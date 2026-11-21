@@ -41,8 +41,8 @@ use crate::lifecycle_rules::cross_level::{LifecycleDecidedCandidate, LifecycleSu
 use crate::lifecycle_rules::facts::{
     LifecycleLibraryRef, LifecycleTitleClaims, LifecycleTitlePeople, LifecycleTitleWatch,
     LifecycleWatchContext, WatchSignalFreshness, build_subject_input,
-    build_subject_input_with_completed_retention_episodes, nest_subject_input, unknown_reason,
-    watch_signal_sweep_is_fresh,
+    build_subject_input_with_episode_watch, narrow_subject_parts, nest_subject_input,
+    unknown_reason, watch_signal_sweep_is_fresh,
 };
 use crate::lifecycle_rules::service::LifecycleRuleSetDetail;
 use crate::lifecycle_rules::storage::{
@@ -1467,6 +1467,16 @@ impl AppUseCase {
             let mut page_titles = Vec::with_capacity(prepared.len());
             for (title, subjects, title_input, people, watch, claims, series_movies) in prepared {
                 let title_index = page_titles.len();
+                // The title's plays, grouped by episode once for a show's
+                // many subjects. A movie has one subject and no episodes.
+                let episode_watch = (subjects.len() > 1)
+                    .then(|| super::facts::LifecycleEpisodeWatchIndex::new(watch));
+                // The title's own document, prepared once for all of its
+                // seasons and episodes, and dropped with the title rather
+                // than held for the chunk.
+                let title_document = title_input
+                    .as_ref()
+                    .and_then(scryer_rules::lifecycle::LifecycleTitleDocument::prepare);
                 let mut decisions: Vec<LifecycleSubjectDecision> = Vec::new();
                 // A subject that failed or lost a write this pass is missing
                 // from `decisions`, so its partners cannot be judged free of
@@ -1484,8 +1494,10 @@ impl AppUseCase {
                             &subject,
                             live,
                             title_input.as_ref(),
+                            title_document.as_ref(),
                             people,
                             watch,
+                            episode_watch.as_ref(),
                             claims,
                             &lists_by_title,
                             series_movies,
@@ -1786,8 +1798,10 @@ impl AppUseCase {
         subject: &super::subjects::LifecycleSubject,
         live: Option<Option<LifecycleCandidate>>,
         title_input: Option<&scryer_rules::lifecycle::LifecycleInput>,
+        title_document: Option<&scryer_rules::lifecycle::LifecycleTitleDocument>,
         people: LifecycleTitlePeople<'_>,
         watch: LifecycleTitleWatch<'_>,
+        episode_watch: Option<&super::facts::LifecycleEpisodeWatchIndex<'_>>,
         claims: LifecycleTitleClaims<'_>,
         lists: &super::list_facts::LifecycleListFacts,
         series_movies: &[LifecycleSeriesMovieDoc],
@@ -1945,13 +1959,14 @@ impl AppUseCase {
         let completed_retention_episode_ids = deletion_checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.completed_retention_episode_ids());
-        let mut input = build_subject_input_with_completed_retention_episodes(
+        let mut input = build_subject_input_with_episode_watch(
             evaluation_time,
             title,
             &library,
             subject,
             people,
             watch,
+            episode_watch,
             claims,
             series_movies,
             completed_retention_episode_ids.as_ref(),
@@ -1968,39 +1983,50 @@ impl AppUseCase {
             LifecycleStorageRead::Sampled(evaluation_time),
         )
         .await;
-        // A season or episode is evaluated beside its title's own facts.
-        if let Some(title_input) = title_input
-            && subject.kind != scryer_domain::LifecycleRuleSubjectKind::Title
+        // A season or episode is evaluated beside its title's own facts. The
+        // title's prepared document is shared by all of them. A started
+        // delete puts its own effects back into the whole input first, so
+        // that one subject is nested into a copy of the title's input.
+        let nests_beside =
+            title_input.filter(|_| subject.kind != scryer_domain::LifecycleRuleSubjectKind::Title);
+        let restores_own_effects = active.is_some() && started_delete.is_some();
+        let evaluation = if let (Some(_), Some(title_document), false) =
+            (nests_beside, title_document, restores_own_effects)
         {
-            input = nest_subject_input(title_input.clone(), input, subject);
-        }
-        if let (Some(candidate), Some(started)) = (active.as_ref(), started_delete.as_ref())
-            && let Err(reason) = self
-                .restore_sequence_own_effects(
-                    candidate,
-                    title,
-                    &started.sequence,
-                    &started.steps,
-                    started.checkpoint.as_ref(),
-                    &mut input,
-                    super::action_execution::SequenceOwnEffects::MonitoringAndFiles,
-                    super::action_execution::OwnMonitoringEvidence::Pass(subject),
-                )
-                .await
-        {
-            debug!(
-                rule_set_id,
-                candidate_id = candidate.id.as_str(),
-                reason,
-                "could not restore a started lifecycle delete's own effects; holding its candidate"
-            );
-            counts.held += 1;
-            candidates
-                .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
-                .await?;
-            return Ok(stored_decision(candidate, true));
-        }
-        let evaluation = evaluator.evaluate(&input);
+            let (subject_doc, narrow) = narrow_subject_parts(input, subject);
+            evaluator.evaluate_beside_title(title_document, &subject_doc, &narrow)
+        } else {
+            if let Some(title_input) = nests_beside {
+                input = nest_subject_input(title_input.clone(), input, subject);
+            }
+            if let (Some(candidate), Some(started)) = (active.as_ref(), started_delete.as_ref())
+                && let Err(reason) = self
+                    .restore_sequence_own_effects(
+                        candidate,
+                        title,
+                        &started.sequence,
+                        &started.steps,
+                        started.checkpoint.as_ref(),
+                        &mut input,
+                        super::action_execution::SequenceOwnEffects::MonitoringAndFiles,
+                        super::action_execution::OwnMonitoringEvidence::Pass(subject),
+                    )
+                    .await
+            {
+                debug!(
+                    rule_set_id,
+                    candidate_id = candidate.id.as_str(),
+                    reason,
+                    "could not restore a started lifecycle delete's own effects; holding its candidate"
+                );
+                counts.held += 1;
+                candidates
+                    .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
+                    .await?;
+                return Ok(stored_decision(candidate, true));
+            }
+            evaluator.evaluate(&input)
+        };
         counts.evaluated += 1;
 
         let decision = match &evaluation {

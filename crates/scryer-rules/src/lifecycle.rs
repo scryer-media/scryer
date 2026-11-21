@@ -918,6 +918,121 @@ impl LifecycleRulesEvaluator {
     pub fn evaluate(&mut self, input: &LifecycleInput) -> Result<LifecycleEvalResult, RulesError> {
         self.evaluate_policies(input, &input.level())
     }
+
+    /// Evaluate one season or episode beside its title's prepared document.
+    ///
+    /// The result is the one [`Self::evaluate`] gives for the title's input
+    /// with `subject` as its subject and `narrow` under `season` or
+    /// `episode`: the same document reaches the rules, the same size bound
+    /// applies, and the same unobservable facts hold a rule. Only the cost
+    /// differs. The title's part is shared rather than copied and serialized
+    /// again for each of its seasons and episodes.
+    ///
+    /// `subject.kind` says which section `narrow` is. A title subject has no
+    /// section, so it is refused; evaluate it with [`Self::evaluate`].
+    pub fn evaluate_beside_title(
+        &mut self,
+        title: &LifecycleTitleDocument,
+        subject: &LifecycleSubjectDoc,
+        narrow: &LifecycleNarrowSubjectDoc,
+    ) -> Result<LifecycleEvalResult, RulesError> {
+        let section = match subject.kind {
+            LifecycleSubjectKind::Season => "season",
+            LifecycleSubjectKind::Episode => "episode",
+            LifecycleSubjectKind::Title => {
+                return Err(RulesError::Evaluation(
+                    "a title subject is not evaluated beside its own document".to_string(),
+                ));
+            }
+        };
+        self.evaluate_prepared_where(
+            |limits| title.nested_input(limits, section, subject, narrow),
+            &subject.kind,
+            "all",
+            |_| true,
+        )
+    }
+}
+
+/// A title's input document, prepared once so that each of its seasons and
+/// episodes is evaluated beside it without copying or serializing it again.
+///
+/// It holds every top-level field of the title's document but `subject`,
+/// which each season and episode replaces with its own.
+#[derive(Debug, Clone)]
+pub struct LifecycleTitleDocument {
+    fields: std::collections::BTreeMap<Value, Value>,
+    /// The serialized length of the title's document, less its `subject`
+    /// value.
+    bytes_without_subject: usize,
+    /// The title's facts Scryer could not observe.
+    unobservable: std::collections::BTreeMap<String, String>,
+}
+
+impl LifecycleTitleDocument {
+    /// Prepare a title's own input. `None` for an input that already carries
+    /// a season or an episode, which is not a title's own, or one that does
+    /// not serialize; the caller then evaluates each nested input whole.
+    pub fn prepare(title_input: &LifecycleInput) -> Option<Self> {
+        if title_input.season.is_some() || title_input.episode.is_some() {
+            return None;
+        }
+        let bytes = crate::runtime::serialized_len(title_input).ok()?;
+        let subject_bytes = crate::runtime::serialized_len(&title_input.subject).ok()?;
+        let document = serde_json::to_value(title_input).ok()?;
+        let unobservable = crate::policy::observation::unobservable_facts(&document);
+        let serde_json::Value::Object(document) = document else {
+            return None;
+        };
+        let fields = document
+            .into_iter()
+            .filter(|(name, _)| name != "subject")
+            .map(|(name, value)| (Value::from(name), Value::from(value)))
+            .collect();
+        Some(Self {
+            fields,
+            bytes_without_subject: bytes.checked_sub(subject_bytes)?,
+            unobservable,
+        })
+    }
+
+    /// The engine input, and its unobservable facts, for one season or
+    /// episode beside this title.
+    fn nested_input(
+        &self,
+        limits: &RuntimeLimits,
+        section: &'static str,
+        subject: &LifecycleSubjectDoc,
+        narrow: &LifecycleNarrowSubjectDoc,
+    ) -> Result<(Value, std::collections::BTreeMap<String, String>), RulesError> {
+        // The nested document's text is the title's with the subject value
+        // swapped and `,"<section>":<narrow>` appended as its last field.
+        let size = self.bytes_without_subject
+            + crate::runtime::serialized_len(subject)?
+            + section.len()
+            + r#","":"#.len()
+            + crate::runtime::serialized_len(narrow)?;
+        if size > limits.max_input_bytes {
+            return Err(RulesError::InputTooLarge {
+                size,
+                limit: limits.max_input_bytes,
+            });
+        }
+        let narrow = serde_json::to_value(narrow)?;
+        let mut unobservable = self.unobservable.clone();
+        unobservable.extend(
+            crate::policy::observation::unobservable_facts(&narrow)
+                .into_iter()
+                .map(|(name, reason)| (format!("{section}.{name}"), reason)),
+        );
+        let mut fields = self.fields.clone();
+        fields.insert(
+            Value::from("subject"),
+            Value::from(serde_json::to_value(subject)?),
+        );
+        fields.insert(Value::from(section), Value::from(narrow));
+        Ok((Value::from(fields), unobservable))
+    }
 }
 
 // ── Output validation ───────────────────────────────────────────────────────
@@ -1834,5 +1949,158 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    /// A season and an episode input as the host nests them: the title's own
+    /// input with the subject replaced and one narrow section added.
+    fn nested_inputs() -> Vec<(LifecycleInput, LifecycleInput)> {
+        let mut title = synthetic_title_input();
+        title.subject.facet = "series".to_string();
+        title.facts.active_downloads = Observation::unknown("not_yet_collected");
+        title.facts.added_by_user_id = Observation::absent_because("title_added_by_system");
+        let mut out = Vec::new();
+        for kind in [LifecycleSubjectKind::Season, LifecycleSubjectKind::Episode] {
+            for position in [1, 3] {
+                let mut facts = title.facts.clone();
+                facts.monitored = Observation::known(position == 1);
+                facts.last_watched_at = Observation::unknown("episode_play_time_missing");
+                facts.season_position_by_air_date = Observation::known(position);
+                facts.episode_position_by_air_date = Observation::known(position);
+                let narrow = LifecycleNarrowSubjectDoc {
+                    id: format!("narrow-{position}"),
+                    collection_id: Some("season-1".to_string()),
+                    season_number: Some(position as i32),
+                    episode_number: (kind == LifecycleSubjectKind::Episode).then_some(7),
+                    facts,
+                };
+                let mut nested = title.clone();
+                nested.subject.kind = kind;
+                nested.subject.subject_id = narrow.id.clone();
+                nested.subject.collection_id = narrow.collection_id.clone();
+                nested.subject.season_number = narrow.season_number;
+                nested.subject.name = format!("Subject \"{position}\" · é");
+                match kind {
+                    LifecycleSubjectKind::Season => nested.season = Some(narrow),
+                    _ => nested.episode = Some(narrow),
+                }
+                out.push((title.clone(), nested));
+            }
+        }
+        out
+    }
+
+    fn narrow_of(input: &LifecycleInput) -> (&'static str, &LifecycleNarrowSubjectDoc) {
+        match (&input.season, &input.episode) {
+            (Some(season), None) => ("season", season),
+            (None, Some(episode)) => ("episode", episode),
+            _ => panic!("a nested input carries exactly one section"),
+        }
+    }
+
+    /// The document composed from a prepared title is the document the whole
+    /// nested input serializes to: same value, same size, same unobservable
+    /// facts.
+    #[test]
+    fn a_prepared_title_composes_the_document_the_whole_input_serializes_to() {
+        for (title, nested) in nested_inputs() {
+            let prepared = LifecycleTitleDocument::prepare(&title).expect("title prepares");
+            let (section, narrow) = narrow_of(&nested);
+            let whole_len = runtime::serialized_len(&nested).expect("input serializes");
+
+            let mut limits = RuntimeLimits::lifecycle_defaults();
+            limits.max_input_bytes = whole_len;
+            let whole = runtime::bounded_input_document(&nested, &limits).expect("fits exactly");
+            let expected_unobservable = crate::policy::observation::unobservable_facts_in(
+                &whole,
+                validation::LIFECYCLE_NESTED_FACT_SECTIONS,
+            );
+            let (composed, unobservable) = prepared
+                .nested_input(&limits, section, &nested.subject, narrow)
+                .expect("the composed document fits the same bound");
+            assert_eq!(composed, Value::from(whole));
+            assert_eq!(unobservable, expected_unobservable);
+            assert!(unobservable.contains_key("active_downloads"));
+            assert!(unobservable.contains_key(&format!("{section}.last_watched_at")));
+
+            limits.max_input_bytes = whole_len - 1;
+            let whole_err = runtime::bounded_input_document(&nested, &limits)
+                .expect_err("one byte over the bound");
+            let composed_err = prepared
+                .nested_input(&limits, section, &nested.subject, narrow)
+                .expect_err("one byte over the bound");
+            assert_eq!(format!("{whole_err:?}"), format!("{composed_err:?}"));
+        }
+    }
+
+    /// Evaluating beside a prepared title decides what evaluating the whole
+    /// nested input decides: matches, no-matches, holds and errors alike.
+    #[test]
+    fn evaluating_beside_a_prepared_title_decides_what_the_whole_input_decides() {
+        let policies = [
+            policy(
+                "old_seasons",
+                "unmonitor_season if {\n  input.season.facts.season_position_by_air_date > 1\n}\n",
+            ),
+            policy(
+                "old_episodes",
+                "unmonitor_episode if {\n  input.episode.facts.episode_position_by_air_date > 2\n  not input.facts.added_by_user_id\n}\n",
+            ),
+            policy(
+                "held_by_the_title",
+                "unmonitor_season if {\n  input.facts.active_downloads == 0\n}\nunmonitor_episode if {\n  input.facts.active_downloads == 0\n}\n",
+            ),
+            policy(
+                "held_by_the_subject",
+                "unmonitor_season if {\n  input.season.facts.last_watched_at\n}\nunmonitor_episode if {\n  input.episode.facts.last_watched_at\n}\n",
+            ),
+            policy(
+                "reads_the_subject",
+                "unmonitor_season if {\n  input.subject.kind == \"season\"\n  input.season.id == input.subject.subject_id\n  input.season.facts.monitored\n}\nunmonitor_episode if {\n  input.episode.episode_number == 7\n  not input.episode.facts.monitored\n}\n",
+            ),
+        ];
+        let engine = LifecycleRulesEngine::build(&policies).expect("policies compile");
+        let mut outcomes = BTreeSet::new();
+        for (title, nested) in nested_inputs() {
+            let prepared = LifecycleTitleDocument::prepare(&title).expect("title prepares");
+            let (_, narrow) = narrow_of(&nested);
+            let whole = engine
+                .evaluator()
+                .evaluate(&nested)
+                .expect("the whole input evaluates");
+            let beside = engine
+                .evaluator()
+                .evaluate_beside_title(&prepared, &nested.subject, narrow)
+                .expect("the composed input evaluates");
+            assert_eq!(format!("{whole:?}"), format!("{beside:?}"));
+            assert_eq!(whole.records.len() + whole.errors.len(), policies.len());
+            outcomes.extend(
+                whole
+                    .records
+                    .iter()
+                    .map(|record| format!("{:?}", record.decision.outcome)),
+            );
+        }
+        assert_eq!(
+            outcomes.len(),
+            3,
+            "match, no-match and held all occur: {outcomes:?}"
+        );
+    }
+
+    #[test]
+    fn a_title_subject_is_not_evaluated_beside_its_own_document() {
+        let title = synthetic_title_input();
+        let nested = synthetic_lifecycle_input();
+        assert!(LifecycleTitleDocument::prepare(&nested).is_none());
+        let prepared = LifecycleTitleDocument::prepare(&title).expect("title prepares");
+        let engine = LifecycleRulesEngine::build(&[policy("any", "unmonitor := true\n")])
+            .expect("policy compiles");
+        let narrow = nested.season.as_ref().expect("synthetic season");
+        assert!(
+            engine
+                .evaluator()
+                .evaluate_beside_title(&prepared, &title.subject, narrow)
+                .is_err()
+        );
     }
 }

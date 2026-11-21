@@ -663,124 +663,7 @@ impl AppUseCase {
         title_files: &[TitleMediaFile],
         inventory: &Arc<LifecycleTitleEpisodeInventory>,
     ) -> AppResult<Vec<LifecycleSubject>> {
-        if inventory.title_id != title.id {
-            return Err(AppError::Repository(
-                "lifecycle episode inventory title mismatch".into(),
-            ));
-        }
-        if title.facet == scryer_domain::MediaFacet::Movie {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::MOVIE_HAS_NO_EPISODES,
-                "movie titles do not have an episode inventory",
-            ));
-        }
-        if kind == Scope::Title {
-            let (episode_file_count, episode_file_count_unresolved) =
-                inventory.downloaded_episode_count(&inventory.episodes);
-            return Ok(vec![LifecycleSubject {
-                kind,
-                id: title.id.clone(),
-                collection: None,
-                episodes: inventory.episodes.clone(),
-                files: title_files.to_vec(),
-                episode_file_count,
-                episode_file_count_unresolved,
-                ambiguous_files: title_files.iter().any(|file| {
-                    !file.series_movie_link_ids.is_empty() || file.title_id != title.id
-                }),
-                inventory: Some(Arc::clone(inventory)),
-                monitored: title.monitored,
-                label: title.name.clone(),
-            }]);
-        }
-
-        let mut subjects = Vec::new();
-        if kind == Scope::Season {
-            for collection in inventory.collections.iter().filter(|collection| {
-                matches!(
-                    collection.collection_type,
-                    CollectionType::Season | CollectionType::Specials
-                )
-            }) {
-                subjects.push(LifecycleSubject {
-                    kind,
-                    id: collection.id.clone(),
-                    collection: Some(collection.clone()),
-                    episodes: inventory
-                        .episodes
-                        .iter()
-                        .filter(|episode| episode.collection_id.as_deref() == Some(&collection.id))
-                        .cloned()
-                        .collect(),
-                    files: vec![],
-                    episode_file_count: 0,
-                    episode_file_count_unresolved: false,
-                    ambiguous_files: false,
-                    inventory: Some(Arc::clone(inventory)),
-                    monitored: collection.monitored,
-                    label: format!("Season {}", collection.collection_index),
-                });
-            }
-        } else {
-            for episode in &inventory.episodes {
-                let collection = inventory
-                    .collections
-                    .iter()
-                    .find(|collection| Some(&collection.id) == episode.collection_id.as_ref())
-                    .cloned();
-                subjects.push(LifecycleSubject {
-                    kind,
-                    id: episode.id.clone(),
-                    collection,
-                    episodes: vec![episode.clone()],
-                    files: vec![],
-                    episode_file_count: 0,
-                    episode_file_count_unresolved: false,
-                    ambiguous_files: false,
-                    inventory: Some(Arc::clone(inventory)),
-                    monitored: episode.monitored,
-                    label: format!(
-                        "S{}E{}{}",
-                        episode.season_number.as_deref().unwrap_or("?"),
-                        episode.episode_number.as_deref().unwrap_or("?"),
-                        episode
-                            .title
-                            .as_ref()
-                            .map(|name| format!(" · {name}"))
-                            .unwrap_or_default()
-                    ),
-                });
-            }
-        }
-        for subject in &mut subjects {
-            let ids: HashSet<&str> = subject
-                .episodes
-                .iter()
-                .map(|episode| episode.id.as_str())
-                .collect();
-            for scoped in &inventory.scoped_files {
-                if !scoped
-                    .episode_ids
-                    .iter()
-                    .any(|id| ids.contains(id.as_str()))
-                {
-                    continue;
-                }
-                subject.ambiguous_files |= scoped.media_file.title_id != title.id
-                    || scoped
-                        .episode_ids
-                        .iter()
-                        .any(|id| !ids.contains(id.as_str()))
-                    || !scoped.media_file.series_movie_link_ids.is_empty();
-                subject.files.push(scoped.media_file.clone());
-            }
-            let (episode_file_count, episode_file_count_unresolved) =
-                inventory.downloaded_episode_count(&subject.episodes);
-            subject.episode_file_count = episode_file_count;
-            subject.episode_file_count_unresolved = episode_file_count_unresolved;
-            subject.files.sort_by(|a, b| a.id.cmp(&b.id));
-        }
-        Ok(subjects)
+        subjects_from_episode_inventory(kind, title, title_files, inventory)
     }
 
     pub(crate) async fn lifecycle_resolve_subject(
@@ -1267,6 +1150,166 @@ impl AppUseCase {
     }
 }
 
+/// Project one title-bound inventory into the requested scope. No repository
+/// or filesystem read is made.
+fn subjects_from_episode_inventory(
+    kind: Scope,
+    title: &Title,
+    title_files: &[TitleMediaFile],
+    inventory: &Arc<LifecycleTitleEpisodeInventory>,
+) -> AppResult<Vec<LifecycleSubject>> {
+    if inventory.title_id != title.id {
+        return Err(AppError::Repository(
+            "lifecycle episode inventory title mismatch".into(),
+        ));
+    }
+    if title.facet == scryer_domain::MediaFacet::Movie {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::lifecycle::MOVIE_HAS_NO_EPISODES,
+            "movie titles do not have an episode inventory",
+        ));
+    }
+    if kind == Scope::Title {
+        let (episode_file_count, episode_file_count_unresolved) =
+            inventory.downloaded_episode_count(&inventory.episodes);
+        return Ok(vec![LifecycleSubject {
+            kind,
+            id: title.id.clone(),
+            collection: None,
+            episodes: inventory.episodes.clone(),
+            files: title_files.to_vec(),
+            episode_file_count,
+            episode_file_count_unresolved,
+            ambiguous_files: title_files
+                .iter()
+                .any(|file| !file.series_movie_link_ids.is_empty() || file.title_id != title.id),
+            inventory: Some(Arc::clone(inventory)),
+            monitored: title.monitored,
+            label: title.name.clone(),
+        }]);
+    }
+
+    // Each of these is built once for the title, so that no season or
+    // episode scans the whole inventory for its own rows. The first
+    // collection with an id wins, as a scan from the front would find it,
+    // and a season's episodes and a subject's files keep inventory order.
+    let mut collection_by_id: HashMap<&str, &Collection> = HashMap::new();
+    for collection in &inventory.collections {
+        collection_by_id
+            .entry(collection.id.as_str())
+            .or_insert(collection);
+    }
+    let mut episodes_by_collection: HashMap<&str, Vec<&Episode>> = HashMap::new();
+    for episode in &inventory.episodes {
+        if let Some(collection_id) = episode.collection_id.as_deref() {
+            episodes_by_collection
+                .entry(collection_id)
+                .or_default()
+                .push(episode);
+        }
+    }
+    let mut files_by_episode: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, scoped) in inventory.scoped_files.iter().enumerate() {
+        for episode_id in &scoped.episode_ids {
+            let indexes = files_by_episode.entry(episode_id.as_str()).or_default();
+            if indexes.last() != Some(&index) {
+                indexes.push(index);
+            }
+        }
+    }
+    let mut subjects = Vec::new();
+    if kind == Scope::Season {
+        for collection in inventory.collections.iter().filter(|collection| {
+            matches!(
+                collection.collection_type,
+                CollectionType::Season | CollectionType::Specials
+            )
+        }) {
+            subjects.push(LifecycleSubject {
+                kind,
+                id: collection.id.clone(),
+                collection: Some(collection.clone()),
+                episodes: episodes_by_collection
+                    .get(collection.id.as_str())
+                    .map(|episodes| episodes.iter().map(|&episode| episode.clone()).collect())
+                    .unwrap_or_default(),
+                files: vec![],
+                episode_file_count: 0,
+                episode_file_count_unresolved: false,
+                ambiguous_files: false,
+                inventory: Some(Arc::clone(inventory)),
+                monitored: collection.monitored,
+                label: format!("Season {}", collection.collection_index),
+            });
+        }
+    } else {
+        for episode in &inventory.episodes {
+            let collection = episode
+                .collection_id
+                .as_deref()
+                .and_then(|id| collection_by_id.get(id))
+                .map(|&collection| collection.clone());
+            subjects.push(LifecycleSubject {
+                kind,
+                id: episode.id.clone(),
+                collection,
+                episodes: vec![episode.clone()],
+                files: vec![],
+                episode_file_count: 0,
+                episode_file_count_unresolved: false,
+                ambiguous_files: false,
+                inventory: Some(Arc::clone(inventory)),
+                monitored: episode.monitored,
+                label: format!(
+                    "S{}E{}{}",
+                    episode.season_number.as_deref().unwrap_or("?"),
+                    episode.episode_number.as_deref().unwrap_or("?"),
+                    episode
+                        .title
+                        .as_ref()
+                        .map(|name| format!(" · {name}"))
+                        .unwrap_or_default()
+                ),
+            });
+        }
+    }
+    for subject in &mut subjects {
+        let ids: HashSet<&str> = subject
+            .episodes
+            .iter()
+            .map(|episode| episode.id.as_str())
+            .collect();
+        // The subject's files, in inventory order, each once.
+        let mut file_indexes: Vec<usize> = subject
+            .episodes
+            .iter()
+            .filter_map(|episode| files_by_episode.get(episode.id.as_str()))
+            .flatten()
+            .copied()
+            .collect();
+        file_indexes.sort_unstable();
+        file_indexes.dedup();
+        for scoped in file_indexes
+            .into_iter()
+            .map(|index| &inventory.scoped_files[index])
+        {
+            subject.ambiguous_files |= scoped.media_file.title_id != title.id
+                || scoped
+                    .episode_ids
+                    .iter()
+                    .any(|id| !ids.contains(id.as_str()))
+                || !scoped.media_file.series_movie_link_ids.is_empty();
+            subject.files.push(scoped.media_file.clone());
+        }
+        let (episode_file_count, episode_file_count_unresolved) =
+            inventory.downloaded_episode_count(&subject.episodes);
+        subject.episode_file_count = episode_file_count;
+        subject.episode_file_count_unresolved = episode_file_count_unresolved;
+        subject.files.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    Ok(subjects)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1677,5 +1720,174 @@ mod tests {
                 .is_some_and(|rank| *rank <= 2),
             "the live removal by another candidate protects this target from a > 2 policy"
         );
+    }
+
+    /// The projection as a scan of the whole inventory for each subject: the
+    /// files, ambiguity and episodes each season or episode must come out with.
+    fn scanned_subjects(
+        kind: Scope,
+        title: &Title,
+        inventory: &LifecycleTitleEpisodeInventory,
+    ) -> Vec<(String, Option<String>, Vec<String>, Vec<String>, bool)> {
+        let mut scopes: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
+        if kind == Scope::Season {
+            for collection in inventory.collections.iter().filter(|collection| {
+                matches!(
+                    collection.collection_type,
+                    CollectionType::Season | CollectionType::Specials
+                )
+            }) {
+                scopes.push((
+                    collection.id.clone(),
+                    Some(collection.collection_index.clone()),
+                    inventory
+                        .episodes
+                        .iter()
+                        .filter(|episode| episode.collection_id.as_deref() == Some(&collection.id))
+                        .map(|episode| episode.id.clone())
+                        .collect(),
+                ));
+            }
+        } else {
+            for episode in &inventory.episodes {
+                let collection = inventory
+                    .collections
+                    .iter()
+                    .find(|collection| Some(&collection.id) == episode.collection_id.as_ref());
+                scopes.push((
+                    episode.id.clone(),
+                    collection.map(|collection| collection.collection_index.clone()),
+                    vec![episode.id.clone()],
+                ));
+            }
+        }
+        scopes
+            .into_iter()
+            .map(|(id, collection_index, episode_ids)| {
+                let mut ambiguous = false;
+                let mut files = Vec::new();
+                for scoped in &inventory.scoped_files {
+                    if !scoped.episode_ids.iter().any(|id| episode_ids.contains(id)) {
+                        continue;
+                    }
+                    ambiguous |= scoped.media_file.title_id != title.id
+                        || scoped
+                            .episode_ids
+                            .iter()
+                            .any(|id| !episode_ids.contains(id))
+                        || !scoped.media_file.series_movie_link_ids.is_empty();
+                    files.push(scoped.media_file.id.clone());
+                }
+                files.sort();
+                (id, collection_index, episode_ids, files, ambiguous)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn indexed_subjects_match_a_scan_of_the_inventory_for_each_subject() {
+        let title = crate::lifecycle_rules::facts::tests::faceted_title(
+            None,
+            scryer_domain::MediaFacet::Series,
+        );
+        let mut episodes = Vec::new();
+        for (season, collection_id) in [(1, "s1"), (2, "s2"), (0, "specials"), (9, "gone")] {
+            for number in 1..=4 {
+                episodes.push(episode(
+                    &format!("{collection_id}-e{number}"),
+                    collection_id,
+                    &season.to_string(),
+                    &number.to_string(),
+                    Some("2024-01-02"),
+                    EpisodeType::Standard,
+                ));
+            }
+        }
+        let mut loose = episode("loose", "s1", "1", "9", None, EpisodeType::Standard);
+        loose.collection_id = None;
+        episodes.push(loose);
+        let file = |id: &str, title_id: &str, links: &[&str]| EpisodeScopedMediaFile {
+            media_file: TitleMediaFile {
+                id: id.to_string(),
+                title_id: title_id.to_string(),
+                ..Default::default()
+            },
+            title_role: crate::MediaFileRole::Primary,
+            episode_ids: links.iter().map(|id| (*id).to_string()).collect(),
+            primary_episode_ids: vec![],
+        };
+        let mut linked_movie = file("file-b-movie", &title.id, &["s2-e1"]);
+        linked_movie.media_file.series_movie_link_ids = vec!["link-1".to_string()];
+        let inventory = Arc::new(LifecycleTitleEpisodeInventory {
+            title_id: title.id.clone(),
+            collections: vec![
+                collection("s1", "1", CollectionType::Season),
+                collection("s2", "2", CollectionType::Season),
+                collection("specials", "0", CollectionType::Specials),
+                // A second collection with an id already seen is never the
+                // one an episode resolves to.
+                collection("s2", "22", CollectionType::Season),
+            ],
+            episodes,
+            // Out of id order on purpose: a subject's files sort by id.
+            scoped_files: vec![
+                file("file-z-single", &title.id, &["s1-e1"]),
+                file("file-a-second-version", &title.id, &["s1-e1"]),
+                file("file-m-double", &title.id, &["s1-e2", "s1-e3"]),
+                file("file-c-repeated", &title.id, &["s1-e4", "s1-e4"]),
+                file("file-k-two-seasons", &title.id, &["s1-e4", "s2-e1"]),
+                linked_movie,
+                file("file-d-other-title", "title-other", &["s2-e2"]),
+                file(
+                    "file-e-unknown-episode",
+                    &title.id,
+                    &["s2-e3", "not-an-episode"],
+                ),
+                file("file-f-no-episode", &title.id, &[]),
+                file("file-g-special", &title.id, &["specials-e1"]),
+                file("file-h-orphan-season", &title.id, &["gone-e2"]),
+                file("file-i-loose", &title.id, &["loose"]),
+            ],
+            file_availability: HashMap::new(),
+            episode_coverage: HashMap::new(),
+            presence_probed: false,
+            retention_ranks: Mutex::default(),
+        });
+
+        for kind in [Scope::Season, Scope::Episode] {
+            let subjects = subjects_from_episode_inventory(kind, &title, &[], &inventory)
+                .expect("the inventory projects");
+            let projected: Vec<_> = subjects
+                .iter()
+                .map(|subject| {
+                    (
+                        subject.id.clone(),
+                        subject
+                            .collection
+                            .as_ref()
+                            .map(|collection| collection.collection_index.clone()),
+                        subject
+                            .episodes
+                            .iter()
+                            .map(|episode| episode.id.clone())
+                            .collect::<Vec<_>>(),
+                        subject
+                            .files
+                            .iter()
+                            .map(|file| file.id.clone())
+                            .collect::<Vec<_>>(),
+                        subject.ambiguous_files,
+                    )
+                })
+                .collect();
+            assert_eq!(projected, scanned_subjects(kind, &title, &inventory));
+            assert!(projected.iter().any(|subject| subject.3.len() > 1));
+            assert!(projected.iter().any(|subject| subject.4));
+            assert!(
+                projected
+                    .iter()
+                    .any(|subject| !subject.4 && !subject.3.is_empty())
+            );
+        }
     }
 }

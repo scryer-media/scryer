@@ -407,6 +407,38 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         phase: &'static str,
         selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
+        self.evaluate_prepared_where(
+            |limits| {
+                let document = document(limits)?;
+                let unobservable = if F::TRACKS_REFERENCED_FACTS {
+                    unobservable_facts_in(&document, F::NESTED_FACT_SECTIONS)
+                } else {
+                    BTreeMap::new()
+                };
+                Ok((document.into(), unobservable))
+            },
+            ctx,
+            phase,
+            selected,
+        )
+    }
+
+    /// [`Self::evaluate_document_where`] over an input the caller hands over
+    /// in the engine's own value type, with the facts it could not observe
+    /// (as [`unobservable_facts_in`] would read them off the same document).
+    /// A caller that evaluates many inputs sharing one large part builds that
+    /// part once and composes each input from it. `prepare` is not called
+    /// when no rule is loaded, and the family's input bound is the caller's
+    /// to apply.
+    pub(crate) fn evaluate_prepared_where(
+        &mut self,
+        prepare: impl FnOnce(
+            &RuntimeLimits,
+        ) -> Result<(regorus::Value, BTreeMap<String, String>), RulesError>,
+        ctx: &F::EvalContext,
+        phase: &'static str,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
+    ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
 
         if self.rules.is_empty() {
@@ -415,13 +447,8 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
 
         let input_timer =
             PolicyTimer::new(&self.observer, F::NAME, "input_prepare", phase, "", "none");
-        let document = document(&self.limits)?;
-        let unobservable = if F::TRACKS_REFERENCED_FACTS {
-            unobservable_facts_in(&document, F::NESTED_FACT_SECTIONS)
-        } else {
-            BTreeMap::new()
-        };
-        self.engine.set_input(document.into());
+        let (input, unobservable) = prepare(&self.limits)?;
+        self.engine.set_input(input);
         input_timer.finish("ok");
 
         for (index, rule) in self.rules.iter().enumerate() {
