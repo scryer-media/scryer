@@ -1216,7 +1216,7 @@ function RootSidebarContent({
     <SidebarTrigger
       id="root-sidebar-mobile-trigger"
       aria-label={t("nav.mobileTrigger")}
-      className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-muted2)] shadow-none transition hover:border-[var(--scry-bhover2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:ring-primary/25 min-[1280px]:hidden"
+      className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-muted2)] shadow-none transition hover:border-[var(--scry-bhover2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:ring-primary/25 min-[1024px]:hidden"
     />
   );
   const canInjectMobileNavigation =
@@ -1233,7 +1233,7 @@ function RootSidebarContent({
         collapsible={isMobile ? "offcanvas" : "none"}
         mobileTitle={t("nav.mobileTitle")}
         mobileDescription={t("nav.mobileDescription")}
-        className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[4px_0_16px_rgba(2,6,23,0.04)] dark:shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[1280px]:sticky min-[1280px]:top-[var(--root-shell-top-offset,0px)] min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:self-start"
+        className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[4px_0_16px_rgba(2,6,23,0.04)] dark:shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[1024px]:sticky min-[1024px]:top-[var(--root-shell-top-offset,0px)] min-[1024px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:self-start"
       >
         <SidebarHeader className="px-4 py-0">
           <div className="flex w-full items-center justify-center">
@@ -2061,11 +2061,11 @@ function RootSidebarContent({
       </Sidebar>
       <SidebarInset
         data-slot="root-content-panel"
-        className="relative min-w-0 min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:overflow-hidden"
+        className="relative min-w-0 min-[1024px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:overflow-hidden"
       >
         {headerWithMobileNavigation}
         {canInjectMobileNavigation ? null : (
-          <div className="mx-3 mb-3 mt-3 flex items-center gap-3 rounded-xl border border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] px-3 py-2 shadow-[0_12px_28px_rgba(2,6,23,0.16)] min-[1280px]:hidden">
+          <div className="mx-3 mb-3 mt-3 flex items-center gap-3 rounded-xl border border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] px-3 py-2 shadow-[0_12px_28px_rgba(2,6,23,0.16)] min-[1024px]:hidden">
             {mobileNavigationTrigger}
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-foreground">
@@ -2091,7 +2091,7 @@ export const RootSidebar = React.memo(function RootSidebar(
 ) {
   return (
     <SidebarProvider
-      className="min-[1280px]:h-full"
+      className="min-[1024px]:h-full"
       style={
         {
           "--sidebar-width": "224px",

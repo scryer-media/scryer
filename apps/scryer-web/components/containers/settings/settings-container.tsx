@@ -599,7 +599,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   return (
     <div
       className={cn(
-        "flex min-h-0 w-full flex-1 flex-col overflow-visible bg-transparent min-[1280px]:overflow-hidden",
+        "flex min-h-0 w-full flex-1 flex-col overflow-visible bg-transparent min-[1024px]:overflow-hidden",
         "md:flex-row",
       )}
     >
@@ -607,7 +607,7 @@ export const SettingsContainer = memo(function SettingsContainer({
         ref={settingsContentRef}
         data-slot="settings-main-scroll"
         className={cn(
-          "min-w-0 flex-1 overflow-visible bg-transparent min-[1280px]:overflow-y-auto",
+          "min-w-0 flex-1 overflow-visible bg-transparent min-[1024px]:overflow-y-auto",
           showReferenceRail && "[scrollbar-gutter:stable]",
         )}
       >

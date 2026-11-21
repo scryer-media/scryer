@@ -1194,7 +1194,7 @@ function TitleContextPanel({
     onImportQueued: reloadTitleAndDownloads,
   });
   const panelClassName = cn(
-    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1280px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
+    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1024px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
   );
   const moreLikeThisItems = React.useMemo(
@@ -1390,7 +1390,7 @@ function TitleContextPanel({
     >
       <div
         data-slot="title-context-scroll"
-        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[1280px]:overflow-y-auto sm:p-5 sm:pb-5"
+        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[1024px]:overflow-y-auto sm:p-5 sm:pb-5"
       >
         <div className="-mx-4 -mt-4 sm:-mx-5 sm:-mt-5">
           <TitleWorkspaceHero
@@ -4377,7 +4377,7 @@ export function MediaContentView({
                             selectedTitleListInlineActive ||
                               selectedTitlePosterInlineActive
                               ? "grid h-full items-stretch"
-                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[1280px]:overflow-hidden",
+                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[1024px]:overflow-hidden",
                           )
                         : "grid min-h-0 gap-4",
                       !selectedTitleLayoutActive &&

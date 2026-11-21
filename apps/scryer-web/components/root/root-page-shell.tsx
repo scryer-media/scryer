@@ -1947,7 +1947,7 @@ function AuthenticatedHomePage({
                           <div
                             ref={shellFrameRef}
                             data-slot="root-shell-frame"
-                            className="flex min-h-0 w-full flex-1 min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:overflow-hidden"
+                            className="flex min-h-0 w-full flex-1 min-[1024px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:overflow-hidden"
                             style={
                               {
                                 "--root-shell-top-offset": `${shellTopOffset}px`,
@@ -1986,7 +1986,7 @@ function AuthenticatedHomePage({
                             >
                               <main
                                 data-slot="root-main-scroll"
-                                className="flex min-h-[70vh] flex-1 flex-col min-[1280px]:min-h-0 min-[1280px]:overflow-y-auto"
+                                className="flex min-h-[70vh] flex-1 flex-col min-[1024px]:min-h-0 min-[1024px]:overflow-y-auto"
                               >
                                 <Suspense fallback={<ViewLoadingFallback />}>
                                   {routeIsLanding ? (
