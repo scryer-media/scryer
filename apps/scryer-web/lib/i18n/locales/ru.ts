@@ -6972,6 +6972,12 @@ const ru: LocaleDictionary = {
     "Нумерация эпизодов неоднозначна",
   "settings.lifecycleExecutionReason.playbackHold":
     "Отложено: этот тайтл воспроизводится на медиасервере.",
+  "settings.lifecycleExecutionCause.staleMovePlan":
+    "План перемещения изменился до запуска. Он будет составлен заново при следующем проходе.",
+  "settings.lifecycleExecutionCause.blockedItems":
+    "Для некоторых файлов нужно принять решение, прежде чем их можно переместить.",
+  "settings.lifecycleExecutionCause.insufficientSpace":
+    "В месте назначения нет места для этих файлов.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
