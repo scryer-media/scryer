@@ -1722,13 +1722,17 @@ mod tests {
         );
     }
 
+    /// A scanned subject: its id, collection index, episode ids, file ids and
+    /// whether any of its files is ambiguous.
+    type ScannedSubject = (String, Option<String>, Vec<String>, Vec<String>, bool);
+
     /// The projection as a scan of the whole inventory for each subject: the
     /// files, ambiguity and episodes each season or episode must come out with.
     fn scanned_subjects(
         kind: Scope,
         title: &Title,
         inventory: &LifecycleTitleEpisodeInventory,
-    ) -> Vec<(String, Option<String>, Vec<String>, Vec<String>, bool)> {
+    ) -> Vec<ScannedSubject> {
         let mut scopes: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
         if kind == Scope::Season {
             for collection in inventory.collections.iter().filter(|collection| {

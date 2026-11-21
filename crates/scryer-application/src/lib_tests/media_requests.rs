@@ -3189,16 +3189,17 @@ async fn a_staged_outage_stops_answering_within_minutes() {
     );
 }
 
-/// A request app over three movies and three series, one of the series known
-/// to SMG only by a TMDB id until it is resolved.
-fn batch_staging_app(
-    fail_detail: bool,
-) -> (
+/// The batch staging app, its SMG detail read count and the resolves it saw.
+type BatchStagingApp = (
     MediaRequestTestHarness,
     AppUseCase,
     Arc<std::sync::atomic::AtomicUsize>,
     Arc<std::sync::Mutex<Vec<(String, bool)>>>,
-) {
+);
+
+/// A request app over three movies and three series, one of the series known
+/// to SMG only by a TMDB id until it is resolved.
+fn batch_staging_app(fail_detail: bool) -> BatchStagingApp {
     let harness = bootstrap_media_request_app();
     let mut movies = HashMap::new();
     for tvdb_id in [93_001, 93_002, 93_003] {

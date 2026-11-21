@@ -1116,12 +1116,29 @@ fn reference_selection_keeps_cover_programs_and_commentary_out_of_summary() {
         ffprobe_primary_stream(&reference, "video").unwrap()["index"],
         1
     );
+    // With no default stream the first stream that is not commentary leads;
+    // codec and channel count never pick it.
     assert_eq!(
         ffprobe_primary_stream(&reference, "audio").unwrap()["index"],
-        4
+        3
     );
     assert_eq!(ffprobe_languages(&reference, "audio"), ["eng"]);
     assert_eq!(ffprobe_streams(&reference, "audio").len(), 4);
+
+    // A default stream that is not commentary leads over earlier ones.
+    let mut with_default = reference.clone();
+    with_default["streams"][5]["disposition"] = serde_json::json!({"default":1});
+    assert_eq!(
+        ffprobe_primary_stream(&with_default, "audio").unwrap()["index"],
+        5
+    );
+    // A default commentary stream never leads.
+    let mut default_commentary = reference;
+    default_commentary["streams"][2]["disposition"] = serde_json::json!({"comment":1,"default":1});
+    assert_eq!(
+        ffprobe_primary_stream(&default_commentary, "audio").unwrap()["index"],
+        3
+    );
 }
 
 #[test]

@@ -3235,8 +3235,10 @@ async fn an_entry_only_removal_is_recorded_as_entry_removed() {
 
 /// A folder that takes no rename or new name until dropped, so a test can
 /// tell a step never set a file in it aside.
+#[cfg(unix)]
 struct ReadOnlyFolder(std::path::PathBuf);
 
+#[cfg(unix)]
 impl ReadOnlyFolder {
     fn new(folder: &std::path::Path) -> Self {
         use std::os::unix::fs::PermissionsExt;
@@ -3245,6 +3247,7 @@ impl ReadOnlyFolder {
     }
 }
 
+#[cfg(unix)]
 impl Drop for ReadOnlyFolder {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
@@ -3254,6 +3257,7 @@ impl Drop for ReadOnlyFolder {
 
 /// The client-failed download's import, with `library` recorded as a library
 /// file it left unsettled on the payload's file.
+#[cfg(unix)]
 async fn record_unsettled_library_file(
     app: &mut AppUseCase,
     tracked: &TrackedDownload,
@@ -3279,6 +3283,7 @@ async fn record_unsettled_library_file(
 /// cannot tell apart, a symlink, is never set aside: its folder takes no
 /// rename, yet the check answers that the question is open, and the import's
 /// row records it for the download's cleanup. The file never leaves its name.
+#[cfg(unix)]
 #[tokio::test]
 async fn an_already_imported_download_file_is_never_set_aside_and_is_recorded_unsettled() {
     let (mut app, user, client, _repository, _config, tracked) =
@@ -3323,6 +3328,7 @@ async fn an_already_imported_download_file_is_never_set_aside_and_is_recorded_un
 /// import left open first. A symlink to the download's file is the library
 /// file: the client entry goes, its data stays, and the import now carries
 /// the library-holds mark instead of the open question.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_cleanup_keeps_the_data_of_an_unsettled_library_file_that_is_the_download_file() {
     let (mut app, user, client, repository, config, tracked) =
@@ -3368,6 +3374,7 @@ async fn a_cleanup_keeps_the_data_of_an_unsettled_library_file_that_is_the_downl
 
 /// A cleanup whose library file was left unsettled and is a separate file
 /// removes the download's data as before, and the open question is cleared.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_cleanup_removes_the_data_of_an_unsettled_library_file_that_is_separate() {
     let (mut app, user, client, _repository, config, tracked) =
@@ -3414,6 +3421,7 @@ async fn a_cleanup_removes_the_data_of_an_unsettled_library_file_that_is_separat
 /// A cleanup that cannot settle an unsettled library file, here because the
 /// download's folder takes no rename, defers and removes nothing: no client
 /// request, the payload intact, and the question still open.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_cleanup_that_cannot_settle_an_unsettled_library_file_defers_and_removes_nothing() {
     let (mut app, user, client, _repository, _config, tracked) =
