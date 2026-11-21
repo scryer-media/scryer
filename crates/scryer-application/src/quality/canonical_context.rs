@@ -357,7 +357,22 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
     ) -> ResolvedScoringContext {
-        self.resolve_canonical_scoring_context_impl(title, profile, true)
+        self.resolve_canonical_scoring_context_impl(title, profile, true, None)
+            .await
+    }
+
+    /// [`Self::resolve_canonical_scoring_context`] for a pass over many titles:
+    /// `library_names` carries each library's name between calls, so the
+    /// library row is read once per library instead of once per title. Hold
+    /// the map for one pass only. A failed read is not recorded, so the next
+    /// title of that library reads again.
+    pub(crate) async fn resolve_canonical_scoring_context_with_library_names(
+        &self,
+        title: &Title,
+        profile: &QualityProfile,
+        library_names: &mut std::collections::HashMap<String, Option<String>>,
+    ) -> ResolvedScoringContext {
+        self.resolve_canonical_scoring_context_impl(title, profile, true, Some(library_names))
             .await
     }
 
@@ -368,8 +383,25 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
     ) -> ResolvedScoringContext {
-        self.resolve_canonical_scoring_context_impl(title, profile, false)
+        self.resolve_canonical_scoring_context_impl(title, profile, false, None)
             .await
+    }
+
+    /// The library name rules see, or `None` with a warning when it cannot be
+    /// read. `Err` marks the failed read so a caller's memo can skip it.
+    async fn scoring_library_name(&self, library_id: &str) -> Result<Option<String>, ()> {
+        match self.services.catalog.libraries.get_by_id(library_id).await {
+            Ok(Some(library)) => Ok(Some(library.name)),
+            Ok(None) => Ok(None),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    library_id = %library_id,
+                    "canonical scoring: library name unresolved; rules see no library"
+                );
+                Err(())
+            }
+        }
     }
 
     async fn resolve_canonical_scoring_context_impl(
@@ -377,6 +409,7 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
         include_rules: bool,
+        library_names: Option<&mut std::collections::HashMap<String, Option<String>>>,
     ) -> ResolvedScoringContext {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet).to_string();
 
@@ -403,23 +436,21 @@ impl AppUseCase {
         profile.criteria.scoring_persona = persona;
         profile.criteria.facet_persona_overrides.clear();
 
-        let library_name = match self
-            .services
-            .catalog
-            .libraries
-            .get_by_id(&title.library_id)
-            .await
-        {
-            Ok(Some(library)) => Some(library.name),
-            Ok(None) => None,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    library_id = %title.library_id,
-                    "canonical scoring: library name unresolved; rules see no library"
-                );
-                None
-            }
+        let library_name = match library_names {
+            Some(names) => match names.get(&title.library_id) {
+                Some(name) => name.clone(),
+                None => match self.scoring_library_name(&title.library_id).await {
+                    Ok(name) => names
+                        .entry(title.library_id.clone())
+                        .or_insert(name)
+                        .clone(),
+                    Err(()) => None,
+                },
+            },
+            None => self
+                .scoring_library_name(&title.library_id)
+                .await
+                .unwrap_or(None),
         };
 
         let rules = if include_rules {

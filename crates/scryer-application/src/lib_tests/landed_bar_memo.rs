@@ -938,3 +938,98 @@ async fn a_malformed_title_override_reads_as_inheriting_and_keeps_the_pass_going
         BTreeSet::from([wanted.id.clone()])
     );
 }
+
+/// A rule that scores by the library a title sits in, so a library name read
+/// for the wrong title, or not read at all, moves the bar.
+fn library_named_rule_engine() -> scryer_rules::UserRulesEngine {
+    let policy = scryer_rules::UserPolicy {
+        id: "library_named".to_string(),
+        name: "Library named".to_string(),
+        rego_source: scryer_rules::rewrite_package_declaration(
+            "score_entry[\"second_library\"] := 400 if {\n    input.context.library_name == \"Second Shelf\"\n}\nscore_entry[\"any_library\"] := 25 if {\n    input.context.library_name != null\n}\n",
+            "library_named",
+        ),
+        origin: scryer_rules::PolicyOrigin::User,
+        applied_facets: vec![],
+    };
+    scryer_rules::UserRulesEngine::build(&[policy]).expect("library rule compiles")
+}
+
+#[tokio::test]
+async fn a_page_of_titles_reads_each_library_once_and_scores_as_one_title_at_a_time() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    fixture
+        .app
+        .swap_user_rules_engine(library_named_rule_engine());
+    let mut second_library = mock_default_library(MediaFacet::Movie);
+    second_library.id = "library-movie-second".to_string();
+    second_library.slug = "movies-second".to_string();
+    second_library.name = "Second Shelf".to_string();
+    second_library.is_default = false;
+    fixture
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(second_library);
+
+    let mut scopes = Vec::new();
+    for index in 0..5 {
+        let name = format!("Shelf Reel {index}");
+        let release = format!("Shelf.Reel.{index}.2024.1080p.WEB-DL.H.264-GRP");
+        let title = fixture.add_movie(&name, &release, 6_000_000_000).await;
+        if index >= 3 {
+            fixture
+                .edit_title(&title.id, |title| {
+                    title.library_id = "library-movie-second".to_string();
+                })
+                .await;
+        }
+        scopes.push(movie_scope(&title));
+    }
+
+    // One title per call is what every title paid before: its own library read.
+    let mut one_at_a_time = Vec::new();
+    for scope in &scopes {
+        one_at_a_time.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    let reads = || fixture.libraries.get_by_id_reads.load(Ordering::SeqCst);
+    let before = reads();
+    let page = fixture.app.landed_bars_for_scopes(&scopes).await;
+    assert_eq!(page, one_at_a_time);
+    assert_eq!(reads() - before, 2, "two libraries on the page, two reads");
+    let (Some(first), Some(second)) = (page[0], page[3]) else {
+        panic!("every scope is occupied: {page:?}");
+    };
+    assert_eq!(second - first, 400, "the library name reached the rules");
+
+    // A failed read is never remembered: every title asks again, and scores
+    // as a title whose library could not be read always has.
+    fixture
+        .libraries
+        .get_by_id_fails
+        .store(true, Ordering::SeqCst);
+    let before = reads();
+    let unreadable = fixture.app.landed_bars_for_scopes(&scopes).await;
+    assert_eq!(reads() - before, scopes.len());
+    let mut unreadable_one_at_a_time = Vec::new();
+    for scope in &scopes {
+        unreadable_one_at_a_time.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    assert_eq!(unreadable, unreadable_one_at_a_time);
+    assert_eq!(
+        unreadable[0],
+        Some(first - 25),
+        "no library name, no library rule"
+    );
+}

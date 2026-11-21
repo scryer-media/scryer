@@ -272,6 +272,8 @@ impl AppUseCase {
             (usize, Vec<String>),
             crate::quality::landed_bar_memo::LandedBar,
         > = HashMap::new();
+        // Titles on a page share a handful of libraries.
+        let mut library_names: HashMap<String, Option<String>> = HashMap::new();
         for title in &titles {
             let title_indices: Vec<usize> = scored_indices
                 .iter()
@@ -293,7 +295,11 @@ impl AppUseCase {
                 }
             };
             let context = self
-                .resolve_canonical_scoring_context(title, &profile)
+                .resolve_canonical_scoring_context_with_library_names(
+                    title,
+                    &profile,
+                    &mut library_names,
+                )
                 .await;
             let memo_base = memo_ticket.map(|_| {
                 let mut hasher = blake3::Hasher::new();
