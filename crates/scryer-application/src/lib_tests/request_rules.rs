@@ -1611,14 +1611,17 @@ async fn housekeeping_keeps_the_newest_three_traces_of_each_rule_set() {
             ))
             .await;
     }
-    harness
-        .request_rule_decisions
-        .seed(trace("unlinked".to_string(), -500, "[]"))
-        .await;
+    // No rule set voted in these: a group of their own.
+    for index in 0..5 {
+        harness
+            .request_rule_decisions
+            .seed(trace(format!("unlinked-{index}"), -500 + index, "[]"))
+            .await;
+    }
 
     assert_eq!(
         harness.app.purge_superseded_request_rule_traces().await,
-        5_007
+        5_009
     );
     assert_eq!(harness.app.purge_superseded_request_rule_traces().await, 0);
     let mut kept: Vec<String> = harness
@@ -1637,7 +1640,9 @@ async fn housekeeping_keeps_the_newest_three_traces_of_each_rule_set() {
             "busy-05009",
             "quiet-0",
             "quiet-1",
-            "unlinked",
+            "unlinked-2",
+            "unlinked-3",
+            "unlinked-4",
         ]
     );
 }

@@ -5010,7 +5010,6 @@ const zh_TW: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "所有庫",
   "settings.requestRuleLibrariesHelp":
     "全部不勾選，則此規則適用於所有庫中的請求。",
-  "settings.requestRuleDecisionCount": "決策數",
   "settings.requestRuleCopy": "複製規則",
   "settings.requestRuleCreate": "建立規則",
   "settings.requestRuleUpdate": "更新規則",

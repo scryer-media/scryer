@@ -1487,7 +1487,8 @@ impl AppUseCase {
         purged
     }
 
-    /// Keep each request rule set's newest traces and remove the rest. A
+    /// Keep each request rule set's newest traces, and the newest traces no
+    /// rule set voted in, and remove the rest. A
     /// trace explains one decision on the request page and in the recent
     /// decisions list; nothing decides from it. A batch that finds none ends
     /// the pass without a write.

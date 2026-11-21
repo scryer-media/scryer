@@ -1292,19 +1292,6 @@ export function SettingsRequestRulesSection({
                   <TableHead>
                     {t("settings.requestDeclaredActionsTitle")}
                   </TableHead>
-                  <SortableHead
-                    id={selectorId("settings-request-rules-sort", "decisions")}
-                    label={t("settings.requestRuleDecisionCount")}
-                    className="text-center"
-                    active={ruleSort.key === "decisions"}
-                    descending={ruleSort.descending}
-                    onSort={() => {
-                      setRuleSort((current) =>
-                        nextRuleTableSort(current, "decisions"),
-                      );
-                      setRulePageIndex(0);
-                    }}
-                  />
                   <TableHead className="text-right">
                     {t("label.actions")}
                   </TableHead>
@@ -1356,9 +1343,6 @@ export function SettingsRequestRulesSection({
                           />
                         ) : null}
                       </TableCell>
-                      <TableCell className="text-center">
-                        {record.decisionCount}
-                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <IconButton
@@ -1393,7 +1377,7 @@ export function SettingsRequestRulesSection({
                 })}
                 {ruleSetRecords.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
+                    <TableCell colSpan={6} className="text-muted-foreground">
                       {t("settings.noRequestRulesFound")}
                     </TableCell>
                   </TableRow>

@@ -3261,7 +3261,6 @@ const de: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Alle Bibliotheken",
   "settings.requestRuleLibrariesHelp":
     "Lassen Sie alle Felder unmarkiert, damit diese Regel für Anfragen in jeder Bibliothek gilt.",
-  "settings.requestRuleDecisionCount": "Entscheidungen",
   "settings.requestRuleCopy": "Regel kopieren",
   "settings.requestRuleCreate": "Regel erstellen",
   "settings.requestRuleUpdate": "Regel aktualisieren",

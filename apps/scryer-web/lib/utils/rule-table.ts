@@ -156,7 +156,6 @@ export const REQUEST_RULE_SORT_KEYS = [
   "description",
   "enabled",
   "libraries",
-  "decisions",
 ] as const;
 
 export type RequestRuleSortKey = (typeof REQUEST_RULE_SORT_KEYS)[number];
@@ -166,7 +165,6 @@ type SortableRequestRule = {
   name: string;
   description: string | null;
   enabled: boolean;
-  decisionCount: number;
 };
 
 /// Request rules in table order. `libraryLabel` is the text the Libraries
@@ -195,8 +193,6 @@ export function sortRequestRules<T extends SortableRequestRule>(
           direction *
           ruleTableCollator.compare(libraryLabel(left), libraryLabel(right))
         );
-      case "decisions":
-        return direction * (left.decisionCount - right.decisionCount);
     }
   });
 }

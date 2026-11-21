@@ -2947,7 +2947,6 @@ const zh_CN: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "所有库",
   "settings.requestRuleLibrariesHelp":
     "全部不勾选，则此规则适用于所有库中的请求。",
-  "settings.requestRuleDecisionCount": "决策数",
   "settings.requestRuleCopy": "复制规则",
   "settings.requestRuleCreate": "创建规则",
   "settings.requestRuleUpdate": "更新规则",

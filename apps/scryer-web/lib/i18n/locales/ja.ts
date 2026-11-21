@@ -3193,7 +3193,6 @@ const ja: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "すべてのライブラリ",
   "settings.requestRuleLibrariesHelp":
     "すべてのチェックを外すと、このルールはすべてのライブラリのリクエストに適用されます。",
-  "settings.requestRuleDecisionCount": "判定数",
   "settings.requestRuleCopy": "ルールをコピー",
   "settings.requestRuleCreate": "ルールを作成",
   "settings.requestRuleUpdate": "ルールを更新",

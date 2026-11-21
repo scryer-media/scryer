@@ -5782,7 +5782,6 @@ const cs: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Všechny knihovny",
   "settings.requestRuleLibrariesHelp":
     "Ponecháním všech políček nezaškrtnutých uplatníte toto pravidlo na žádosti ve všech knihovnách.",
-  "settings.requestRuleDecisionCount": "Rozhodnutí",
   "settings.requestRuleCopy": "Kopírovat pravidlo",
   "settings.requestRuleCreate": "Vytvořit pravidlo",
   "settings.requestRuleUpdate": "Aktualizovat pravidlo",

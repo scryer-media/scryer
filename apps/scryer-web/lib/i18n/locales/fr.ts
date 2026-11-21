@@ -3368,7 +3368,6 @@ const fr: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Toutes les bibliothèques",
   "settings.requestRuleLibrariesHelp":
     "Laissez toutes les cases décochées pour appliquer cette règle aux demandes de toutes les bibliothèques.",
-  "settings.requestRuleDecisionCount": "Décisions",
   "settings.requestRuleCopy": "Copier la règle",
   "settings.requestRuleCreate": "Créer la règle",
   "settings.requestRuleUpdate": "Mettre à jour la règle",

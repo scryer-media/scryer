@@ -243,9 +243,10 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
 
     /// One read ranks every rule set's traces newest first and names the
     /// traces outside the newest `keep` of each rule set that voted in them;
-    /// the deletes then go in bind-safe transactions. Once a pass has run,
-    /// the links table holds about `keep` rows per rule set, so the read is
-    /// small and a pass with nothing to remove writes nothing.
+    /// a second names the traces no rule set voted in outside the newest
+    /// `keep` of those. The deletes then go in bind-safe transactions. Once a
+    /// pass has run, both tables hold about `keep` rows per group, so the
+    /// reads are small and a pass with nothing to remove writes nothing.
     async fn delete_traces_beyond_latest_per_rule_set(
         &self,
         keep: usize,
@@ -254,7 +255,7 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         if keep == 0 || limit == 0 {
             return Ok(0);
         }
-        let ids: Vec<String> = SqlRuntime::fetch_all(
+        let mut ids: Vec<String> = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             "SELECT ranked.decision_id AS decision_id
                FROM (
@@ -278,6 +279,36 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         .iter()
         .map(|row| row.text("decision_id"))
         .collect::<AppResult<_>>()?;
+        // Traces no rule set voted in are one more group, read apart because
+        // they have no link row to rank. Pre-flight traces are left to their
+        // own purge, so they neither go here nor take a kept place.
+        let unlinked_limit = limit
+            .min(SUPERSEDED_TRACE_READ_MAX)
+            .saturating_sub(ids.len());
+        if unlinked_limit > 0 {
+            let unlinked = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT d.id AS decision_id
+                       FROM request_rule_decisions d
+                      WHERE NOT EXISTS (
+                                SELECT 1 FROM request_rule_decision_rule_sets l
+                                 WHERE l.decision_id = d.id
+                            )
+                        AND NOT (d.{PREFLIGHT_TRACE_PREDICATE})
+                      ORDER BY d.evaluated_at DESC, d.id DESC
+                      LIMIT {{}} OFFSET {{}}"
+                ),
+                &[
+                    SqlArg::I64(unlinked_limit as i64),
+                    SqlArg::I64(keep.min(i64::MAX as usize) as i64),
+                ],
+            )
+            .await?;
+            for row in &unlinked {
+                ids.push(row.text("decision_id")?);
+            }
+        }
         let mut removed = 0usize;
         for chunk in ids.chunks(SUPERSEDED_TRACE_DELETE_CHUNK) {
             let placeholders = std::iter::repeat_n("{}", chunk.len())

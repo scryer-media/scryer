@@ -72,9 +72,6 @@ export type RequestRuleSetRecord = {
   description: string;
   enabled: boolean;
   libraryIds: string[];
-  /// How many stored decisions name this rule set. Read per rule set rather
-  /// than batched, so the number on a row is the number the API holds.
-  decisionCount: number;
   /// Absent on payloads that do not select it.
   declaredActions?: RequestDeclaredActions;
   createdAt: string;
