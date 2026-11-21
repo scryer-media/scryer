@@ -44,7 +44,7 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
 - Database indexes that no query used are dropped, and the indexes that common lookups were missing are added.
 - Guided tour progress and monthly indexer usage are kept in backups.
 - The built-in expired request leases rule is view-only. It is listed with the lifecycle rules, where it can be turned on or off, and no longer has its own card on the Request Rules page.
-- Request decision traces are kept to the newest three per rule. Housekeeping removes older traces, and the traces earlier builds wrote for every preview in the request dialog.
+- Request decision traces are kept to the newest three per rule. A preview in the request dialog stores no trace, and housekeeping removes the preview traces earlier releases stored.
 
 ## Lifecycle rules
 
@@ -60,23 +60,21 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
   - storage facts for every library root, with free space sampled by the storage capacity module
   - when a title was first requested (`requested_at`), and who watched it, by name (`watched_by_usernames`) and with each user's plays (`watched_by_users`)
   - content ratings (`age_rating`, `certifications`, `certification_label`, `certification_rank`) and awards (`award_count`, `awards`), in the same shapes request rules read
-  - a movie's `release_date`: the earliest release date Scryer knows, of any kind and in any market. It replaces the theatrical, digital and physical date facts, which now read as unknown, so a rule that still reads one holds its titles.
+  - a movie's `release_date`: the earliest release date Scryer knows, of any kind and in any market.
 - A rule loads only the fact groups it names.
 - A title whose ratings or awards are not stored yet reads them as unknown (`metadata_not_stored`), never as empty.
 - A rule that deletes files to free space checks the free space again after each deletion, and stops once the space it freed satisfies it.
 - A title deleted by a lifecycle rule is excluded from every public list that added it, so the list does not add it back.
-- An aired episode nobody has played counts as unwatched, instead of holding every watch fact as unknown.
+- An aired episode nobody has played counts as unwatched.
 - A playback session holds only the title it is playing. A session that matches no title holds nothing. A media server that cannot be reached holds deletions on every title until it answers, and lets reversible actions run.
 - A rule holds a title when a fact it needs cannot be known. `max_video_height` is unknown until every file of the title has been scanned. A new series or season favorite holds an action that would remove it.
 - Conflicting actions across a title, its seasons and its episodes hold each other, and the Simple builder refuses to save them.
 - Act now runs one selected rule and evaluates it first. Only a rule's own run acts on its candidates.
 - A held title waits for the rule's next evaluation.
 - Titles past a rule's maximum per run wait for the next run.
-- A rule whose only action is a season or episode notification counts as notify-only, so its notification is sent.
 - Validation reports the undefined tags, quality profiles and move targets that a save would refuse.
 - Every hold and state reason shows translated text, and a held or failed step shows the cause behind it, such as a move refused for lack of space.
-- A rule's move to another library lands each title on that library's default root, and moves and searches started by a rule no longer fail.
-- The rule builder no longer offers facts the server never collects.
+- A rule's move to another library lands each title on that library's default root.
 - The Rules page lists Scoring, Lifecycle and Request Rules under the sidebar's Rules entry. Lifecycle's Rules, Leaving soon and History are page tabs. The command palette still finds the page when searched as "maintenance".
 - The rule table sorts by any column and pages after 15 rules.
 - A new rule can be created enabled or disabled. Creating a rule enabled that deletes files still asks for confirmation.
@@ -97,7 +95,7 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
 - Request dialogs put lease, tag and release help behind info icons.
 - The Request Rules page has Rules, Try a request and Decisions tabs. Its rule table sorts and pages like the lifecycle table, and no longer shows a decision count.
 - Each decision lists the votes that decided it, approve, then deny, then review, then any rule that failed to run, each by name. The other rules and failure text open under the row.
-- The request dialog reads a title's metadata once when it opens, and its previews and the submit use that read. A list sync reads its new requests' metadata in batches. A metadata outage is retried after five minutes.
+- The request dialog reads a title's metadata once when it opens, and its previews and the submit use that read. A list sync reads its new requests' metadata in batches.
 - Series shape facts count the episodes Scryer has loaded.
 
 ## Rule builder
@@ -116,7 +114,7 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
 - The Rules pages order Scoring, Request, Lifecycle. Scoring rules have Rules and Community tabs: Community holds the installed rule packs and the registry packs not yet installed, and each pack rule installs from its own card.
 - Scoring and request rule tables sort by any column and page like the lifecycle table.
 - Try a rule picks a saved rule from a type-to-filter list, and groups libraries by facet.
-- The AI prompt for writing a rule is a fraction of its former size.
+- The AI prompt for writing a rule is much shorter.
 - Builder problems are shown when saving, and decisions and changes sit in a compact table.
 
 ## Rule imports
@@ -136,7 +134,7 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
 - Each release can show a tour of its highlights.
 - Steps that change page point at the navigation first, and each spotlight has a hand-drawn arrow.
 - A finished or skipped tour is recorded for the account on the server.
-- The onboarding tour opens right after the first-run wizard, without a reload.
+- The onboarding tour opens right after the first-run wizard.
 
 ## Indexers
 
@@ -335,7 +333,6 @@ All filesystem work now goes through one disk service.
 
 - Moves on one volume rename instead of copying, using a rename that never replaces.
 - The volume serial and file index are read from the file's own handle.
-- Deduplicated, compressed and cloud-placeholder files can be read again; only links and junctions are refused.
 - Removals leave the read-only flag alone unless asked.
 
 ## Performance
