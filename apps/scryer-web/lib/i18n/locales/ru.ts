@@ -2580,8 +2580,6 @@ const ru: LocaleDictionary = {
   "settings.scoringNavRules": "Правила",
   "settings.scoringNavCommunity": "Сообщество",
   "settings.communityRulePacks": "Доступные пакеты правил",
-  "settings.communityRulePacksDescription":
-    "Пакеты правил сообщества, которые можно установить. Откройте пакет, чтобы увидеть его правила.",
   "settings.communityRulePacksAllInstalled":
     "Все пакеты правил сообщества уже установлены.",
   "settings.rulePackAuthor": "Автор",
@@ -13584,8 +13582,6 @@ const ru: LocaleDictionary = {
   "uiText.deny": "Запретить",
   "uiText.isReadyToApply": "готово к применению.",
   "uiText.installedRulePacks": "Установленные пакеты правил",
-  "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization":
-    "Названия, описания и категории, заданные автором пакета, остаются управляемыми. Некоторые пакеты позволяют копировать отдельные правила для настройки.",
   "uiText.pack": "Пакет",
   "uiText.lastUpdated": "Последнее обновление",
   "uiText.autoUpdate": "Автообновление",

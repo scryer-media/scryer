@@ -166,11 +166,6 @@ export function TrackedRulePacksSection({
         <h3 className="text-base font-semibold">
           {t("uiText.installedRulePacks")}
         </h3>
-        <p className="text-xs text-muted-foreground">
-          {t(
-            "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization",
-          )}
-        </p>
       </div>
       <div className="overflow-x-auto rounded border border-border bg-card">
         <Table

@@ -122,9 +122,6 @@ export function CommunityRulePacksSection({
         <h3 className="text-base font-semibold">
           {t("settings.communityRulePacks")}
         </h3>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.communityRulePacksDescription")}
-        </p>
       </div>
       <div className="overflow-x-auto rounded border border-border bg-card">
         <Table

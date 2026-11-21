@@ -7347,8 +7347,6 @@ const en: LocaleDictionary = {
   "settings.scoringNavRules": "Rules",
   "settings.scoringNavCommunity": "Community",
   "settings.communityRulePacks": "Available rule packs",
-  "settings.communityRulePacksDescription":
-    "Community rule packs you can install. Open a pack to see its rules.",
   "settings.communityRulePacksAllInstalled":
     "Every community rule pack is already installed.",
   "settings.rulePackAuthor": "Author",
@@ -13020,8 +13018,6 @@ const en: LocaleDictionary = {
   "uiText.deny": "Deny",
   "uiText.isReadyToApply": "is ready to apply.",
   "uiText.installedRulePacks": "Installed rule packs",
-  "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization":
-    "Pack-authored names, descriptions, and facets stay managed. Some packs allow individual rules to be copied for customization.",
   "uiText.pack": "Pack",
   "uiText.lastUpdated": "Last updated",
   "uiText.autoUpdate": "Auto-update",
