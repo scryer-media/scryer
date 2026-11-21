@@ -65,6 +65,32 @@ use crate::{AppError, AppResult, AppUseCase};
 /// and query size rather than to go fast.
 pub const LIFECYCLE_EVALUATION_TITLE_CHUNK: usize = 200;
 
+/// One chunk's live candidates of a rule, read together.
+#[derive(Default)]
+struct LifecycleChunkLiveCandidates {
+    /// The subject kinds whose read succeeded.
+    read_kinds: HashSet<&'static str>,
+    /// Each subject's live candidate, the highest match generation when a
+    /// store holds more than one.
+    by_subject: HashMap<(&'static str, String), LifecycleCandidate>,
+    /// Every live candidate the reads returned.
+    found: Vec<LifecycleCandidate>,
+}
+
+impl LifecycleChunkLiveCandidates {
+    /// The subject's live candidate as the chunk read it, or `None` when its
+    /// kind could not be read.
+    fn active_for(
+        &self,
+        subject: &super::subjects::LifecycleSubject,
+    ) -> Option<Option<LifecycleCandidate>> {
+        let kind = subject.kind.as_storage_str();
+        self.read_kinds
+            .contains(kind)
+            .then(|| self.by_subject.get(&(kind, subject.id.clone())).cloned())
+    }
+}
+
 /// Per-pass read-through state. Inventories are capped to a title page so a
 /// long evaluation cannot retain its entire catalog, while repeated rules can
 /// reuse a consistent first-page snapshot. The configured roots are read once
@@ -1449,15 +1475,23 @@ impl AppUseCase {
                     series_movies,
                 ));
             }
+            // The chunk's live candidates, read together rather than once per
+            // subject as each is reconciled.
+            let chunk_live = self
+                .lifecycle_chunk_live_candidates(
+                    &rule_set.id,
+                    prepared.iter().flat_map(|(_, subjects, ..)| subjects),
+                )
+                .await;
             // Only a rule that deletes media can have a delete under way.
             if detail.declared_actions.destructive {
-                let candidates = self
-                    .lifecycle_chunk_active_candidates(
-                        &rule_set.id,
-                        detail.rule_set.current_revision_number,
-                        prepared.iter().flat_map(|(_, subjects, ..)| subjects),
-                    )
-                    .await;
+                let revision_number = detail.rule_set.current_revision_number;
+                let candidates = chunk_live
+                    .found
+                    .iter()
+                    .filter(|candidate| candidate.revision_number == revision_number)
+                    .cloned()
+                    .collect();
                 self.lifecycle_read_ahead_started_delete_steps(candidates, &mut started_reads)
                     .await;
             }
@@ -1478,6 +1512,7 @@ impl AppUseCase {
                 let mut incomplete = false;
                 for subject in subjects {
                     in_scope.insert(subject.id.clone());
+                    let live = chunk_live.active_for(&subject);
                     match self
                         .reconcile_lifecycle_title(
                             cross_level,
@@ -1485,6 +1520,7 @@ impl AppUseCase {
                             &mut evaluator,
                             title,
                             &subject,
+                            live,
                             title_input.as_ref(),
                             people,
                             watch,
@@ -1581,15 +1617,14 @@ impl AppUseCase {
         Ok(counts)
     }
 
-    /// The live candidates of the rule's current revision for a chunk's
-    /// subjects, one read per subject kind. A failed read is left out: those
-    /// candidates then read their own step rows when reconciled.
-    async fn lifecycle_chunk_active_candidates<'s>(
+    /// The live candidates of the rule for a chunk's subjects, one read per
+    /// subject kind. A kind whose read failed is left out: its subjects then
+    /// read their own candidate, and their own step rows, when reconciled.
+    async fn lifecycle_chunk_live_candidates<'s>(
         &self,
         rule_set_id: &str,
-        revision_number: i64,
         subjects: impl Iterator<Item = &'s super::subjects::LifecycleSubject>,
-    ) -> Vec<LifecycleCandidate> {
+    ) -> LifecycleChunkLiveCandidates {
         let mut ids_by_kind: HashMap<&'static str, Vec<String>> = HashMap::new();
         for subject in subjects {
             ids_by_kind
@@ -1597,7 +1632,7 @@ impl AppUseCase {
                 .or_default()
                 .push(subject.id.clone());
         }
-        let mut candidates = Vec::new();
+        let mut live = LifecycleChunkLiveCandidates::default();
         for (kind, ids) in ids_by_kind {
             match self
                 .services
@@ -1606,11 +1641,24 @@ impl AppUseCase {
                 .list_active_subject_candidates(rule_set_id, kind, &ids)
                 .await
             {
-                Ok(found) => candidates.extend(
-                    found
-                        .into_iter()
-                        .filter(|candidate| candidate.revision_number == revision_number),
-                ),
+                Ok(found) => {
+                    live.read_kinds.insert(kind);
+                    for candidate in found {
+                        // The single-subject read answers with the highest
+                        // match generation; so does this.
+                        match live.by_subject.entry((kind, candidate.subject_id.clone())) {
+                            std::collections::hash_map::Entry::Occupied(mut held) => {
+                                if candidate.match_generation > held.get().match_generation {
+                                    held.insert(candidate.clone());
+                                }
+                            }
+                            std::collections::hash_map::Entry::Vacant(slot) => {
+                                slot.insert(candidate.clone());
+                            }
+                        }
+                        live.found.push(candidate);
+                    }
+                }
                 Err(error) => debug!(
                     rule_set_id,
                     error = %error,
@@ -1618,7 +1666,7 @@ impl AppUseCase {
                 ),
             }
         }
-        candidates
+        live
     }
 
     /// Record on each of one title's live candidates whether the rule decided
@@ -1774,6 +1822,7 @@ impl AppUseCase {
         evaluator: &mut LifecycleRulesEvaluator,
         title: &Title,
         subject: &super::subjects::LifecycleSubject,
+        live: Option<Option<LifecycleCandidate>>,
         title_input: Option<&scryer_rules::lifecycle::LifecycleInput>,
         people: LifecycleTitlePeople<'_>,
         watch: LifecycleTitleWatch<'_>,
@@ -1792,9 +1841,20 @@ impl AppUseCase {
         let rule_set_id = detail.rule_set.id.as_str();
         let candidates = &self.services.customization.lifecycle_evaluation;
 
-        let mut active = candidates
-            .get_active_subject_candidate(rule_set_id, subject.kind.as_storage_str(), &subject.id)
-            .await?;
+        // The chunk's read answers for the subject when it could be made; a
+        // subject whose kind it could not read reads its own candidate.
+        let mut active = match live {
+            Some(active) => active,
+            None => {
+                candidates
+                    .get_active_subject_candidate(
+                        rule_set_id,
+                        subject.kind.as_storage_str(),
+                        &subject.id,
+                    )
+                    .await?
+            }
+        };
         // The pairing a subject gets when this pass cannot decide it: the
         // actions its live candidate stored. With `as_candidate` unset the
         // candidate pairs but is not itself marked.
