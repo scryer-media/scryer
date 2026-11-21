@@ -109,7 +109,7 @@ struct SequenceStepExecutionContext<'a> {
     evaluator: &'a mut LifecycleRulesEvaluator,
     libraries: &'a HashMap<String, LifecycleLibraryRef>,
     tag_conflicts: &'a Option<std::collections::HashSet<String>>,
-    storage_roots: &'a super::storage::LifecycleStorageRootsOnce,
+    recheck_shared: &'a super::action_execution::LifecycleRecheckShared,
 }
 
 struct SequenceStepRunContext<'a> {
@@ -129,9 +129,9 @@ pub(super) struct SequenceCandidateExecutionContext<'a> {
     pub(super) evaluator: &'a mut LifecycleRulesEvaluator,
     pub(super) libraries: &'a HashMap<String, LifecycleLibraryRef>,
     pub(super) tag_conflicts: &'a Option<std::collections::HashSet<String>>,
-    /// The configured roots, read once for this candidate however many
-    /// safety checks it runs.
-    pub(super) storage_roots: &'a super::storage::LifecycleStorageRootsOnce,
+    /// What every safety check for this candidate shares: the rule's source
+    /// reads and the configured roots, read once however many checks run.
+    pub(super) recheck_shared: &'a super::action_execution::LifecycleRecheckShared,
     pub(super) budget: &'a mut LifecycleSequencePassBudget,
 }
 
@@ -240,7 +240,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
-            storage_roots,
+            recheck_shared,
             budget,
         } = context;
         if candidate.state != LifecycleCandidateState::Blocked {
@@ -285,7 +285,7 @@ impl AppUseCase {
                 candidate,
                 libraries,
                 tag_conflicts,
-                storage_roots,
+                recheck_shared,
                 super::action_execution::RecheckFilePresence::Probe,
             )
             .await
@@ -306,7 +306,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
-            storage_roots,
+            recheck_shared,
             budget,
         } = context;
         let now = Utc::now();
@@ -370,7 +370,7 @@ impl AppUseCase {
                         evaluator,
                         libraries,
                         tag_conflicts,
-                        storage_roots,
+                        recheck_shared,
                         budget,
                     },
                 )
@@ -661,7 +661,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
-            storage_roots,
+            recheck_shared,
             budget,
         } = context;
         let sequence_hash = sequence
@@ -939,7 +939,7 @@ impl AppUseCase {
                     candidate,
                     libraries,
                     tag_conflicts,
-                    storage_roots,
+                    recheck_shared,
                     super::action_execution::RecheckFilePresence::Probe,
                 )
                 .await;
@@ -1027,7 +1027,7 @@ impl AppUseCase {
                         evaluator,
                         libraries,
                         tag_conflicts,
-                        storage_roots,
+                        recheck_shared,
                     },
                     step,
                     &mut run,
@@ -1079,7 +1079,7 @@ impl AppUseCase {
                                     candidate,
                                     libraries,
                                     tag_conflicts,
-                                    storage_roots,
+                                    recheck_shared,
                                     super::action_execution::RecheckFilePresence::Probe,
                                 )
                                 .await
@@ -1098,7 +1098,7 @@ impl AppUseCase {
                                             evaluator,
                                             libraries,
                                             tag_conflicts,
-                                            storage_roots,
+                                            recheck_shared,
                                         },
                                         step,
                                         &mut run,
@@ -1284,7 +1284,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
-            storage_roots,
+            recheck_shared,
         } = context;
         match (&step.kind, &step.parameters) {
             (
@@ -1547,7 +1547,7 @@ impl AppUseCase {
                         evaluator,
                         libraries,
                         tag_conflicts,
-                        storage_roots,
+                        recheck_shared,
                     },
                     step,
                     run,
@@ -2376,7 +2376,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
-            storage_roots,
+            recheck_shared,
             ..
         } = context;
         let Some(unmonitor) = sequence.steps[..step_index]
@@ -2508,7 +2508,7 @@ impl AppUseCase {
                 evaluator,
                 libraries,
                 tag_conflicts,
-                storage_roots,
+                recheck_shared,
             };
             self.execute_scoped_lifecycle_deletion(
                 &mut context,

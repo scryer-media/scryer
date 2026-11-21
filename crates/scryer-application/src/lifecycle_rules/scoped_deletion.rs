@@ -677,7 +677,7 @@ impl AppUseCase {
         let evaluator = &mut *context.evaluator;
         let libraries = context.libraries;
         let tag_conflicts = context.tag_conflicts;
-        let storage_roots = context.storage_roots;
+        let recheck_shared = context.recheck_shared;
         let (subject_label, subject_files) = self
             .lifecycle_policy_deletion_files(candidate, title)
             .await?;
@@ -822,10 +822,7 @@ impl AppUseCase {
         // These rechecks keep only the decision, never the input, so a rule
         // that reads no presence fact is rechecked without probing the
         // title's files: its decision cannot depend on them.
-        let recheck_presence = if super::subjects::rule_may_read_file_presence(
-            &detail.revision.rego_source,
-            &detail.rule_set.id,
-        ) {
+        let recheck_presence = if recheck_shared.source_reads.file_presence {
             super::action_execution::RecheckFilePresence::Probe
         } else {
             super::action_execution::RecheckFilePresence::SkipUnread
@@ -862,7 +859,7 @@ impl AppUseCase {
                         candidate,
                         libraries,
                         tag_conflicts,
-                        storage_roots,
+                        recheck_shared,
                         recheck_presence,
                     )
                     .await

@@ -574,9 +574,52 @@ pub(super) struct LifecycleExecutionContext<'a> {
     pub(super) evaluator: &'a mut LifecycleRulesEvaluator,
     pub(super) libraries: &'a HashMap<String, LifecycleLibraryRef>,
     pub(super) tag_conflicts: &'a Option<HashSet<String>>,
-    /// The configured roots, read once for this unit of work however many
-    /// safety checks it runs.
-    pub(super) storage_roots: &'a super::storage::LifecycleStorageRootsOnce,
+    /// What every safety check of this unit of work shares: the rule's
+    /// source reads and the configured roots, read once however many checks
+    /// it runs.
+    pub(super) recheck_shared: &'a LifecycleRecheckShared,
+}
+
+/// What one rule's source says it reads, worked out once per rule rather
+/// than once per safety check. Each is a pure function of the stored source
+/// and the rule's id, so it is the same answer every check computed itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LifecycleRuleSourceReads {
+    pub(super) fact_loads: super::list_facts::LifecycleFactLoads,
+    pub(super) watch_facts: bool,
+    pub(super) favorite_facts: bool,
+    pub(super) storage: bool,
+    pub(super) file_presence: bool,
+}
+
+impl LifecycleRuleSourceReads {
+    pub(super) fn of(detail: &LifecycleRuleSetDetail) -> Self {
+        let source = &detail.revision.rego_source;
+        let rule_set_id = &detail.rule_set.id;
+        Self {
+            fact_loads: super::list_facts::LifecycleFactLoads::for_rule(source, rule_set_id),
+            watch_facts: super::watch_recheck::rule_reads_watch_facts(source, rule_set_id),
+            favorite_facts: super::watch_recheck::rule_reads_favorite_facts(source, rule_set_id),
+            storage: super::storage::rule_reads_storage(source),
+            file_presence: super::subjects::rule_may_read_file_presence(source, rule_set_id),
+        }
+    }
+}
+
+/// What every safety check for one candidate shares: the rule's source
+/// reads, and the configured roots, read on the first check that needs them.
+pub(super) struct LifecycleRecheckShared {
+    pub(super) source_reads: LifecycleRuleSourceReads,
+    pub(super) storage_roots: super::storage::LifecycleStorageRootsOnce,
+}
+
+impl LifecycleRecheckShared {
+    pub(super) fn new(source_reads: LifecycleRuleSourceReads) -> Self {
+        Self {
+            source_reads,
+            storage_roots: super::storage::LifecycleStorageRootsOnce::new(),
+        }
+    }
 }
 
 // ── Rule state ──────────────────────────────────────────────────────────────
@@ -1226,6 +1269,7 @@ impl AppUseCase {
                 }
             };
             let mut evaluator = engine.evaluator();
+            let source_reads = LifecycleRuleSourceReads::of(&detail);
 
             // The selection covers abandoned leases as well as due work: a
             // candidate whose worker died mid-run is `executing` with nothing
@@ -1343,7 +1387,7 @@ impl AppUseCase {
                             }
                         }
                         Ok(sequence) => {
-                            let storage_roots = super::storage::LifecycleStorageRootsOnce::new();
+                            let recheck_shared = LifecycleRecheckShared::new(source_reads);
                             let budget = sequence_budget
                                 .as_mut()
                                 .expect("sequence actions always have a step budget");
@@ -1356,7 +1400,7 @@ impl AppUseCase {
                                         evaluator: &mut evaluator,
                                         libraries: &libraries,
                                         tag_conflicts: &tag_conflicts,
-                                        storage_roots: &storage_roots,
+                                        recheck_shared: &recheck_shared,
                                         budget,
                                     },
                                 )
@@ -1373,7 +1417,7 @@ impl AppUseCase {
                                         evaluator: &mut evaluator,
                                         libraries: &libraries,
                                         tag_conflicts: &tag_conflicts,
-                                        storage_roots: &storage_roots,
+                                        recheck_shared: &recheck_shared,
                                         budget,
                                     },
                                 )
@@ -1614,7 +1658,7 @@ impl AppUseCase {
         candidate: &LifecycleCandidate,
         libraries: &HashMap<String, LifecycleLibraryRef>,
         tag_conflicts: &Option<HashSet<String>>,
-        storage_roots: &super::storage::LifecycleStorageRootsOnce,
+        recheck_shared: &LifecycleRecheckShared,
         presence: RecheckFilePresence,
     ) -> SafetyDecision {
         // (1) Re-read the rule and the gates: both can move between selection
@@ -1949,7 +1993,9 @@ impl AppUseCase {
             Some(Ok(title_subject)) => Some(title_subject),
             Some(Err(_)) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
-        let storage_roots = match storage_roots
+        let source_reads = recheck_shared.source_reads;
+        let storage_roots = match recheck_shared
+            .storage_roots
             .get_or_try_init(|| self.lifecycle_storage_roots_context())
             .await
         {
@@ -1964,10 +2010,7 @@ impl AppUseCase {
         let lists_by_title = self
             .lifecycle_list_facts_loading(
                 std::slice::from_ref(&title),
-                super::list_facts::LifecycleFactLoads::for_rule(
-                    &detail.revision.rego_source,
-                    &detail.rule_set.id,
-                ),
+                source_reads.fact_loads,
                 &watch_context,
                 recheck_time,
             )
@@ -2046,7 +2089,7 @@ impl AppUseCase {
             }
             None => subject_input,
         };
-        if super::storage::rule_reads_storage(&detail.revision.rego_source)
+        if source_reads.storage
             && !matches!(
                 input.subject_facts().storage_roots,
                 scryer_rules::lifecycle::Observation::Known { .. }
@@ -2154,10 +2197,18 @@ impl AppUseCase {
         // the subject's watched items back from their servers first; a play
         // since then, a play no stored fact credits, or a read that cannot be
         // made holds. A clean read changes nothing it read.
-        if super::watch_recheck::rule_reads_watch_facts(
-            &detail.revision.rego_source,
-            &candidate.rule_set_id,
-        ) {
+        // These two are asked under the candidate's own rule id; the shared
+        // answers were worked out under the rule's, which is the same id for
+        // every candidate the pass selects for it.
+        let same_rule_id = candidate.rule_set_id == detail.rule_set.id;
+        if if same_rule_id {
+            source_reads.watch_facts
+        } else {
+            super::watch_recheck::rule_reads_watch_facts(
+                &detail.revision.rego_source,
+                &candidate.rule_set_id,
+            )
+        } {
             let episode_ids = (subject.kind != scryer_domain::LifecycleRuleSubjectKind::Title)
                 .then(|| {
                     subject
@@ -2188,10 +2239,15 @@ impl AppUseCase {
             // A rule that reads a favourite fact also compares each item's
             // live favourite flags, carried in the same answers, with the
             // favourites stored for the title.
-            let favorites = if super::watch_recheck::rule_reads_favorite_facts(
-                &detail.revision.rego_source,
-                &candidate.rule_set_id,
-            ) {
+            let reads_favorites = if same_rule_id {
+                source_reads.favorite_facts
+            } else {
+                super::watch_recheck::rule_reads_favorite_facts(
+                    &detail.revision.rego_source,
+                    &candidate.rule_set_id,
+                )
+            };
+            let favorites = if reads_favorites {
                 match self
                     .services
                     .integrations
