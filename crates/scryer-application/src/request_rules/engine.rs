@@ -94,8 +94,10 @@ impl RequestRulesEngineCache {
     }
 }
 
-/// Shared handle the service bundle hangs on to.
-pub type RequestRulesEngineHandle = Arc<RwLock<RequestRulesEngineCache>>;
+/// Shared handle the service bundle hangs on to. A generation is installed
+/// whole and never changed in place, so a reader takes the `Arc` and drops the
+/// lock without copying the engine or its maps.
+pub type RequestRulesEngineHandle = Arc<RwLock<Arc<RequestRulesEngineCache>>>;
 
 impl AppUseCase {
     /// Read the current engine generation.
@@ -103,21 +105,21 @@ impl AppUseCase {
     /// A poisoned lock produces an unavailable generation. Request evaluation
     /// holds rather than deciding against an empty engine that might omit
     /// persisted enabled rules.
-    pub(crate) fn request_rules_engine_snapshot(&self) -> RequestRulesEngineCache {
+    pub(crate) fn request_rules_engine_snapshot(&self) -> Arc<RequestRulesEngineCache> {
         self.services
             .customization
             .request_rules_engine
             .read()
-            .map(|guard| guard.clone())
+            .map(|guard| Arc::clone(&guard))
             .unwrap_or_else(|error| {
                 tracing::warn!(
                     error = %error,
                     "request rules engine lock poisoned; request rules are unavailable"
                 );
-                RequestRulesEngineCache {
+                Arc::new(RequestRulesEngineCache {
                     unavailable: true,
                     ..RequestRulesEngineCache::default()
-                }
+                })
             })
     }
 
@@ -133,11 +135,17 @@ impl AppUseCase {
             .map_err(|error| {
                 AppError::Repository(format!("request rules engine lock poisoned: {error}"))
             })?;
-        guard.unavailable = true;
-        guard.generation = guard.generation.checked_add(1).ok_or_else(|| {
+        let generation = guard.generation.checked_add(1).ok_or_else(|| {
             AppError::Repository("request rules engine generation exhausted".to_string())
         })?;
-        Ok(guard.generation)
+        // Readers keep the generation they already hold; the unavailable one
+        // replaces it, copied once per rebuild rather than once per read.
+        *guard = Arc::new(RequestRulesEngineCache {
+            unavailable: true,
+            generation,
+            ..RequestRulesEngineCache::clone(&guard)
+        });
+        Ok(generation)
     }
 
     /// Rebuild the engine from every enabled rule set.
@@ -271,14 +279,14 @@ impl AppUseCase {
             );
             return Ok(());
         }
-        *guard = RequestRulesEngineCache {
+        *guard = Arc::new(RequestRulesEngineCache {
             engine,
             scopes,
             load_errors,
             generation,
             unavailable: false,
             fact_reads,
-        };
+        });
         drop(guard);
 
         tracing::debug!(rule_count, "request rules engine rebuilt");

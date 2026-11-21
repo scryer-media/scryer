@@ -314,7 +314,14 @@ impl AppUseCase {
         };
 
         let mut evaluator = cache.engine.evaluator();
-        let outcome = match evaluator.evaluate(&input) {
+        // Only the rules whose scope covers the library run: the votes and
+        // errors of the rest would be dropped below anyway.
+        let outcome = match evaluator.evaluate_in_scope(&input, |rule_set_id| {
+            cache
+                .scopes
+                .get(rule_set_id)
+                .is_some_and(|scope| scope.covers(&library.id))
+        }) {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(

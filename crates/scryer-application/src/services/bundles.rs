@@ -490,9 +490,9 @@ impl AppServices {
                 request_rule_decisions: Arc::new(
                     null_repositories::NullRequestRuleDecisionRepository,
                 ),
-                request_rules_engine: Arc::new(std::sync::RwLock::new(
+                request_rules_engine: Arc::new(std::sync::RwLock::new(Arc::new(
                     crate::request_rules::RequestRulesEngineCache::default(),
-                )),
+                ))),
                 pp_scripts: Arc::new(NullPostProcessingScriptRepository),
                 plugin_installations: Arc::new(NullPluginInstallationRepository),
                 plugin_descriptor_loader: Arc::new(NullPluginDescriptorLoader),

@@ -379,7 +379,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input: &F::Input,
         ctx: &F::EvalContext,
         phase: &'static str,
-        selected: impl Fn(&F::RuleExtra) -> bool,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
 
@@ -403,7 +403,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input_timer.finish("ok");
 
         for (index, rule) in self.rules.iter().enumerate() {
-            if !selected(&rule.extra) {
+            if !selected(rule) {
                 continue;
             }
             let temperature = if self.observed_rules.get(index).copied().unwrap_or(false) {
