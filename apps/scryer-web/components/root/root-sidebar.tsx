@@ -456,16 +456,16 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
-    id: "lifecycleRules",
-    label: (t) => t("settings.lifecycleRules"),
-    icon: LifecycleRulesIcon,
-    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
-  },
-  {
     id: "requestRules",
     label: (t) => t("settings.requestRules"),
     icon: Inbox,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
+    id: "lifecycleRules",
+    label: (t) => t("settings.lifecycleRules"),
+    icon: LifecycleRulesIcon,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {
     id: "plugins",

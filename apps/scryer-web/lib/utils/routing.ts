@@ -133,8 +133,8 @@ const REQUEST_RULES_SECTION_BY_SEGMENT: Record<string, RequestRulesSection> = {
 /// experimental-features switch.
 export const RULES_SECTIONS: readonly RulesSection[] = [
   "scoring",
-  "lifecycle",
   "request",
+  "lifecycle",
 ];
 
 /// Rule kinds still in beta. The rail badges these.

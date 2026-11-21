@@ -455,7 +455,7 @@ test("indexer settings always offer the search and client panes", () => {
 });
 
 test("every rule kind is offered, with lifecycle and request badged beta", () => {
-  assert.deepEqual(RULES_SECTIONS, ["scoring", "lifecycle", "request"]);
+  assert.deepEqual(RULES_SECTIONS, ["scoring", "request", "lifecycle"]);
   assert.deepEqual([...BETA_RULES_SECTIONS].sort(), ["lifecycle", "request"]);
   assert.equal(BETA_RULES_SECTIONS.has("scoring"), false);
   assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");

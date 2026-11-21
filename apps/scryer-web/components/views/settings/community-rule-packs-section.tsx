@@ -216,7 +216,8 @@ function CommunityPackRow({
       <TableRow
         id={rowId}
         data-ui="settings-table-row"
-        className="hover:bg-[var(--scry-rowHover)] [&>td]:align-middle"
+        className="cursor-pointer hover:bg-[var(--scry-rowHover)] [&>td]:align-middle"
+        onClick={() => onExpandedChange(!expanded)}
       >
         <TableCell>
           <TableDisclosureButton
@@ -224,7 +225,11 @@ function CommunityPackRow({
             expanded={expanded}
             aria-controls={detailId}
             aria-label={pack.name}
-            onClick={() => onExpandedChange(!expanded)}
+            onClick={(event) => {
+              // The row toggles too; one click must not toggle twice.
+              event.stopPropagation();
+              onExpandedChange(!expanded);
+            }}
           />
         </TableCell>
         <TableCell>
