@@ -27261,6 +27261,14 @@ type QueryRoot {
 		"""
 		libraryId: ID,
 		"""
+		Return candidates whose decided actions include at least one of these heads, as their `actions.heads` reports them; a season or episode head matches only a season or episode subject that decided the title head it narrows. A candidate recorded without decided actions matches none. Null or empty applies no action filter.
+		"""
+		actions: [LifecycleActionHead!],
+		"""
+		Return candidates of rules currently in one of these states, as the rule list reports them. Null or empty applies no rule-state filter.
+		"""
+		ruleStates: [LifecycleRuleState!],
+		"""
 		Maximum number of candidates to return; defaults to 50, at most 200.
 		"""
 		limit: Int
@@ -35188,6 +35196,11 @@ type UiDashboardLayoutItem {
 	Height in grid rows.
 	"""
 	h: Int!
+	"""
+	The panel's own settings as saved by the web client, a JSON object, or
+	null when the panel has none.
+	"""
+	settings: JSON
 }
 
 """
@@ -35214,6 +35227,12 @@ input UiDashboardLayoutItemInput {
 	Height in grid rows, at least 1.
 	"""
 	h: Int!
+	"""
+	The panel's own settings: a JSON object of at most 2048 bytes when
+	serialized, stored as given. Omitted or null saves the panel without
+	settings.
+	"""
+	settings: JSON
 }
 
 """

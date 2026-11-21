@@ -5053,7 +5053,8 @@ impl UiDashboardBreakpoint {
     }
 }
 
-/// One panel's place on a dashboard grid. The panel id is opaque to the server.
+/// One panel's place on a dashboard grid. The panel id and its settings are
+/// opaque to the server: the web owns what a panel's settings mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiDashboardLayoutItem {
     pub panel_id: String,
@@ -5061,6 +5062,8 @@ pub struct UiDashboardLayoutItem {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// The panel's own settings, a JSON object, or `None` when it has none.
+    pub settings: Option<serde_json::Value>,
 }
 
 /// The dashboard layout a user saved for one breakpoint. An empty item list is

@@ -3657,6 +3657,8 @@ pub mod settings {
     pub const DASHBOARD_ITEM_SIZE_OUT_OF_RANGE: &str = "SETTINGS_DASHBOARD_ITEM_SIZE_OUT_OF_RANGE";
     /// A dashboard panel extends past the layout's last column.
     pub const DASHBOARD_ITEM_EXCEEDS_COLUMNS: &str = "SETTINGS_DASHBOARD_ITEM_EXCEEDS_COLUMNS";
+    /// A dashboard panel's settings are not a JSON object, or are larger than one panel may store.
+    pub const DASHBOARD_PANEL_SETTINGS_INVALID: &str = "SETTINGS_DASHBOARD_PANEL_SETTINGS_INVALID";
     /// Language must be a language code of at most 16 letters, digits or hyphens.
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
     /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
@@ -3925,6 +3927,7 @@ pub mod settings {
         DASHBOARD_ITEM_POSITION_OUT_OF_RANGE,
         DASHBOARD_ITEM_SIZE_OUT_OF_RANGE,
         DASHBOARD_ITEM_EXCEEDS_COLUMNS,
+        DASHBOARD_PANEL_SETTINGS_INVALID,
         LANGUAGE_OUT_OF_RANGE,
         UI_TOUR_ID_INVALID,
         UI_TOUR_COUNT_OUT_OF_RANGE,

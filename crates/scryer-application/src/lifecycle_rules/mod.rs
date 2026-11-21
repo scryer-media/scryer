@@ -50,8 +50,8 @@ pub use action_sequence::{
 };
 pub use declared_actions::{
     LIFECYCLE_DECLARED_ACTIONS_SCHEMA_VERSION, LifecycleDeclaredActions,
-    build_declared_action_sequence, decided_actions_from_json, decided_actions_to_json,
-    decided_heads_in_execution_order,
+    build_declared_action_sequence, decided_actions_from_json, decided_actions_include_head,
+    decided_actions_to_json, decided_heads_in_execution_order,
 };
 pub use evaluation::{
     LIFECYCLE_EVALUATION_TITLE_CHUNK, LifecycleCandidateFilter, LifecycleCandidateView,
@@ -62,6 +62,11 @@ pub(crate) use safety::LifecyclePlaybackCache;
 pub use safety::{
     LifecycleActivityCheck, LifecyclePlaybackHold, LifecyclePlaybackPicture, PlayingSession,
     SessionAttribution, fold_playback_picture,
+};
+/// The decided-actions document and its heads, for callers that filter
+/// candidates by what was decided.
+pub use scryer_rules::lifecycle_actions::{
+    LifecycleActionHead as DecidedActionHead, LifecycleActions as DecidedActions,
 };
 pub use service::{
     EXPIRED_REQUEST_LEASES_REGO, LIFECYCLE_MAX_GRACE_DAYS, LIFECYCLE_PREVIEW_DEFAULT_TITLES,
