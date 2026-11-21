@@ -7352,8 +7352,6 @@ const en: LocaleDictionary = {
   "settings.communityRulePacksAllInstalled":
     "Every community rule pack is already installed.",
   "settings.rulePackAuthor": "Author",
-  "settings.rulePackInstallRuleHelp":
-    "Install a rule to add its pack with that rule turned on. The pack's other rules arrive turned off; turn them on under Installed rule packs.",
   "settings.rulePackInstall": "Install",
   "settings.rulePackInstalling": "Installing…",
   "settings.ruleLibraryCommunityEmpty":
@@ -12973,8 +12971,6 @@ const en: LocaleDictionary = {
   "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
     "Choose the rules to enable after installation. Rules stay managed",
   "uiText.managedByThePackAuthor": "Managed by the pack author.",
-  "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled":
-    "Existing custom copies are not adopted or disabled when this pack is installed.",
   "uiText.toNotifyAMediaServerIeJellyfinFirstCreateA":
     "To notify a media server (ie. Jellyfin), first create a",
   "uiText.mediaServerConnection": "media server connection",

@@ -2585,8 +2585,6 @@ const ru: LocaleDictionary = {
   "settings.communityRulePacksAllInstalled":
     "Все пакеты правил сообщества уже установлены.",
   "settings.rulePackAuthor": "Автор",
-  "settings.rulePackInstallRuleHelp":
-    "Установите правило, чтобы добавить его пакет с этим правилом включённым. Остальные правила пакета будут выключены; включить их можно в разделе установленных пакетов правил.",
   "settings.rulePackInstall": "Установить",
   "settings.rulePackInstalling": "Установка…",
   "settings.ruleLibraryCommunityEmpty":
@@ -13536,8 +13534,6 @@ const ru: LocaleDictionary = {
   "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
     "Выберите правила для включения после установки. Правила остаются управляемыми",
   "uiText.managedByThePackAuthor": "Управляется автором пакета.",
-  "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled":
-    "При установке этого пакета существующие пользовательские копии не передаются под его управление и не отключаются.",
   "uiText.toNotifyAMediaServerIeJellyfinFirstCreateA":
     "Чтобы отправлять уведомления медиасерверу (например, Jellyfin), сначала создайте",
   "uiText.mediaServerConnection": "подключение медиасервера",

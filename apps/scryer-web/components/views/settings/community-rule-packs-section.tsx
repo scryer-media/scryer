@@ -259,14 +259,6 @@ function CommunityPackRow({
                 </p>
               ) : (
                 <>
-                  <div className="space-y-1 text-xs text-muted-foreground">
-                    <p>{t("settings.rulePackInstallRuleHelp")}</p>
-                    <p>
-                      {t(
-                        "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled",
-                      )}
-                    </p>
-                  </div>
                   <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2 @[900px]:grid-cols-3">
                     {ready.map((template) => (
                       <div
