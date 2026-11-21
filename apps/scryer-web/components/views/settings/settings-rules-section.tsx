@@ -813,17 +813,16 @@ export function SettingsRulesSection({
                     onClick={() => setIsArrImportOpen(true)}
                     disabled={mutatingRuleSetId !== null}
                     leadingIcon={
-                      <span aria-hidden className="flex items-center gap-0.5">
+                      <span aria-hidden className="flex items-center">
                         <img
                           src={productLogoUrl("SONARR") ?? undefined}
                           alt=""
                           className="h-4 w-4"
                         />
-                        <span className="text-xs opacity-60">/</span>
                         <img
                           src={productLogoUrl("RADARR") ?? undefined}
                           alt=""
-                          className="h-4 w-4"
+                          className="-ml-1 h-4 w-4"
                         />
                       </span>
                     }
