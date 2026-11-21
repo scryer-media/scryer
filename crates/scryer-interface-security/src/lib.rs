@@ -129,6 +129,11 @@ async fn login_payload_from_user(
         }
     }
     .map_err(to_gql_error)?;
+    if !password_change_required {
+        // Every caller is a media-server sign-in; a required password change
+        // stamps when it issues the full session.
+        app.record_interactive_sign_in(&user.id).await;
+    }
     let expires_at = Utc::now()
         + chrono::Duration::seconds(if password_change_required {
             app.mfa_enrollment_token_lifetime()

@@ -3680,9 +3680,11 @@ const ko: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "에피소드 번호가 모호합니다",
   "settings.lifecycleExecutionReason.playbackHold":
-    "보류: 미디어 서버에서 재생 중입니다.",
+    "보류: 이 타이틀이 미디어 서버에서 재생 중입니다.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "보류: 미디어 서버에 재생 여부를 확인할 수 없었습니다.",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "보류: Scryer가 어떤 타이틀과도 연결하지 못한 항목을 미디어 서버가 재생 중이므로, 재생이 끝날 때까지 아무것도 삭제하지 않습니다.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "보류: 미디어 서버에 저장된 시청 기록보다 최신 재생이 있습니다.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

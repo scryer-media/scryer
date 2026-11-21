@@ -15,6 +15,8 @@ export const LIFECYCLE_EXECUTION_REASON_KEYS: Readonly<
     "settings.lifecycleExecutionReason.unknownAtExecution",
   playback_hold: "settings.lifecycleExecutionReason.playbackHold",
   playback_unknown: "settings.lifecycleExecutionReason.playbackUnknown",
+  playback_unattributed:
+    "settings.lifecycleExecutionReason.playbackUnattributed",
   watch_recheck_newer_play:
     "settings.lifecycleExecutionReason.watchRecheckNewerPlay",
   watch_recheck_newer_favorite:

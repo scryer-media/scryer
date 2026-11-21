@@ -12714,9 +12714,11 @@ const en: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episode numbering is ambiguous",
   "settings.lifecycleExecutionReason.playbackHold":
-    "Held: something is playing on a media server.",
+    "Held: this title is playing on a media server.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Held: a media server could not be asked whether something is playing.",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "Held: a media server is playing something Scryer could not match to a title, so nothing is deleted until it stops.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Held: the media server shows a play newer than the stored watch history.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

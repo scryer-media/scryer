@@ -2136,6 +2136,7 @@ impl AppUseCase {
                                 candidate_reason::FIRST_MATCH
                             }
                             .to_string(),
+                            state_cause_code: None,
                             reason_codes: decision.reason_codes.clone(),
                             action_kind: ACTION_SEQUENCE_KIND.to_string(),
                             decided_actions_json: decided_json,

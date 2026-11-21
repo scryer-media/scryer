@@ -4415,6 +4415,23 @@ file = "postgres/migrations/0363_dashboard_panel_settings_and_lifecycle_due_inde
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 364
+description = "lifecycle cause codes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0364_lifecycle_cause_codes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0364_lifecycle_cause_codes.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

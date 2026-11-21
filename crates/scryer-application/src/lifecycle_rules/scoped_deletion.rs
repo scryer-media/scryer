@@ -1008,6 +1008,7 @@ mod hold_detail_tests {
             status: LifecycleActionRunStatus::Running,
             hold_reason: None,
             error: None,
+            cause_code: None,
             detail,
             started_at: now,
             finished_at: None,

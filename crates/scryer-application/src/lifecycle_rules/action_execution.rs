@@ -3009,6 +3009,7 @@ impl AppUseCase {
                 now,
                 LifecycleCandidateState::Blocked,
                 reason,
+                None,
                 Utc::now(),
             )
             .await?
@@ -3040,6 +3041,7 @@ mod monitoring_conflict_lookup_tests {
             match_generation: 1,
             state: LifecycleCandidateState::Due,
             state_reason: "due".to_string(),
+            state_cause_code: None,
             reason_codes: vec![],
             action_kind: ACTION_SEQUENCE_KIND.to_string(),
             decided_actions_json: None,

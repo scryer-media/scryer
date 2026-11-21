@@ -6225,9 +6225,11 @@ const zh_HK: LocaleDictionary = {
     "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
   "pendingImports.reason.anime_numbering_ambiguous": "劇集編號不明確",
   "settings.lifecycleExecutionReason.playbackHold":
-    "已暫緩：媒體伺服器上正在播放內容。",
+    "已暫緩：此作品正在媒體伺服器上播放。",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "已暫緩：無法向媒體伺服器確認是否正在播放。",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "已暫緩：媒體伺服器正在播放 Scryer 無法對應到任何作品的內容，播放結束前不會刪除任何內容。",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "已暫緩：媒體伺服器顯示有比已存觀看記錄更新的播放。",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

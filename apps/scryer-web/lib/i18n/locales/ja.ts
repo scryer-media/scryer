@@ -3753,9 +3753,11 @@ const ja: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "エピソード番号があいまいです",
   "settings.lifecycleExecutionReason.playbackHold":
-    "保留: メディアサーバーで再生中です。",
+    "保留: このタイトルはメディアサーバーで再生中です。",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "保留: メディアサーバーに再生状況を問い合わせられませんでした。",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "保留: Scryer がどのタイトルにも対応付けられないものをメディアサーバーが再生中のため、再生が終わるまで何も削除しません。",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "保留: メディアサーバーに保存済みの視聴履歴より新しい再生があります。",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

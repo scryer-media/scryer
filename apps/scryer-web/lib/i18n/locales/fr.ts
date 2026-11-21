@@ -3937,9 +3937,11 @@ const fr: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numérotation des épisodes ambiguë",
   "settings.lifecycleExecutionReason.playbackHold":
-    "En attente : une lecture est en cours sur un serveur multimédia.",
+    "En attente : ce titre est en cours de lecture sur un serveur multimédia.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "En attente : impossible de demander à un serveur multimédia si une lecture est en cours.",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "En attente : un serveur multimédia lit un contenu que Scryer n'a pu associer à aucun titre ; rien n'est supprimé avant la fin de la lecture.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "En attente : le serveur multimédia indique une lecture plus récente que l'historique enregistré.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

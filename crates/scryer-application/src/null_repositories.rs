@@ -1874,6 +1874,7 @@ impl crate::ports::LifecycleCandidateRepository for NullLifecycleEvaluationRepos
         _expected_lease_updated_at: DateTime<Utc>,
         _state: scryer_domain::LifecycleCandidateState,
         _state_reason: &str,
+        _state_cause_code: Option<&str>,
         _finished_at: DateTime<Utc>,
     ) -> AppResult<bool> {
         Err(AppError::Repository(

@@ -252,6 +252,7 @@ impl AppUseCase {
             status: LifecycleActionRunStatus::Running,
             hold_reason: None,
             error: None,
+            cause_code: None,
             detail: serde_json::to_string(&SequenceHistoryDetail {
                 schema_version: SEQUENCE_HISTORY_SCHEMA_VERSION,
                 maintenance_sequence_history: true,

@@ -523,6 +523,7 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         expected_lease_updated_at: DateTime<Utc>,
         state: LifecycleCandidateState,
         state_reason: &str,
+        state_cause_code: Option<&str>,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool> {
         let mut rows = self.candidates.lock().await;
@@ -537,6 +538,7 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         }
         candidate.state = state;
         candidate.state_reason = state_reason.to_string();
+        candidate.state_cause_code = state_cause_code.map(str::to_string);
         candidate.last_evaluated_at = finished_at;
         candidate.updated_at = finished_at;
         Ok(true)

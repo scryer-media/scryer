@@ -2520,6 +2520,128 @@ async fn login_with_wrong_password_returns_error() {
     );
 }
 
+async fn last_sign_in(ctx: &TestContext, user_id: &str) -> Option<chrono::DateTime<Utc>> {
+    scryer_application::UserRepository::account_timestamps(&ctx.users, user_id)
+        .await
+        .expect("read account timestamps")
+        .expect("account exists")
+        .last_login_at
+}
+
+/// A password sign-in stamps the account's last sign-in time once the full
+/// session is established; the restricted token for a required password
+/// change, the requests that follow and a re-issued session do not.
+#[tokio::test]
+async fn a_password_sign_in_records_the_last_sign_in_time() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let user = ctx
+        .app
+        .create_user(
+            &admin,
+            "stamptest".to_string(),
+            "s3cr3t!!".to_string(),
+            scryer_domain::AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(last_sign_in(&ctx, &user.id).await, None);
+
+    let before = Utc::now();
+    let login_body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "stamptest", password: "s3cr3t!!" }) { token passwordChangeRequired } }"#,
+        None,
+    )
+    .await;
+    assert!(login_body["errors"].is_null(), "login: {login_body}");
+    assert_eq!(login_body["data"]["login"]["passwordChangeRequired"], true);
+    assert_eq!(
+        last_sign_in(&ctx, &user.id).await,
+        None,
+        "the restricted password-change token does not finish the sign-in"
+    );
+    let restricted = login_body["data"]["login"]["token"]
+        .as_str()
+        .expect("login token");
+
+    let changed = gql_with_token(
+        &ctx,
+        r#"mutation { completeRequiredPasswordChange(input: { password: "stamp-owned-password1" }) { token passwordChangeRequired } }"#,
+        json!({}),
+        restricted,
+    )
+    .await;
+    assert_no_errors(&changed);
+    let stamped = last_sign_in(&ctx, &user.id)
+        .await
+        .expect("finishing the sign-in records its time");
+    assert!(
+        stamped >= before - chrono::Duration::seconds(1),
+        "{stamped} is older than the sign-in at {before}"
+    );
+
+    let token = changed["data"]["completeRequiredPasswordChange"]["token"]
+        .as_str()
+        .expect("full token");
+    let me_body = gql_with_token(&ctx, "{ me { username } }", json!({}), token).await;
+    assert_no_errors(&me_body);
+    let (token_user, _) = ctx
+        .app
+        .authenticate_token_with_claims(token)
+        .await
+        .expect("token authenticates");
+    ctx.app
+        .issue_access_token(&token_user)
+        .await
+        .expect("re-issue a session");
+    assert_eq!(
+        last_sign_in(&ctx, &user.id).await,
+        Some(stamped),
+        "an authenticated request or re-issued session is not a sign-in"
+    );
+
+    let second = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "stamptest", password: "stamp-owned-password1" }) { token passwordChangeRequired } }"#,
+        None,
+    )
+    .await;
+    assert!(second["errors"].is_null(), "second login: {second}");
+    assert_eq!(second["data"]["login"]["passwordChangeRequired"], false);
+    let restamped = last_sign_in(&ctx, &user.id)
+        .await
+        .expect("the second sign-in keeps a time");
+    assert!(restamped >= stamped, "{restamped} went backwards from {stamped}");
+}
+
+#[tokio::test]
+async fn a_failed_sign_in_records_no_sign_in_time() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let user = ctx
+        .app
+        .create_user(
+            &admin,
+            "nostamptest".to_string(),
+            "correct_horse".to_string(),
+            scryer_domain::AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "nostamptest", password: "wrong_password" }) { token } }"#,
+        None,
+    )
+    .await;
+    assert!(!body["errors"].is_null(), "wrong password must fail: {body}");
+    assert_eq!(last_sign_in(&ctx, &user.id).await, None);
+}
+
 #[tokio::test]
 async fn delete_media_file_honors_custom_library_permissions_after_library_refactor() {
     let ctx = TestContext::new().await;
