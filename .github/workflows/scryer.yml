@@ -1088,7 +1088,12 @@ jobs:
             archive_name: scryer-linux-arm64-portable.tar.gz
             release_profile: release
             install_nasm: false
-            extra_rustflags: ""
+            # LLVM schedules its machine outliner on every AArch64 build. It
+            # only outlines minsize functions, which this profile never makes,
+            # but it keeps every compiled function in memory until the end of
+            # the fat-LTO module: the final compile ran out of memory at
+            # 30 GiB here where x86 peaks at 14 GiB.
+            extra_rustflags: "-C llvm-args=-enable-machine-outliner=never"
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
