@@ -1081,7 +1081,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: ubuntu-26.04-arm
-            release_runner: linux_arm_release
+            release_runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-musl
             sccache_lane: pr-linux-arm64-cpu
             artifact_name: scryer-linux-arm64-portable
