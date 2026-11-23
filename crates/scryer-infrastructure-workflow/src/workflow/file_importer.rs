@@ -3392,6 +3392,37 @@ fn reconcile_existing_destination(
     ensure_same_source(source, source_fingerprint)?;
     validate_import_destination_parent(destination_guard, dest)?;
     validate_import_destination_file(destination_guard)?;
+    // An empty regular file at the destination holds nothing: it is what an
+    // import that failed while it took the name leaves behind. It is removed
+    // and the import goes on as if the name were free, but only for a source
+    // that has content, never for a link, and only while the name still
+    // reads as that same empty file. Probes: one more stat of the name, and
+    // only on this path.
+    if kind == EntryKind::File && existing.is_len(0) && size > 0 {
+        let still_empty = Disk::process()
+            .fingerprint_blocking(dest)
+            .is_ok_and(|now| now.is_len(0) && existing.still_marks(&now));
+        if !still_empty {
+            return Err(AppError::ManualReconciliationRequired(format!(
+                "import destination changed while it was inspected: {}",
+                dest.display()
+            )));
+        }
+        return match Disk::process().remove_blocking(dest, Remove::File) {
+            Ok(_) => {
+                tracing::info!(
+                    dest = %dest.display(),
+                    "removed an empty file at the import destination; the import takes its name"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(AppError::ManualReconciliationRequired(format!(
+                "import destination is an empty file that could not be removed: {}: {}",
+                dest.display(),
+                error.words()
+            ))),
+        };
+    }
     // The existing destination is adopted, and a move's source later removed
     // beside it, only when the two hold the same content at the operator's
     // depth: at quick depth their lengths and live head and tail, at full
@@ -7000,6 +7031,75 @@ mod tests {
             std::fs::read(&dest).expect("destination"),
             b"other video bytes!"
         );
+    }
+
+    #[test]
+    fn an_empty_existing_destination_is_replaced_by_the_import() {
+        for mode in [ImportMode::HardlinkOrCopy, ImportMode::Move] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let source = dir.path().join("source.mkv");
+            let dest = dir.path().join("library").join("Imported.Movie.mkv");
+            std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
+            std::fs::write(&source, b"source video bytes").expect("write source");
+            std::fs::write(&dest, b"").expect("write destination");
+
+            let result = import_file_blocking(
+                source.clone(),
+                dest.clone(),
+                mode,
+                ImportFileOptions::default(),
+                None,
+                None,
+                ImportFilePermissions::default(),
+            )
+            .unwrap_or_else(|error| panic!("{mode:?} over an empty destination: {error}"));
+
+            assert_eq!(
+                result.destination_disposition,
+                ImportDestinationDisposition::Created
+            );
+            assert_eq!(
+                std::fs::read(&dest).expect("destination"),
+                b"source video bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_source_never_replaces_an_empty_destination_link() {
+        // A link at the destination is never removed, even to an empty file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let target = dir.path().join("elsewhere.mkv");
+        let dest = dir.path().join("library").join("Imported.Movie.mkv");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
+        std::fs::write(&source, b"source video bytes").expect("write source");
+        std::fs::write(&target, b"").expect("write target");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &dest).expect("link");
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&target, &dest).is_err() {
+            return;
+        }
+
+        import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::HardlinkOrCopy,
+            ImportFileOptions::default(),
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect_err("a link at the destination must conflict");
+
+        assert!(
+            std::fs::symlink_metadata(&dest)
+                .expect("destination")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&target).expect("target"), b"");
     }
 
     #[tokio::test]

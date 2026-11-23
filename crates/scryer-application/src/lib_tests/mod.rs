@@ -26,6 +26,7 @@ mod discovery_sync;
 mod download_enrichment;
 mod downloads;
 pub(crate) use downloads::RecordingDownloadRegistry;
+mod empty_import_leftovers;
 mod episode_file_delete;
 mod episode_metadata_refresh;
 mod file_privacy;
