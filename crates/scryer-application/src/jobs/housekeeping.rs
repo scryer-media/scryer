@@ -474,6 +474,7 @@ impl AppUseCase {
             committed: entries,
             withheld_titles: withheld,
             upgrade_links,
+            quarantined_upgrades,
         } = crate::recycle_bin::list_committed_entries_with_upgrade_links(config).await?;
         let mut upgrades = UpgradePurgeContext::listed(upgrade_links);
         for title_id in &withheld {
@@ -540,6 +541,63 @@ impl AppUseCase {
             {
                 purged += 1;
             }
+        }
+        // An entry quarantined because nothing in the library covered what
+        // it held is asked again once it has expired: a later import, or a
+        // rule this version reads that the quarantining one did not, may
+        // cover it now. One still uncovered is left exactly as it is.
+        for entry in quarantined_upgrades {
+            if !entry.manifest.recycled_before(cutoff) {
+                continue;
+            }
+            match self
+                .purge_quarantined_upgrade_entry_once_covered(config, &entry, &mut upgrades)
+                .await
+            {
+                Ok(true) => purged += 1,
+                Ok(false) => {}
+                Err(error) => warn!(
+                    media_root = %media_root,
+                    path = %entry.entry_dir.display(),
+                    error = %error,
+                    "failed to purge a quarantined recycle entry the library now covers"
+                ),
+            }
+        }
+        Ok(purged)
+    }
+
+    /// Purges a quarantined upgrade entry when the checks every upgrade
+    /// entry passes before its purge now pass for it. One that still fails
+    /// them is not rewritten or moved.
+    async fn purge_quarantined_upgrade_entry_once_covered(
+        &self,
+        config: &crate::recycle_bin::RecycleBinConfig,
+        entry: &crate::recycle_bin::QuarantinedUpgradeEntry,
+        upgrades: &mut UpgradePurgeContext,
+    ) -> AppResult<bool> {
+        if entry.manifest.recycled_reason() != "upgrade_replaced" {
+            return Ok(false);
+        }
+        if let Err(reason) = self
+            .validate_recycle_entry_before_permanent_delete(&entry.manifest, upgrades)
+            .await
+        {
+            tracing::debug!(
+                path = %entry.entry_dir.display(),
+                reason = %reason,
+                "quarantined recycle entry is still not covered by the library"
+            );
+            return Ok(false);
+        }
+        let purged = crate::recycle_bin::purge_quarantined_upgrade_entry(config, entry).await?;
+        if purged {
+            info!(
+                path = %entry.entry_dir.display(),
+                "purged a quarantined recycle entry the library now covers"
+            );
+            self.record_recycle_entry_purged_event(DomainEventActor::system(), &entry.manifest)
+                .await;
         }
         Ok(purged)
     }
@@ -690,8 +748,7 @@ impl AppUseCase {
     fn purged_recycle_reason(
         manifest: &crate::recycle_bin::RecycleManifest,
     ) -> scryer_domain::MediaFileDeletedReason {
-        let reason = manifest.reason.split(';').next().unwrap_or_default().trim();
-        if reason == "upgrade_replaced" {
+        if manifest.recycled_reason() == "upgrade_replaced" {
             scryer_domain::MediaFileDeletedReason::RecycleBinPurgedAfterUpgrade
         } else {
             scryer_domain::MediaFileDeletedReason::RecycleBinPurged
@@ -703,7 +760,7 @@ impl AppUseCase {
         manifest: &crate::recycle_bin::RecycleManifest,
         upgrades: &mut UpgradePurgeContext,
     ) -> Result<(), String> {
-        if manifest.reason != "upgrade_replaced" {
+        if manifest.recycled_reason() != "upgrade_replaced" {
             return Ok(());
         }
 

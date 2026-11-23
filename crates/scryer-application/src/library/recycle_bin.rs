@@ -185,6 +185,14 @@ pub struct CommittedRecycleEntry {
     pub manifest: RecycleManifest,
 }
 
+/// A quarantined entry, laid out as Scryer wrote it, of a file an upgrade
+/// replaced. Its payload has not been looked at.
+#[derive(Debug, Clone)]
+pub(crate) struct QuarantinedUpgradeEntry {
+    pub entry_dir: PathBuf,
+    pub manifest: RecycleManifest,
+}
+
 /// A recycle bin entry for listing purposes.
 #[derive(Debug, Clone)]
 pub struct RecycleEntry {
@@ -250,8 +258,21 @@ impl RecycleManifest {
         self.status.as_deref() == Some(RECYCLE_STATUS_QUARANTINED)
     }
 
+    /// Why the file was recycled, without the `; quarantine: …` a quarantine
+    /// adds after it.
+    pub(crate) fn recycled_reason(&self) -> &str {
+        self.reason.split(';').next().unwrap_or_default().trim()
+    }
+
     pub fn original_path_buf(&self) -> PathBuf {
         crate::stored_paths::stored_path_to_path_buf(&self.original_path)
+    }
+
+    /// Whether the file was recycled before `cutoff`. An unreadable time
+    /// never expires.
+    pub(crate) fn recycled_before(&self, cutoff: chrono::DateTime<Utc>) -> bool {
+        chrono::DateTime::parse_from_rfc3339(&self.recycled_at)
+            .is_ok_and(|recycled_at| recycled_at.with_timezone(&Utc) < cutoff)
     }
 }
 
@@ -1998,6 +2019,9 @@ struct InspectedEntry {
     /// The upgrade the manifest records, when the entry is laid out as
     /// Scryer wrote it and is committed or quarantined.
     upgrade_link: Option<(String, UpgradeLink)>,
+    /// The entry, when it is quarantined, laid out as Scryer wrote it, and
+    /// was recycled by an upgrade. Read from the manifest alone.
+    quarantined_upgrade: Option<QuarantinedUpgradeEntry>,
 }
 
 impl InspectedEntry {
@@ -2006,6 +2030,7 @@ impl InspectedEntry {
             title_id: None,
             committed: None,
             upgrade_link: None,
+            quarantined_upgrade: None,
         }
     }
 }
@@ -2060,8 +2085,7 @@ impl UpgradeLinks {
 
 /// The upgrade an entry's manifest records, when it records one completely.
 fn manifest_upgrade_link(manifest: &RecycleManifest) -> Option<(String, UpgradeLink)> {
-    let reason = manifest.reason.split(';').next().unwrap_or_default().trim();
-    if reason != "upgrade_replaced" {
+    if manifest.recycled_reason() != "upgrade_replaced" {
         return None;
     }
     let non_empty = |value: &Option<String>| {
@@ -2134,6 +2158,9 @@ async fn inspect_entry_dir(config: &RecycleBinConfig, entry_dir: PathBuf) -> Ins
     let upgrade_link = (layout.is_ok() && (manifest.is_committed() || manifest.is_quarantined()))
         .then(|| manifest_upgrade_link(&manifest))
         .flatten();
+    let quarantined_upgrade = layout.is_ok()
+        && manifest.is_quarantined()
+        && manifest.recycled_reason() == "upgrade_replaced";
 
     if let Err(reason) = layout.and_then(|()| committed_status(&manifest)) {
         if let Err(error) =
@@ -2149,6 +2176,10 @@ async fn inspect_entry_dir(config: &RecycleBinConfig, entry_dir: PathBuf) -> Ins
             title_id,
             committed: None,
             upgrade_link,
+            quarantined_upgrade: quarantined_upgrade.then_some(QuarantinedUpgradeEntry {
+                entry_dir,
+                manifest,
+            }),
         };
     }
 
@@ -2158,6 +2189,7 @@ async fn inspect_entry_dir(config: &RecycleBinConfig, entry_dir: PathBuf) -> Ins
             title_id,
             committed: None,
             upgrade_link,
+            quarantined_upgrade: None,
         };
     }
     InspectedEntry {
@@ -2167,6 +2199,7 @@ async fn inspect_entry_dir(config: &RecycleBinConfig, entry_dir: PathBuf) -> Ins
             manifest,
         }),
         upgrade_link,
+        quarantined_upgrade: None,
     }
 }
 
@@ -2234,6 +2267,7 @@ pub(crate) async fn list_committed_entries_for_title_with_upgrade_links(
             title_id: owner,
             committed,
             upgrade_link,
+            quarantined_upgrade: _,
         } = inspect_entry_dir(config, entry).await;
         if let Some((original_file_id, link)) = upgrade_link
             && link.title_id == title_id
@@ -2328,6 +2362,9 @@ pub(crate) struct RecycleRootListing {
     /// The upgrades recorded by the committed and quarantined entries the
     /// listing read.
     pub upgrade_links: UpgradeLinks,
+    /// The quarantined entries of files an upgrade replaced, for the pass
+    /// that checks whether the library now covers what each held.
+    pub quarantined_upgrades: Vec<QuarantinedUpgradeEntry>,
 }
 
 /// [`list_committed_entries_reporting_withheld`], plus the upgrades the
@@ -2351,6 +2388,9 @@ pub(crate) async fn list_committed_entries_with_upgrade_links(
         if let Some((original_file_id, link)) = inspected.upgrade_link {
             listing.upgrade_links.record(original_file_id, link);
         }
+        listing
+            .quarantined_upgrades
+            .extend(inspected.quarantined_upgrade);
         match (inspected.title_id, inspected.committed) {
             (_, Some(committed)) => listing.committed.push(committed),
             (Some(Some(title_id)), None) => listing.withheld_titles.push(title_id),
@@ -2372,8 +2412,7 @@ pub(crate) fn recycled_before(
     entry: &CommittedRecycleEntry,
     cutoff: chrono::DateTime<Utc>,
 ) -> bool {
-    chrono::DateTime::parse_from_rfc3339(&entry.manifest.recycled_at)
-        .is_ok_and(|recycled_at| recycled_at.with_timezone(&Utc) < cutoff)
+    entry.manifest.recycled_before(cutoff)
 }
 
 pub async fn list_expired_committed_entries(
@@ -2479,6 +2518,31 @@ pub(crate) async fn purge_committed_entry(
         return Ok(false);
     }
 
+    if recycled_payload_path(&entry.entry_dir, &entry.manifest)
+        .await
+        .is_err()
+    {
+        return Ok(false);
+    }
+    crate::fs_safety::remove_dir_all_safely(&entry.entry_dir).await?;
+    Ok(true)
+}
+
+/// Removes a quarantined upgrade entry the caller has just shown the library
+/// no longer needs. Only an entry still laid out as Scryer wrote it, still
+/// quarantined, still an upgrade's, and whose payload is its own goes; any
+/// other is kept and `false` is returned.
+pub(crate) async fn purge_quarantined_upgrade_entry(
+    config: &RecycleBinConfig,
+    entry: &QuarantinedUpgradeEntry,
+) -> AppResult<bool> {
+    if let Err(reason) = trusted_entry_layout(config, &entry.entry_dir, &entry.manifest) {
+        warn!(path = %entry.entry_dir.display(), reason = %reason, "skipping untrusted quarantined recycle entry purge");
+        return Ok(false);
+    }
+    if !entry.manifest.is_quarantined() || entry.manifest.recycled_reason() != "upgrade_replaced" {
+        return Ok(false);
+    }
     if recycled_payload_path(&entry.entry_dir, &entry.manifest)
         .await
         .is_err()
