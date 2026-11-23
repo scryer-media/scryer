@@ -951,6 +951,199 @@ fn a_replacing_move_refuses_another_kind_at_the_destination() {
     assert_eq!(std::fs::read(&file).unwrap(), b"file");
 }
 
+/// The real filesystem, on a volume that may offer no exclusive rename and
+/// no hard links: each one it lacks is refused as unsupported.
+struct Lacking {
+    exclusive_rename: bool,
+    hard_link: bool,
+}
+
+impl DiskBackend for Lacking {
+    fn stat(&self, path: &Path) -> io::Result<RawStat> {
+        SystemBackend.stat(path)
+    }
+    fn lstat(&self, path: &Path) -> io::Result<RawStat> {
+        SystemBackend.lstat(path)
+    }
+    fn list(&self, path: &Path) -> io::Result<crate::backend::Listing> {
+        SystemBackend.list(path)
+    }
+    fn open_dir(&self, path: &Path) -> io::Result<crate::backend::DirEntries> {
+        SystemBackend.open_dir(path)
+    }
+    fn has_entries(&self, path: &Path) -> io::Result<bool> {
+        SystemBackend.has_entries(path)
+    }
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        SystemBackend.canonicalize(path)
+    }
+    fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
+        SystemBackend.read_link(path)
+    }
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        SystemBackend.remove_file(path)
+    }
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        SystemBackend.remove_dir(path)
+    }
+    fn remove_tree(&self, path: &Path) -> io::Result<()> {
+        SystemBackend.remove_tree(path)
+    }
+    fn rename(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        SystemBackend.rename(source, dest)
+    }
+    fn rename_no_replace(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        match self.exclusive_rename {
+            true => SystemBackend.rename_no_replace(source, dest),
+            false => Err(io::ErrorKind::Unsupported.into()),
+        }
+    }
+    fn rename_claimed(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<(), crate::backend::ClaimedRenameFailed> {
+        SystemBackend.rename_claimed(source, dest)
+    }
+    fn hard_link(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        match self.hard_link {
+            true => SystemBackend.hard_link(source, dest),
+            false => Err(io::ErrorKind::Unsupported.into()),
+        }
+    }
+    fn symlink(&self, target: &Path, at: &Path) -> io::Result<()> {
+        SystemBackend.symlink(target, at)
+    }
+    fn create_dir_all(&self, path: &Path, access: Access) -> io::Result<()> {
+        SystemBackend.create_dir_all(path, access)
+    }
+    fn create_dir(&self, path: &Path, access: Access) -> io::Result<()> {
+        SystemBackend.create_dir(path, access)
+    }
+    fn write_new(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        access: Access,
+    ) -> Result<SyncOutcome, WriteFailure> {
+        SystemBackend.write_new(path, bytes, access)
+    }
+    fn sync_file(&self, path: &Path) -> io::Result<SyncOutcome> {
+        SystemBackend.sync_file(path)
+    }
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        SystemBackend.read(path)
+    }
+    fn open(&self, path: &Path, open: Open) -> io::Result<std::fs::File> {
+        SystemBackend.open(path, open)
+    }
+    fn read_from(&self, file: std::fs::File) -> io::Result<Vec<u8>> {
+        SystemBackend.read_from(file)
+    }
+    fn write(&self, path: &Path, bytes: &[u8], replace: Replace, access: Access) -> io::Result<()> {
+        SystemBackend.write(path, bytes, replace, access)
+    }
+    fn sync_handle(&self, file: &std::fs::File) -> io::Result<SyncOutcome> {
+        SystemBackend.sync_handle(file)
+    }
+    fn sync_dir(&self, path: &Path) -> io::Result<SyncOutcome> {
+        SystemBackend.sync_dir(path)
+    }
+    fn restrict_to_owner(&self, path: &Path, what: OwnerOnly) -> io::Result<()> {
+        SystemBackend.restrict_to_owner(path, what)
+    }
+    fn restrict_handle_to_owner(&self, file: &std::fs::File, what: OwnerOnly) -> io::Result<()> {
+        SystemBackend.restrict_handle_to_owner(file, what)
+    }
+    fn set_modified(&self, path: &Path, at: std::time::SystemTime) -> io::Result<()> {
+        SystemBackend.set_modified(path, at)
+    }
+}
+
+/// A staged copy takes the destination name by the exclusive rename where
+/// the volume has one, by a hard link where it has no exclusive rename, and
+/// by a rename over a reservation of the name only where it has neither. The
+/// staged name is cleared each way, and the file promoted is the file under
+/// the destination name.
+#[test]
+fn a_staged_copy_promotes_by_exclusive_rename_then_link_then_claim() {
+    for (exclusive_rename, hard_link, promoted_by) in [
+        (true, true, "rename_no_replace"),
+        (false, true, "hard_link"),
+        (false, false, "rename_claimed"),
+    ] {
+        let mut fixture = StagedFixture::new();
+        let backend = Lacking {
+            exclusive_rename,
+            hard_link,
+        };
+        fixture.disk = Disk::with_seams(Arc::new(backend), fixture.clock.clone());
+
+        let copied = fixture
+            .copy(&Watch::nobody())
+            .unwrap_or_else(|refusal| panic!("{promoted_by}: {refusal:?}"));
+
+        let tried =
+            fixture
+                .disk
+                .calls_in_order(&["rename_no_replace", "hard_link", "rename_claimed"]);
+        let expected: &[&str] = match promoted_by {
+            "rename_no_replace" => &["rename_no_replace"],
+            "hard_link" => &["rename_no_replace", "hard_link"],
+            _ => &["rename_no_replace", "hard_link", "rename_claimed"],
+        };
+        assert_eq!(tried, expected, "{promoted_by}");
+        assert_eq!(
+            std::fs::read(&fixture.dest).unwrap(),
+            payload(),
+            "{promoted_by}"
+        );
+        assert!(!fixture.staged.exists(), "{promoted_by}");
+        #[cfg(unix)]
+        {
+            let promoted = copied.promoted.expect("the handle answered");
+            let landed = Mark::of(&std::fs::symlink_metadata(&fixture.dest).unwrap());
+            assert_eq!(promoted.same_file(&landed), Sameness::Same, "{promoted_by}");
+        }
+        #[cfg(not(unix))]
+        let _ = copied;
+    }
+}
+
+/// A destination name taken before the staged copy reaches it is refused at
+/// the promotion, by whichever way the volume offers, and never replaced.
+#[test]
+fn a_staged_copy_never_replaces_a_destination_taken_under_it() {
+    for (exclusive_rename, hard_link) in [(true, true), (false, true), (false, false)] {
+        let mut fixture = StagedFixture::new();
+        let backend = Lacking {
+            exclusive_rename,
+            hard_link,
+        };
+        fixture.disk = Disk::with_seams(Arc::new(backend), fixture.clock.clone());
+        std::fs::write(&fixture.dest, b"someone else's file").unwrap();
+
+        let refusal = fixture
+            .copy(&Watch::nobody())
+            .expect_err("the destination is taken");
+
+        let case = (exclusive_rename, hard_link);
+        assert_eq!(refusal.step, StagedStep::Promote, "{case:?}");
+        assert!(
+            matches!(&refusal.cause, StagedCause::Io(error) if error.kind() == io::ErrorKind::AlreadyExists),
+            "{case:?}: {:?}",
+            refusal.cause
+        );
+        assert_eq!(refusal.left, None, "{case:?}");
+        assert_eq!(
+            std::fs::read(&fixture.dest).unwrap(),
+            b"someone else's file",
+            "{case:?}"
+        );
+        assert!(!fixture.staged.exists(), "{case:?}");
+    }
+}
+
 /// What an earlier attempt of a staged copy left at the destination name is
 /// still said when a later attempt fails for another reason.
 #[test]

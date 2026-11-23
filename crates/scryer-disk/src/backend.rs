@@ -429,6 +429,10 @@ impl SystemBackend {
     /// volume has no numbers), it goes only while the source still reads as
     /// present. Anything else at the name is left in place.
     ///
+    /// Called once no handle on the reservation is open: a share refuses to
+    /// remove a file its own client holds. A removal that fails is logged
+    /// and the file is left in place.
+    ///
     /// Probes, on the failure alone: one read of `dest`, then the removal; one
     /// read of the source only where the entry cannot be told.
     fn release_failed_claim(
@@ -437,12 +441,21 @@ impl SystemBackend {
         dest: &Path,
         claim: Option<FileIdentity>,
     ) -> bool {
+        let remove = || match std::fs::remove_file(dest) {
+            Ok(()) => false,
+            Err(error) => {
+                tracing::warn!(
+                    path = %dest.display(),
+                    error = %error,
+                    "a rename reported failure and its reservation could not be removed; it is left in place"
+                );
+                true
+            }
+        };
         match self.lstat(dest) {
             Ok(stat) if stat.kind == EntryKind::File && stat.len == 0 => {
                 match (claim, stat.identity) {
-                    (Some(claim), Some(found)) if claim == found => {
-                        std::fs::remove_file(dest).is_err()
-                    }
+                    (Some(claim), Some(found)) if claim == found => remove(),
                     (Some(_), Some(_)) => {
                         tracing::warn!(
                             path = %dest.display(),
@@ -451,7 +464,7 @@ impl SystemBackend {
                         true
                     }
                     _ => match self.lstat(source) {
-                        Ok(_) => std::fs::remove_file(dest).is_err(),
+                        Ok(_) => remove(),
                         Err(error) => {
                             tracing::error!(
                                 path = %dest.display(),
@@ -587,37 +600,25 @@ impl DiskBackend for SystemBackend {
     }
 
     fn rename_claimed(&self, source: &Path, dest: &Path) -> Result<(), ClaimedRenameFailed> {
-        let claim = self.open(dest, Open::create_new())?;
         // The reservation's own entry, to tell it from anything a failed
-        // rename left at the name. Windows reads it through the handle before
-        // the handle closes for the rename: one handle read per claimed
-        // rename. Unix keeps the handle and reads it on a failure alone.
-        #[cfg(windows)]
+        // rename left at the name, is read through its handle, and the handle
+        // closes before the rename: a share refuses to replace, or to remove,
+        // a file its own client still holds open. One handle read per claimed
+        // rename.
         let claim = {
-            let identity = by_handle::ByHandle::of(&claim)
-                .ok()
-                .and_then(|read| read.identity());
-            drop(claim);
-            identity
+            let held = self.open(dest, Open::create_new())?;
+            identity_of_handle(&held)
         };
-        // The name holds the empty file just made, so only the source's kind
-        // is read before the rename: on Windows one handle read per claimed
-        // rename, links not followed, and none of the reservation; none on
-        // unix.
+        // The name holds the empty file just made, so beyond that read only
+        // the source's kind is read before the rename: on Windows one more
+        // handle read, links not followed; none on unix.
         #[cfg(windows)]
         let renamed = refuse_folder_onto_file(source).and_then(|()| std::fs::rename(source, dest));
         #[cfg(not(windows))]
         let renamed = std::fs::rename(source, dest);
-        renamed.map_err(|error| {
-            #[cfg(not(windows))]
-            let claim = claim
-                .metadata()
-                .ok()
-                .and_then(|metadata| RawStat::of(&metadata).identity);
-            ClaimedRenameFailed {
-                error,
-                reservation_left: self.release_failed_claim(source, dest, claim),
-            }
+        renamed.map_err(|error| ClaimedRenameFailed {
+            error,
+            reservation_left: self.release_failed_claim(source, dest, claim),
         })
     }
 
@@ -1651,6 +1652,65 @@ mod tests {
         // With no entry to tell, the source's absence keeps it.
         assert!(SystemBackend.release_failed_claim(&missing, &dest, None));
         assert_eq!(std::fs::read(&dest).unwrap(), b"");
+    }
+
+    /// A claimed rename that fails, on every platform, leaves no reservation
+    /// behind and says so: the handle it reserved the name with is closed
+    /// before the rename, and the empty file it made is the one released.
+    #[test]
+    fn a_failed_claimed_rename_leaves_no_reservation_on_every_platform() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for (source, dest) in [
+            ("invented-missing.bin", "invented-absent.bin"),
+            ("invented-folder", "invented-present.bin"),
+        ] {
+            let (source, dest) = (dir.path().join(source), dir.path().join(dest));
+            if source.extension().is_none() {
+                std::fs::create_dir(&source).unwrap();
+            }
+            let failed = SystemBackend
+                .rename_claimed(&source, &dest)
+                .expect_err("the rename fails");
+            assert!(!failed.reservation_left, "{source:?}");
+            assert!(
+                std::fs::symlink_metadata(&dest).is_err(),
+                "the reservation is gone: {source:?}"
+            );
+            // The name is free for the next attempt.
+            std::fs::write(&dest, b"next").unwrap();
+        }
+    }
+
+    /// The reservation a failed claimed rename finds as its own is removed;
+    /// one it cannot remove is kept and said to be left.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_claim_removes_its_own_reservation_and_keeps_one_it_cannot() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("invented-missing.bin");
+        let dest = dir.path().join("invented-claimed.bin");
+        std::fs::write(&dest, b"").unwrap();
+        let claim = SystemBackend.lstat(&dest).unwrap().identity;
+        assert!(claim.is_some(), "a unix volume numbers its files");
+        assert!(!SystemBackend.release_failed_claim(&missing, &dest, claim));
+        assert!(std::fs::symlink_metadata(&dest).is_err(), "released");
+
+        // A folder that refuses the removal keeps the reservation.
+        let locked = dir.path().join("invented-locked");
+        std::fs::create_dir(&locked).unwrap();
+        let dest = locked.join("invented-claimed.bin");
+        std::fs::write(&dest, b"").unwrap();
+        let claim = SystemBackend.lstat(&dest).unwrap().identity;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // A user the permissions do not bind removes it anyway; nothing to
+        // test then.
+        let probe = locked.join("invented-probe.bin");
+        if std::fs::write(&probe, b"").is_err() {
+            assert!(SystemBackend.release_failed_claim(&missing, &dest, claim));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"", "kept");
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]
