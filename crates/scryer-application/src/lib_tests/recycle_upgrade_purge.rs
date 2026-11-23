@@ -867,3 +867,153 @@ async fn an_entry_naming_episodes_no_live_file_covers_is_quarantined() {
     assert!(!fixture.purge(&entry).await);
     assert_quarantined_and_kept(&entry);
 }
+
+/// Rewrites an entry's manifest in place, as an earlier pass or version left
+/// it.
+fn rewrite_manifest(recycled: &Path, edit: impl FnOnce(&mut crate::recycle_bin::RecycleManifest)) {
+    let path = recycled.parent().unwrap().join("manifest.json");
+    let mut manifest: crate::recycle_bin::RecycleManifest =
+        serde_json::from_slice(&std::fs::read(&path).expect("read manifest"))
+            .expect("decode manifest");
+    edit(&mut manifest);
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&manifest).expect("encode manifest"),
+    )
+    .expect("write manifest");
+}
+
+/// Dates the entry well past the bin's retention.
+fn expire(recycled: &Path) {
+    rewrite_manifest(recycled, |manifest| {
+        manifest.recycled_at = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+    });
+}
+
+fn manifest_bytes(recycled: &Path) -> Vec<u8> {
+    std::fs::read(recycled.parent().unwrap().join("manifest.json")).expect("read manifest")
+}
+
+/// An expired entry quarantined because nothing covered what it held is
+/// left exactly as it is by housekeeping while that stays true, and purged
+/// by the first pass after the library covers it.
+#[tokio::test]
+async fn housekeeping_purges_an_expired_quarantined_entry_once_the_library_covers_it() {
+    let fixture = UpgradeFixture::new().await;
+    let title_id = fixture.title.id.clone();
+    let gone = fixture.library_path("Lanternfall.1080p.mkv");
+    let entry = fixture
+        .upgrade_entry(
+            "Lanternfall.720p.mkv",
+            ORIGINAL_ID,
+            Some((REPLACEMENT_ID, &gone)),
+        )
+        .await;
+    assert!(!fixture.purge(&entry).await);
+    assert_quarantined_and_kept(&entry);
+    expire(&entry);
+    let before = manifest_bytes(&entry);
+
+    assert_eq!(fixture.app.purge_recycle_bins_for_housekeeping().await, 0);
+    assert_quarantined_and_kept(&entry);
+    assert_eq!(
+        manifest_bytes(&entry),
+        before,
+        "the manifest is not rewritten"
+    );
+
+    let live = fixture
+        .live_file("synthetic-file-c", &title_id, "Lanternfall.2160p.mkv")
+        .await;
+    assert_eq!(fixture.app.purge_recycle_bins_for_housekeeping().await, 1);
+    assert!(!entry.exists(), "the covered entry is purged");
+    assert!(live.exists(), "the live file is untouched");
+}
+
+/// A quarantined entry the library covers stays for the bin's retention like
+/// any other.
+#[tokio::test]
+async fn housekeeping_keeps_a_covered_quarantined_entry_that_has_not_expired() {
+    let fixture = UpgradeFixture::new().await;
+    let title_id = fixture.title.id.clone();
+    let gone = fixture.library_path("Lanternfall.1080p.mkv");
+    let entry = fixture
+        .upgrade_entry(
+            "Lanternfall.720p.mkv",
+            ORIGINAL_ID,
+            Some((REPLACEMENT_ID, &gone)),
+        )
+        .await;
+    assert!(!fixture.purge(&entry).await);
+    fixture
+        .live_file("synthetic-file-c", &title_id, "Lanternfall.2160p.mkv")
+        .await;
+
+    assert_eq!(fixture.app.purge_recycle_bins_for_housekeeping().await, 0);
+    assert_quarantined_and_kept(&entry);
+}
+
+/// Only an upgrade's entry, laid out as Scryer wrote it, is asked again. A
+/// quarantined entry recycled for another reason, and one whose manifest no
+/// longer names its directory, are kept however old, with a live file of the
+/// title in the library.
+#[tokio::test]
+async fn housekeeping_keeps_quarantined_entries_that_are_not_trusted_upgrades() {
+    let fixture = UpgradeFixture::new().await;
+    let title_id = fixture.title.id.clone();
+    let live = fixture
+        .live_file(REPLACEMENT_ID, &title_id, "Lanternfall.2160p.mkv")
+        .await;
+    let removed = fixture.removal_entry("Lanternfall.sample.mkv").await;
+    rewrite_manifest(&removed, |manifest| {
+        manifest.status = Some(crate::recycle_bin::RECYCLE_STATUS_QUARANTINED.to_string());
+        manifest.reason = format!("{}; quarantine: synthetic", manifest.reason);
+    });
+    expire(&removed);
+    let renamed = fixture
+        .upgrade_entry(
+            "Lanternfall.720p.mkv",
+            ORIGINAL_ID,
+            Some((REPLACEMENT_ID, &live)),
+        )
+        .await;
+    rewrite_manifest(&renamed, |manifest| {
+        manifest.status = Some(crate::recycle_bin::RECYCLE_STATUS_QUARANTINED.to_string());
+        manifest.reason = format!("{}; quarantine: synthetic", manifest.reason);
+        manifest.entry_id = Some("20010101_000000000_abcdef".to_string());
+    });
+    expire(&renamed);
+
+    assert_eq!(fixture.app.purge_recycle_bins_for_housekeeping().await, 0);
+    assert_quarantined_and_kept(&removed);
+    assert_quarantined_and_kept(&renamed);
+    assert!(live.exists());
+}
+
+/// A → B → C for one episode, where an earlier version quarantined A when
+/// B's row went: the pass that purges B's expired entry also purges A's,
+/// through the upgrade B's entry records.
+#[tokio::test]
+async fn housekeeping_purges_an_entry_an_earlier_version_quarantined_mid_chain() {
+    let fixture = UpgradeFixture::new().await;
+    fixture.series().await;
+    let a = fixture
+        .episode_upgrade_entry("S01E01.480p.mkv", "synthetic-ep-a", "synthetic-ep-b", None)
+        .await;
+    rewrite_manifest(&a, |manifest| {
+        manifest.status = Some(crate::recycle_bin::RECYCLE_STATUS_QUARANTINED.to_string());
+        manifest.reason = format!("{}; quarantine: synthetic", manifest.reason);
+    });
+    let b = fixture
+        .episode_upgrade_entry("S01E01.720p.mkv", "synthetic-ep-b", "synthetic-ep-c", None)
+        .await;
+    let c = fixture
+        .live_episode_file("synthetic-ep-c", "S01E01.1080p.mkv", "synthetic-episode-1")
+        .await;
+    expire(&a);
+    expire(&b);
+
+    assert_eq!(fixture.app.purge_recycle_bins_for_housekeeping().await, 2);
+    assert!(!a.exists() && !b.exists());
+    assert!(c.exists(), "the live file is untouched");
+}
