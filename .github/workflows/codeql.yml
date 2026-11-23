@@ -56,7 +56,11 @@ jobs:
     needs: changes
     if: always()
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 90
+    env:
+      # Leave #[cfg(test)] code out of the Rust database. Test code does not
+      # ship, and type inference over it pushed the scan past an hour.
+      CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES: -test
     permissions:
       actions: read
       contents: read
