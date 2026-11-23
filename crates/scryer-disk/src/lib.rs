@@ -792,6 +792,27 @@ impl Disk {
             .await
     }
 
+    /// Read the current mark only if `path` still names the expected entry.
+    /// One fresh probe, with links left unresolved. Callers can check the
+    /// returned mark for any properties that must still hold.
+    pub fn fingerprint_if_same_entry_blocking(&self, path: &Path, expected: &Mark) -> Option<Mark> {
+        self.fingerprint_blocking(path)
+            .ok()
+            .filter(|current| expected.still_marks(current))
+    }
+
+    /// The bounded async form of [`Self::fingerprint_if_same_entry_blocking`].
+    pub async fn fingerprint_if_same_entry(
+        &self,
+        path: impl Into<PathBuf>,
+        expected: &Mark,
+    ) -> Option<Mark> {
+        self.fingerprint(path)
+            .await
+            .ok()
+            .filter(|current| expected.still_marks(current))
+    }
+
     /// [`Self::fingerprint_followed_blocking`] off the runtime, bounded.
     pub async fn fingerprint_followed(
         &self,

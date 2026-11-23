@@ -208,9 +208,9 @@ async fn remove_empty_files(
             continue;
         }
         let still_empty = Disk::process()
-            .fingerprint(path.clone())
+            .fingerprint_if_same_entry(path.clone(), &mark)
             .await
-            .is_ok_and(|now| is_empty_file(&now) && mark.still_marks(&now));
+            .is_some_and(|now| is_empty_file(&now));
         if !still_empty {
             outcomes[index] = Outcome::Changed;
             continue;

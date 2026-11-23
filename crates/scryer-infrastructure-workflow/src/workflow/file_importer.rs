@@ -3419,8 +3419,8 @@ fn reconcile_existing_destination(
         && is_abandoned_empty_file(&existing)
     {
         let still_empty = Disk::process()
-            .fingerprint_blocking(dest)
-            .is_ok_and(|now| now.is_len(0) && existing.still_marks(&now));
+            .fingerprint_if_same_entry_blocking(dest, &existing)
+            .is_some_and(|now| now.is_len(0));
         if !still_empty {
             return Err(AppError::ManualReconciliationRequired(format!(
                 "import destination changed while it was inspected: {}",
