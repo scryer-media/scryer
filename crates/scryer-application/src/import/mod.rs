@@ -11,7 +11,6 @@ pub(crate) mod checks;
 pub mod completed_download;
 pub(crate) mod coverage_validation;
 pub(crate) mod decide;
-pub mod empty_leftovers;
 pub(crate) mod external_monitoring;
 pub mod failed_download;
 pub(crate) mod parameters;

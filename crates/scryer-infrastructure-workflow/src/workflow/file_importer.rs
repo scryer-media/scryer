@@ -3315,6 +3315,19 @@ fn is_unused_rename_reservation(
     })
 }
 
+/// An empty file at a library name that was last written less than this long
+/// ago may be a name another operation reserved and has yet to fill. An older
+/// one is nobody's.
+const ABANDONED_EMPTY_FILE_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Whether an empty file is old enough to be an abandoned leftover. A file
+/// whose time is unread, or ahead of this host's clock, is not.
+fn is_abandoned_empty_file(mark: &disk::Mark) -> bool {
+    mark.modified()
+        .and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age >= ABANDONED_EMPTY_FILE_AGE)
+}
+
 fn reconcile_existing_destination(
     source: &Path,
     dest: &Path,
@@ -3395,10 +3408,16 @@ fn reconcile_existing_destination(
     // An empty regular file at the destination holds nothing: it is what an
     // import that failed while it took the name leaves behind. It is removed
     // and the import goes on as if the name were free, but only for a source
-    // that has content, never for a link, and only while the name still
-    // reads as that same empty file. Probes: one more stat of the name, and
-    // only on this path.
-    if kind == EntryKind::File && existing.is_len(0) && size > 0 {
+    // that has content, never for a link, never for a file written within
+    // the last hour, which may be a name another operation has reserved, and
+    // only while the name still reads as that same empty file. A newer empty
+    // file stops the import below, as any differing destination does.
+    // Probes: one more stat of the name, and only on this path.
+    if kind == EntryKind::File
+        && existing.is_len(0)
+        && size > 0
+        && is_abandoned_empty_file(&existing)
+    {
         let still_empty = Disk::process()
             .fingerprint_blocking(dest)
             .is_ok_and(|now| now.is_len(0) && existing.still_marks(&now));
@@ -7034,6 +7053,34 @@ mod tests {
     }
 
     #[test]
+    fn a_freshly_made_empty_destination_stops_the_import_and_is_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("library").join("Imported.Movie.mkv");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
+        std::fs::write(&source, b"source video bytes").expect("write source");
+        std::fs::write(&dest, b"").expect("write destination");
+
+        let error = import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::HardlinkOrCopy,
+            ImportFileOptions::default(),
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect_err("a fresh empty destination may be another operation's reservation");
+
+        assert!(matches!(error, AppError::ManualReconciliationRequired(_)));
+        assert_eq!(std::fs::read(&dest).expect("destination"), b"");
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"source video bytes"
+        );
+    }
+
+    #[test]
     fn an_empty_existing_destination_is_replaced_by_the_import() {
         for mode in [ImportMode::HardlinkOrCopy, ImportMode::Move] {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -7042,6 +7089,13 @@ mod tests {
             std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
             std::fs::write(&source, b"source video bytes").expect("write source");
             std::fs::write(&dest, b"").expect("write destination");
+            std::fs::File::options()
+                .write(true)
+                .open(&dest)
+                .and_then(|file| {
+                    file.set_modified(std::time::SystemTime::now() - 2 * ABANDONED_EMPTY_FILE_AGE)
+                })
+                .expect("age the destination");
 
             let result = import_file_blocking(
                 source.clone(),

@@ -220,7 +220,6 @@ pub(crate) use import::archive_extractor;
 pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
-pub use import::empty_leftovers::{EmptyImportLeftover, EmptyImportLeftoverRoots};
 pub(crate) use import::import as import_workflow;
 pub use import::import::{
     LibraryFileSameness, library_file_is_import_source_blocking,

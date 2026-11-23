@@ -526,11 +526,10 @@ impl ApplicationMigrator {
                     }));
                 }
                 super::_0023_empty_failed_import_files::ID => {
-                    let app = app.clone();
                     let datastore = datastore.clone();
                     let restore = app.restore_coordinator().clone();
                     std::mem::drop(self.spawn_retryable(restore, spec, async move {
-                        super::_0023_empty_failed_import_files::migrate(&app, &datastore).await
+                        super::_0023_empty_failed_import_files::migrate(&datastore).await
                     }));
                 }
                 super::_0020_payload_blob_compression::ID => {
