@@ -1072,8 +1072,10 @@ pub struct StagedCopyRefusal {
 impl Disk {
     /// Copies `source` to `dest` through `how.staged`, as `how` says, and
     /// returns what it streamed and how its fsync went, which it does not
-    /// log. The staged file takes the destination name
-    /// with [`Self::move_claimed_blocking`]. Takes no turn on the volume and
+    /// log. The staged file takes the destination name without replacing
+    /// anything there: by an exclusive rename, else a hard link, and only on
+    /// a volume with neither by a rename over a reservation of the name, as
+    /// [`Self::move_claimed_blocking`] makes it. Takes no turn on the volume and
     /// proves nothing: both are the caller's. Reports [`Phase::Copying`] at
     /// nothing once the staged file is open, and [`Phase::Finishing`] once
     /// its last byte is written. Blocks on the disk.
@@ -1192,7 +1194,7 @@ impl Disk {
         let faulted = None;
         let promoted = match faulted {
             Some(error) => Err(error),
-            None => self.move_claimed_blocking(how.staged, dest),
+            None => self.promote_staged_blocking(how.staged, dest),
         };
         promoted.map_err(|error| {
             if let Some(at) = error.left() {

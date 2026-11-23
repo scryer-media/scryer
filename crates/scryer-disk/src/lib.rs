@@ -1948,7 +1948,7 @@ impl Disk {
     }
 
     /// The calls this owner made of `operations`, in order, for tests.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn calls_in_order(&self, operations: &[&str]) -> Vec<&'static str> {
         let order = self.inner.call_order.lock().unwrap();
         order
