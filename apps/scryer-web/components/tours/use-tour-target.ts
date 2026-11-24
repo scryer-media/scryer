@@ -4,13 +4,24 @@ import type { TourTarget } from "@/lib/tours/types";
 import { selectorId } from "@/lib/utils/dom-ids";
 
 /** How long a step waits for its target to render before showing without it. */
-const TARGET_WAIT_MS = 1200;
+export const TARGET_WAIT_MS = 1200;
+/**
+ * The wait for a target on a page the step has just opened: the page's code
+ * and data load first, and giving up early would drop the spotlight only to
+ * bring it back a moment later.
+ */
+export const ROUTE_TARGET_WAIT_MS = 4000;
 
 export type TourTargetState = {
   /** The target's viewport rectangle, or null when the step shows without one. */
   rect: TourRect | null;
   /** The search is over: the target was found, or the step goes on without it. */
   settled: boolean;
+  /**
+   * The id of the element `rect` belongs to. While a new target is awaited
+   * the rect is still the old element's, and this says so.
+   */
+  elementId: string | null;
 };
 
 function visibleRect(element: Element): TourRect | null {
@@ -58,7 +69,7 @@ function sameRect(a: TourRect | null, b: TourRect | null): boolean {
 /**
  * Finds a step's target by its durable id and follows it: the spotlight moves
  * with scrolling, resizing and layout shifts. A target that is not rendered
- * yet (a route still loading) is waited for briefly; one that never appears,
+ * yet (a route still loading) is waited for up to `waitMs`; one that never appears,
  * or is hidden, leaves the step to show centered without a spotlight. A
  * `fallback` is spotlighted while the target is hidden, and the spotlight
  * moves to the target once it shows.
@@ -71,6 +82,7 @@ export function useTourTarget(
   target: TourTarget | undefined,
   reduceMotion: boolean,
   fallback?: TourTarget,
+  waitMs: number = TARGET_WAIT_MS,
 ): TourTargetState {
   const id = target && target.length > 0 ? selectorId(...target) : null;
   const fallbackId =
@@ -80,6 +92,7 @@ export function useTourTarget(
   const [state, setState] = React.useState<TourTargetState>(() => ({
     rect: null,
     settled: id === null,
+    elementId: null,
   }));
 
   React.useEffect(() => {
@@ -92,7 +105,9 @@ export function useTourTarget(
 
     const publish = (next: TourTargetState) =>
       setState((current) =>
-        current.settled === next.settled && sameRect(current.rect, next.rect)
+        current.settled === next.settled &&
+        current.elementId === next.elementId &&
+        sameRect(current.rect, next.rect)
           ? current
           : next,
       );
@@ -107,12 +122,15 @@ export function useTourTarget(
       }
       if (!element) {
         // A target that went away takes its spotlight with it.
-        if (found) publish({ rect: null, settled: true });
+        if (found) publish({ rect: null, settled: true, elementId: null });
         return;
       }
       const rect = visibleRect(element);
       if (rect && !scrolled) {
         scrolled = true;
+        // On its way into view it is found: the wait must not give up on it
+        // while it scrolls.
+        found = true;
         const offscreen =
           rect.top < 0 ||
           rect.left < 0 ||
@@ -130,9 +148,9 @@ export function useTourTarget(
       }
       if (rect) {
         found = true;
-        publish({ rect, settled: true });
+        publish({ rect, settled: true, elementId: element.id });
       } else if (found) {
-        publish({ rect: null, settled: true });
+        publish({ rect: null, settled: true, elementId: null });
       }
     };
     const schedule = () => {
@@ -152,8 +170,8 @@ export function useTourTarget(
     window.addEventListener("scroll", schedule, true);
     // A new target that never shows lets go of the one before it as well.
     const giveUp = window.setTimeout(() => {
-      if (!found) publish({ rect: null, settled: true });
-    }, TARGET_WAIT_MS);
+      if (!found) publish({ rect: null, settled: true, elementId: null });
+    }, waitMs);
     schedule();
 
     return () => {
@@ -164,7 +182,7 @@ export function useTourTarget(
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", schedule, true);
     };
-  }, [id, fallbackId, reduceMotion]);
+  }, [id, fallbackId, reduceMotion, waitMs]);
 
   return state;
 }

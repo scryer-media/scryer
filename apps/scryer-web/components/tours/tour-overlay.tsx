@@ -29,7 +29,7 @@ import {
 } from "@/lib/tours/placement";
 import { tourArrow, type TourArrow } from "@/lib/tours/arrow";
 import type { TourIcon, TourStep, TourTarget } from "@/lib/tours/types";
-import { useTourTarget } from "./use-tour-target";
+import { ROUTE_TARGET_WAIT_MS, useTourTarget } from "./use-tour-target";
 
 const TOUR_ICONS: Record<TourIcon, LucideIcon> = {
   sparkles: Sparkles,
@@ -74,10 +74,50 @@ export type TourOverlayProps = {
  * is open.
  */
 export default function TourOverlay(props: TourOverlayProps) {
+  const { onSkip, reduceMotion } = props;
   const step = props.steps[props.index];
+  // The dialog and its backdrop outlive each step. The backdrop keeps the last
+  // spotlight until the next step has found its own, so moving between steps
+  // (and pages) glides the cutout across instead of flashing the blurred
+  // lightbox while the next target is looked for. `undefined`: nothing has
+  // settled yet.
+  const [spot, setSpot] = React.useState<TourRect | null | undefined>(
+    undefined,
+  );
+  const showSpot = React.useCallback((next: TourRect | null) => {
+    setSpot((current) => (sameSpot(current, next) ? current : next));
+  }, []);
   if (!step) return null;
-  // Keyed by step so each one searches for its own target from scratch.
-  return <TourStepOverlay key={step.id} step={step} {...props} />;
+  return (
+    <DialogPrimitive.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onSkip();
+      }}
+    >
+      <DialogPrimitive.Portal>
+        <TourBackdrop spot={spot} reduceMotion={reduceMotion} />
+        {/* Keyed by step so each one searches for its own target from scratch. */}
+        <TourStepOverlay
+          key={step.id}
+          step={step}
+          onSpot={showSpot}
+          {...props}
+        />
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
+function sameSpot(a: TourRect | null | undefined, b: TourRect | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.top === b.top &&
+    a.left === b.left &&
+    a.width === b.width &&
+    a.height === b.height
+  );
 }
 
 function TourStepOverlay({
@@ -86,18 +126,24 @@ function TourStepOverlay({
   index,
   pointAt,
   onPointed,
+  onSpot,
   reduceMotion,
   onBack,
   onNext,
   onSkip,
   onAction,
-}: TourOverlayProps & { step: TourStep }) {
+}: TourOverlayProps & {
+  step: TourStep;
+  onSpot: (spot: TourRect | null) => void;
+}) {
   const t = useTranslate();
   const target = pointAt ?? step.target;
-  const { rect, settled } = useTourTarget(
+  const { rect, settled, elementId } = useTourTarget(
     target,
     reduceMotion,
     pointAt ? undefined : step.fallbackTarget,
+    // A step that opens a page waits for that page to load its target.
+    step.route ? ROUTE_TARGET_WAIT_MS : undefined,
   );
   // A callback ref: the portal mounts the card after this component does.
   const [card, setCard] = React.useState<HTMLDivElement | null>(null);
@@ -109,6 +155,10 @@ function TourStepOverlay({
   const placement =
     cardSize && settled ? placeTourCard(viewport, cardSize, rect) : null;
   const spot = rect ? spotlightRect(rect) : null;
+  // The backdrop follows this step's spotlight once the step has settled.
+  React.useLayoutEffect(() => {
+    if (settled) onSpot(rect ? spotlightRect(rect) : null);
+  }, [settled, rect, onSpot]);
   // The card fades in where it belongs; only later moves (a target that
   // shifts, a resize) glide, so it never slides in from the corner.
   const placed = placement !== null;
@@ -145,142 +195,141 @@ function TourStepOverlay({
   }, [pointing, onPointed]);
 
   return (
-    <DialogPrimitive.Root
-      open
-      onOpenChange={(open) => {
-        if (!open) onSkip();
-      }}
-    >
-      <DialogPrimitive.Portal>
-        <TourBackdrop
-          spot={settled ? spot : null}
+    <>
+      {placement && cardSize && spot ? (
+        <TourArrowLayer
+          // Redrawn from the start whenever the spotlight lands on a new
+          // element, not while the next one is still being waited for.
+          key={elementId ?? undefined}
+          arrow={tourArrow(
+            { top: placement.top, left: placement.left, ...cardSize },
+            spot,
+            step.id,
+          )}
           reduceMotion={reduceMotion}
         />
-        {placement && cardSize && spot ? (
-          <TourArrowLayer
-            // Redrawn from the start whenever it points somewhere new.
-            key={target?.join("/")}
-            arrow={tourArrow(
-              { top: placement.top, left: placement.left, ...cardSize },
-              spot,
-              step.id,
-            )}
-            reduceMotion={reduceMotion}
-          />
-        ) : null}
-        <DialogPrimitive.Content
-          ref={setCard}
-          data-slot="tour-card"
-          data-testid="guided-tour-dialog"
-          data-tour-side={placement?.side}
-          onPointerDownOutside={(event) => event.preventDefault()}
-          onInteractOutside={(event) => event.preventDefault()}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowRight") {
-              event.preventDefault();
-              onNext();
-            } else if (event.key === "ArrowLeft" && index > 0) {
-              event.preventDefault();
-              onBack();
-            }
-          }}
-          className={cn(
-            "fixed z-[91] flex w-[min(28rem,calc(100vw-2rem))] flex-col gap-4 rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl outline-none",
-            !reduceMotion &&
-              (glide
-                ? "motion-safe:transition-[top,left,opacity]"
-                : "motion-safe:transition-opacity") +
-                " motion-safe:duration-200 motion-safe:ease-out",
-            placement ? "opacity-100" : "opacity-0",
-          )}
-          style={{ top: placement?.top ?? 0, left: placement?.left ?? 0 }}
-        >
-          <div className="flex items-start gap-4">
-            <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-primary">
-              <Icon className="size-5" aria-hidden="true" />
-            </span>
-            <div className="min-w-0 space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground">
-                {t("tours.stepOf", {
-                  current: index + 1,
-                  total: steps.length,
-                })}
-              </p>
-              <DialogPrimitive.Title className="text-lg font-semibold leading-snug">
-                {t(step.titleKey)}
-              </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="text-sm leading-relaxed text-muted-foreground">
-                {t(step.bodyKey)}
-              </DialogPrimitive.Description>
-            </div>
+      ) : null}
+      <DialogPrimitive.Content
+        ref={setCard}
+        data-slot="tour-card"
+        data-testid="guided-tour-dialog"
+        data-tour-side={placement?.side}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            onNext();
+          } else if (event.key === "ArrowLeft" && index > 0) {
+            event.preventDefault();
+            onBack();
+          }
+        }}
+        className={cn(
+          "fixed z-[91] flex w-[min(28rem,calc(100vw-2rem))] flex-col gap-4 rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl outline-none",
+          !reduceMotion &&
+            (glide
+              ? "motion-safe:transition-[top,left,opacity]"
+              : "motion-safe:transition-opacity") +
+              " motion-safe:duration-200 motion-safe:ease-out",
+          placement ? "opacity-100" : "opacity-0",
+        )}
+        style={{ top: placement?.top ?? 0, left: placement?.left ?? 0 }}
+      >
+        <div className="flex items-start gap-4">
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-primary">
+            <Icon className="size-5" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              {t("tours.stepOf", {
+                current: index + 1,
+                total: steps.length,
+              })}
+            </p>
+            <DialogPrimitive.Title className="text-lg font-semibold leading-snug">
+              {t(step.titleKey)}
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Description className="text-sm leading-relaxed text-muted-foreground">
+              {t(step.bodyKey)}
+            </DialogPrimitive.Description>
           </div>
+        </div>
 
-          <div className="flex items-center gap-1.5" aria-hidden="true">
-            {steps.map((dot, dotIndex) => (
-              <span
-                key={dot.id}
-                className={cn(
-                  "h-1.5 rounded-full",
-                  !reduceMotion && "motion-safe:transition-all",
-                  dotIndex === index
-                    ? "w-5 bg-primary"
-                    : dotIndex < index
-                      ? "w-1.5 bg-primary/50"
-                      : "w-1.5 bg-muted-foreground/30",
-                )}
-              />
-            ))}
-          </div>
+        <div className="flex items-center gap-1.5" aria-hidden="true">
+          {steps.map((dot, dotIndex) => (
+            <span
+              key={dot.id}
+              className={cn(
+                "h-1.5 rounded-full",
+                !reduceMotion && "motion-safe:transition-all",
+                dotIndex === index
+                  ? "w-5 bg-primary"
+                  : dotIndex < index
+                    ? "w-1.5 bg-primary/50"
+                    : "w-1.5 bg-muted-foreground/30",
+              )}
+            />
+          ))}
+        </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-              onClick={onSkip}
-              data-testid="guided-tour-skip"
-            >
-              {t("tours.skip")}
-            </Button>
-            <div className="flex flex-wrap items-center gap-2">
-              {index > 0 ? (
-                <Button variant="outline" size="sm" onClick={onBack}>
-                  {t("tours.back")}
-                </Button>
-              ) : null}
-              {step.action ? (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => onAction(step.action!.route)}
-                >
-                  {t(step.action.labelKey)}
-                </Button>
-              ) : null}
-              <Button size="sm" onClick={onNext} autoFocus>
-                {isLast ? t("tours.done") : t("tours.next")}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={onSkip}
+            data-testid="guided-tour-skip"
+          >
+            {t("tours.skip")}
+          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {index > 0 ? (
+              <Button variant="outline" size="sm" onClick={onBack}>
+                {t("tours.back")}
               </Button>
-            </div>
+            ) : null}
+            {step.action ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onAction(step.action!.route)}
+              >
+                {t(step.action.labelKey)}
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={onNext} autoFocus>
+              {isLast ? t("tours.done") : t("tours.next")}
+            </Button>
           </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </div>
+      </DialogPrimitive.Content>
+    </>
   );
 }
 
 /**
  * Dims the page. With a spotlight, the target shows through a rounded cutout
  * ringed in the highlight color; without one, the page is dimmed and blurred
- * so the card reads as a lightbox.
+ * so the card reads as a lightbox. Before the first step has settled the page
+ * is only dimmed, so a tour that opens on a spotlight does not blur first.
  */
 function TourBackdrop({
   spot,
   reduceMotion,
 }: {
-  spot: TourRect | null;
+  spot: TourRect | null | undefined;
   reduceMotion: boolean;
 }) {
   const maskId = React.useId();
+  if (spot === undefined) {
+    return (
+      <div
+        data-slot="tour-backdrop"
+        className="fixed inset-0 z-[90] bg-black/60"
+      />
+    );
+  }
   if (!spot) {
     return (
       <div

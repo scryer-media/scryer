@@ -89,6 +89,15 @@ export const TOUR_REGISTRY: readonly TourDefinition[] = [
           onDesktop(context) && context.permissions.canManageSystemSettings,
       },
       {
+        id: "media-servers",
+        titleKey: "tours.onboarding.mediaServers.title",
+        bodyKey: "tours.onboarding.mediaServers.body",
+        icon: "library",
+        target: ["root-sidebar-settings-shortcut", "mediaservers"],
+        when: (context) =>
+          onDesktop(context) && context.permissions.canManageSystemSettings,
+      },
+      {
         id: "quality-profiles",
         titleKey: "tours.onboarding.qualityProfiles.title",
         bodyKey: "tours.onboarding.qualityProfiles.body",
@@ -106,15 +115,6 @@ export const TOUR_REGISTRY: readonly TourDefinition[] = [
         target: ["root-sidebar-settings-shortcut", "rules"],
         when: (context) =>
           onDesktop(context) && context.permissions.canManageCatalogSettings,
-      },
-      {
-        id: "media-servers",
-        titleKey: "tours.onboarding.mediaServers.title",
-        bodyKey: "tours.onboarding.mediaServers.body",
-        icon: "library",
-        target: ["root-sidebar-settings-shortcut", "mediaservers"],
-        when: (context) =>
-          onDesktop(context) && context.permissions.canManageSystemSettings,
       },
       {
         id: "notifications",
