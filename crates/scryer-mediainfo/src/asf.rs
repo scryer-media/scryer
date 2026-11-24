@@ -1056,7 +1056,6 @@ mod tests {
             .join("tests/media/wmv_wmv1_mp3_mono.wmv");
         let analysis = crate::analyze_catalog_file(&path).unwrap();
         let audio = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -1075,7 +1074,6 @@ mod tests {
             .join("tests/media/wmv_wmv1_aac_surround.wmv");
         let analysis = crate::analyze_catalog_file(&path).unwrap();
         let audio = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -1095,7 +1093,6 @@ mod tests {
                 .join(fixture);
             let analysis = crate::analyze_catalog_file(&path).unwrap();
             let video = analysis
-                .details
                 .streams
                 .iter()
                 .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
@@ -1177,21 +1174,14 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(analysis.num_chapters, Some(2));
-        assert_eq!(analysis.details.chapters.len(), 2);
-        assert_eq!(
-            analysis.details.chapters[0].title.as_deref(),
-            Some("Début 🎬")
-        );
-        assert_eq!(analysis.details.chapters[0].start_seconds, 0.0);
-        assert_eq!(
-            analysis.details.chapters[1].title.as_deref(),
-            Some("第二章")
-        );
-        assert!((analysis.details.chapters[1].start_seconds - 0.125).abs() < 1e-9);
+        assert_eq!(analysis.chapter_count, Some(2));
+        assert_eq!(analysis.chapters.len(), 2);
+        assert_eq!(analysis.chapters[0].title.as_deref(), Some("Début 🎬"));
+        assert_eq!(analysis.chapters[0].start_seconds, 0.0);
+        assert_eq!(analysis.chapters[1].title.as_deref(), Some("第二章"));
+        assert!((analysis.chapters[1].start_seconds - 0.125).abs() < 1e-9);
         assert!(
             analysis
-                .details
                 .chapters
                 .iter()
                 .all(|chapter| chapter.end_seconds.is_none())
@@ -1264,8 +1254,8 @@ mod tests {
         )
         .unwrap();
         let chapters = reference["chapters"].as_array().unwrap();
-        assert_eq!(chapters.len(), native.details.chapters.len());
-        for (reference, native) in chapters.iter().zip(&native.details.chapters) {
+        assert_eq!(chapters.len(), native.chapters.len());
+        for (reference, native) in chapters.iter().zip(&native.chapters) {
             assert_eq!(reference["tags"]["title"].as_str(), native.title.as_deref());
             let start = reference["start_time"]
                 .as_str()

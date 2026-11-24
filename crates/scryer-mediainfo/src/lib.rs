@@ -1,7 +1,6 @@
 // disk-guard: this crate is the media parser, one of the three crates clippy.toml exempts from the disk guard by name.
 #![allow(clippy::disallowed_methods)]
 
-use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek};
 use std::path::Path;
 
@@ -92,94 +91,15 @@ impl Default for AnalyzeOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-/// A single audio stream extracted from media analysis.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AudioStreamDetail {
-    pub codec: Option<String>,
-    pub profile: Option<String>,
-    pub channels: Option<i32>,
-    pub language: Option<String>,
-    /// Human-readable track title from the container (e.g. "English", "日本語").
-    /// Often set by uploaders even when the ISO language tag is missing/`und`.
-    pub name: Option<String>,
-    pub bitrate_kbps: Option<i32>,
-}
-
-/// A single subtitle stream extracted from media analysis.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubtitleStreamDetail {
-    pub codec: Option<String>,
-    pub language: Option<String>,
-    pub name: Option<String>,
-    pub forced: bool,
-    pub default: bool,
-}
-
-/// Parsed media properties.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MediaAnalysis {
-    pub details: scryer_media_model::AnalysisDetails,
-    pub video_codec: Option<String>,
-    pub video_width: Option<i32>,
-    pub video_height: Option<i32>,
-    pub video_bitrate_kbps: Option<i32>,
-    pub video_bit_depth: Option<i32>,
-    /// "Dolby Vision", "HDR10+", "HDR10", or "HLG"
-    pub video_hdr_format: Option<String>,
-    /// Dolby Vision profile number (5, 7, 8, etc.) if DV is detected
-    pub dovi_profile: Option<u8>,
-    /// Dolby Vision base-layer signal compatibility ID
-    pub dovi_bl_compat_id: Option<u8>,
-    /// Frame rate as a decimal string, e.g. "23.976", "24", "60"
-    pub video_frame_rate: Option<String>,
-    /// Codec profile, e.g. "Main 10", "High", "Main"
-    pub video_profile: Option<String>,
-    pub audio_codec: Option<String>,
-    pub audio_profile: Option<String>,
-    pub audio_channels: Option<i32>,
-    /// Bitrate of the primary audio stream in kbps
-    pub audio_bitrate_kbps: Option<i32>,
-    /// Language tags from all audio streams (BCP-47 / ISO 639-2), "und" filtered out
-    pub audio_languages: Vec<String>,
-    /// All audio streams with per-stream details
-    pub audio_streams: Vec<AudioStreamDetail>,
-    /// Language tags from all subtitle streams
-    pub subtitle_languages: Vec<String>,
-    /// Codec names for all subtitle streams
-    pub subtitle_codecs: Vec<String>,
-    /// All subtitle streams with per-stream details
-    pub subtitle_streams: Vec<SubtitleStreamDetail>,
-    pub has_multiaudio: bool,
-    pub duration_seconds: Option<i32>,
-    pub num_chapters: Option<i32>,
-    pub container_format: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if the analysis describes a valid video file (has a video
-/// stream and non-zero duration). Returns `false` for executables, audio-only
-/// files, corrupt containers, etc.
-pub fn is_valid_video(analysis: &MediaAnalysis) -> bool {
-    analysis.video_codec.is_some() && analysis.duration_seconds.map(|d| d > 0).unwrap_or(false)
-}
-
-/// Analyzes a media file using pure Rust container parsers. Dispatches to the
-/// appropriate parser based on container sniffing with an extension fallback.
-pub fn analyze_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfoError> {
-    analyze_catalog_file(file_path)
-}
+pub use scryer_media_model::AnalysisDetails;
 
 /// Canonical analysis for import decisions, persisted metadata, and library scans.
 /// Enrichment is bounded by each container parser and runs in the same pass as
 /// metadata discovery so consumers do not reopen a file to fill missing facts.
-pub fn analyze_catalog_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfoError> {
+pub fn analyze_catalog_file(file_path: &Path) -> Result<AnalysisDetails, MediaInfoError> {
     analyze_file_with_options(
         file_path,
         AnalyzeOptions {
@@ -193,7 +113,7 @@ pub fn analyze_catalog_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfo
 pub fn analyze_disc_file(
     file_path: &Path,
     selection: scryer_media_model::DiscSelection,
-) -> Result<MediaAnalysis, MediaInfoError> {
+) -> Result<AnalysisDetails, MediaInfoError> {
     disc::analyze(file_path, selection, AnalysisProfile::DefaultRich)
 }
 
@@ -201,7 +121,7 @@ pub fn analyze_disc_file(
 pub fn analyze_file_with_options(
     file_path: &Path,
     options: AnalyzeOptions,
-) -> Result<MediaAnalysis, MediaInfoError> {
+) -> Result<AnalysisDetails, MediaInfoError> {
     let ext = scryer_media_model::formats::canonical_video_extension(file_path)
         .map(str::to_owned)
         .or_else(|| {
@@ -229,13 +149,13 @@ pub fn analyze_file_with_options(
         }
         Err(error) => return Err(error.into()),
     };
-    let analysis = analyze_source(&mut source, &ext, options)?;
+    let details = analyze_source(&mut source, &ext, options)?;
     if !source.unchanged(file_path)? {
         return Err(MediaInfoError::Io(
             "media source changed during analysis".into(),
         ));
     }
-    Ok(analysis)
+    Ok(details)
 }
 
 /// Analyze a seekable logical media file, including a file assembled from disc extents.
@@ -244,7 +164,7 @@ pub fn analyze_source(
     input: &mut dyn source::MediaSource,
     extension: &str,
     options: AnalyzeOptions,
-) -> Result<MediaAnalysis, MediaInfoError> {
+) -> Result<AnalysisDetails, MediaInfoError> {
     analyze_source_with_limits(input, extension, options, 64 * 1024 * 1024, 1024)
 }
 
@@ -256,7 +176,7 @@ pub(crate) fn analyze_source_with_limits(
     options: AnalyzeOptions,
     byte_budget: u64,
     io_limit: u64,
-) -> Result<MediaAnalysis, MediaInfoError> {
+) -> Result<AnalysisDetails, MediaInfoError> {
     let started = std::time::Instant::now();
     let ext = extension.to_ascii_lowercase();
     let mut source = source::BoundedSource::new(input, byte_budget).with_io_limit(io_limit);
@@ -302,13 +222,13 @@ pub(crate) fn analyze_source_with_limits(
     // Parsers stop enriching once the budget is gone, so a bounded failure here
     // means exhaustion struck before any track was parsed and there is nothing
     // to keep.
-    let mut analysis = match raw {
-        Ok(raw) => build_analysis(raw),
-        Err(_) if source.exhausted => MediaAnalysis::default(),
+    let mut details = match raw {
+        Ok(raw) => build_details(raw),
+        Err(_) if source.exhausted => AnalysisDetails::default(),
         Err(error) => return Err(error),
     };
-    analysis.details.revision = scryer_media_model::ANALYSIS_REVISION;
-    let report = &mut analysis.details.report;
+    details.revision = scryer_media_model::ANALYSIS_REVISION;
+    let report = &mut details.report;
     report.bytes_read = source.bytes_read;
     report.seeks = source.seeks;
     report.elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
@@ -323,7 +243,7 @@ pub(crate) fn analyze_source_with_limits(
             ..Default::default()
         });
     }
-    Ok(analysis)
+    Ok(details)
 }
 
 /// Recognize explicit audio containers before a video suffix can turn them into
@@ -580,197 +500,15 @@ fn looks_like_mp4(data: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: convert RawContainer → MediaAnalysis
+// Internal: convert RawContainer → AnalysisDetails
 // ---------------------------------------------------------------------------
 
-fn build_analysis(mut raw: RawContainer) -> MediaAnalysis {
+fn build_details(mut raw: RawContainer) -> AnalysisDetails {
     populate_analysis_details(&mut raw);
-    let video_tracks: Vec<&RawTrack> = raw
-        .tracks
-        .iter()
-        .filter(|t| t.kind == TrackKind::Video)
-        .collect();
-    let video_track = select_primary_video_track(&video_tracks);
-    let selected_program = video_track.and_then(|track| track.metadata.program_id);
-    let audio_tracks: Vec<&RawTrack> = raw
-        .tracks
-        .iter()
-        .filter(|t| {
-            t.kind == TrackKind::Audio
-                && (selected_program.is_none() || t.metadata.program_id == selected_program)
-        })
-        .collect();
-    let subtitle_tracks: Vec<&RawTrack> = raw
-        .tracks
-        .iter()
-        .filter(|t| {
-            t.kind == TrackKind::Subtitle
-                && (selected_program.is_none() || t.metadata.program_id == selected_program)
-        })
-        .collect();
-
-    // --- Video ---
-    let video_codec = video_track.and_then(|t| t.codec_name.clone());
-    let video_bitrate_kbps = video_track
-        .and_then(|t| t.bit_rate_bps)
-        .map(|bps| (bps / 1000) as i32);
-
-    // Extract profile + bit depth from codec private data
-    let codec_info = video_track.map(extract_codec_info).unwrap_or_default();
-    let video_width = video_track
-        .and_then(|track| track.width)
-        .or(codec_info.width);
-    let video_height = video_track
-        .and_then(|track| track.height)
-        .or(codec_info.height);
-
-    let video_bit_depth = video_track.and_then(|track| track.metadata.bit_depth);
-    let video_profile = video_track.and_then(|track| track.metadata.profile.clone());
-    let video_hdr_format = video_track
-        .and_then(|track| {
-            let hdr = &track.metadata.hdr;
-            if hdr.dolby_vision == Some(true) {
-                Some("Dolby Vision")
-            } else if hdr.hdr10plus == Some(true) {
-                Some("HDR10+")
-            } else if hdr.hdr10 == Some(true) {
-                Some("HDR10")
-            } else if hdr.hlg == Some(true) {
-                Some("HLG")
-            } else {
-                None
-            }
-        })
-        .map(str::to_string);
-
-    // Parse Dolby Vision config record for profile details.
-    let dovi_info = video_track
-        .and_then(|t| t.dovi_config.as_deref())
-        .and_then(codec::parse_dovi_config);
-    let dovi_profile = dovi_info.as_ref().map(|d| d.profile);
-    let dovi_bl_compat_id = dovi_info.as_ref().map(|d| d.bl_signal_compatibility_id);
-
-    let video_frame_rate = video_track
-        .and_then(|track| track.frame_rate_fps)
-        .or(codec_info.frame_rate_fps)
-        .and_then(|fps| {
-            if fps <= 0.0 {
-                return None;
-            }
-            let s = format!("{fps:.3}");
-            let s = s.trim_end_matches('0').trim_end_matches('.');
-            Some(s.to_owned())
-        });
-
-    // --- Audio ---
-    let primary_audio = select_primary_audio_track(&audio_tracks);
-    let audio_codec = primary_audio.and_then(|t| t.codec_name.clone());
-    let audio_profile = primary_audio.and_then(|t| t.audio_profile.clone());
-    let audio_channels = primary_audio.and_then(|t| t.channels);
-    let audio_bitrate_kbps = primary_audio
-        .and_then(|t| t.bit_rate_bps)
-        .map(|bps| (bps / 1000) as i32);
-
-    let audio_languages: Vec<String> = audio_tracks
-        .iter()
-        .filter(|track| track.metadata.disposition.commentary != Some(true))
-        .filter_map(|t| t.language.as_deref())
-        .filter(|l| !l.is_empty() && *l != "und")
-        .map(str::to_owned)
-        .collect();
-
-    let audio_streams: Vec<AudioStreamDetail> = audio_tracks
-        .iter()
-        .map(|t| AudioStreamDetail {
-            codec: t.codec_name.clone(),
-            profile: t.audio_profile.clone(),
-            channels: t.channels,
-            language: t
-                .language
-                .as_deref()
-                .filter(|l| !l.is_empty() && *l != "und")
-                .map(str::to_owned),
-            name: t.name.clone(),
-            bitrate_kbps: t.bit_rate_bps.map(|bps| (bps / 1000) as i32),
-        })
-        .collect();
-
-    let has_multiaudio = audio_tracks.len() > 1;
-
-    // --- Subtitles ---
-    let subtitle_languages: Vec<String> = subtitle_tracks
-        .iter()
-        .filter_map(|t| t.language.as_deref())
-        .filter(|l| !l.is_empty() && *l != "und")
-        .map(str::to_owned)
-        .collect();
-
-    let subtitle_codecs: Vec<String> = subtitle_tracks
-        .iter()
-        .filter_map(|t| t.codec_name.clone())
-        .collect();
-
-    let subtitle_streams: Vec<SubtitleStreamDetail> = subtitle_tracks
-        .iter()
-        .map(|t| SubtitleStreamDetail {
-            codec: t.codec_name.clone(),
-            language: t
-                .language
-                .as_deref()
-                .filter(|l| !l.is_empty() && *l != "und")
-                .map(str::to_owned),
-            name: t.name.clone(),
-            forced: t.forced,
-            default: t.default_track,
-        })
-        .collect();
-
-    // --- Container ---
-    let duration_seconds = raw.duration_seconds.map(|d| d.round() as i32);
-    let num_chapters = raw.num_chapters;
-    let container_format = Some(raw.format_name.clone());
-
-    MediaAnalysis {
-        details: raw.details,
-        video_codec,
-        video_width,
-        video_height,
-        video_bitrate_kbps,
-        video_bit_depth,
-        video_hdr_format,
-        dovi_profile,
-        dovi_bl_compat_id,
-        video_frame_rate,
-        video_profile,
-        audio_codec,
-        audio_profile,
-        audio_channels,
-        audio_bitrate_kbps,
-        audio_languages,
-        audio_streams,
-        subtitle_languages,
-        subtitle_codecs,
-        subtitle_streams,
-        has_multiaudio,
-        duration_seconds,
-        num_chapters,
-        container_format,
-    }
-}
-
-fn select_primary_audio_track<'a>(audio_tracks: &[&'a RawTrack]) -> Option<&'a RawTrack> {
-    scryer_media_types::primary_audio_stream_index(audio_tracks.iter().map(|track| {
-        (
-            track
-                .metadata
-                .disposition
-                .default
-                .unwrap_or(track.default_track),
-            track.metadata.disposition.commentary == Some(true),
-            track.name.as_deref(),
-        )
-    }))
-    .map(|index| audio_tracks[index])
+    let mut details = raw.details;
+    details.container_format = Some(raw.format_name);
+    details.chapter_count = raw.num_chapters.and_then(|count| u32::try_from(count).ok());
+    details
 }
 
 fn populate_analysis_details(raw: &mut RawContainer) {
@@ -784,6 +522,9 @@ fn populate_analysis_details(raw: &mut RawContainer) {
         track.metadata.id.get_or_insert_with(|| index.to_string());
         if track.default_track {
             track.metadata.disposition.default.get_or_insert(true);
+        }
+        if track.forced {
+            track.metadata.disposition.forced.get_or_insert(true);
         }
         if track.kind == TrackKind::Audio
             && let Some((code, exhausted)) = audio_metadata::enrich_private_header(track)
@@ -960,9 +701,21 @@ fn populate_analysis_details(raw: &mut RawContainer) {
             channels: track.channels,
             language: track.language.clone(),
             name: track.name.clone(),
-            metadata: track.metadata.clone(),
+            metadata: stream_metadata(track),
         })
         .collect();
+}
+
+/// The track's metadata plus the facts only its codec configuration holds.
+fn stream_metadata(track: &RawTrack) -> scryer_media_model::StreamMetadata {
+    let mut metadata = track.metadata.clone();
+    if track.kind == TrackKind::Video {
+        let info = extract_codec_info(track);
+        metadata.configured_width = info.width;
+        metadata.configured_height = info.height;
+        metadata.nominal_frame_rate_fps = track.frame_rate_fps.or(info.frame_rate_fps);
+    }
+    metadata
 }
 
 fn select_primary_video_track<'a>(video_tracks: &[&'a RawTrack]) -> Option<&'a RawTrack> {
@@ -1001,52 +754,94 @@ fn extract_codec_info(track: &RawTrack) -> codec::CodecInfo {
     }
 }
 
+/// Parser facts the unit tests assert, read from the details.
+#[cfg(test)]
+pub(crate) mod test_facts {
+    use scryer_media_model::AnalysisDetails;
+
+    /// The selected video stream's codec.
+    pub(crate) fn video_codec(details: &AnalysisDetails) -> Option<&str> {
+        details.selected_video()?.codec.as_deref()
+    }
+
+    /// A selected video stream with a codec and a duration that rounds to at
+    /// least one second.
+    pub(crate) fn has_video_with_duration(details: &AnalysisDetails) -> bool {
+        video_codec(details).is_some()
+            && details
+                .duration_seconds
+                .is_some_and(|seconds| seconds.round() > 0.0)
+    }
+
+    /// The selected video's size, from the container or else the codec
+    /// configuration.
+    pub(crate) fn video_size(details: &AnalysisDetails) -> (Option<i32>, Option<i32>) {
+        details.selected_video().map_or((None, None), |video| {
+            (
+                video.width.or(video.metadata.configured_width),
+                video.height.or(video.metadata.configured_height),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn primary_audio_probe_keeps_mono_main_track_over_commentary() {
+    fn commentary_role_and_default_flag_reach_the_audio_streams() {
         let mut mono = test_track(TrackKind::Audio, "aac");
         mono.channels = Some(1);
         let mut commentary = test_track(TrackKind::Audio, "flac");
         commentary.channels = Some(2);
         commentary.default_track = true;
         commentary.name = Some("Director's Commentary".into());
-        let analysis = build_analysis(RawContainer {
+        let details = build_details(RawContainer {
             format_name: "matroska".into(),
             duration_seconds: Some(60.0),
             num_chapters: None,
             details: Default::default(),
             tracks: vec![commentary, mono],
         });
-        assert_eq!(analysis.audio_channels, Some(1));
-        assert_eq!(analysis.audio_codec.as_deref(), Some("aac"));
+        let commentary = &details.streams[0];
+        assert_eq!(commentary.codec.as_deref(), Some("flac"));
+        assert_eq!(commentary.metadata.disposition.default, Some(true));
+        assert_eq!(commentary.name.as_deref(), Some("Director's Commentary"));
+        let mono = &details.streams[1];
+        assert_eq!(mono.codec.as_deref(), Some("aac"));
+        assert_eq!(mono.channels, Some(1));
+        assert_eq!(mono.metadata.disposition.default, None);
+        assert_eq!(mono.metadata.disposition.commentary, None);
     }
 
     #[test]
-    fn primary_audio_probe_uses_default_then_first_non_commentary() {
+    fn default_flag_from_the_container_keeps_an_explicit_disposition() {
         let mut stereo = test_track(TrackKind::Audio, "flac");
         stereo.channels = Some(2);
         let mut mono = test_track(TrackKind::Audio, "aac");
         mono.channels = Some(1);
         mono.default_track = true;
+        let mut explicit = mono.clone();
+        explicit.metadata.disposition.default = Some(false);
+        explicit.metadata.disposition.commentary = Some(true);
+        let details = build_details(RawContainer {
+            format_name: "matroska".into(),
+            duration_seconds: None,
+            num_chapters: None,
+            details: Default::default(),
+            tracks: vec![stereo, mono, explicit],
+        });
+        let defaults: Vec<_> = details
+            .streams
+            .iter()
+            .map(|stream| stream.metadata.disposition.default)
+            .collect();
+        assert_eq!(defaults, [None, Some(true), Some(false)]);
         assert_eq!(
-            select_primary_audio_track(&[&stereo, &mono])
-                .unwrap()
-                .channels,
-            Some(1)
+            details.streams[2].metadata.disposition.commentary,
+            Some(true)
         );
-        mono.default_track = false;
-        assert_eq!(
-            select_primary_audio_track(&[&mono, &stereo])
-                .unwrap()
-                .channels,
-            Some(1)
-        );
-        mono.metadata.disposition.commentary = Some(true);
-        stereo.metadata.disposition.commentary = Some(true);
-        assert!(select_primary_audio_track(&[&mono, &stereo]).is_none());
     }
 
     #[test]
@@ -1101,7 +896,7 @@ mod tests {
             Err(MediaInfoError::UnsupportedFormat(_))
         ));
         assert!(matches!(
-            analyze_file(Path::new("")),
+            analyze_catalog_file(Path::new("")),
             Err(MediaInfoError::Io(_))
         ));
     }
@@ -1126,11 +921,11 @@ mod tests {
                     AnalyzeOptions::default(),
                 )
                 .unwrap();
-                assert!(!is_valid_video(&analysis));
-                assert_eq!(analysis.video_codec, None);
-                assert_eq!(analysis.details.selected_video_id, None);
+                assert!(!test_facts::has_video_with_duration(&analysis));
+                assert_eq!(test_facts::video_codec(&analysis), None);
+                assert_eq!(analysis.selected_video_id, None);
                 assert_eq!(
-                    analysis.details.report.status,
+                    analysis.report.status,
                     scryer_media_model::ProbeStatus::Complete
                 );
             }
@@ -1150,8 +945,8 @@ mod tests {
     }
 
     #[test]
-    fn analysis_selects_default_audio_and_keeps_primary_fields_on_that_track() {
-        let analysis = build_analysis(RawContainer {
+    fn analysis_keeps_default_audio_facts_on_that_track() {
+        let details = build_details(RawContainer {
             details: Default::default(),
             format_name: "matroska".into(),
             duration_seconds: Some(60.0),
@@ -1220,14 +1015,17 @@ mod tests {
             ],
         });
 
-        assert_eq!(analysis.audio_codec.as_deref(), Some("flac"));
-        assert_eq!(analysis.audio_profile, None);
-        assert_eq!(analysis.audio_channels, Some(6));
-        assert_eq!(analysis.audio_bitrate_kbps, Some(640));
-        assert_eq!(
-            analysis.details.streams[2].metadata.disposition.default,
-            Some(true)
-        );
+        let default = &details.streams[2];
+        assert_eq!(default.codec.as_deref(), Some("flac"));
+        assert_eq!(default.metadata.profile, None);
+        assert_eq!(default.channels, Some(6));
+        assert_eq!(default.metadata.bitrate_bps, Some(640_000));
+        assert_eq!(default.metadata.disposition.default, Some(true));
+        let other = &details.streams[1];
+        assert_eq!(other.metadata.profile.as_deref(), Some("LC"));
+        assert_eq!(other.metadata.disposition.default, None);
+        assert_eq!(details.container_format.as_deref(), Some("matroska"));
+        assert_eq!(details.chapter_count, Some(0));
     }
 
     #[test]
@@ -1282,26 +1080,32 @@ mod tests {
         let mut other = test_track(TrackKind::Audio, "flac");
         other.metadata.program_id = Some(2);
         other.language = Some("jpn".into());
-        let analysis = build_analysis(RawContainer {
+        let analysis = build_details(RawContainer {
             tracks: vec![video, commentary, normal, described, other],
             format_name: "mpegts".into(),
             duration_seconds: Some(10.0),
             num_chapters: None,
             details: Default::default(),
         });
-        assert_eq!(analysis.audio_codec.as_deref(), Some("aac"));
-        // The first ordinary audio track is primary; a later six-channel
-        // descriptive track must not replace its channel count.
-        assert_eq!(analysis.audio_channels, Some(2));
-        assert_eq!(analysis.audio_streams.len(), 3);
-        assert!(
-            analysis
-                .audio_languages
-                .iter()
-                .all(|language| language == "eng")
+        assert_eq!(analysis.selected_program_id, Some(1));
+        let program_audio: Vec<_> = analysis
+            .program_streams(scryer_media_model::StreamKind::Audio)
+            .map(|stream| (stream.codec.as_deref(), stream.language.as_deref()))
+            .collect();
+        assert_eq!(
+            program_audio,
+            [
+                (Some("truehd"), Some("fra")),
+                (Some("aac"), Some("eng")),
+                (Some("aac"), Some("eng"))
+            ]
         );
-        assert_eq!(analysis.details.streams.len(), 5);
-        let hdr = &analysis.details.streams[0].metadata.hdr;
+        assert_eq!(
+            analysis.streams[1].metadata.disposition.commentary,
+            Some(true)
+        );
+        assert_eq!(analysis.streams.len(), 5);
+        let hdr = &analysis.streams[0].metadata.hdr;
         assert_eq!(hdr.dolby_vision, Some(true));
         assert_eq!(hdr.hdr10plus, Some(true));
         assert_eq!(hdr.hdr10, Some(true));
@@ -1317,7 +1121,7 @@ mod tests {
         main.height = Some(1080);
         main.frame_rate_fps = Some(24000.0 / 1001.0);
 
-        let analysis = build_analysis(RawContainer {
+        let analysis = build_details(RawContainer {
             details: Default::default(),
             format_name: "matroska".into(),
             duration_seconds: Some(60.0),
@@ -1325,9 +1129,16 @@ mod tests {
             tracks: vec![cover, main],
         });
 
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
-        assert_eq!(analysis.video_width, Some(1920));
-        assert_eq!(analysis.video_height, Some(1080));
+        assert_eq!(test_facts::video_codec(&analysis), Some("h264"));
+        assert_eq!(test_facts::video_size(&analysis), (Some(1920), Some(1080)));
+        assert_eq!(
+            analysis
+                .selected_video()
+                .unwrap()
+                .metadata
+                .nominal_frame_rate_fps,
+            Some(24000.0 / 1001.0)
+        );
     }
 
     #[test]

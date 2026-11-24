@@ -1,15 +1,13 @@
-use crate::{
-    MediaAnalysis,
-    types::{RawContainer, RawTrack, TrackKind},
-};
-use scryer_media_model::{StreamDetail, StreamKind};
+use scryer_media_model::{AnalysisDetails, StreamDetail};
 
-pub(super) fn apply_navigation(analysis: &mut MediaAnalysis, declared: &[StreamDetail]) {
+/// Merge the languages, roles and stream facts disc navigation declares into
+/// the streams probed from the title's clip.
+pub(super) fn apply_navigation(details: &mut AnalysisDetails, declared: &[StreamDetail]) {
     if declared.is_empty() {
         return;
     }
     for declaration in declared {
-        let actual = analysis.details.streams.iter_mut().find(|stream| {
+        let actual = details.streams.iter_mut().find(|stream| {
             stream.kind == declaration.kind && stream.metadata.id == declaration.metadata.id
         });
         if let Some(actual) = actual {
@@ -81,7 +79,7 @@ pub(super) fn apply_navigation(analysis: &mut MediaAnalysis, declared: &[StreamD
                 || declaration.metadata.hdr.hdr10plus == Some(true))
                 && contradicts_pq
             {
-                analysis.details.report.warnings.push(scryer_media_model::ProbeWarning {
+                details.report.warnings.push(scryer_media_model::ProbeWarning {
                     code: "disc_hdr_signaling_conflict".into(), message: "Disc HDR signaling conflicts with the elementary video; bitstream signaling takes precedence".into(),
                     stream_id: actual.metadata.id.clone(), ..Default::default()
                 });
@@ -95,82 +93,7 @@ pub(super) fn apply_navigation(analysis: &mut MediaAnalysis, declared: &[StreamD
                 }
             }
         } else {
-            analysis.details.streams.push(declaration.clone());
-        }
-    }
-    // Reuse ordinary-file audio selection and summary projection after adding
-    // IFO languages and roles. A commentary track must not remain the winner
-    // merely because its role was learned after payload probing.
-    let tracks = analysis
-        .details
-        .streams
-        .iter()
-        .filter(|stream| {
-            stream.kind != StreamKind::Video
-                && (analysis.details.selected_program_id.is_none()
-                    || stream.metadata.program_id == analysis.details.selected_program_id)
-        })
-        .map(|stream| RawTrack {
-            kind: if stream.kind == StreamKind::Audio {
-                TrackKind::Audio
-            } else {
-                TrackKind::Subtitle
-            },
-            codec_id: stream.codec.clone().unwrap_or_default(),
-            codec_name: stream.codec.clone(),
-            audio_profile: stream.metadata.profile.clone(),
-            channels: stream.channels,
-            bit_rate_bps: stream
-                .metadata
-                .bitrate_bps
-                .and_then(|rate| i64::try_from(rate).ok()),
-            language: stream.language.clone(),
-            name: stream.name.clone(),
-            forced: stream.metadata.disposition.forced == Some(true),
-            default_track: stream.metadata.disposition.default == Some(true),
-            metadata: stream.metadata.clone(),
-            ..Default::default()
-        })
-        .collect();
-    let summary = crate::build_analysis(RawContainer {
-        format_name: "disc".into(),
-        duration_seconds: None,
-        num_chapters: None,
-        tracks,
-        details: Default::default(),
-    });
-    analysis.audio_codec = summary.audio_codec;
-    analysis.audio_profile = summary.audio_profile;
-    analysis.audio_channels = summary.audio_channels;
-    analysis.audio_bitrate_kbps = summary.audio_bitrate_kbps;
-    analysis.audio_languages = summary.audio_languages;
-    analysis.audio_streams = summary.audio_streams;
-    analysis.has_multiaudio = summary.has_multiaudio;
-    analysis.subtitle_streams = summary.subtitle_streams;
-    analysis.subtitle_languages = summary.subtitle_languages;
-    analysis.subtitle_codecs = summary.subtitle_codecs;
-    if let Some(video) = analysis.details.streams.iter().find(|stream| {
-        stream.kind == StreamKind::Video && stream.metadata.id == analysis.details.selected_video_id
-    }) {
-        let hdr = &video.metadata.hdr;
-        analysis.video_hdr_format = if hdr.dolby_vision == Some(true) {
-            Some("Dolby Vision")
-        } else if hdr.hdr10plus == Some(true) {
-            Some("HDR10+")
-        } else if hdr.hdr10 == Some(true) {
-            Some("HDR10")
-        } else if hdr.hlg == Some(true) {
-            Some("HLG")
-        } else {
-            None
-        }
-        .map(str::to_string);
-        if analysis.video_frame_rate.is_none() {
-            analysis.video_frame_rate = video
-                .metadata
-                .declared_frame_rate
-                .and_then(|rate| rate.as_f64())
-                .map(|rate| format!("{rate:.3}"));
+            details.streams.push(declaration.clone());
         }
     }
 }

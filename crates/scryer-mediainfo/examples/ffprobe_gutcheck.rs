@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use scryer_mediainfo::{AnalysisProfile, AnalyzeOptions, analyze_file, analyze_file_with_options};
+use scryer_mediainfo::{
+    AnalysisProfile, AnalyzeOptions, analyze_catalog_file, analyze_file_with_options,
+};
 use serde_json::Value;
 
 const MAX_DEPTH: usize = 3;
@@ -111,13 +113,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     print_summary(
-        "scryer_mediainfo::analyze_file [default-rich]",
+        "scryer_mediainfo::analyze_catalog_file [default-rich]",
         &rich_durations,
         &rich_failures,
     );
     println!();
     print_summary(
-        "scryer_mediainfo::analyze_file [sonarr-ffprobe-parity]",
+        "scryer_mediainfo::analyze_catalog_file [sonarr-ffprobe-parity]",
         &parity_durations,
         &parity_failures,
     );
@@ -140,7 +142,7 @@ fn run_native(
     let start = Instant::now();
     let result = match profile {
         Some(profile) => analyze_file_with_options(path, AnalyzeOptions { profile }),
-        None => analyze_file(path),
+        None => analyze_catalog_file(path),
     };
     match result {
         Ok(_) => durations.push((path.to_path_buf(), start.elapsed())),

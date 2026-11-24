@@ -8,7 +8,12 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use scryer_mediainfo::{AnalysisProfile, AnalyzeOptions, MediaAnalysis, analyze_file_with_options};
+#[path = "../tests/support/details_facts.rs"]
+mod facts;
+
+use scryer_mediainfo::{
+    AnalysisDetails, AnalysisProfile, AnalyzeOptions, analyze_file_with_options,
+};
 use serde_json::{Value, json};
 
 const MAX_DEPTH: usize = 16;
@@ -356,7 +361,7 @@ fn compare_file_with_analysis(
     ffprobe: &Path,
     path: &Path,
     sonarr_channel_layout_retry: bool,
-    analysis: MediaAnalysis,
+    analysis: AnalysisDetails,
     stage: StageStatus,
 ) -> FileOutcome {
     let ffprobe = match sonarr_ffprobe_json(ffprobe, path, sonarr_channel_layout_retry) {
@@ -368,7 +373,7 @@ fn compare_file_with_analysis(
 }
 
 fn compare_analysis_to_ffprobe(
-    analysis: MediaAnalysis,
+    analysis: AnalysisDetails,
     ffprobe: Value,
     stage: StageStatus,
 ) -> FileOutcome {
@@ -376,11 +381,15 @@ fn compare_analysis_to_ffprobe(
     let audio = ffprobe_primary_stream(&ffprobe, "audio");
     let container_format = analysis.container_format.as_deref();
     let mut mismatches = Vec::new();
+    let (video_width, video_height) = facts::video_size(&analysis);
+    let primary_audio = facts::primary_audio(&analysis);
+    let audio_streams = facts::audio(&analysis);
+    let subtitle_streams = facts::subtitles(&analysis);
 
     compare_option(
         &mut mismatches,
         "video_codec",
-        &analysis.video_codec,
+        &facts::video_codec(&analysis).map(str::to_owned),
         video
             .and_then(|stream| stream.get("codec_name"))
             .and_then(Value::as_str)
@@ -389,7 +398,7 @@ fn compare_analysis_to_ffprobe(
     compare_option(
         &mut mismatches,
         "audio_codec",
-        &analysis.audio_codec,
+        &primary_audio.and_then(|stream| stream.codec.clone()),
         audio
             .and_then(|stream| stream.get("codec_name"))
             .and_then(Value::as_str)
@@ -398,50 +407,47 @@ fn compare_analysis_to_ffprobe(
     compare_option(
         &mut mismatches,
         "video_width",
-        &analysis.video_width,
+        &video_width,
         ffprobe_optional_i32(video, "width"),
     );
     compare_option(
         &mut mismatches,
         "video_height",
-        &analysis.video_height,
+        &video_height,
         ffprobe_optional_i32(video, "height"),
     );
     compare_option(
         &mut mismatches,
         "audio_channels",
-        &analysis.audio_channels,
+        &primary_audio.and_then(|stream| stream.channels),
         ffprobe_optional_i32(audio, "channels"),
     );
 
     compare_bitrate(
         &mut mismatches,
         "video_bitrate_kbps",
-        analysis.video_bitrate_kbps,
+        facts::video_bitrate_kbps(&analysis),
         ffprobe_bitrate_kbps(video),
     );
     compare_bitrate(
         &mut mismatches,
         "audio_bitrate_kbps",
-        analysis.audio_bitrate_kbps,
+        primary_audio.and_then(|stream| facts::kbps(stream.metadata.bitrate_bps)),
         ffprobe_bitrate_kbps(audio),
     );
     compare_frame_rate(
         &mut mismatches,
-        analysis
-            .video_frame_rate
-            .as_deref()
-            .and_then(|fps| fps.parse::<f64>().ok()),
+        facts::video_fps(&analysis).map(|fps| (fps * 1000.0).round() / 1000.0),
         ffprobe_frame_rate(video),
     );
     compare_i32(
         &mut mismatches,
         "duration_seconds",
-        analysis.duration_seconds.unwrap_or_default(),
+        facts::duration_seconds(&analysis).unwrap_or_default(),
         ffprobe_sonarr_duration_seconds(&ffprobe).unwrap_or_default(),
         1,
     );
-    let native_audio_languages = analysis.audio_languages.clone();
+    let native_audio_languages = facts::audio_languages(&analysis);
     compare_vec(
         &mut mismatches,
         "audio_languages",
@@ -453,7 +459,7 @@ fn compare_analysis_to_ffprobe(
         ),
     );
 
-    let native_subtitle_languages = analysis.subtitle_languages.clone();
+    let native_subtitle_languages = facts::subtitle_languages(&analysis);
     compare_vec(
         &mut mismatches,
         "subtitle_languages",
@@ -468,7 +474,7 @@ fn compare_analysis_to_ffprobe(
     compare_vec(
         &mut mismatches,
         "subtitle_codecs",
-        &analysis.subtitle_codecs,
+        &facts::subtitle_codecs(&analysis),
         ffprobe_subtitle_codecs(&ffprobe),
     );
 
@@ -476,19 +482,19 @@ fn compare_analysis_to_ffprobe(
     compare_i32(
         &mut mismatches,
         "audio_stream_count",
-        analysis.audio_streams.len() as i32,
+        audio_streams.len() as i32,
         probe_audio_streams.len() as i32,
         0,
     );
-    for (index, (native, probe)) in analysis
-        .audio_streams
+    for (index, (native, probe)) in audio_streams
         .iter()
         .zip(probe_audio_streams.iter())
         .enumerate()
     {
+        let native_language = facts::known_language(native).map(str::to_owned);
         let probe_language = ffprobe_language_for_compare(
             container_format,
-            native.language.as_deref(),
+            native_language.as_deref(),
             probe
                 .get("tags")
                 .and_then(|tags| tags.get("language"))
@@ -513,13 +519,13 @@ fn compare_analysis_to_ffprobe(
         compare_option(
             &mut mismatches,
             &format!("audio_stream[{index}].language"),
-            &native.language,
+            &native_language,
             probe_language,
         );
         compare_bitrate(
             &mut mismatches,
             &format!("audio_stream[{index}].bitrate_kbps"),
-            native.bitrate_kbps,
+            facts::kbps(native.metadata.bitrate_bps),
             ffprobe_bitrate_kbps(Some(probe)),
         );
     }
@@ -528,19 +534,19 @@ fn compare_analysis_to_ffprobe(
     compare_i32(
         &mut mismatches,
         "subtitle_stream_count",
-        analysis.subtitle_streams.len() as i32,
+        subtitle_streams.len() as i32,
         probe_subtitle_streams.len() as i32,
         0,
     );
-    for (index, (native, probe)) in analysis
-        .subtitle_streams
+    for (index, (native, probe)) in subtitle_streams
         .iter()
         .zip(probe_subtitle_streams.iter())
         .enumerate()
     {
+        let native_language = facts::known_language(native).map(str::to_owned);
         let probe_language = ffprobe_language_for_compare(
             container_format,
-            native.language.as_deref(),
+            native_language.as_deref(),
             probe
                 .get("tags")
                 .and_then(|tags| tags.get("language"))
@@ -570,19 +576,19 @@ fn compare_analysis_to_ffprobe(
         compare_option(
             &mut mismatches,
             &format!("subtitle_stream[{index}].language"),
-            &native.language,
+            &native_language,
             probe_language,
         );
         compare_bool(
             &mut mismatches,
             &format!("subtitle_stream[{index}].forced"),
-            native.forced,
+            native.metadata.disposition.forced == Some(true),
             probe_forced,
         );
         compare_bool(
             &mut mismatches,
             &format!("subtitle_stream[{index}].default"),
-            native.default,
+            native.metadata.disposition.default == Some(true),
             probe_default,
         );
     }
@@ -594,32 +600,37 @@ fn compare_analysis_to_ffprobe(
     }
 }
 
-fn fast_analysis_has_adequate_facts(analysis: &MediaAnalysis) -> bool {
-    if !scryer_mediainfo::is_valid_video(analysis) {
+fn fast_analysis_has_adequate_facts(analysis: &AnalysisDetails) -> bool {
+    if !facts::has_video_with_duration(analysis) {
         return false;
     }
-    if analysis.video_width.is_none()
-        || analysis.video_height.is_none()
+    let (width, height) = facts::video_size(analysis);
+    if width.is_none()
+        || height.is_none()
         || analysis.duration_seconds.is_none()
-        || analysis.video_frame_rate.is_none()
+        || facts::video_fps(analysis).is_none()
     {
         return false;
     }
-    if !analysis.audio_streams.is_empty() && analysis.audio_codec.is_none() {
+    let audio = facts::audio(analysis);
+    if !audio.is_empty()
+        && facts::primary_audio(analysis)
+            .and_then(|stream| stream.codec.as_deref())
+            .is_none()
+    {
         return false;
     }
-    if analysis.audio_streams.iter().any(|stream| {
+    if audio.iter().any(|stream| {
         stream.codec.is_none()
             || stream.channels.is_none()
-            || audio_codec_needs_profile(stream.codec.as_deref()) && stream.profile.is_none()
+            || audio_codec_needs_profile(stream.codec.as_deref())
+                && stream.metadata.profile.is_none()
     }) {
         return false;
     }
-    if analysis
-        .subtitle_streams
-        .iter()
-        .any(|stream| stream.codec.is_none())
-        || analysis.subtitle_codecs.len() < analysis.subtitle_streams.len()
+    let subtitles = facts::subtitles(analysis);
+    if subtitles.iter().any(|stream| stream.codec.is_none())
+        || facts::subtitle_codecs(analysis).len() < subtitles.len()
     {
         return false;
     }
@@ -631,16 +642,14 @@ fn audio_codec_needs_profile(codec: Option<&str>) -> bool {
     matches!(codec, Some("eac3" | "truehd" | "dts"))
 }
 
-fn hevc_hdr_may_need_rich_confirmation(analysis: &MediaAnalysis) -> bool {
-    analysis.video_codec.as_deref() == Some("hevc")
-        && analysis.video_hdr_format.as_deref() != Some("Dolby Vision")
-        && (analysis
-            .video_bit_depth
-            .is_some_and(|bit_depth| bit_depth >= 10)
-            || matches!(
-                analysis.video_hdr_format.as_deref(),
-                Some("HDR10" | "HLG" | "HDR10+")
-            ))
+fn hevc_hdr_may_need_rich_confirmation(analysis: &AnalysisDetails) -> bool {
+    let [dolby_vision, hdr10_plus, hdr10, hlg] = facts::hdr_signals(analysis);
+    facts::video_codec(analysis) == Some("hevc")
+        && !dolby_vision
+        && (facts::video_bit_depth(analysis).is_some_and(|bit_depth| bit_depth >= 10)
+            || hdr10
+            || hlg
+            || hdr10_plus)
 }
 
 fn compare_option<T: std::fmt::Debug + PartialEq>(

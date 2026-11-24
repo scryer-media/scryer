@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use scryer_mediainfo::analyze_file;
+use scryer_mediainfo::analyze_catalog_file;
 
 #[allow(dead_code, unused_imports)]
 #[path = "../../../crates/scryer-mediainfo/src/scan.rs"]
@@ -21,7 +21,7 @@ fn bench_fixture(c: &mut Criterion, name: &str) {
     }
 
     c.bench_function(&format!("analyze {name}"), |b| {
-        b.iter(|| analyze_file(std::hint::black_box(&path)).expect("fixture should analyze"))
+        b.iter(|| analyze_catalog_file(std::hint::black_box(&path)).expect("fixture should analyze"))
     });
 }
 

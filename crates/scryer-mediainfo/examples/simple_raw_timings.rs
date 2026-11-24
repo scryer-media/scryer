@@ -8,7 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use scryer_mediainfo::{AnalysisProfile, AnalyzeOptions, MediaAnalysis, analyze_file_with_options};
+#[path = "../tests/support/details_facts.rs"]
+mod facts;
+
+use scryer_mediainfo::{
+    AnalysisDetails, AnalysisProfile, AnalyzeOptions, analyze_file_with_options,
+};
 use serde_json::Value;
 
 const MAX_DEPTH: usize = 16;
@@ -209,32 +214,37 @@ fn time_native_fast_then_rich(path: &Path) -> Result<NativeTiming, String> {
     })
 }
 
-fn fast_analysis_has_adequate_facts(analysis: &MediaAnalysis) -> bool {
-    if !scryer_mediainfo::is_valid_video(analysis) {
+fn fast_analysis_has_adequate_facts(analysis: &AnalysisDetails) -> bool {
+    if !facts::has_video_with_duration(analysis) {
         return false;
     }
-    if analysis.video_width.is_none()
-        || analysis.video_height.is_none()
+    let (width, height) = facts::video_size(analysis);
+    if width.is_none()
+        || height.is_none()
         || analysis.duration_seconds.is_none()
-        || analysis.video_frame_rate.is_none()
+        || facts::video_fps(analysis).is_none()
     {
         return false;
     }
-    if !analysis.audio_streams.is_empty() && analysis.audio_codec.is_none() {
+    let audio = facts::audio(analysis);
+    if !audio.is_empty()
+        && facts::primary_audio(analysis)
+            .and_then(|stream| stream.codec.as_deref())
+            .is_none()
+    {
         return false;
     }
-    if analysis.audio_streams.iter().any(|stream| {
+    if audio.iter().any(|stream| {
         stream.codec.is_none()
             || stream.channels.is_none()
-            || audio_codec_needs_profile(stream.codec.as_deref()) && stream.profile.is_none()
+            || audio_codec_needs_profile(stream.codec.as_deref())
+                && stream.metadata.profile.is_none()
     }) {
         return false;
     }
-    if analysis
-        .subtitle_streams
-        .iter()
-        .any(|stream| stream.codec.is_none())
-        || analysis.subtitle_codecs.len() < analysis.subtitle_streams.len()
+    let subtitles = facts::subtitles(analysis);
+    if subtitles.iter().any(|stream| stream.codec.is_none())
+        || facts::subtitle_codecs(analysis).len() < subtitles.len()
     {
         return false;
     }
@@ -246,16 +256,14 @@ fn audio_codec_needs_profile(codec: Option<&str>) -> bool {
     matches!(codec, Some("eac3" | "truehd" | "dts"))
 }
 
-fn hevc_hdr_may_need_rich_confirmation(analysis: &MediaAnalysis) -> bool {
-    analysis.video_codec.as_deref() == Some("hevc")
-        && analysis.video_hdr_format.as_deref() != Some("Dolby Vision")
-        && (analysis
-            .video_bit_depth
-            .is_some_and(|bit_depth| bit_depth >= 10)
-            || matches!(
-                analysis.video_hdr_format.as_deref(),
-                Some("HDR10" | "HLG" | "HDR10+")
-            ))
+fn hevc_hdr_may_need_rich_confirmation(analysis: &AnalysisDetails) -> bool {
+    let [dolby_vision, hdr10_plus, hdr10, hlg] = facts::hdr_signals(analysis);
+    facts::video_codec(analysis) == Some("hevc")
+        && !dolby_vision
+        && (facts::video_bit_depth(analysis).is_some_and(|bit_depth| bit_depth >= 10)
+            || hdr10
+            || hlg
+            || hdr10_plus)
 }
 
 fn time_sonarr_ffprobe(ffprobe: &Path, path: &Path) -> Result<Duration, String> {

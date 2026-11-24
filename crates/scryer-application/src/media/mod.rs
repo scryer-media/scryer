@@ -1,3 +1,5 @@
+#[cfg(any(feature = "runtime-media-analysis", test))]
+pub(crate) mod analysis_summary;
 pub(crate) mod analyzer;
 pub(crate) mod audio_requirements;
 pub(crate) mod disc_analysis;

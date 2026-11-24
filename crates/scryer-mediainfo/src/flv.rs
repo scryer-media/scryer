@@ -733,7 +733,6 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
                 analysis
-                    .details
                     .report
                     .warnings
                     .iter()
@@ -742,11 +741,11 @@ mod tests {
             })
             .next()
             .expect("some io limit must exhaust the budget inside the tag scan");
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
-        assert!(crate::is_valid_video(&analysis));
-        assert!(analysis.details.report.budget_exhausted);
+        assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
+        assert!(crate::test_facts::has_video_with_duration(&analysis));
+        assert!(analysis.report.budget_exhausted);
         assert_eq!(
-            analysis.details.report.status,
+            analysis.report.status,
             scryer_media_model::ProbeStatus::Incomplete
         );
     }

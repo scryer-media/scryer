@@ -1007,10 +1007,12 @@ mod tests {
         assert_eq!(raw.tracks[2].codec_name.as_deref(), Some("text"));
         assert_eq!(raw.tracks[2].language.as_deref(), Some("jpn"));
         assert_eq!(raw.tracks[2].name.as_deref(), Some("Captions"));
-        let analysis = crate::build_analysis(raw);
-        assert_eq!(analysis.subtitle_codecs, ["text"]);
-        assert_eq!(analysis.subtitle_streams[0].codec.as_deref(), Some("text"));
-        assert_eq!(analysis.subtitle_languages, ["jpn"]);
+        let details = crate::build_details(raw);
+        let subtitles: Vec<_> = details
+            .program_streams(scryer_media_model::StreamKind::Subtitle)
+            .map(|stream| (stream.codec.as_deref(), stream.language.as_deref()))
+            .collect();
+        assert_eq!(subtitles, [(Some("text"), Some("jpn"))]);
     }
 
     #[test]
@@ -1026,7 +1028,9 @@ mod tests {
         assert_eq!(audio.metadata.sample_bit_depth, None);
         assert_eq!(audio.bit_rate_bps, Some(384_000));
         assert_eq!(audio.language.as_deref(), Some("deu"));
-        assert!(!crate::is_valid_video(&crate::build_analysis(raw)));
+        assert!(!crate::test_facts::has_video_with_duration(
+            &crate::build_details(raw)
+        ));
     }
 
     #[test]
@@ -1046,7 +1050,10 @@ mod tests {
             scryer_media_model::Rational::new(24_000, 1001)
         );
         assert_eq!(raw.duration_seconds, Some(1.001));
-        assert_eq!(crate::build_analysis(raw).video_codec, None);
+        assert_eq!(
+            crate::test_facts::video_codec(&crate::build_details(raw)),
+            None
+        );
         header[9..13].copy_from_slice(b"H264");
         assert_eq!(
             parse_ogm_identification(&header)
@@ -1322,9 +1329,7 @@ mod tests {
         let raw = parse(output.get_ref().clone());
         assert_eq!(raw.duration_seconds, Some(3.0));
         assert_eq!(
-            crate::build_analysis(raw.clone())
-                .details
-                .duration_provenance,
+            crate::build_details(raw.clone()).duration_provenance,
             scryer_media_model::Provenance::Estimated
         );
         assert_eq!(
@@ -1373,9 +1378,13 @@ mod tests {
             )
             .unwrap();
             assert_eq!(analysis.container_format.as_deref(), Some("ogm"));
-            assert_eq!(analysis.video_codec.as_deref(), Some("mpeg4"));
-            assert_eq!(analysis.subtitle_codecs, ["text"]);
-            assert!(crate::is_valid_video(&analysis));
+            assert_eq!(crate::test_facts::video_codec(&analysis), Some("mpeg4"));
+            let subtitle_codecs: Vec<_> = analysis
+                .program_streams(scryer_media_model::StreamKind::Subtitle)
+                .map(|stream| stream.codec.as_deref())
+                .collect();
+            assert_eq!(subtitle_codecs, [Some("text")]);
+            assert!(crate::test_facts::has_video_with_duration(&analysis));
         }
         let analysis = crate::analyze_source(
             &mut Cursor::new(fixture::audio_only()),
@@ -1383,7 +1392,7 @@ mod tests {
             crate::AnalyzeOptions::default(),
         )
         .unwrap();
-        assert!(!crate::is_valid_video(&analysis));
+        assert!(!crate::test_facts::has_video_with_duration(&analysis));
     }
 
     #[test]
@@ -1428,10 +1437,12 @@ mod tests {
                 .unwrap();
         }
         drop(writer);
-        let analysis = crate::build_analysis(parse(output.into_inner()));
-        assert_eq!(analysis.audio_streams.len(), 2);
-        assert!(analysis.has_multiaudio);
-        assert_eq!(analysis.audio_languages, ["eng", "jpn"]);
+        let details = crate::build_details(parse(output.into_inner()));
+        let languages: Vec<_> = details
+            .program_streams(scryer_media_model::StreamKind::Audio)
+            .map(|stream| stream.language.as_deref())
+            .collect();
+        assert_eq!(languages, [Some("eng"), Some("jpn")]);
     }
 
     #[test]

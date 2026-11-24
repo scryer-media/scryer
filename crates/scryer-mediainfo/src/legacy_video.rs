@@ -781,7 +781,6 @@ mod tests {
                 .join(fixture);
             let analysis = crate::analyze_catalog_file(&path).unwrap();
             let video = analysis
-                .details
                 .streams
                 .iter()
                 .find(|stream| stream.codec.as_deref() == Some("mjpeg"))

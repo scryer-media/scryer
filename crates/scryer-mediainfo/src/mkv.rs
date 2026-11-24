@@ -4044,21 +4044,20 @@ mod tests {
             let analysis =
                 crate::analyze_source(&mut source, "mkv", crate::AnalyzeOptions::default())
                     .unwrap();
-            assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
-            assert_eq!(analysis.duration_seconds, Some(600));
-            assert_eq!(analysis.video_bitrate_kbps, Some(8000));
+            assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
+            assert_eq!(analysis.duration_seconds.map(f64::round), Some(600.0));
             assert_eq!(
-                analysis.details.chapters[0].title.as_deref(),
-                Some("Opening")
+                analysis
+                    .selected_video()
+                    .and_then(|video| video.metadata.bitrate_bps)
+                    .map(|bps| bps / 1000),
+                Some(8000)
             );
-            assert_eq!(
-                analysis.details.attachments[0].name.as_deref(),
-                Some("font.ttf")
-            );
-            assert!(analysis.details.report.budget_exhausted);
+            assert_eq!(analysis.chapters[0].title.as_deref(), Some("Opening"));
+            assert_eq!(analysis.attachments[0].name.as_deref(), Some("font.ttf"));
+            assert!(analysis.report.budget_exhausted);
             assert!(
                 analysis
-                    .details
                     .report
                     .warnings
                     .iter()
@@ -4093,7 +4092,6 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
                 analysis
-                    .details
                     .report
                     .warnings
                     .iter()
@@ -4102,24 +4100,23 @@ mod tests {
             })
             .next()
             .expect("some io limit must exhaust the budget inside video enrichment");
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
-        assert_eq!(analysis.duration_seconds, Some(600));
+        assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
+        assert_eq!(analysis.duration_seconds.map(f64::round), Some(600.0));
         assert!(
-            crate::is_valid_video(&analysis),
+            crate::test_facts::has_video_with_duration(&analysis),
             "an enrichment gap must not make the file unrecognizable as video"
         );
-        assert!(analysis.details.report.budget_exhausted);
+        assert!(analysis.report.budget_exhausted);
         assert_eq!(
-            analysis.details.report.status,
+            analysis.report.status,
             scryer_media_model::ProbeStatus::Incomplete
         );
         assert!(
-            analysis.details.report.bytes_read > 0,
+            analysis.report.bytes_read > 0,
             "the report must account for the work that was done"
         );
         assert!(
             analysis
-                .details
                 .report
                 .warnings
                 .iter()
@@ -4133,10 +4130,10 @@ mod tests {
         let mut source = sparse_catalog_mkv(7680, false, false);
         let analysis =
             crate::analyze_source(&mut source, "mkv", crate::AnalyzeOptions::default()).unwrap();
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
         assert!(analysis.duration_seconds.is_none());
-        assert!(analysis.num_chapters.is_none());
-        assert!(analysis.details.report.budget_exhausted);
+        assert!(analysis.chapter_count.is_none());
+        assert!(analysis.report.budget_exhausted);
         assert!(source.reads < 256, "{} reads", source.reads);
     }
 }

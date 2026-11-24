@@ -2474,7 +2474,6 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/hevc_hdr10plus.mp4");
         let analysis = crate::analyze_catalog_file(&path).unwrap();
         let video = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)

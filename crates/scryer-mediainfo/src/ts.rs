@@ -2409,7 +2409,6 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
                 analysis
-                    .details
                     .report
                     .warnings
                     .iter()
@@ -2418,17 +2417,17 @@ mod tests {
             })
             .next()
             .expect("some io limit must exhaust the budget inside stream probing");
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
         assert!(
-            !analysis.details.programs.is_empty(),
+            !analysis.programs.is_empty(),
             "the program map survives the probing gap"
         );
         // Duration comes from a timestamp scan that runs after probing, so it can
         // stay unknown here. What matters is that the tracks are still described:
         // the analyzer then reports this file as inconclusive rather than invalid.
-        assert!(analysis.details.report.budget_exhausted);
+        assert!(analysis.report.budget_exhausted);
         assert_eq!(
-            analysis.details.report.status,
+            analysis.report.status,
             scryer_media_model::ProbeStatus::Incomplete
         );
     }

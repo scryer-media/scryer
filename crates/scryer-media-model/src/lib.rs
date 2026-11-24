@@ -257,6 +257,16 @@ pub struct StreamMetadata {
     pub variable_frame_rate: Option<bool>,
     pub color: ColorMetadata,
     pub hdr: HdrCapabilities,
+    /// Picture width declared by the codec configuration (for example an H.264
+    /// or HEVC parameter set), independent of the container's track header.
+    pub configured_width: Option<i32>,
+    /// Picture height declared by the codec configuration.
+    pub configured_height: Option<i32>,
+    /// The parser's single frame-rate figure for a video stream: the
+    /// container's rate, or the codec configuration's timing when the
+    /// container states none. Unlike the rationals above it is never derived
+    /// from disc navigation.
+    pub nominal_frame_rate_fps: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,6 +380,9 @@ pub struct DiscMetadata {
 #[serde(default)]
 pub struct AnalysisDetails {
     pub revision: u32,
+    /// Container family the parser recognized, for example `matroska`, `mp4`
+    /// or `iso` for a disc image.
+    pub container_format: Option<String>,
     pub duration_seconds: Option<f64>,
     pub duration_provenance: Provenance,
     pub overall_bitrate_bps: Option<u64>,
@@ -378,6 +391,10 @@ pub struct AnalysisDetails {
     pub streams: Vec<StreamDetail>,
     pub programs: Vec<Program>,
     pub chapters: Vec<Chapter>,
+    /// Chapter count in the convention ffprobe reports. Containers whose
+    /// chapter markers are counted without being listed in `chapters` still
+    /// report a count; `None` means the container was not examined for them.
+    pub chapter_count: Option<u32>,
     pub attachments: Vec<Attachment>,
     pub caption_services: Vec<CaptionService>,
     pub disc: Option<DiscMetadata>,
@@ -385,6 +402,23 @@ pub struct AnalysisDetails {
 }
 
 impl AnalysisDetails {
+    /// The stream the parser selected as the primary picture, if any.
+    pub fn selected_video(&self) -> Option<&StreamDetail> {
+        let id = self.selected_video_id.as_ref()?;
+        self.streams.iter().find(|stream| {
+            stream.kind == StreamKind::Video && stream.metadata.id.as_ref() == Some(id)
+        })
+    }
+
+    /// Streams of one kind that belong to the selected program, in file order.
+    /// Every stream qualifies when no program is selected.
+    pub fn program_streams(&self, kind: StreamKind) -> impl Iterator<Item = &StreamDetail> {
+        let program = self.selected_program_id;
+        self.streams.iter().filter(move |stream| {
+            stream.kind == kind && (program.is_none() || stream.metadata.program_id == program)
+        })
+    }
+
     /// Whether a video stream declares stereoscopy; absence is not verified 2D.
     pub fn is_3d(&self) -> bool {
         self.streams.iter().any(|stream| {

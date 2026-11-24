@@ -7,6 +7,32 @@ use super::*;
 mod authored_image;
 use authored_image::{both32, iso, mpls};
 
+/// Codec, language, default flag and commentary role of each audio stream in
+/// the selected program.
+type AudioFacts<'a> = (Option<&'a str>, Option<&'a str>, Option<bool>, Option<bool>);
+
+fn audio_facts(details: &AnalysisDetails) -> Vec<AudioFacts<'_>> {
+    details
+        .program_streams(scryer_media_model::StreamKind::Audio)
+        .map(|stream| {
+            (
+                stream.codec.as_deref(),
+                stream.language.as_deref(),
+                stream.metadata.disposition.default,
+                stream.metadata.disposition.commentary,
+            )
+        })
+        .collect()
+}
+
+/// The clip's audio, labelled by the clip information's language.
+const AUDIO_FACTS_FRA: &[AudioFacts<'static>] = &[(Some("mp2"), Some("fra"), None, None)];
+/// IFO languages and the commentary role merged onto the probed DVD audio.
+const AUDIO_FACTS_DVD: &[AudioFacts<'static>] = &[
+    (Some("ac3"), Some("en"), None, Some(false)),
+    (Some("dts"), Some("fr"), None, Some(true)),
+];
+
 #[test]
 fn udf_bluray_titles_reuse_native_stream_probing_across_metadata_extents() {
     let clip = video_clip();
@@ -35,14 +61,14 @@ fn udf_bluray_titles_reuse_native_stream_probing_across_metadata_extents() {
         )
         .unwrap();
         assert_eq!(
-            analysis.details.report.status,
+            analysis.report.status,
             ProbeStatus::Complete,
             "{:?}",
-            analysis.details.report
+            analysis.report
         );
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
-        assert_eq!(analysis.duration_seconds, Some(2));
-        let disc = analysis.details.disc.as_ref().unwrap();
+        assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
+        assert_eq!(analysis.duration_seconds.map(f64::round), Some(2.0));
+        let disc = analysis.disc.as_ref().unwrap();
         assert_eq!(disc.titles.len(), 2);
         assert_eq!(disc.selected_title_id.as_deref(), Some("00001"));
         assert!(disc.automatic_selection);
@@ -56,8 +82,8 @@ fn udf_bluray_titles_reuse_native_stream_probing_across_metadata_extents() {
             AnalysisProfile::DefaultRich,
         )
         .unwrap();
-        assert_eq!(selected.duration_seconds, Some(1));
-        assert!(!selected.details.disc.unwrap().automatic_selection);
+        assert_eq!(selected.duration_seconds.map(f64::round), Some(1.0));
+        assert!(!selected.disc.unwrap().automatic_selection);
     }
 }
 
@@ -147,18 +173,15 @@ fn clpi_stream_inventory_validates_authored_ranges_and_packet_bounds() {
     )
     .unwrap();
     assert_eq!(
-        analysis.details.report.status,
+        analysis.report.status,
         ProbeStatus::Complete,
         "{:?}",
-        analysis.details.report
+        analysis.report
     );
+    assert_eq!(analysis.disc.as_ref().unwrap().disc_type, "uhd_bluray");
+    assert_eq!(audio_facts(&analysis), AUDIO_FACTS_FRA);
     assert_eq!(
-        analysis.details.disc.as_ref().unwrap().disc_type,
-        "uhd_bluray"
-    );
-    assert_eq!(analysis.audio_languages, ["fra"]);
-    assert_eq!(
-        analysis.details.disc.as_ref().unwrap().titles[0].segments[0].sequence_id,
+        analysis.disc.as_ref().unwrap().titles[0].segments[0].sequence_id,
         Some(0)
     );
     let bad_trim = inspect(
@@ -168,9 +191,7 @@ fn clpi_stream_inventory_validates_authored_ranges_and_packet_bounds() {
     )
     .unwrap();
     assert_eq!(
-        bad_trim.details.disc.as_ref().unwrap().titles[0]
-            .report
-            .status,
+        bad_trim.disc.as_ref().unwrap().titles[0].report.status,
         ProbeStatus::Malformed
     );
     let truncated = inspect(
@@ -183,9 +204,7 @@ fn clpi_stream_inventory_validates_authored_ranges_and_packet_bounds() {
     )
     .unwrap();
     assert_eq!(
-        truncated.details.disc.as_ref().unwrap().titles[0]
-            .report
-            .status,
+        truncated.disc.as_ref().unwrap().titles[0].report.status,
         ProbeStatus::Malformed
     );
 }
@@ -304,16 +323,15 @@ fn missing_clip_information_retains_inventory_without_claiming_a_valid_title() {
         AnalysisProfile::DefaultRich,
     )
     .unwrap();
-    assert_eq!(analysis.details.report.status, ProbeStatus::Incomplete);
+    assert_eq!(analysis.report.status, ProbeStatus::Incomplete);
     assert!(
         analysis
-            .details
             .report
             .warnings
             .iter()
             .any(|warning| warning.code == "missing_clip_information")
     );
-    let disc = analysis.details.disc.unwrap();
+    let disc = analysis.disc.unwrap();
     assert!(disc.selected_title_id.is_none());
     assert!(!disc.titles[0].streams.is_empty());
     assert_eq!(disc.titles[0].duration_seconds, Some(1.0));
@@ -351,13 +369,13 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
     )
     .unwrap();
     assert_eq!(
-        automatic.details.report.status,
+        automatic.report.status,
         ProbeStatus::Complete,
         "{:?}",
-        automatic.details.report
+        automatic.report
     );
-    assert_eq!(automatic.duration_seconds, Some(2));
-    let disc = automatic.details.disc.unwrap();
+    assert_eq!(automatic.duration_seconds.map(f64::round), Some(2.0));
+    let disc = automatic.disc.unwrap();
     assert_eq!(disc.selected_title_id.as_deref(), Some("00001"));
     assert_eq!(disc.titles.len(), 2);
     assert_eq!(disc.titles[0].aliases, ["00003"]);
@@ -385,7 +403,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
     )
     .unwrap();
     assert_eq!(
-        mapped.details.disc.unwrap().titles[1].report.status,
+        mapped.disc.unwrap().titles[1].report.status,
         ProbeStatus::Complete
     );
     assert!(
@@ -401,8 +419,8 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
         AnalysisProfile::DefaultRich,
     )
     .unwrap();
-    assert_eq!(selected.duration_seconds, Some(1));
-    assert!(!selected.details.disc.unwrap().automatic_selection);
+    assert_eq!(selected.duration_seconds.map(f64::round), Some(1.0));
+    assert!(!selected.disc.unwrap().automatic_selection);
     let missing = inspect(
         &mut Cursor::new(bytes),
         DiscSelection {
@@ -412,9 +430,9 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
         AnalysisProfile::DefaultRich,
     )
     .unwrap();
-    assert!(missing.video_codec.is_none());
-    assert!(missing.details.disc.unwrap().selected_title_id.is_none());
-    assert_eq!(missing.details.report.status, ProbeStatus::Incomplete);
+    assert!(crate::test_facts::video_codec(&missing).is_none());
+    assert!(missing.disc.unwrap().selected_title_id.is_none());
+    assert_eq!(missing.report.status, ProbeStatus::Incomplete);
 }
 
 #[test]
@@ -448,7 +466,6 @@ fn encrypted_longest_title_falls_back_only_for_automatic_selection() {
     .unwrap();
     assert_eq!(
         automatic
-            .details
             .disc
             .as_ref()
             .unwrap()
@@ -457,9 +474,7 @@ fn encrypted_longest_title_falls_back_only_for_automatic_selection() {
         Some("00002")
     );
     assert_eq!(
-        automatic.details.disc.as_ref().unwrap().titles[0]
-            .report
-            .status,
+        automatic.disc.as_ref().unwrap().titles[0].report.status,
         ProbeStatus::Encrypted
     );
     let selected = inspect(
@@ -471,10 +486,10 @@ fn encrypted_longest_title_falls_back_only_for_automatic_selection() {
         AnalysisProfile::DefaultRich,
     )
     .unwrap();
-    assert!(selected.video_codec.is_none());
-    assert_eq!(selected.details.report.status, ProbeStatus::Encrypted);
+    assert!(crate::test_facts::video_codec(&selected).is_none());
+    assert_eq!(selected.report.status, ProbeStatus::Encrypted);
     assert_eq!(
-        selected.details.disc.unwrap().selected_title_id.as_deref(),
+        selected.disc.unwrap().selected_title_id.as_deref(),
         Some("00001")
     );
 }
@@ -510,15 +525,15 @@ fn bluray_cuts_in_one_clip_probe_only_their_own_packet_ranges() {
             AnalysisProfile::DefaultRich,
         )
         .unwrap();
-        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
-        assert_eq!(analysis.details.duration_seconds, Some(65_536.0 / 45_000.0));
+        assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
+        assert_eq!(analysis.duration_seconds, Some(65_536.0 / 45_000.0));
         assert_eq!(
-            analysis.details.report.status,
+            analysis.report.status,
             ProbeStatus::Complete,
             "{:?}",
-            analysis.details.report
+            analysis.report
         );
-        let disc = analysis.details.disc.unwrap();
+        let disc = analysis.disc.unwrap();
         assert_eq!(disc.selected_title_id.as_deref(), Some("00002"));
         assert_eq!(disc.titles[0].report.status, ProbeStatus::Encrypted);
         assert_eq!(disc.titles[1].report.status, ProbeStatus::Complete);
@@ -619,13 +634,17 @@ fn intact_dvd_uses_title_program_range_chapters_and_ifo_roles() {
         AnalysisProfile::DefaultRich,
     )
     .unwrap();
-    assert_eq!(analysis.details.report.status, ProbeStatus::Complete);
-    assert_eq!(analysis.duration_seconds, Some(5));
-    assert_eq!(analysis.audio_codec.as_deref(), Some("ac3"));
-    assert_eq!(analysis.audio_languages, ["en"]);
-    assert_eq!(analysis.audio_streams.len(), 2);
-    assert_eq!(analysis.subtitle_streams[0].language.as_deref(), Some("en"));
-    let disc = analysis.details.disc.unwrap();
+    assert_eq!(analysis.report.status, ProbeStatus::Complete);
+    assert_eq!(analysis.duration_seconds.map(f64::round), Some(5.0));
+    assert_eq!(audio_facts(&analysis), AUDIO_FACTS_DVD);
+    assert_eq!(
+        analysis
+            .program_streams(scryer_media_model::StreamKind::Subtitle)
+            .next()
+            .and_then(|stream| stream.language.as_deref()),
+        Some("en")
+    );
+    let disc = analysis.disc.unwrap();
     let title = &disc.titles[0];
     assert_eq!(disc.disc_type, "dvd");
     assert_eq!(title.segments.len(), 2);
@@ -673,12 +692,8 @@ fn dvd_post_title_exits_preserve_the_authored_timeline() {
             AnalysisProfile::DefaultRich,
         )
         .unwrap();
-        assert_eq!(
-            analysis.details.report.status,
-            ProbeStatus::Complete,
-            "{command:?}"
-        );
-        assert_eq!(analysis.details.duration_seconds, Some(5.0));
+        assert_eq!(analysis.report.status, ProbeStatus::Complete, "{command:?}");
+        assert_eq!(analysis.duration_seconds, Some(5.0));
     }
 }
 

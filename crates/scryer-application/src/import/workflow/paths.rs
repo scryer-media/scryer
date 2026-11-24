@@ -870,22 +870,26 @@ fn probe_video_content(
         crate::media::metrics::record_probe(
             crate::media::metrics::ProbeOperation::Discovery,
             started.elapsed(),
-            result
-                .as_ref()
-                .ok()
-                .map(|analysis| &analysis.details.report),
+            result.as_ref().ok().map(|details| &details.report),
         );
         match result {
-            Ok(analysis) if disc_image || scryer_mediainfo::is_valid_video(&analysis) => {
+            Ok(details)
+                if disc_image || crate::media::analysis_summary::is_valid_video(&details) =>
+            {
+                use crate::media::analysis_summary as summary;
+                let video = details.selected_video();
+                let (video_width, video_height) =
+                    video.map(summary::video_dimensions).unwrap_or_default();
                 Ok(Some(ManualImportVideoFacts {
-                    container_format: analysis.container_format,
-                    video_codec: analysis.video_codec,
-                    audio_codec: analysis.audio_codec,
-                    video_width: analysis.video_width,
-                    video_height: analysis.video_height,
-                    duration_seconds: analysis.duration_seconds,
-                    disc: analysis.details.disc,
-                    report: analysis.details.report,
+                    video_codec: video.and_then(|video| video.codec.clone()),
+                    audio_codec: summary::primary_audio(&details)
+                        .and_then(|audio| audio.codec.clone()),
+                    video_width,
+                    video_height,
+                    duration_seconds: summary::duration_seconds(&details),
+                    container_format: details.container_format,
+                    disc: details.disc,
+                    report: details.report,
                 }))
             }
             Ok(_)

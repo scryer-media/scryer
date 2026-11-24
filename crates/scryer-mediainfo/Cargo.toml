@@ -5,8 +5,6 @@ edition.workspace = true
 
 [dependencies]
 scryer-media-model = { path = "../scryer-media-model" }
-# Scryer's primary-audio policy, used by the flat summary.
-scryer-media-types = { path = "../scryer-media-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -1,9 +1,12 @@
 // disk-guard: test, example and build-script code may call the filesystem directly.
 #![allow(clippy::disallowed_methods)]
 
+#[path = "support/details_facts.rs"]
+mod facts;
+
 use scryer_mediainfo::{
-    AnalysisProfile, AnalyzeOptions, MediaAnalysis, analyze_file, analyze_file_with_options,
-    is_valid_video,
+    AnalysisDetails, AnalysisProfile, AnalyzeOptions, analyze_catalog_file,
+    analyze_file_with_options,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -47,35 +50,26 @@ fn fixture_manifest() -> FixtureManifest {
 fn mp4_chapter_lists_and_referenced_text_tracks_preserve_authored_titles() {
     for name in ["chapters_nero.mp4", "chapters_quicktime.mp4"] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
-        assert_eq!(analysis.num_chapters, Some(2), "{name}");
-        assert_eq!(
-            analysis.details.chapters.len(),
-            2,
-            "{name}: {:?}",
-            analysis.details.report
-        );
-        assert_eq!(
-            analysis.details.chapters[0].title.as_deref(),
-            Some("Opening")
-        );
-        assert_eq!(analysis.details.chapters[1].title.as_deref(), Some("幕間"));
-        assert_eq!(analysis.details.chapters[0].start_seconds, 0.0);
-        assert_eq!(analysis.details.chapters[0].end_seconds, Some(0.5));
-        assert_eq!(analysis.details.chapters[1].start_seconds, 0.5);
-        assert_eq!(analysis.details.chapters[1].end_seconds, Some(1.0));
+        assert_eq!(analysis.chapter_count, Some(2), "{name}");
+        assert_eq!(analysis.chapters.len(), 2, "{name}: {:?}", analysis.report);
+        assert_eq!(analysis.chapters[0].title.as_deref(), Some("Opening"));
+        assert_eq!(analysis.chapters[1].title.as_deref(), Some("幕間"));
+        assert_eq!(analysis.chapters[0].start_seconds, 0.0);
+        assert_eq!(analysis.chapters[0].end_seconds, Some(0.5));
+        assert_eq!(analysis.chapters[1].start_seconds, 0.5);
+        assert_eq!(analysis.chapters[1].end_seconds, Some(1.0));
         assert!(
-            analysis.subtitle_streams.is_empty(),
+            facts::subtitles(&analysis).is_empty(),
             "chapter text must not become a subtitle track"
         );
         assert!(
             !analysis
-                .details
                 .report
                 .warnings
                 .iter()
                 .any(|warning| warning.code.starts_with("mp4_chapter")),
             "{name}: {:?}",
-            analysis.details.report
+            analysis.report
         );
     }
 }
@@ -87,18 +81,16 @@ fn program_stream_codec_headers_reach_the_catalog_contract() {
         ("ps_mpeg2_mp2.vob", "mpeg2video"),
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
-        assert_eq!(analysis.video_codec.as_deref(), Some(codec), "{name}");
-        assert_eq!(analysis.video_width, Some(160));
-        assert_eq!(analysis.video_height, Some(120));
+        assert_eq!(facts::video_codec(&analysis), Some(codec), "{name}");
+        assert_eq!(facts::video_size(&analysis), (Some(160), Some(120)));
         let video = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
             .unwrap();
         assert_eq!(video.metadata.id.as_deref(), Some("00e0"));
         assert_eq!(video.metadata.bitrate_bps, None);
-        assert_eq!(analysis.video_bitrate_kbps, None);
+        assert_eq!(facts::video_bitrate_kbps(&analysis), None);
         assert_eq!(video.metadata.bit_depth, Some(8));
         assert_eq!(video.metadata.pixel_format.as_deref(), Some("yuv420p"));
         assert_eq!(
@@ -114,7 +106,6 @@ fn program_stream_codec_headers_reach_the_catalog_contract() {
             scryer_media_model::Rational::new(1, 1)
         );
         let audio = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -123,10 +114,10 @@ fn program_stream_codec_headers_reach_the_catalog_contract() {
         assert_eq!(audio.metadata.sample_rate, Some(48_000));
         assert_eq!(audio.metadata.channel_layout.as_deref(), Some("mono"));
         assert_eq!(
-            analysis.details.report.status,
+            analysis.report.status,
             scryer_media_model::ProbeStatus::Incomplete
         );
-        assert!(analysis.details.report.bytes_read < 256 * 1024);
+        assert!(analysis.report.bytes_read < 256 * 1024);
     }
 }
 
@@ -135,13 +126,11 @@ fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
     let analysis =
         scryer_mediainfo::analyze_catalog_file(&media("wmv_wmv1_aac_surround.wmv")).unwrap();
     let video = analysis
-        .details
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
         .unwrap();
     let audio = analysis
-        .details
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -169,7 +158,6 @@ fn short_transport_stream_audio_retains_separate_bitrate_estimates() {
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let audio = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.codec.as_deref() == Some("aac"))
@@ -184,7 +172,10 @@ fn short_transport_stream_audio_retains_separate_bitrate_estimates() {
             audio.metadata.bitrate_provenance,
             scryer_media_model::Provenance::Unknown
         );
-        assert!(analysis.audio_bitrate_kbps.is_none());
+        assert!(
+            facts::primary_audio(&analysis)
+                .is_some_and(|primary| primary.metadata.bitrate_bps.is_none())
+        );
     }
 }
 
@@ -197,7 +188,6 @@ fn flv_declared_frame_rates_do_not_claim_observed_timing() {
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let video = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
@@ -241,7 +231,6 @@ fn flv_audio_headers_reach_the_canonical_contract() {
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let audio = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.codec.as_deref() == Some(codec))
@@ -266,7 +255,6 @@ fn mpeg_dts_and_extensible_aac_preserve_audio_header_properties() {
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let stream = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.codec.as_deref() == Some(codec))
@@ -300,7 +288,6 @@ fn opus_vorbis_and_flac_headers_reach_the_canonical_contract() {
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let stream = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -335,7 +322,6 @@ fn dolby_audio_properties_survive_mkv_mp4_and_transport_streams() {
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let track = analysis
-            .details
             .streams
             .iter()
             .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -364,7 +350,6 @@ fn dolby_audio_properties_survive_mkv_mp4_and_transport_streams() {
 fn encoded_audio_properties_do_not_invent_decoder_formats_or_surround_layouts() {
     let pcm = scryer_mediainfo::analyze_catalog_file(&media("matrix_avi_002.avi")).unwrap();
     let track = pcm
-        .details
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -389,7 +374,6 @@ fn encoded_audio_properties_do_not_invent_decoder_formats_or_surround_layouts() 
     )
     .unwrap();
     let track = unassigned
-        .details
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -401,7 +385,6 @@ fn encoded_audio_properties_do_not_invent_decoder_formats_or_surround_layouts() 
     );
     let aac = scryer_mediainfo::analyze_catalog_file(&media("h264_aac.mkv")).unwrap();
     let track = aac
-        .details
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
@@ -424,19 +407,15 @@ fn av1_sequence_color_matches_native_expectations_in_mp4_and_mkv() {
     // sequence primaries=9, transfer=16, matrix=9; remuxed without re-encoding.
     for name in ["av1_sequence_pq.mp4", "av1_sequence_pq.mkv"] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
-        assert_eq!(analysis.video_codec.as_deref(), Some("av1"), "{name}");
-        assert_eq!(analysis.video_profile.as_deref(), Some("Main"), "{name}");
-        assert_eq!(analysis.video_bit_depth, Some(10), "{name}");
-        assert_eq!(
-            analysis.video_hdr_format.as_deref(),
-            Some("HDR10"),
-            "{name}"
-        );
+        assert_eq!(facts::video_codec(&analysis), Some("av1"), "{name}");
+        assert_eq!(facts::video_profile(&analysis), Some("Main"), "{name}");
+        assert_eq!(facts::video_bit_depth(&analysis), Some(10), "{name}");
+        assert_eq!(facts::hdr_signals(&analysis), facts::HDR10, "{name}");
         assert!(
-            (analysis.details.duration_seconds.unwrap() - 1.0).abs() < 0.01,
+            (analysis.duration_seconds.unwrap() - 1.0).abs() < 0.01,
             "{name}"
         );
-        let metadata = &analysis.details.streams[0].metadata;
+        let metadata = &analysis.streams[0].metadata;
         assert_eq!(
             metadata.pixel_format.as_deref(),
             Some("yuv420p10le"),
@@ -458,13 +437,12 @@ fn av1_sequence_color_matches_native_expectations_in_mp4_and_mkv() {
         assert_eq!(metadata.hdr.hdr10plus, None);
         assert!(
             !analysis
-                .details
                 .report
                 .warnings
                 .iter()
                 .any(|warning| warning.code == "av1_enrichment_incomplete"),
             "{:?}",
-            analysis.details.report
+            analysis.report
         );
     }
 }
@@ -473,8 +451,8 @@ fn av1_sequence_color_matches_native_expectations_in_mp4_and_mkv() {
 fn hevc_sequence_and_sei_metadata_survive_mp4_and_mkv_projection() {
     for name in ["hevc_sequence_pq.mp4", "hevc_sequence_pq.mkv"] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
-        let metadata = &analysis.details.streams[0].metadata;
-        assert_eq!(analysis.video_profile.as_deref(), Some("Main 10"), "{name}");
+        let metadata = &analysis.streams[0].metadata;
+        assert_eq!(facts::video_profile(&analysis), Some("Main 10"), "{name}");
         assert_eq!(metadata.level, Some(30));
         assert_eq!(metadata.pixel_format.as_deref(), Some("yuv420p10le"));
         assert_eq!(metadata.color.transfer, Some(16));
@@ -496,7 +474,7 @@ fn hevc_sequence_and_sei_metadata_survive_mp4_and_mkv_projection() {
     }
 }
 
-fn analyze_fixture(fixture: &FixtureExpectation) -> MediaAnalysis {
+fn analyze_fixture(fixture: &FixtureExpectation) -> AnalysisDetails {
     analyze_file_with_options(
         &media(&fixture.name),
         AnalyzeOptions {
@@ -655,51 +633,47 @@ fn fixture_matrix_expected_metadata() {
             fixture.name
         );
         assert_eq!(
-            analysis.video_codec.as_deref(),
+            facts::video_codec(&analysis),
             Some(fixture.video_codec.as_str()),
             "{} video codec",
             fixture.name
         );
+        let (width, height) = facts::video_size(&analysis);
+        assert_eq!(width, Some(fixture.width), "{} video width", fixture.name);
         assert_eq!(
-            analysis.video_width,
-            Some(fixture.width),
-            "{} video width",
-            fixture.name
-        );
-        assert_eq!(
-            analysis.video_height,
+            height,
             Some(fixture.height),
             "{} video height",
             fixture.name
         );
-        let actual_fps = analysis
-            .video_frame_rate
-            .as_deref()
-            .and_then(|fps| fps.parse::<f64>().ok())
+        // The rate as a reader sees it: three decimals, so 23.9764 reads as 23.976.
+        let actual_fps = facts::video_fps(&analysis)
+            .map(|fps| (fps * 1000.0).round() / 1000.0)
             .unwrap_or_default();
         assert!(
             (actual_fps - f64::from(fixture.fps)).abs() < 0.001,
             "{} frame rate {:?} should equal {}",
             fixture.name,
-            analysis.video_frame_rate,
+            facts::video_fps(&analysis),
             fixture.fps
         );
+        let duration = facts::duration_seconds(&analysis);
         assert!(
-            analysis.duration_seconds.unwrap_or_default() >= fixture.min_duration_seconds,
+            duration.unwrap_or_default() >= fixture.min_duration_seconds,
             "{} duration {:?} should be at least {}",
             fixture.name,
-            analysis.duration_seconds,
+            duration,
             fixture.min_duration_seconds
         );
         assert_eq!(
-            is_valid_video(&analysis),
+            facts::has_video_with_duration(&analysis),
             fixture.valid_video,
             "{} validity",
             fixture.name
         );
 
-        let actual_audio_codecs: Vec<_> = analysis
-            .audio_streams
+        let audio = facts::audio(&analysis);
+        let actual_audio_codecs: Vec<_> = audio
             .iter()
             .filter_map(|stream| stream.codec.clone())
             .collect();
@@ -709,11 +683,8 @@ fn fixture_matrix_expected_metadata() {
             fixture.name
         );
 
-        let actual_audio_channels: Vec<_> = analysis
-            .audio_streams
-            .iter()
-            .filter_map(|stream| stream.channels)
-            .collect();
+        let actual_audio_channels: Vec<_> =
+            audio.iter().filter_map(|stream| stream.channels).collect();
         assert_eq!(
             actual_audio_channels, fixture.audio_channels,
             "{} audio channels",
@@ -721,18 +692,19 @@ fn fixture_matrix_expected_metadata() {
         );
 
         assert_eq!(
-            analysis.has_multiaudio,
+            audio.len() > 1,
             fixture.audio_codecs.len() > 1,
             "{} multiaudio flag",
             fixture.name
         );
         assert_eq!(
-            analysis.audio_languages, fixture.audio_languages,
+            facts::audio_languages(&analysis),
+            fixture.audio_languages,
             "{} audio languages",
             fixture.name
         );
         assert_eq!(
-            analysis.subtitle_streams.len(),
+            facts::subtitles(&analysis).len(),
             fixture.subtitle_stream_count,
             "{} subtitle stream count",
             fixture.name
@@ -747,13 +719,16 @@ fn fixture_matrix_expected_metadata() {
 /// Profile, level, compatibility id and the RPU / enhancement-layer / base-layer flags
 /// reported for the primary video stream.
 fn mkv_dovi_record(name: &str) -> (u8, u8, u8, bool, bool, bool) {
-    let a = analyze_file(&media(name)).unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert!(is_valid_video(&a));
-    let dovi = a.details.streams[0].metadata.hdr.dovi.clone().unwrap();
-    assert_eq!(dovi.profile, a.dovi_profile);
-    assert_eq!(dovi.base_layer_compatibility_id, a.dovi_bl_compat_id);
+    let a = analyze_catalog_file(&media(name)).unwrap();
+    assert_eq!(facts::video_codec(&a), Some("hevc"));
+    assert!(facts::hdr_signals(&a)[0], "Dolby Vision signal");
+    assert!(facts::has_video_with_duration(&a));
+    let dovi = a.streams[0].metadata.hdr.dovi.clone().unwrap();
+    assert_eq!(
+        (dovi.profile, dovi.base_layer_compatibility_id),
+        facts::dovi(&a),
+        "the record belongs to the selected video"
+    );
     (
         dovi.profile.unwrap(),
         dovi.level.unwrap(),
@@ -794,20 +769,18 @@ fn mkv_dv_profile8() {
 
 #[test]
 fn mp4_dv_profile7() {
-    let a = analyze_file(&media("dv_profile7.mp4")).unwrap();
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(7));
-    assert_eq!(a.dovi_bl_compat_id, Some(6));
-    assert!(is_valid_video(&a));
+    let a = analyze_catalog_file(&media("dv_profile7.mp4")).unwrap();
+    assert!(facts::hdr_signals(&a)[0], "Dolby Vision signal");
+    assert_eq!(facts::dovi(&a), (Some(7), Some(6)));
+    assert!(facts::has_video_with_duration(&a));
 }
 
 #[test]
 fn mp4_dv_profile8() {
-    let a = analyze_file(&media("dv_profile8.mp4")).unwrap();
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(8));
-    assert_eq!(a.dovi_bl_compat_id, Some(1));
-    assert!(is_valid_video(&a));
+    let a = analyze_catalog_file(&media("dv_profile8.mp4")).unwrap();
+    assert!(facts::hdr_signals(&a)[0], "Dolby Vision signal");
+    assert_eq!(facts::dovi(&a), (Some(8), Some(1)));
+    assert!(facts::has_video_with_duration(&a));
 }
 
 // ---------------------------------------------------------------------------
@@ -816,12 +789,11 @@ fn mp4_dv_profile8() {
 
 #[test]
 fn mkv_h264_8k_fixture_reports_dimensions() {
-    let a = analyze_file(&media("h264_8k_aac.mkv")).unwrap();
+    let a = analyze_catalog_file(&media("h264_8k_aac.mkv")).unwrap();
     assert_eq!(a.container_format.as_deref(), Some("matroska"));
-    assert_eq!(a.video_codec.as_deref(), Some("h264"));
-    assert_eq!(a.video_width, Some(7680));
-    assert_eq!(a.video_height, Some(4320));
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("h264"));
+    assert_eq!(facts::video_size(&a), (Some(7680), Some(4320)));
+    assert!(facts::has_video_with_duration(&a));
 }
 
 // ---------------------------------------------------------------------------
@@ -837,10 +809,11 @@ fn mkv_hevc_hdr10plus() {
         },
     )
     .unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("HDR10+"));
-    assert_eq!(a.video_bit_depth, Some(10));
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("hevc"));
+    assert!(facts::hdr_signals(&a)[1], "HDR10+ signal");
+    assert!(!facts::hdr_signals(&a)[0], "no Dolby Vision signal");
+    assert_eq!(facts::video_bit_depth(&a), Some(10));
+    assert!(facts::has_video_with_duration(&a));
 }
 
 #[test]
@@ -852,9 +825,9 @@ fn mkv_hevc_hdr10plus_content_probe_profile() {
         },
     )
     .unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format, None);
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("hevc"));
+    assert_eq!(facts::hdr_signals(&a), facts::NO_HDR);
+    assert!(facts::has_video_with_duration(&a));
 }
 
 #[test]
@@ -867,22 +840,17 @@ fn mpegts_content_probe_profile_identifies_video_without_deep_track_enrichment()
     )
     .unwrap();
     assert_eq!(a.container_format.as_deref(), Some("mpegts"));
-    assert_eq!(a.video_codec.as_deref(), Some("h264"));
-    assert_eq!(a.video_width, None);
-    assert_eq!(a.video_height, None);
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("h264"));
+    assert_eq!(facts::video_size(&a), (None, None));
+    assert!(facts::has_video_with_duration(&a));
     assert_eq!(
-        a.details.duration_provenance,
+        a.duration_provenance,
         scryer_media_model::Provenance::Estimated
     );
-    assert_eq!(
-        a.details.report.status,
-        scryer_media_model::ProbeStatus::Incomplete
-    );
-    assert!(!a.details.report.budget_exhausted);
+    assert_eq!(a.report.status, scryer_media_model::ProbeStatus::Incomplete);
+    assert!(!a.report.budget_exhausted);
     assert!(
-        a.details
-            .report
+        a.report
             .warnings
             .iter()
             .any(|warning| warning.code == "content_probe_duration_estimate")
@@ -898,9 +866,12 @@ fn mkv_hevc_hdr10plus_ffprobe_parity_profile() {
         },
     )
     .unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("HDR10+"));
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("hevc"));
+    assert!(
+        facts::hdr_signals(&a)[1] && !facts::hdr_signals(&a)[0],
+        "HDR10+ signal"
+    );
+    assert!(facts::has_video_with_duration(&a));
 }
 
 #[test]
@@ -912,9 +883,12 @@ fn mp4_hevc_hdr10plus() {
         },
     )
     .unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("HDR10+"));
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("hevc"));
+    assert!(
+        facts::hdr_signals(&a)[1] && !facts::hdr_signals(&a)[0],
+        "HDR10+ signal"
+    );
+    assert!(facts::has_video_with_duration(&a));
 }
 
 #[test]
@@ -926,9 +900,9 @@ fn mp4_hevc_hdr10plus_ffprobe_parity_profile() {
         },
     )
     .unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format, None);
-    assert!(is_valid_video(&a));
+    assert_eq!(facts::video_codec(&a), Some("hevc"));
+    assert_eq!(facts::hdr_signals(&a), facts::NO_HDR);
+    assert!(facts::has_video_with_duration(&a));
 }
 
 // ---------------------------------------------------------------------------
@@ -937,7 +911,7 @@ fn mp4_hevc_hdr10plus_ffprobe_parity_profile() {
 
 #[test]
 fn unsupported_extension_returns_error() {
-    let err = analyze_file(&PathBuf::from("/tmp/fake.unsupported")).unwrap_err();
+    let err = analyze_catalog_file(&PathBuf::from("/tmp/fake.unsupported")).unwrap_err();
     assert!(
         matches!(err, scryer_mediainfo::MediaInfoError::UnsupportedFormat(ref ext) if ext == "unsupported"),
         "{err:?}"
@@ -985,12 +959,12 @@ fn canonical_path_and_fragmented_sources_have_identical_facts() {
             },
         )
         .unwrap();
-        let mut expected = analyze_file(&path).unwrap();
-        assert!(actual.details.report.bytes_read > 0);
-        assert!(actual.details.report.bytes_read < 32 * 1024 * 1024);
+        let mut expected = analyze_catalog_file(&path).unwrap();
+        assert!(actual.report.bytes_read > 0);
+        assert!(actual.report.bytes_read < 32 * 1024 * 1024);
         // Extent boundaries change the number of underlying reads and seeks only.
-        actual.details.report = Default::default();
-        expected.details.report = Default::default();
+        actual.report = Default::default();
+        expected.report = Default::default();
         assert_eq!(
             serde_json::to_value(actual).unwrap(),
             serde_json::to_value(expected).unwrap(),

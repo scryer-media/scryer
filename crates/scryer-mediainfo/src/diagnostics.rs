@@ -86,8 +86,8 @@ pub fn diagnose_source(
                 profile: AnalysisProfile::DefaultRich,
             },
         ) {
-            Ok(analysis) => {
-                for stream in &analysis.details.streams {
+            Ok(details) => {
+                for stream in &details.streams {
                     if let Some(pid) = stream
                         .metadata
                         .id
@@ -98,7 +98,7 @@ pub fn diagnose_source(
                         codecs.insert(pid, codec.clone());
                     }
                 }
-                analysis.details.report
+                details.report
             }
             Err(error) => ProbeReport {
                 status: match error {

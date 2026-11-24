@@ -1809,16 +1809,19 @@ pub(crate) fn parse_dovi_config(data: &[u8]) -> Option<DoviConfigInfo> {
     })
 }
 
+/// The HDR signals the parser records for one video track, in the order
+/// Dolby Vision, HDR10+, HDR10, HLG; each is true only when positively signaled.
 #[cfg(test)]
-fn detect_hdr_format(track: &RawTrack) -> Option<String> {
-    crate::build_analysis(crate::types::RawContainer {
+fn detect_hdr_signals(track: &RawTrack) -> [bool; 4] {
+    let details = crate::build_details(crate::types::RawContainer {
         format_name: "fixture".into(),
         duration_seconds: None,
         num_chapters: None,
         tracks: vec![track.clone()],
         details: Default::default(),
-    })
-    .video_hdr_format
+    });
+    let hdr = &details.selected_video().expect("video track").metadata.hdr;
+    [hdr.dolby_vision, hdr.hdr10plus, hdr.hdr10, hdr.hlg].map(|flag| flag == Some(true))
 }
 
 /// Extract the NAL unit length prefix size from an HEVCDecoderConfigurationRecord.
@@ -2443,8 +2446,8 @@ mod tests {
             forced: false,
             default_track: false,
         };
-        // DV takes priority over color_transfer
-        assert_eq!(detect_hdr_format(&track).as_deref(), Some("Dolby Vision"));
+        // PQ without a bit depth does not establish HDR10 beside Dolby Vision.
+        assert_eq!(detect_hdr_signals(&track), [true, false, false, false]);
     }
 
     #[test]
@@ -2470,14 +2473,14 @@ mod tests {
             default_track: false,
         };
         assert_eq!(
-            detect_hdr_format(&track),
-            None,
+            detect_hdr_signals(&track),
+            [false; 4],
             "PQ alone does not establish HDR10"
         );
         let mut track = track;
         track.metadata.bit_depth = Some(10);
         track.metadata.color.primaries = Some(9);
-        assert_eq!(detect_hdr_format(&track).as_deref(), Some("HDR10"));
+        assert_eq!(detect_hdr_signals(&track), [false, false, true, false]);
     }
 
     #[test]
@@ -2502,8 +2505,7 @@ mod tests {
             forced: false,
             default_track: false,
         };
-        // HDR10+ takes priority over HDR10
-        assert_eq!(detect_hdr_format(&track).as_deref(), Some("HDR10+"));
+        assert_eq!(detect_hdr_signals(&track), [false, true, false, false]);
     }
 
     #[test]
@@ -2528,7 +2530,7 @@ mod tests {
             forced: false,
             default_track: false,
         };
-        assert_eq!(detect_hdr_format(&track).as_deref(), Some("HLG"));
+        assert_eq!(detect_hdr_signals(&track), [false, false, false, true]);
     }
 
     #[test]
@@ -2553,7 +2555,7 @@ mod tests {
             forced: false,
             default_track: false,
         };
-        assert_eq!(detect_hdr_format(&track), None);
+        assert_eq!(detect_hdr_signals(&track), [false; 4]);
     }
 
     #[test]

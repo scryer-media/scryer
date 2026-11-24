@@ -463,16 +463,17 @@ mod tests {
         .unwrap();
         assert_eq!(
             analysis
-                .details
                 .streams
                 .iter()
                 .map(|stream| stream.metadata.id.as_deref())
                 .collect::<Vec<_>>(),
             [Some("00c4"), Some("00e7"), Some("00c0"), Some("00e1")]
         );
-        assert_eq!(analysis.details.selected_video_id.as_deref(), Some("00e7"));
-        assert_eq!(analysis.video_width, Some(720));
-        assert_eq!(analysis.video_height, Some(480));
+        assert_eq!(analysis.selected_video_id.as_deref(), Some("00e7"));
+        assert_eq!(
+            crate::test_facts::video_size(&analysis),
+            (Some(720), Some(480))
+        );
     }
 
     #[test]

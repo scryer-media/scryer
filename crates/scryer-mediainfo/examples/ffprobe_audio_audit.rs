@@ -9,7 +9,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use scryer_mediainfo::analyze_file;
+#[path = "../tests/support/details_facts.rs"]
+mod facts;
+
+use scryer_mediainfo::analyze_catalog_file;
 use serde_json::Value;
 
 const MAX_DEPTH: usize = 8;
@@ -71,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         stats.files_total += 1;
 
-        let native = match analyze_file(path) {
+        let native = match analyze_catalog_file(path) {
             Ok(native) => native,
             Err(error) => {
                 record_example(
@@ -96,17 +99,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let probe_audio_streams = ffprobe_audio_streams(&probe_json);
-        if native.audio_streams.is_empty() && probe_audio_streams.is_empty() {
+        let native_audio_streams: Vec<ProbeAudioStream> = facts::audio(&native)
+            .into_iter()
+            .map(|stream| ProbeAudioStream {
+                codec: stream.codec.clone(),
+                profile: stream.metadata.profile.clone(),
+                channels: stream.channels,
+                bitrate_kbps: facts::kbps(stream.metadata.bitrate_bps),
+                language: facts::known_language(stream).map(str::to_owned),
+            })
+            .collect();
+        if native_audio_streams.is_empty() && probe_audio_streams.is_empty() {
             continue;
         }
 
         stats.files_with_audio += 1;
-        stats.total_native_audio_streams += native.audio_streams.len();
+        stats.total_native_audio_streams += native_audio_streams.len();
         stats.total_probe_audio_streams += probe_audio_streams.len();
 
         let mut file_has_mismatch = false;
 
-        if native.audio_streams.len() != probe_audio_streams.len() {
+        if native_audio_streams.len() != probe_audio_streams.len() {
             file_has_mismatch = true;
             increment_mismatch(
                 &mut stats,
@@ -114,14 +127,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!(
                     "{} stream_count native={} ffprobe={}",
                     path.display(),
-                    native.audio_streams.len(),
+                    native_audio_streams.len(),
                     probe_audio_streams.len()
                 ),
             );
         }
 
-        for (stream_index, (native_stream, probe_stream)) in native
-            .audio_streams
+        for (stream_index, (native_stream, probe_stream)) in native_audio_streams
             .iter()
             .zip(probe_audio_streams.iter())
             .enumerate()

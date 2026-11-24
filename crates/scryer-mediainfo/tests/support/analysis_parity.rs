@@ -209,7 +209,7 @@ pub fn reference_bitrate_is_estimate(reference: &Value, stream: &Value) -> bool 
 
 pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
     let mut differences = Vec::new();
-    let details = &native["details"];
+    let details = native;
     let native_streams = details["streams"]
         .as_array()
         .map(Vec::as_slice)
@@ -559,15 +559,15 @@ mod tests {
             let mut tags = serde_json::Map::new();
             tags.insert(key.into(), "jpn".into());
             let reference = serde_json::json!({"streams":[{"codec_type":"subtitle", "codec_name":"text", "tags":tags}]});
-            let mut native = serde_json::json!({"details":{"streams":[{"kind":"subtitle", "codec":"text", "metadata":{"original_language":"jpn"}}]}});
+            let mut native = serde_json::json!({"streams":[{"kind":"subtitle", "codec":"text", "metadata":{"original_language":"jpn"}}]});
             assert!(compare(&native, &reference).is_empty(), "{key}");
-            native["details"]["streams"][0]["metadata"]["original_language"] = Value::Null;
+            native["streams"][0]["metadata"]["original_language"] = Value::Null;
             assert_eq!(
                 compare(&native, &reference).len(),
                 1,
                 "{key}: missing native language must fail"
             );
-            native["details"]["streams"][0]["metadata"]["original_language"] = "eng".into();
+            native["streams"][0]["metadata"]["original_language"] = "eng".into();
             assert_eq!(
                 compare(&native, &reference).len(),
                 1,
@@ -583,7 +583,8 @@ mod tests {
         stream["bit_rate"] = "104856800".into();
         assert_eq!(reference_bitrate_bps(&stream), Some(104856800.0));
         let reference = serde_json::json!({"streams":[stream]});
-        let native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"mpeg1video","metadata":{}}]}});
+        let native =
+            serde_json::json!({"streams":[{"kind":"video","codec":"mpeg1video","metadata":{}}]});
         assert!(compare(&native, &serde_json::json!({"streams":[{"codec_type":"video", "codec_name":"mpeg1video", "bit_rate":"104856800"}]})).iter().any(|error| error.contains("bitrate_bps")));
         let mut other_codec = reference["streams"][0].clone();
         other_codec["codec_name"] = "h264".into();
@@ -601,19 +602,20 @@ mod tests {
                 &reference,
                 &reference["streams"][0]
             ));
-            let mut native = serde_json::json!({"details":{"streams":[{"kind":"audio","codec":codec,"metadata":{}}]}});
+            let mut native =
+                serde_json::json!({"streams":[{"kind":"audio","codec":codec,"metadata":{}}]});
             assert!(
                 compare(&native, &reference)
                     .iter()
                     .any(|error| error.contains("bitrate_bps"))
             );
-            native["details"]["streams"][0]["metadata"]["estimated_bitrate_bps"] = 64000.into();
+            native["streams"][0]["metadata"]["estimated_bitrate_bps"] = 64000.into();
             assert!(
                 !compare(&native, &reference)
                     .iter()
                     .any(|error| error.contains("bitrate"))
             );
-            native["details"]["streams"][0]["metadata"]["estimated_bitrate_bps"] = 8000.into();
+            native["streams"][0]["metadata"]["estimated_bitrate_bps"] = 8000.into();
             assert!(
                 compare(&native, &reference)
                     .iter()
@@ -654,18 +656,18 @@ mod tests {
 
     #[test]
     fn asf_reference_language_normalization_requires_a_matching_original() {
-        let mut native = serde_json::json!({"details":{"streams":[{"kind":"audio","codec":"mp3","metadata":{"original_language":"en-US"}}]}});
+        let mut native = serde_json::json!({"streams":[{"kind":"audio","codec":"mp3","metadata":{"original_language":"en-US"}}]});
         let mut reference = serde_json::json!({"format":{"format_name":"asf"},"streams":[{"codec_type":"audio","codec_name":"mp3","tags":{"language":"eng"}}]});
         assert!(compare(&native, &reference).is_empty());
         for original in [Value::Null, "".into(), "ja-JP".into()] {
-            native["details"]["streams"][0]["metadata"]["original_language"] = original;
+            native["streams"][0]["metadata"]["original_language"] = original;
             assert!(
                 compare(&native, &reference)
                     .iter()
                     .any(|error| error.contains("original_language"))
             );
         }
-        native["details"]["streams"][0]["metadata"]["original_language"] = "en-US".into();
+        native["streams"][0]["metadata"]["original_language"] = "en-US".into();
         reference["format"]["format_name"] = "matroska,webm".into();
         assert!(
             compare(&native, &reference)
@@ -694,7 +696,8 @@ mod tests {
             "retain the original reference declaration"
         );
         let reference = serde_json::json!({"streams":[stream.clone()]});
-        let native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"mjpeg","metadata":{}}]}});
+        let native =
+            serde_json::json!({"streams":[{"kind":"video","codec":"mjpeg","metadata":{}}]});
         assert!(
             compare(&native, &reference)
                 .iter()
@@ -720,23 +723,23 @@ mod tests {
 
     #[test]
     fn nominal_frame_rate_comparison_keeps_bounded_observations_separate() {
-        let mut native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"vp9","metadata":{
+        let mut native = serde_json::json!({"streams":[{"kind":"video","codec":"vp9","metadata":{
             "declared_frame_rate":{"numerator":120,"denominator":1},
             "observed_frame_rate":{"numerator":2750,"denominator":23}
-        }}]}});
+        }}]});
         let mut reference = serde_json::json!({"streams":[{"codec_type":"video","codec_name":"vp9","r_frame_rate":"240/1","avg_frame_rate":"120/1"}]});
         assert!(compare(&native, &reference).is_empty());
         reference["streams"][0]["avg_frame_rate"] = "0/0".into();
         reference["streams"][0]["r_frame_rate"] = "120/1".into();
         assert!(compare(&native, &reference).is_empty());
-        native["details"]["streams"][0]["metadata"]["declared_frame_rate"] =
+        native["streams"][0]["metadata"]["declared_frame_rate"] =
             serde_json::json!({"numerator":60,"denominator":1});
         assert!(
             compare(&native, &reference)
                 .iter()
                 .any(|error| error.contains("rational_frame_rate"))
         );
-        native["details"]["streams"][0]["metadata"] = Value::Null;
+        native["streams"][0]["metadata"] = Value::Null;
         assert!(
             compare(&native, &reference)
                 .iter()
@@ -746,7 +749,7 @@ mod tests {
 
     #[test]
     fn missing_required_rich_values_are_mismatches() {
-        let native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"hevc","metadata":{}}]}});
+        let native = serde_json::json!({"streams":[{"kind":"video","codec":"hevc","metadata":{}}]});
         let reference = serde_json::json!({"streams":[{"codec_type":"video","codec_name":"hevc","profile":"Main 10","pix_fmt":"yuv420p10le","color_transfer":"smpte2084","disposition":{"comment":1}}]});
         let errors = compare(&native, &reference);
         for field in [

@@ -126,7 +126,7 @@ impl<T: Clone> AnalysisFlight<T> {
 
 #[cfg(feature = "runtime-media-analysis")]
 static NATIVE_PROBE_FLIGHTS: std::sync::LazyLock<
-    AnalysisFlights<Result<scryer_mediainfo::MediaAnalysis, scryer_mediainfo::MediaInfoError>>,
+    AnalysisFlights<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::MediaInfoError>>,
 > = std::sync::LazyLock::new(AnalysisFlights::default);
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -141,13 +141,15 @@ fn permits_unavailable_probe(path: &std::path::Path) -> bool {
 }
 
 #[cfg(feature = "runtime-media-analysis")]
-pub(crate) fn unavailable_analysis(path: &std::path::Path) -> scryer_mediainfo::MediaAnalysis {
-    let mut analysis = scryer_mediainfo::MediaAnalysis::default();
-    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
-    analysis.details.report.status = scryer_media_types::ProbeStatus::Unsupported;
-    analysis.container_format =
-        scryer_media_types::formats::canonical_video_extension(path).map(str::to_owned);
-    analysis
+pub(crate) fn unavailable_analysis(path: &std::path::Path) -> scryer_media_types::AnalysisDetails {
+    let mut details = scryer_media_types::AnalysisDetails {
+        revision: scryer_media_types::ANALYSIS_REVISION,
+        container_format: scryer_media_types::formats::canonical_video_extension(path)
+            .map(str::to_owned),
+        ..Default::default()
+    };
+    details.report.status = scryer_media_types::ProbeStatus::Unsupported;
+    details
 }
 
 /// Share the physical probe across catalog scans and final import validation.
@@ -156,7 +158,7 @@ pub(crate) async fn probe_native_catalog(
     path: PathBuf,
     selection: scryer_media_types::DiscSelection,
     operation: crate::media::metrics::ProbeOperation,
-) -> AppResult<Result<scryer_mediainfo::MediaAnalysis, scryer_mediainfo::MediaInfoError>> {
+) -> AppResult<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::MediaInfoError>> {
     let source_path = path.clone();
     // A metadata read that fails is an I/O failure for this file, not
     // evidence about the file's identity. Folding it into `None` and
@@ -200,10 +202,7 @@ pub(crate) async fn probe_native_catalog(
             crate::media::metrics::record_probe(
                 operation,
                 started.elapsed(),
-                result
-                    .as_ref()
-                    .ok()
-                    .map(|analysis| &analysis.details.report),
+                result.as_ref().ok().map(|details| &details.report),
             );
             Ok(result)
         },
@@ -304,29 +303,27 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
         .await?;
         #[cfg(feature = "runtime-media-analysis")]
         match result {
-            Ok(analysis)
-                if scryer_mediainfo::is_valid_video(&analysis)
-                    && (analysis.container_format.as_deref() != Some("iso")
-                        || analysis.details.report.status
-                            == scryer_media_types::ProbeStatus::Complete) =>
+            Ok(details)
+                if crate::media::analysis_summary::is_valid_video(&details)
+                    && (details.container_format.as_deref() != Some("iso")
+                        || details.report.status == scryer_media_types::ProbeStatus::Complete) =>
             {
                 Ok(MediaAnalysisOutcome::Valid(Box::new(
-                    crate::post_download_gate::build_media_file_analysis(&analysis),
+                    crate::media::analysis_summary::summarize(&details),
                 )))
             }
-            Ok(analysis)
-                if analysis.container_format.as_deref() == Some("iso")
-                    || analysis.video_codec.is_some()
-                    || analysis.details.selected_video_id.is_some()
-                    || analysis.details.report.budget_exhausted
+            Ok(details)
+                if details.container_format.as_deref() == Some("iso")
+                    || details.selected_video_id.is_some()
+                    || details.report.budget_exhausted
                     || matches!(
-                        analysis.details.report.status,
+                        details.report.status,
                         scryer_media_types::ProbeStatus::Unsupported
                             | scryer_media_types::ProbeStatus::Encrypted
                     ) =>
             {
                 Ok(MediaAnalysisOutcome::Inconclusive(Box::new(
-                    crate::post_download_gate::build_media_file_analysis(&analysis),
+                    crate::media::analysis_summary::summarize(&details),
                 )))
             }
             Ok(_) => Ok(MediaAnalysisOutcome::NoVideo),

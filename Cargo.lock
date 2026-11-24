@@ -6303,7 +6303,6 @@ dependencies = [
  "ogg",
  "riff",
  "scryer-media-model",
- "scryer-media-types",
  "scuffle-h264",
  "scuffle-h265",
  "serde",
