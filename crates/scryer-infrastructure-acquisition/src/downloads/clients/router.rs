@@ -56,7 +56,7 @@ pub fn download_client_feedback_timeout() -> Duration {
 }
 
 /// Read a staged NZB back out of its zstd frame, for handing to a browser.
-async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
+pub(super) async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
     let input = Disk::process()
         .open(&staged_nzb.compressed_path, Open::read())
         .await
@@ -280,6 +280,13 @@ fn download_client_remote_path_mappings(
             None
         }
     }
+}
+
+/// Whether a completed row of this client may name the parent of its release
+/// folder, so the release folder is looked for on disk. TorBox reports the
+/// engine's own job folder, so probing for it decides nothing.
+fn completed_import_dir_may_be_parent(client_type: &str) -> bool {
+    client_type != super::torbox::client::CLIENT_TYPE
 }
 
 fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDownload) {
@@ -1463,6 +1470,10 @@ impl PrioritizedDownloadClientRouter {
         if Self::is_native_nzb_client_type(&config.client_type) {
             return artifact_kind == DownloadArtifactKind::NzbBytes;
         }
+        if config.client_type == super::torbox::client::CLIENT_TYPE {
+            // Torrents and NZBs alike: TorBox takes both.
+            return true;
+        }
         let Some(provider) = plugin_provider else {
             return false;
         };
@@ -1827,6 +1838,7 @@ impl PrioritizedDownloadClientRouter {
         if seed_goals.is_resolved() {
             effective_request.seed_goal_ratio = seed_goals.seed_goal_ratio;
             effective_request.seed_goal_seconds = seed_goals.seed_goal_seconds;
+            effective_request.seed_never_remove = seed_goals.never_remove;
         }
 
         Ok((effective_request, seed_goals))
@@ -2127,6 +2139,14 @@ impl PrioritizedDownloadClientRouter {
             }
             "http" => {
                 let client = HttpDownloadClient::for_config(config, proxy_config, http_client)?;
+                Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
+            }
+            super::torbox::client::CLIENT_TYPE => {
+                let client = super::torbox::TorboxDownloadClient::for_config(
+                    config,
+                    proxy_config,
+                    http_client,
+                )?;
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             _ => {
@@ -2997,7 +3017,8 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .await
             {
                 Ok((mut effective_request, resolved_seed_goals)) => {
-                    if Self::is_native_nzb_client_type(&config.client_type)
+                    if (Self::is_native_nzb_client_type(&config.client_type)
+                        || config.client_type == super::torbox::client::CLIENT_TYPE)
                         && Self::request_uses_nzb_payload(&effective_request)
                         && let Some(staged_nzb) = staged_nzb.as_ref()
                     {
@@ -3510,7 +3531,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                                 if let Some(mappings) = mappings.as_deref() {
                                     apply_remote_path_mappings_to_completed_download(row, mappings);
                                 }
-                                if accepts_torrents {
+                                if accepts_torrents
+                                    && completed_import_dir_may_be_parent(&config.client_type)
+                                {
                                     normalize_completed_download_import_dir(row);
                                 }
                             }
@@ -3736,7 +3759,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         if let Some(mappings) = mappings.as_deref() {
                             apply_remote_path_mappings_to_completed_download(item, mappings);
                         }
-                        if accepts_torrents {
+                        if accepts_torrents
+                            && completed_import_dir_may_be_parent(&config.client_type)
+                        {
                             normalize_completed_download_import_dir(item);
                         }
                         accepted_items.push(item.clone());
@@ -3869,7 +3894,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         if let Some(mappings) = mappings.as_deref() {
                             apply_remote_path_mappings_to_completed_download(item, mappings);
                         }
-                        if accepts_torrents {
+                        if accepts_torrents
+                            && completed_import_dir_may_be_parent(&config.client_type)
+                        {
                             normalize_completed_download_import_dir(item);
                         }
                         accepted_items.push(item.clone());
@@ -4006,7 +4033,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         DownloadSourceKind::MagnetUri,
                         self.plugin_provider.as_ref(),
                     );
-                    if accepts_torrents {
+                    if accepts_torrents && completed_import_dir_may_be_parent(&config.client_type) {
                         normalize_completed_download_import_dir(&mut item);
                     }
                     item
@@ -4467,6 +4494,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -6734,6 +6762,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -6815,6 +6844,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -6915,6 +6945,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7103,6 +7134,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7216,6 +7248,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7285,6 +7318,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7356,6 +7390,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7427,6 +7462,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7502,6 +7538,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7584,6 +7621,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7617,6 +7655,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7684,6 +7723,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7751,6 +7791,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7896,6 +7937,7 @@ mod tests {
             info_hash_hint: Some("ABCDEF0123456789ABCDEF0123456789ABCDEF01".to_string()),
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7942,6 +7984,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_download_carries_never_remove_without_a_numeric_goal() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let router = seeding_router(
+            primary.clone(),
+            "qbittorrent",
+            vec!["torrent_file".to_string()],
+            r#"{"primary": {"enabled": true}}"#,
+        )
+        .with_seed_goal_resolution(Arc::new(MockSeedingProfileRepository {
+            profiles: vec![scryer_domain::SeedingProfile {
+                ratio: None,
+                seed_time_minutes: None,
+                never_remove: true,
+                ..test_seeding_profile("indexer-profile")
+            }],
+        }));
+        let grab = router
+            .submit_download(&torrent_add_request(Some("indexer-1")))
+            .await
+            .expect("routes");
+        let sent = primary.submissions.lock().unwrap();
+        assert!(sent[0].seed_never_remove);
+        assert_eq!(sent[0].seed_goal_ratio, None);
+        assert_eq!(sent[0].seed_goal_seconds, None);
+        assert!(grab.seed_goals.expect("resolved").never_remove);
+    }
+
+    #[tokio::test]
     async fn submit_download_resolves_and_persists_seeding_goals_for_torrents() {
         let primary = Arc::new(MockDownloadClient::default());
         let router = seeding_router(
@@ -7967,6 +8037,7 @@ mod tests {
         // clamps the ratio up.
         assert_eq!(sent.seed_goal_ratio, Some(3.0));
         assert_eq!(sent.seed_goal_seconds, Some(3600));
+        assert!(!sent.seed_never_remove);
 
         let recorded = grab.seed_goals.as_ref().expect("goals should be returned");
         assert_eq!(
@@ -8133,6 +8204,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8195,6 +8267,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8282,6 +8355,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8363,6 +8437,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8432,6 +8507,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8496,6 +8572,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -9231,6 +9308,19 @@ mod tests {
             normalize_completed_download_import_dir(&mut item);
 
             assert_eq!(item.dest_dir, root.path().to_string_lossy());
+        }
+    }
+
+    #[test]
+    fn only_torbox_rows_skip_the_release_folder_probe() {
+        assert!(!completed_import_dir_may_be_parent(
+            super::super::torbox::client::CLIENT_TYPE
+        ));
+        for client_type in ["qbittorrent", "transmission", "any-torrent-client"] {
+            assert!(
+                completed_import_dir_may_be_parent(client_type),
+                "{client_type}"
+            );
         }
     }
 

@@ -110,6 +110,68 @@ const it: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Limite di banda (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Condiviso da tutti i download di questo client. Vuoto o 0 significa illimitato.",
+  "settings.downloadClientTorboxApiKey": "Token API",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "Il token API dell'account TorBox.",
+  "settings.downloadClientTorboxCachedOnly": "Solo in cache",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Rifiuta i download che TorBox non ha già in cache.",
+  "httpRelease.refusal.filePathInvalid":
+    "Un file di questo download ha un percorso che non può essere salvato nella sua cartella di download.",
+  "httpRelease.refusal.tooManyFiles":
+    "Questo download ha più file di quanti un download possa contenerne.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Un file di questo download non ha un riferimento di link utilizzabile.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Un file di questo download richiede un link che questo downloader non può ottenere.",
+  "httpRelease.refusal.linkRefused":
+    "Il server ha continuato a rifiutare i link di download di un file.",
+  "httpRelease.refusal.linkUnavailable":
+    "Nessun link di download è diventato disponibile per un file.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox ha rifiutato il token API.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Il piano TorBox non include questa funzione.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "L'account TorBox ha raggiunto il limite di download attivi.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "L'account TorBox è in un periodo di attesa e non accetta ancora nuovi download.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "L'account TorBox ha raggiunto il limite mensile di download.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "È stato raggiunto il limite orario di nuovi download TorBox.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Questo download è più grande di quanto consenta il piano TorBox.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox non ha questo download in cache e questo client accetta solo download in cache.",
+  "error.reason.TORBOX_INVALID_TORRENT":
+    "TorBox non è riuscito a leggere il torrent.",
+  "error.reason.TORBOX_INVALID_NZB": "Impossibile leggere l'NZB.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Questo download è già nell'account TorBox.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox non ha questo elemento.",
+  "error.reason.TORBOX_LINK_OFFLINE": "Il link di download TorBox è offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox sta limitando la frequenza con cui accetta richieste.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox non è disponibile.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox ha segnalato un file di questo download come infetto.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox offre un file di questo download solo come archivio zip.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Questo download TorBox non contiene file video.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox segnala che questo download non è riuscito.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox non ha più questo download.",
+  "error.reason.TORBOX_STALLED": "Questo download è bloccato su TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "I nomi dei file di questo download TorBox non possono essere salvati su questo sistema.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Questa release non ha link magnet, file torrent o NZB da inviare a TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox non supporta questa azione per questo download.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Questo client TorBox non ha questo download.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "Il client TorBox non ha un token API.",
   "settings.publicUrlTitle": "URL pubblico",
   "settings.publicUrlHelp":
     "L’indirizzo che persone e servizi usano per raggiungere Scryer, ad esempio https://scryer.example.com. Il collegamento degli account e OAuth applicano una modifica subito; le passkey dopo il riavvio di Scryer.",

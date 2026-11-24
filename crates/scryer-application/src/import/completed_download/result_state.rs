@@ -619,7 +619,7 @@ pub(super) async fn apply_import_pass_result(
         // dedicated job directory is removed whole.
         td.clear_no_video_import_retry();
         td.clear_import_execution_retry();
-        if !crate::seeding_gate::client_type_is_torrent(app, &td.client_type) {
+        if !crate::seeding_gate::download_job_is_torrent(app, &td.client_type, td.job_protocol) {
             let (library_id, resolved_facet) =
                 crate::import_workflow::cleanup_routing_scope_for_title_id(
                     app,

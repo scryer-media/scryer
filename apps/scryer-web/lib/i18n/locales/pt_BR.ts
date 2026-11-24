@@ -106,6 +106,69 @@ const pt_BR: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Limite de banda (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Compartilhado por todos os downloads deste cliente. Vazio ou 0 significa ilimitado.",
+  "settings.downloadClientTorboxApiKey": "Token de API",
+  "settings.downloadClientTorboxApiKeyHelp": "O token de API da conta TorBox.",
+  "settings.downloadClientTorboxCachedOnly": "Somente em cache",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Recusar downloads que o TorBox ainda não tenha em cache.",
+  "httpRelease.refusal.filePathInvalid":
+    "Um arquivo deste download tem um caminho que não pode ser salvo dentro da pasta de download.",
+  "httpRelease.refusal.tooManyFiles":
+    "Este download tem mais arquivos do que um download pode conter.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Um arquivo deste download não tem uma referência de link utilizável.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Um arquivo deste download precisa de um link que este downloader não consegue obter.",
+  "httpRelease.refusal.linkRefused":
+    "O servidor recusou repetidamente os links de download de um arquivo.",
+  "httpRelease.refusal.linkUnavailable":
+    "Nenhum link de download ficou disponível para um arquivo.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "O TorBox recusou o token de API.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "O plano do TorBox não inclui este recurso.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "A conta TorBox atingiu o limite de downloads ativos.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "A conta TorBox está em um período de espera e ainda não aceita novos downloads.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "A conta TorBox atingiu o limite mensal de downloads.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "O limite por hora de novos downloads do TorBox foi atingido.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Este download é maior do que o plano do TorBox permite.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "O TorBox não tem este download em cache, e este cliente aceita apenas downloads em cache.",
+  "error.reason.TORBOX_INVALID_TORRENT":
+    "O TorBox não conseguiu ler o torrent.",
+  "error.reason.TORBOX_INVALID_NZB": "Não foi possível ler o NZB.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Este download já está na conta TorBox.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "O TorBox não tem este item.",
+  "error.reason.TORBOX_LINK_OFFLINE":
+    "O link de download do TorBox está offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "O TorBox está limitando a frequência com que aceita solicitações.",
+  "error.reason.TORBOX_UNAVAILABLE": "O TorBox está indisponível.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "O TorBox marcou um arquivo deste download como infectado.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "O TorBox oferece um arquivo deste download apenas como arquivo zip.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Este download do TorBox não tem arquivo de vídeo.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "O TorBox informa que este download falhou.",
+  "error.reason.TORBOX_ITEM_MISSING": "O TorBox não tem mais este download.",
+  "error.reason.TORBOX_STALLED": "Este download está parado no TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Os nomes de arquivo deste download do TorBox não podem ser salvos neste sistema.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Este release não tem link magnet, arquivo torrent nem NZB para enviar ao TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "O TorBox não oferece suporte a esta ação para este download.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Este cliente TorBox não tem esse download.",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "O cliente TorBox não tem token de API.",
   "settings.publicUrlTitle": "URL pública",
   "settings.publicUrlHelp":
     "O endereço que pessoas e serviços usam para acessar o Scryer, como https://scryer.example.com. A vinculação de contas e o OAuth aplicam uma alteração imediatamente; as passkeys, depois que o Scryer reinicia.",

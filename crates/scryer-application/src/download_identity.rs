@@ -880,7 +880,7 @@ pub fn accepted_download_submission_identity(
 fn client_round_trips_download_id(client_type: Option<&str>) -> bool {
     matches!(
         normalize_lower(client_type).as_deref(),
-        Some("nzbget" | "weaver" | "http")
+        Some("nzbget" | "weaver" | "http" | "torbox")
     )
 }
 

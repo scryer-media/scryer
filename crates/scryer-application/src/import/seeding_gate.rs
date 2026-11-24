@@ -121,6 +121,10 @@ pub(crate) struct SeedGoalLookupKey {
     /// Normalized info hash when known; torrent identity survives a client
     /// re-add, the client's own item id does not.
     pub info_hash: Option<String>,
+    /// What the job's own grab record says it is. Only consulted on a client
+    /// that carries both usenet and torrent jobs; `Unknown` keeps the
+    /// protections there.
+    pub job_protocol: DownloadJobProtocol,
 }
 
 /// Seed goals prefetched for one reconcile tick in a single query.
@@ -602,27 +606,147 @@ fn scryer_goal_is_met(
     }
 }
 
-/// Whether a download client speaks the torrent protocol.
+/// What one download job is, from the record Scryer made when it grabbed it.
 ///
-/// Derived from the client's declared accepted inputs, so plugin-provided
-/// clients answer for themselves and the built-in usenet clients are excluded
-/// without a hard-coded list.
-pub(crate) fn client_type_is_torrent(app: &AppUseCase, client_type: &str) -> bool {
-    let plugin_provider = app
-        .services
-        .integrations
-        .download_client_plugin_provider
-        .available();
-    let inputs = crate::accepted_inputs_for_client(client_type, plugin_provider);
+/// A client that accepts both NZB and torrent inputs carries both kinds of
+/// job, so the client type alone cannot say whether a job owes a seeding
+/// obligation. `Unknown` is the absence of evidence, never a third protocol:
+/// it keeps the seeding protections wherever the client could hold a torrent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DownloadJobProtocol {
+    #[default]
+    Unknown,
+    Usenet,
+    Torrent,
+}
+
+impl DownloadJobProtocol {
+    /// The protocol of the input the grab handed the client. An HTTP-family
+    /// input says nothing about usenet or torrent, so it stays unknown.
+    pub(crate) fn from_source_kind(kind: Option<DownloadSourceKind>) -> Self {
+        match kind {
+            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => Self::Usenet,
+            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => Self::Torrent,
+            Some(DownloadSourceKind::HttpResource) | None => Self::Unknown,
+        }
+    }
+
+    /// The protocol a grab's submission row records. An info hash on the row
+    /// is torrent evidence whatever the recorded input says, so a row that
+    /// contradicts itself keeps the protections.
+    pub(crate) fn from_submission(submission: &crate::DownloadSubmission) -> Self {
+        if submission
+            .info_hash
+            .as_deref()
+            .is_some_and(|hash| !hash.trim().is_empty())
+        {
+            return Self::Torrent;
+        }
+        Self::from_source_kind(submission.source_kind)
+    }
+}
+
+fn source_kind_is_torrent(kind: &DownloadSourceKind) -> bool {
+    matches!(
+        kind,
+        DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri
+    )
+}
+
+fn source_kind_is_usenet(kind: &DownloadSourceKind) -> bool {
+    matches!(
+        kind,
+        DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl
+    )
+}
+
+fn accepted_inputs_for(app: &AppUseCase, client_type: &str) -> Vec<DownloadSourceKind> {
+    crate::accepted_inputs_for_client(
+        client_type,
+        app.services
+            .integrations
+            .download_client_plugin_provider
+            .available(),
+    )
+}
+
+/// Whether a client declares both NZB and torrent inputs, so that only the
+/// job's own record can say which protocol a job on it uses.
+pub(crate) fn client_carries_usenet_and_torrent_jobs(app: &AppUseCase, client_type: &str) -> bool {
+    let inputs = accepted_inputs_for(app, client_type);
+    inputs.iter().any(source_kind_is_torrent) && inputs.iter().any(source_kind_is_usenet)
+}
+
+/// Whether one download job must be treated as a torrent: held for its
+/// seeding obligation, imported by copy, and matched by torrent identity.
+///
+/// This is the one place that decision is made. The client's declared inputs
+/// answer it for every client that speaks one protocol. Only a client that
+/// declares both NZB and torrent inputs consults the job, and only a job
+/// positively recorded as usenet is released from the torrent protections
+/// there. A client whose inputs are unknown keeps them whatever the job says:
+/// missing plugin metadata is not evidence of a Usenet client.
+pub(crate) fn download_job_is_torrent(
+    app: &AppUseCase,
+    client_type: &str,
+    job: DownloadJobProtocol,
+) -> bool {
+    let inputs = accepted_inputs_for(app, client_type);
     // Missing plugin metadata is not evidence of a Usenet client. Apply the
     // seeding protections until its protocol can be established.
-    inputs.is_empty()
-        || inputs.iter().any(|input| {
-            matches!(
-                input,
-                DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri
-            )
-        })
+    if inputs.is_empty() {
+        return true;
+    }
+    if !inputs.iter().any(source_kind_is_torrent) {
+        return false;
+    }
+    let carries_usenet = inputs.iter().any(source_kind_is_usenet);
+    !(carries_usenet && job == DownloadJobProtocol::Usenet)
+}
+
+/// Whether a download client could be holding a torrent.
+///
+/// For callers with no job in hand, and as the first test before reading a
+/// job's record: true for every client that declares a torrent input or whose
+/// inputs are unknown. A caller deciding about one job uses
+/// `download_job_is_torrent` instead.
+pub(crate) fn client_type_is_torrent(app: &AppUseCase, client_type: &str) -> bool {
+    download_job_is_torrent(app, client_type, DownloadJobProtocol::Unknown)
+}
+
+/// The protocol of one client job, read from its submission row, for a
+/// caller that holds no tracked row.
+///
+/// Reads nothing unless the client carries both protocols, since only there
+/// can the answer change a decision. A failed or empty read is `Unknown`,
+/// which keeps the protections.
+pub(crate) async fn job_protocol_for_client_item(
+    app: &AppUseCase,
+    canonical_download_id: Option<&DownloadId>,
+    locator: &ClientJobLocator,
+) -> DownloadJobProtocol {
+    if !client_carries_usenet_and_torrent_jobs(app, &locator.client_type) {
+        return DownloadJobProtocol::Unknown;
+    }
+    match app
+        .services
+        .workflow
+        .download_submissions
+        .find_by_client_item_id_for_download(canonical_download_id, locator)
+        .await
+    {
+        Ok(Some(submission)) => DownloadJobProtocol::from_submission(&submission),
+        Ok(None) => DownloadJobProtocol::Unknown,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                client_type = locator.client_type.as_str(),
+                download_client_item_id = locator.item_id.as_str(),
+                "failed to read the job's grab record; keeping seeding protections"
+            );
+            DownloadJobProtocol::Unknown
+        }
+    }
 }
 
 /// The observed torrent state for one client item, from the published
@@ -684,6 +808,10 @@ tokio::task_local! {
     /// observation. `None` records that no fresh observation was available.
     static IMPORT_SEEDING_OBSERVATIONS:
         std::cell::RefCell<Vec<(SeedGoalLookupKey, Option<TorrentSeedingObservation>)>>;
+
+    /// The job protocols already read from grab records by the import running
+    /// on this task, so the files of one import read a job's record once.
+    static IMPORT_JOB_PROTOCOLS: std::cell::RefCell<Vec<(SeedGoalLookupKey, DownloadJobProtocol)>>;
 }
 
 /// Runs one import of a download. Inside it, the seeding gate observes each
@@ -693,8 +821,45 @@ pub(crate) async fn with_import_seeding_observations<T>(
     operation: impl std::future::Future<Output = T>,
 ) -> T {
     IMPORT_SEEDING_OBSERVATIONS
-        .scope(std::cell::RefCell::new(Vec::new()), operation)
+        .scope(
+            std::cell::RefCell::new(Vec::new()),
+            IMPORT_JOB_PROTOCOLS.scope(std::cell::RefCell::new(Vec::new()), operation),
+        )
         .await
+}
+
+/// The key's job protocol, reading the job's grab record when the caller had
+/// none and the client carries both protocols. Read once per import.
+async fn resolve_import_job_protocol(
+    app: &AppUseCase,
+    key: &SeedGoalLookupKey,
+) -> DownloadJobProtocol {
+    if key.job_protocol != DownloadJobProtocol::Unknown
+        || !client_carries_usenet_and_torrent_jobs(app, &key.client_type)
+    {
+        return key.job_protocol;
+    }
+    let recorded = IMPORT_JOB_PROTOCOLS
+        .try_with(|recorded| {
+            recorded
+                .borrow()
+                .iter()
+                .find(|(recorded_key, _)| recorded_key == key)
+                .map(|(_, protocol)| *protocol)
+        })
+        .ok()
+        .flatten();
+    if let Some(protocol) = recorded {
+        return protocol;
+    }
+    let locator =
+        ClientJobLocator::new(Some(&key.client_id), &key.client_type, &key.client_item_id);
+    let protocol =
+        job_protocol_for_client_item(app, key.canonical_download_id.as_ref(), &locator).await;
+    let _ = IMPORT_JOB_PROTOCOLS.try_with(|recorded| {
+        recorded.borrow_mut().push((key.clone(), protocol));
+    });
+    protocol
 }
 
 fn recorded_import_seeding_observation(
@@ -729,9 +894,20 @@ pub(crate) async fn evaluate_seeding_gate_for(
     key: &SeedGoalLookupKey,
     present_in_client: bool,
 ) -> SeedingGateDecision {
-    if !client_type_is_torrent(app, &key.client_type) {
+    let job_protocol = resolve_import_job_protocol(app, key).await;
+    if !download_job_is_torrent(app, &key.client_type, job_protocol) {
         return SeedingGateDecision::not_applicable();
     }
+    let resolved_key;
+    let key = if job_protocol == key.job_protocol {
+        key
+    } else {
+        resolved_key = SeedGoalLookupKey {
+            job_protocol,
+            ..key.clone()
+        };
+        &resolved_key
+    };
     let observation = match recorded_import_seeding_observation(key) {
         Some(observation) => observation,
         None => {
@@ -802,7 +978,7 @@ pub(crate) async fn evaluate_seeding_gate_with(
     observation: Option<TorrentSeedingObservation>,
     goal_batch: Option<&SeedGoalBatch>,
 ) -> SeedingGateDecision {
-    if !client_type_is_torrent(app, &key.client_type) {
+    if !download_job_is_torrent(app, &key.client_type, key.job_protocol) {
         return SeedingGateDecision::not_applicable();
     }
 
@@ -860,6 +1036,9 @@ pub(crate) fn seed_goal_lookup_key_for_completed(
         info_hash: crate::normalize_torrent_info_hash(Some(
             completed.download_client_item_id.as_str(),
         )),
+        // A completed download carries no grab record; the gate reads it from
+        // the submission when the client carries both protocols.
+        job_protocol: DownloadJobProtocol::Unknown,
     }
 }
 

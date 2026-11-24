@@ -17,6 +17,8 @@ use crate::{
     DownloadSubmissionIdentity, SubmissionScope,
 };
 
+pub use crate::seeding_gate::DownloadJobProtocol;
+
 const DEFAULT_TRACKED_DOWNLOAD_CACHE_TTL_HOURS: i64 = 24;
 const DEFAULT_TRACKED_DOWNLOAD_CACHE_MAX_ENTRIES: usize = 5_000;
 const PASSWORD_RETRY_RECONCILIATION_MESSAGE: &str =
@@ -112,6 +114,10 @@ pub struct TrackedDownload {
     /// Release name from grab history (fallback parsing source).
     pub source_title: Option<String>,
     pub indexer: Option<String>,
+    /// What the job's grab record says it is, read with the submission that
+    /// resolves the title. Decides seeding protections only on a client that
+    /// carries both usenet and torrent jobs; `Unknown` keeps them.
+    pub job_protocol: DownloadJobProtocol,
     pub added_at: Option<DateTime<Utc>>,
     /// Whether the user has been notified about manual intervention.
     pub notified_manual_interaction: bool,
@@ -314,6 +320,7 @@ impl TrackedDownload {
         self.facet = finished.facet;
         self.source_title = finished.source_title;
         self.indexer = finished.indexer;
+        self.job_protocol = finished.job_protocol;
         self.added_at = finished.added_at;
         self.notified_manual_interaction = finished.notified_manual_interaction;
         self.match_type = finished.match_type;
@@ -1036,6 +1043,7 @@ impl TrackedDownloadService {
             facet: client_item.facet.clone(),
             source_title: None,
             indexer: None,
+            job_protocol: DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Unmatched,
@@ -1780,6 +1788,12 @@ impl TrackedDownloadService {
                 .ok()
                 .flatten(),
         };
+
+        // The job's protocol comes from the same grab record, already in hand.
+        // No record leaves what an earlier resolution established.
+        if let Some(sub) = existing_submission.as_ref() {
+            td.job_protocol = DownloadJobProtocol::from_submission(sub);
+        }
 
         // 1. download_submissions lookup (highest confidence).
         if let Some(sub) = existing_submission.as_ref()
@@ -4863,6 +4877,7 @@ mod tests {
             facet: None,
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Unmatched,
@@ -7436,6 +7451,7 @@ mod tests {
                 facet: Some("series".to_string()),
                 source_title: None,
                 indexer: None,
+                job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
                 added_at: None,
                 notified_manual_interaction: false,
                 match_type: TitleMatchType::Unmatched,
@@ -8191,6 +8207,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -8244,6 +8261,7 @@ mod tests {
                 facet: Some("movie".to_string()),
                 source_title: None,
                 indexer: None,
+                job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
                 added_at: None,
                 notified_manual_interaction: false,
                 match_type: TitleMatchType::Submission,
@@ -8451,6 +8469,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: Some("Observed.Show.S01E01.1080p.WEB-DL".to_string()),
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::TitleParse,
@@ -8541,6 +8560,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -8761,6 +8781,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,

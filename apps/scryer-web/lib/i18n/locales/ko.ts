@@ -106,6 +106,68 @@ const ko: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "대역폭 제한(KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "이 클라이언트의 모든 다운로드가 함께 사용합니다. 비워 두거나 0이면 제한이 없습니다.",
+  "settings.downloadClientTorboxApiKey": "API 토큰",
+  "settings.downloadClientTorboxApiKeyHelp": "TorBox 계정의 API 토큰입니다.",
+  "settings.downloadClientTorboxCachedOnly": "캐시된 항목만",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "TorBox에 아직 캐시되지 않은 다운로드를 거부합니다.",
+  "httpRelease.refusal.filePathInvalid":
+    "이 다운로드의 파일 경로를 다운로드 폴더 안에 저장할 수 없습니다.",
+  "httpRelease.refusal.tooManyFiles":
+    "이 다운로드의 파일 수가 한 다운로드에 담을 수 있는 수를 넘습니다.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "이 다운로드의 파일에 사용할 수 있는 링크 참조가 없습니다.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "이 다운로드의 파일에 이 다운로더가 얻을 수 없는 링크가 필요합니다.",
+  "httpRelease.refusal.linkRefused":
+    "서버가 파일의 다운로드 링크를 계속 거부했습니다.",
+  "httpRelease.refusal.linkUnavailable":
+    "파일의 다운로드 링크를 사용할 수 있게 되지 않았습니다.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox가 API 토큰을 거부했습니다.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "TorBox 요금제에 이 기능이 포함되어 있지 않습니다.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "TorBox 계정이 활성 다운로드 한도에 도달했습니다.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox 계정이 대기 기간 중이라 아직 새 다운로드를 받지 않습니다.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "TorBox 계정이 월간 다운로드 한도에 도달했습니다.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "TorBox 새 다운로드의 시간당 한도에 도달했습니다.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "이 다운로드는 TorBox 요금제가 허용하는 크기보다 큽니다.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox에 이 다운로드의 캐시가 없으며, 이 클라이언트는 캐시된 다운로드만 받습니다.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox가 토렌트를 읽지 못했습니다.",
+  "error.reason.TORBOX_INVALID_NZB": "NZB를 읽을 수 없습니다.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "이 다운로드는 이미 TorBox 계정에 있습니다.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox에 이 항목이 없습니다.",
+  "error.reason.TORBOX_LINK_OFFLINE": "TorBox 다운로드 링크가 오프라인입니다.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox가 요청을 받는 빈도를 제한하고 있습니다.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox를 사용할 수 없습니다.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox가 이 다운로드의 파일을 감염된 것으로 표시했습니다.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox가 이 다운로드의 파일을 zip 압축 파일로만 제공합니다.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "이 TorBox 다운로드에는 동영상 파일이 없습니다.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox가 이 다운로드가 실패했다고 보고합니다.",
+  "error.reason.TORBOX_ITEM_MISSING":
+    "TorBox에 더 이상 이 다운로드가 없습니다.",
+  "error.reason.TORBOX_STALLED": "이 다운로드가 TorBox에서 멈춰 있습니다.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "이 TorBox 다운로드의 파일 이름을 이 시스템에 저장할 수 없습니다.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "이 릴리스에는 TorBox로 보낼 마그넷 링크, 토렌트 파일 또는 NZB가 없습니다.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox는 이 다운로드에 대해 이 작업을 지원하지 않습니다.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "이 TorBox 클라이언트에는 그런 다운로드가 없습니다.",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "TorBox 클라이언트에 API 토큰이 없습니다.",
   "settings.publicUrlTitle": "공개 URL",
   "settings.publicUrlHelp":
     "사용자와 서비스가 Scryer에 접속할 때 쓰는 주소입니다(예: https://scryer.example.com). 계정 연결과 OAuth에는 변경 사항이 즉시 적용되고, 패스키에는 Scryer를 다시 시작한 후 적용됩니다.",

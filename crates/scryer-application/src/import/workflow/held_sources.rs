@@ -433,7 +433,7 @@ async fn authorized_release_titles(
 /// The client's removal policy for this download, from the same title and
 /// routing the completed-download cleanup reads: the download submission's
 /// title and the source's client.
-async fn held_download_client_policy(
+pub(crate) async fn held_download_client_policy(
     app: &AppUseCase,
     source: &ClientJobLocator,
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
@@ -476,7 +476,11 @@ async fn held_download_client_policy(
         .remove_completed;
     Ok(if !removes {
         HeldDownloadClientPolicy::Keeps
-    } else if crate::seeding_gate::client_type_is_torrent(app, &source.client_type) {
+    } else if crate::seeding_gate::download_job_is_torrent(
+        app,
+        &source.client_type,
+        crate::seeding_gate::DownloadJobProtocol::from_submission(&submission),
+    ) {
         HeldDownloadClientPolicy::RemovesAfterSeeding
     } else {
         HeldDownloadClientPolicy::Removes
