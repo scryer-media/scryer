@@ -33,12 +33,14 @@ import {
   normalizeProxyDraft,
   normalizeProxyEndpoint,
   proxyProviderFamily,
+  proxyReachThroughOptions,
   splitTunnelList,
   stripConfigAssignment,
   supportsProxyCredentials,
   supportsProxyHostKey,
   supportsProxyPrivateKey,
   supportsProxyPrivateKeyPassphrase,
+  supportsProxyReachThrough,
   supportsProxyRemoteDns,
   supportsProxyWireguardFields,
 } from "./proxies.ts";
@@ -252,6 +254,31 @@ test("the field predicates match the rules the API enforces", () => {
   assert.equal(isTunnelProxyProvider("wireguard"), true);
   assert.equal(isSshTunnelProxyProvider("wireguard"), false);
   assert.equal(isWireguardProxyProvider("wireguard"), true);
+
+  // Only a solver is reached through another proxy.
+  assert.equal(supportsProxyReachThrough("byparr"), true);
+  assert.equal(supportsProxyReachThrough("trawl"), true);
+  assert.equal(supportsProxyReachThrough("socks5"), false);
+  assert.equal(supportsProxyReachThrough("ssh_tunnel"), false);
+});
+
+test("a solver can be reached through enabled transports and tunnels only", () => {
+  const proxies = [
+    { id: "solver-b", providerType: "byparr", isEnabled: true },
+    { id: "socks-a", providerType: "socks5", isEnabled: true },
+    { id: "tunnel-a", providerType: "ssh_tunnel", isEnabled: true },
+    { id: "wg-off", providerType: "wireguard", isEnabled: false },
+  ];
+
+  assert.deepEqual(
+    proxyReachThroughOptions(proxies, "").map((proxy) => proxy.id),
+    ["socks-a", "tunnel-a"],
+  );
+  // The stored choice stays visible even when it is no longer eligible.
+  assert.deepEqual(
+    proxyReachThroughOptions(proxies, "wg-off").map((proxy) => proxy.id),
+    ["socks-a", "tunnel-a", "wg-off"],
+  );
 });
 
 test("a WireGuard key is 32 bytes of base64, and the check says so cheaply", () => {

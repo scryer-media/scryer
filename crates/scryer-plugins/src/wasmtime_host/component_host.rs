@@ -144,6 +144,9 @@ struct ComponentHostInner {
     indexer_error_capture: Mutex<Option<ComponentIndexerErrorCapture>>,
     strategy_events: Mutex<StrategyEventState>,
     transport_proxy_client: Mutex<Option<CachedTransportProxyClient>>,
+    /// Pinned direct clients, reused while a request resolves to the same
+    /// validated addresses under the same trust bundle.
+    request_clients: scryer_outbound_http::PinnedPluginHttpClientCache,
 }
 
 /// A transport-proxied egress client plus what it was built from.
@@ -170,6 +173,7 @@ struct ComponentIndexerErrorCapture {
     context: IndexerErrorCaptureContext,
     final_response: Option<CapturedIndexerHttpResponse>,
     denied_host: Option<String>,
+    local_dispatch_refusal: Option<scryer_application::AppError>,
 }
 
 #[derive(Default)]
@@ -265,6 +269,7 @@ impl ComponentHost {
                 indexer_error_capture: Mutex::new(None),
                 strategy_events: Mutex::new(StrategyEventState::default()),
                 transport_proxy_client: Mutex::new(None),
+                request_clients: scryer_outbound_http::PinnedPluginHttpClientCache::default(),
             }),
         })
     }
@@ -476,9 +481,15 @@ impl ComponentHost {
         };
 
         if !self.request_host_allowed(&request.url) {
-            if let Ok(mut capture) = self.inner.indexer_error_capture.lock()
-                && let Some(capture) = capture.as_mut()
-            {
+            let mut capture = self
+                .inner
+                .indexer_error_capture
+                .lock()
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "recovering poisoned component indexer error capture");
+                    error.into_inner()
+                });
+            if let Some(capture) = capture.as_mut() {
                 capture.denied_host = url::Url::parse(&request.url).ok().and_then(|url| {
                     url.host_str()
                         .filter(|host| host.len() <= 253)
@@ -514,27 +525,60 @@ impl ComponentHost {
             return Ok(transported.response);
         }
 
-        let cancellation = self.cancellation();
-        let target = tokio::select! {
-            _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
-            result = scryer_outbound_http::prepare_plugin_http_target_with_extra_ca(
+        // A solver reached through a proxy or tunnel sends the requests Scryer
+        // makes on its behalf (reusing its clearance, replaying after a solve)
+        // through that route, like the solve itself. The destination is then
+        // checked the way a transport proxy's is, for the same reason.
+        let solver_route = match self
+            .inner
+            .proxy_policy
+            .as_ref()
+            .filter(|policy| policy.config.is_challenge_solver())
+        {
+            Some(policy) => {
+                transport_proxy::solver_reach_through(&policy.config).map_err(|message| {
+                    solver::SolverHealthLedger::shared()
+                        .record_failure(&policy.config.id, &message);
+                    TransportError::Transport
+                })?
+            }
+            None => None,
+        };
+        let (target_client, target_url) = if let Some(route) = solver_route {
+            let url = scryer_outbound_http::validate_operator_http_url(
                 &request.url,
-                &extra_ca_bundle_pem,
                 "component plugin HTTP",
-                &self.inner.egress_policy,
-            ) => result
-                .inspect_err(|error| {
-                    tracing::warn!(
-                        url = %solver::sanitized_url_for_log(&request.url),
-                        error = %error,
-                        "component plugin HTTP destination rejected"
-                    );
-                })
-                .map_err(component_outbound_destination_error)?,
+            )
+            .map_err(component_outbound_destination_error)?;
+            (
+                self.transport_proxy_client(route, &extra_ca_bundle_pem)?,
+                url,
+            )
+        } else {
+            let cancellation = self.cancellation();
+            let target = tokio::select! {
+                _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
+                result = scryer_outbound_http::prepare_plugin_http_target_with_extra_ca_cached(
+                    &request.url,
+                    &extra_ca_bundle_pem,
+                    "component plugin HTTP",
+                    &self.inner.egress_policy,
+                    &self.inner.request_clients,
+                ) => result
+                    .inspect_err(|error| {
+                        tracing::warn!(
+                            url = %solver::sanitized_url_for_log(&request.url),
+                            error = %error,
+                            "component plugin HTTP destination rejected"
+                        );
+                    })
+                    .map_err(component_outbound_destination_error)?,
+            };
+            (target.client().clone(), target.url().clone())
         };
         let Some(policy) = self.inner.proxy_policy.as_ref() else {
             let direct = self
-                .send_direct_request(target.client(), target.url(), &request, &[])
+                .send_direct_request(&target_client, &target_url, &request, &[])
                 .await?;
             self.capture_indexer_response(direct.captured_response.clone());
             return Ok(direct.response);
@@ -548,18 +592,26 @@ impl ComponentHost {
         // origin bytes rather than browser-rendered solver content. These
         // attempts remain one logical guest operation under the same deadline.
         let session_headers = request.method.eq_ignore_ascii_case("GET").then(|| {
-            solver::SolvedSessionCache::shared().session_headers(&policy.config.id, &request.url)
+            solver::SolvedSessionCache::shared()
+                .session_headers(&solver::solved_session_scope(&policy.config), &request.url)
         });
         if let Some(session_headers) = session_headers.filter(|headers| !headers.is_empty()) {
             let direct = self
-                .send_direct_request(target.client(), target.url(), &request, &session_headers)
+                .send_direct_request_via(
+                    &target_client,
+                    &target_url,
+                    &request,
+                    &session_headers,
+                    solver_route,
+                )
                 .await?;
             if solver::looks_like_challenge_response(
                 direct.response.status,
                 &component_header_map(&direct.response.headers),
                 &direct.response.body,
             ) {
-                solver::SolvedSessionCache::shared().invalidate(&policy.config.id, &request.url);
+                solver::SolvedSessionCache::shared()
+                    .invalidate(&solver::solved_session_scope(&policy.config), &request.url);
             } else {
                 self.capture_indexer_response(direct.captured_response.clone());
                 return Ok(direct.response);
@@ -570,10 +622,11 @@ impl ComponentHost {
         }
         let solved = self
             .solve_proxy_request(
-                target.client(),
-                target.url(),
+                &target_client,
+                &target_url,
                 &request,
                 policy,
+                solver_route,
                 &extra_ca_bundle_pem,
             )
             .await?;
@@ -707,8 +760,9 @@ impl ComponentHost {
             result = async {
                 let request = builder.build().map_err(component_transport_error)?;
                 if let Some(tally) = tally.as_ref()
-                    && !tally.try_note_sent(request.url().as_str())
+                    && !tally.try_note_sent_async(request.url().as_str()).await
                 {
+                    self.capture_local_dispatch_refusal(tally.take_dispatch_error());
                     return Err(TransportError::Cancelled);
                 }
                 client.execute(request).await.map_err(|error| {
@@ -746,6 +800,7 @@ impl ComponentHost {
         target_url: &reqwest::Url,
         request: &HttpRequest,
         policy: &ProxyPolicy,
+        solver_route: Option<&scryer_domain::ProxyConfig>,
         extra_ca_bundle_pem: &str,
     ) -> Result<ComponentHttpResult, TransportError> {
         if !policy.config.is_enabled {
@@ -756,9 +811,19 @@ impl ComponentHost {
             policy.config.request_timeout_seconds,
         )
         .min(self.remaining_operation_timeout()?);
-        let proxy_client = scryer_outbound_http::proxy_reqwest_client_with_extra_ca(
-            extra_ca_bundle_pem,
-        )
+        // The solver endpoint is operator-configured: dialled directly with
+        // the trusted client, or through the route it is reached through.
+        let proxy_client = match solver_route {
+            Some(route) => transport_proxy::transport_proxied_reqwest_client_with_redirect_policy(
+                route,
+                extra_ca_bundle_pem,
+                reqwest::redirect::Policy::none(),
+            )
+            .inspect_err(|message| {
+                transport_proxy::record_transport_proxy_failure(route, message);
+            }),
+            None => scryer_outbound_http::proxy_reqwest_client_with_extra_ca(extra_ca_bundle_pem),
+        }
         .map_err(|_| {
             solver::SolverHealthLedger::shared().record_failure(
                 &policy.config.id,
@@ -783,8 +848,9 @@ impl ComponentHost {
             }
             result = async {
                 if let Some(tally) = solve_tally.as_ref()
-                    && !tally.try_note_sent_call(CALL_SOLVER)
+                    && !tally.try_note_sent_call_async(CALL_SOLVER).await
                 {
+                    self.capture_local_dispatch_refusal(tally.take_dispatch_error());
                     return Err(TransportError::Cancelled);
                 }
                 proxy_client
@@ -863,7 +929,13 @@ impl ComponentHost {
         let retry_headers = solver::solution_retry_headers(&solution);
         if !retry_headers.is_empty() {
             let replay = self
-                .send_direct_request(target_client, target_url, request, &retry_headers)
+                .send_direct_request_via(
+                    target_client,
+                    target_url,
+                    request,
+                    &retry_headers,
+                    solver_route,
+                )
                 .await?;
             if !solver::looks_like_challenge_response(
                 replay.response.status,
@@ -871,7 +943,7 @@ impl ComponentHost {
                 &replay.response.body,
             ) {
                 solver::SolvedSessionCache::shared().store_solution(
-                    &policy.config.id,
+                    &solver::solved_session_scope(&policy.config),
                     &request.url,
                     &solution,
                 );
@@ -958,6 +1030,7 @@ impl ComponentHost {
                     context,
                     final_response: None,
                     denied_host: None,
+                    local_dispatch_refusal: None,
                 });
             }
             Err(error) => {
@@ -986,6 +1059,9 @@ impl ComponentHost {
         let Some(capture) = capture else {
             return;
         };
+        if capture.local_dispatch_refusal.is_some() {
+            return;
+        }
         if let Some(host) = capture.denied_host {
             PluginHttpHost::record_host_policy_denial(&capture.context, &host);
             return;
@@ -1010,6 +1086,30 @@ impl ComponentHost {
                 "indexer_host_not_allowed: Host {host} is missing permission for this indexer instance"
             ),
         ))
+    }
+
+    fn capture_local_dispatch_refusal(&self, error: Option<scryer_application::AppError>) {
+        let Some(error) = error else {
+            return;
+        };
+        if let Ok(mut capture) = self.inner.indexer_error_capture.lock()
+            && let Some(capture) = capture.as_mut()
+        {
+            capture.local_dispatch_refusal.get_or_insert(error);
+        }
+    }
+
+    pub(crate) fn captured_local_dispatch_refusal(&self) -> Option<scryer_application::AppError> {
+        self.inner
+            .indexer_error_capture
+            .lock()
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "recovering poisoned component indexer error capture");
+                error.into_inner()
+            })
+            .as_ref()?
+            .local_dispatch_refusal
+            .clone()
     }
 
     /// Prefer the immutable accounting identity over error-response capture.
@@ -1775,6 +1875,101 @@ fn component_invocation_error_v1_1(
 mod tests {
     use super::*;
 
+    struct QuotaRefusingStats;
+
+    impl scryer_application::IndexerStatsTracker for QuotaRefusingStats {
+        fn record_query(&self, _: &str, _: &str, _: bool) {}
+        fn record_grab(&self, _: &str, _: &str) {}
+        fn record_api_limits(
+            &self,
+            _: &str,
+            _: Option<u32>,
+            _: Option<u32>,
+            _: Option<u32>,
+            _: Option<u32>,
+        ) {
+        }
+        fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
+            Vec::new()
+        }
+        fn admit_monthly_request<'a>(
+            &'a self,
+            _: &'a str,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = scryer_application::AppResult<()>> + Send + 'a>,
+        > {
+            Box::pin(std::future::ready(Err(
+                scryer_application::AppError::validation_refused(
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                    "monthly request limit reached",
+                ),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_request_preserves_local_quota_refusal_without_recording_provider_failure() {
+        #[derive(Default)]
+        struct Recorder(AtomicUsize);
+        impl scryer_application::IndexerErrorRecorder for Recorder {
+            fn record(
+                &self,
+                _: scryer_application::NewIndexerError,
+            ) -> scryer_application::AppResult<()> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let host = ComponentHost::for_indexer_with_provider_profile(
+            BTreeMap::new(),
+            Vec::new(),
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            None,
+        )
+        .expect("component host should build");
+        let recorder = Arc::new(Recorder::default());
+        host.begin_indexer_error_capture(IndexerErrorCaptureContext {
+            indexer_id: "quota-fixture".into(),
+            indexer_name: "Fixture".into(),
+            operation: scryer_application::IndexerErrorOperation::InteractiveSearch,
+            recorder: recorder.clone(),
+            stats: Arc::new(QuotaRefusingStats),
+        });
+        let url = reqwest::Url::parse("http://127.0.0.1:9/api").unwrap();
+        let request = HttpRequest {
+            method: "GET".into(),
+            url: url.to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(60),
+            host.send_direct_request(
+                &scryer_outbound_http::no_redirect_reqwest_client(),
+                &url,
+                &request,
+                &[],
+            ),
+        )
+        .await
+        .expect("local quota admission should finish");
+
+        assert!(matches!(result, Err(TransportError::Cancelled)));
+        assert_eq!(
+            host.captured_local_dispatch_refusal()
+                .expect("the adapter must receive the local refusal")
+                .reason(),
+            Some(scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED)
+        );
+        host.finish_indexer_error_capture(true);
+        assert_eq!(recorder.0.load(Ordering::SeqCst), 0);
+    }
+
     fn strategy_test_host(provider_profile: Option<Vec<u8>>) -> ComponentHost {
         ComponentHost::for_indexer_with_provider_profile(
             BTreeMap::new(),
@@ -2317,6 +2512,8 @@ mod tests {
                 consumer_id: "component-indexer".to_string(),
                 consumer_name: "Component indexer".to_string(),
                 config: scryer_domain::ProxyConfig {
+                    reach_through_proxy_config_id: None,
+                    reach_through: None,
                     id: proxy_id.to_string(),
                     name: "Component solver".to_string(),
                     provider_type: scryer_domain::ProxyProviderType::Trawl,
@@ -2372,6 +2569,8 @@ mod tests {
                 consumer_id: "component-indexer".to_string(),
                 consumer_name: "Component indexer".to_string(),
                 config: scryer_domain::ProxyConfig {
+                    reach_through_proxy_config_id: None,
+                    reach_through: None,
                     id: "component-transport".to_string(),
                     name: "House VPN".to_string(),
                     provider_type,
@@ -2565,6 +2764,8 @@ mod tests {
             consumer_id: "component-indexer".to_string(),
             consumer_name: "Component indexer".to_string(),
             config: scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: id.to_string(),
                 name: "Seedbox".to_string(),
                 provider_type: scryer_domain::ProxyProviderType::SshTunnel,
@@ -2777,6 +2978,189 @@ mod tests {
                 .len(),
             3,
             "the second request must use the cached clearance without another solver call"
+        );
+    }
+
+    fn component_routed_solver_host(
+        solver_id: &str,
+        solver_base_url: String,
+        route: Option<scryer_domain::ProxyConfig>,
+    ) -> ComponentHost {
+        let now = chrono::Utc::now();
+        let route_id = route
+            .as_ref()
+            .map(|route| route.id.clone())
+            .unwrap_or_else(|| "route-gone".to_string());
+        ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec!["indexer.example".to_string(), "127.0.0.1".to_string()],
+            Some(ProxyPolicy {
+                consumer_id: "component-indexer".to_string(),
+                consumer_name: "Component indexer".to_string(),
+                config: scryer_domain::ProxyConfig {
+                    reach_through_proxy_config_id: Some(route_id),
+                    reach_through: route.map(Box::new),
+                    id: solver_id.to_string(),
+                    name: "Routed component solver".to_string(),
+                    provider_type: scryer_domain::ProxyProviderType::Trawl,
+                    protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+                    username_encrypted: None,
+                    password_encrypted: None,
+                    remote_dns: false,
+                    base_url: solver_base_url,
+                    request_timeout_seconds: 60,
+                    is_enabled: true,
+                    last_health_status: None,
+                    last_error_message: None,
+                    last_error_at: None,
+                    created_at: now,
+                    updated_at: now,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
+                    peer_public_key: None,
+                    preshared_key_encrypted: None,
+                    tunnel_public_key: None,
+                    tunnel_addresses: Vec::new(),
+                    tunnel_dns_servers: Vec::new(),
+                    tunnel_mtu: None,
+                    tunnel_keepalive_seconds: None,
+                },
+            }),
+            Duration::from_secs(120),
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a routed solver")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_sends_solve_replay_and_cached_reuse_through_the_solver_route() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // wiremock answers absolute-form requests, so it plays the route. The
+        // solver and the indexer names do not resolve: only the route can
+        // carry either hop.
+        let route = MockServer::start().await;
+        let target_url = "http://indexer.example/search".to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {"content-type": "application/json"},
+                    "cookies": [{"name": "clearance", "value": "solved"}],
+                    "userAgent": "solver-test",
+                    "response": "<html><body><pre>{\"wrapped\":true}</pre></body></html>",
+                },
+            })))
+            .expect(1)
+            .mount(&route)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("cookie", "clearance=solved"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"origin":true}"#),
+            )
+            .expect(2)
+            .mount(&route)
+            .await;
+        let now = chrono::Utc::now();
+        let route_config = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
+            id: "component-route".to_string(),
+            name: "Route".to_string(),
+            provider_type: scryer_domain::ProxyProviderType::Http,
+            protocol: None,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            base_url: route.uri(),
+            request_timeout_seconds: 30,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+        };
+        let host = component_routed_solver_host(
+            "component-routed-solver",
+            "http://solver.invalid:8191".to_string(),
+            Some(route_config),
+        );
+
+        for _ in 0..2 {
+            let response = host
+                .http(component_solver_request(target_url.clone(), Vec::new()))
+                .await
+                .expect("the routed solver should replay the origin through the route");
+            assert_eq!(response.status, 200);
+            assert_eq!(response.body, br#"{"origin":true}"#);
+        }
+
+        let requests = route.received_requests().await.expect("recorded requests");
+        let hosts: Vec<Option<String>> = requests
+            .iter()
+            .map(|request| request.url.host_str().map(str::to_string))
+            .collect();
+        assert_eq!(
+            hosts,
+            vec![
+                Some("solver.invalid".to_string()),
+                Some("indexer.example".to_string()),
+                Some("indexer.example".to_string()),
+            ],
+            "the solve, the replay and the cached reuse must each cross the route"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_fails_closed_when_the_solver_route_is_unresolved() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let solver = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&solver)
+            .await;
+        let host = component_routed_solver_host("component-unresolved-route", solver.uri(), None);
+
+        let error = host
+            .http(component_solver_request(
+                format!("{}/search", solver.uri()),
+                Vec::new(),
+            ))
+            .await
+            .expect_err("an unresolved route must refuse the request");
+        assert!(matches!(error, TransportError::Transport), "{error:?}");
+        assert!(
+            solver
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "an unresolved route must not fall back to the direct solver"
         );
     }
 

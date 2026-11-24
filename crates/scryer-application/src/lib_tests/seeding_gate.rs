@@ -143,6 +143,7 @@ fn tracked_for(
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,
@@ -507,6 +508,38 @@ async fn record_sized_file_import_ownership(
     app.services.workflow.imports = imports;
 }
 
+/// A completed import of the tracked download, installed as the app's import
+/// repository so a cleanup's source read finds it.
+async fn record_completed_download_import(
+    app: &mut AppUseCase,
+    tracked: &TrackedDownload,
+) -> Arc<TrackingImportRepo> {
+    let imports = Arc::new(TrackingImportRepo::default());
+    let import_id = imports
+        .queue_import_request(
+            ClientJobLocator::new(
+                Some(&tracked.client_id),
+                &tracked.client_type,
+                &tracked.client_item.download_client_item_id,
+            ),
+            "completed_download".into(),
+            "{}".into(),
+        )
+        .await
+        .unwrap();
+    imports
+        .update_import_status(&import_id, ImportStatus::Completed, None)
+        .await
+        .unwrap();
+    imports
+        .canonical_ids
+        .lock()
+        .await
+        .insert(import_id, tracked.download_id);
+    app.services.workflow.imports = imports.clone();
+    imports
+}
+
 fn cleanup_record_for(tracked: &TrackedDownload) -> crate::DownloadCleanupRecord {
     crate::DownloadCleanupRecord {
         download_id: tracked.download_id,
@@ -521,6 +554,8 @@ fn cleanup_record_for(tracked: &TrackedDownload) -> crate::DownloadCleanupRecord
         history_offset: 0,
         payload_checkpoint: None,
         previous_failure_retry_seconds: None,
+        library_holds_payload: false,
+        library_file_unsettled: Vec::new(),
     }
 }
 
@@ -840,6 +875,48 @@ async fn durable_qbit_cleanup_proves_identity_by_the_submission_item_hash() {
         "client_reports_seeding_obligation_met"
     );
     assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+/// A download an import found to be the library file is removed from its
+/// client as an entry only: the same cleanup that removes it with its data
+/// otherwise keeps the data.
+#[tokio::test]
+async fn durable_cleanup_of_a_download_the_library_holds_removes_its_entry_only() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, _, record) = unhashed_qbit_cleanup_fixture(&client, true).await;
+    let imports = Arc::new(TrackingImportRepo::default());
+    let import_id = imports
+        .queue_import_request_with_identity_for_download(
+            ClientJobLocator::new(
+                Some(&record.client_id),
+                &record.client_type,
+                &record.item_id,
+            ),
+            "movie_download".into(),
+            "{}".into(),
+            None,
+            Some(&record.download_id),
+        )
+        .await
+        .unwrap();
+    assert!(
+        imports
+            .record_library_holds_download_payload(&import_id)
+            .await
+            .unwrap()
+    );
+    app.services.workflow.imports = imports;
+
+    let (_, _, cleanup) = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .expect("the cleanup runs");
+    assert_eq!(cleanup.outcome, TerminalDownloadCleanupOutcome::Removed);
+    let deleted = client.deleted_requests.lock().await;
+    assert_eq!(deleted.len(), 1);
+    assert!(
+        !deleted[0].4,
+        "the library's data is never removed with the entry"
+    );
 }
 
 #[tokio::test]
@@ -1290,9 +1367,9 @@ async fn durable_cleanup_replays_retained_outcomes_without_client_reads() {
 }
 
 #[tokio::test]
-async fn durable_ignored_orphan_cleanup_removes_only_entry() {
+async fn durable_ignored_orphan_cleanup_leaves_the_client_entry() {
     let client = Arc::new(StubDownloadClient::default());
-    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
     let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
     let title = movie_title(&app, &user, "Ignored orphan").await;
     let mut tracked = tracked_for(
@@ -1312,16 +1389,17 @@ async fn durable_ignored_orphan_cleanup_removes_only_entry() {
         .await
         .push(tracked.client_item.clone());
     let record = cleanup_record_for(&tracked);
-    let result = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
-        .await
-        .unwrap();
-    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
-    assert!(!client.deleted_requests.lock().await[0].4);
-    client.history_items.lock().await.clear();
     let result = crate::import::import::run_claimed_download_cleanup(&app, record, None)
         .await
         .unwrap();
-    assert_eq!(result.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    // Ignoring stops tracking only: the cleanup settles as retained and the
+    // client is never asked to remove anything.
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::NotConfigured);
+    assert!(client.deleted_requests.lock().await.is_empty());
+    assert_eq!(
+        last_finished_cleanup(&repository.finished_cleanup.lock().await),
+        Some(("policy_retained".to_string(), true))
+    );
 }
 
 #[tokio::test]
@@ -2701,6 +2779,7 @@ async fn a_client_reported_usenet_failure_is_removed_with_its_payload() {
         crate::acquisition_workflow::process_download_failure(
             &app,
             crate::acquisition_workflow::DownloadFailureContext {
+                failure_code: None,
                 wanted_item: None,
                 title_id: tracked.title_id.clone(),
                 client_id: tracked.client_id.clone(),
@@ -3117,9 +3196,17 @@ async fn a_payload_the_client_already_deleted_settles_cleanly() {
 // An entry-only removal says so; it never claims the payload went too.
 #[tokio::test]
 async fn an_entry_only_removal_is_recorded_as_entry_removed() {
-    let (app, user, client, repository, config, mut tracked) =
+    let (mut app, user, client, repository, config, tracked) =
         client_failure_fixture("weaver", true).await;
-    tracked.state = TrackedDownloadState::Ignored;
+    // The download's file is the library file, so only its entry may go.
+    let imports = record_completed_download_import(&mut app, &tracked).await;
+    let import_id = imports.records.lock().await[0].id.clone();
+    assert!(
+        imports
+            .record_library_holds_download_payload(&import_id)
+            .await
+            .unwrap()
+    );
     let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
     let result = crate::import::import::run_claimed_download_cleanup(
         &app,
@@ -3144,6 +3231,225 @@ async fn an_entry_only_removal_is_recorded_as_entry_removed() {
         last_finished_cleanup(&repository.finished_cleanup.lock().await),
         Some(("entry_removed".to_string(), true))
     );
+}
+
+/// A folder that takes no rename or new name until dropped, so a test can
+/// tell a step never set a file in it aside.
+#[cfg(unix)]
+struct ReadOnlyFolder(std::path::PathBuf);
+
+#[cfg(unix)]
+impl ReadOnlyFolder {
+    fn new(folder: &std::path::Path) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        Self(folder.to_path_buf())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReadOnlyFolder {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// The client-failed download's import, with `library` recorded as a library
+/// file it left unsettled on the payload's file.
+#[cfg(unix)]
+async fn record_unsettled_library_file(
+    app: &mut AppUseCase,
+    tracked: &TrackedDownload,
+    payload: &std::path::Path,
+    library: &std::path::Path,
+) -> Arc<TrackingImportRepo> {
+    let imports = record_completed_download_import(app, tracked).await;
+    let import_id = imports.records.lock().await[0].id.clone();
+    crate::import::import::record_library_files_unsettled(
+        app,
+        &import_id,
+        &[crate::UnsettledLibraryFile::new(
+            &payload.join("movie.mkv"),
+            library,
+        )],
+    )
+    .await
+    .unwrap();
+    imports
+}
+
+/// An already-imported download file whose library file the cheap reads
+/// cannot tell apart, a symlink, is never set aside: its folder takes no
+/// rename, yet the check answers that the question is open, and the import's
+/// row records it for the download's cleanup. The file never leaves its name.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_already_imported_download_file_is_never_set_aside_and_is_recorded_unsettled() {
+    let (mut app, user, client, _repository, _config, tracked) =
+        client_failure_fixture("weaver", true).await;
+    let imports = record_completed_download_import(&mut app, &tracked).await;
+    let import_id = imports.records.lock().await[0].id.clone();
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let source = payload.join("movie.mkv");
+    let shelf = tempfile::tempdir().unwrap();
+    let library = shelf.path().join("Library.Fixture.mkv");
+    std::os::unix::fs::symlink(&source, &library).unwrap();
+
+    let sameness = {
+        let _read_only = ReadOnlyFolder::new(&payload);
+        crate::import::import::settle_already_imported_source(&app, &import_id, &source, &library)
+            .await
+            .expect("told without setting the file aside")
+    };
+    assert_eq!(sameness, crate::LibraryFileSameness::Unsettled);
+    assert_eq!(std::fs::read(&source).unwrap(), b"media");
+    assert!(!crate::disk::aside_path_for(&source).exists());
+
+    crate::import::import::record_library_files_unsettled(
+        &app,
+        &import_id,
+        &[crate::UnsettledLibraryFile::new(&source, &library)],
+    )
+    .await
+    .unwrap();
+    let sources = imports
+        .download_import_sources(&tracked.download_id)
+        .await
+        .unwrap();
+    assert!(!sources.library_holds_payload, "{sources:?}");
+    assert_eq!(
+        sources.library_file_unsettled,
+        vec![crate::UnsettledLibraryFile::new(&source, &library)]
+    );
+}
+
+/// A cleanup about to remove a download's data settles a library file its
+/// import left open first. A symlink to the download's file is the library
+/// file: the client entry goes, its data stays, and the import now carries
+/// the library-holds mark instead of the open question.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cleanup_keeps_the_data_of_an_unsettled_library_file_that_is_the_download_file() {
+    let (mut app, user, client, repository, config, tracked) =
+        client_failure_fixture("weaver", true).await;
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let shelf = tempfile::tempdir().unwrap();
+    let library = shelf.path().join("Library.Fixture.mkv");
+    std::os::unix::fs::symlink(payload.join("movie.mkv"), &library).unwrap();
+    let imports = record_unsettled_library_file(&mut app, &tracked, &payload, &library).await;
+
+    let result = crate::import::import::run_claimed_download_cleanup(
+        &app,
+        cleanup_record_for(&tracked),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(std::fs::read(payload.join("movie.mkv")).unwrap(), b"media");
+    assert_eq!(std::fs::read(&library).unwrap(), b"media");
+    assert!(!crate::disk::aside_path_for(&payload.join("movie.mkv")).exists());
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![(
+            Some(config.id.clone()),
+            None,
+            "client-failed-job".to_string(),
+            true,
+            false
+        )]
+    );
+    assert_eq!(
+        last_finished_cleanup(&repository.finished_cleanup.lock().await),
+        Some(("entry_removed".to_string(), true))
+    );
+    let sources = imports
+        .download_import_sources(&tracked.download_id)
+        .await
+        .unwrap();
+    assert!(sources.library_holds_payload, "{sources:?}");
+    assert!(sources.library_file_unsettled.is_empty(), "{sources:?}");
+}
+
+/// A cleanup whose library file was left unsettled and is a separate file
+/// removes the download's data as before, and the open question is cleared.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cleanup_removes_the_data_of_an_unsettled_library_file_that_is_separate() {
+    let (mut app, user, client, _repository, config, tracked) =
+        client_failure_fixture("weaver", true).await;
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let shelf = tempfile::tempdir().unwrap();
+    let separate = shelf.path().join("Separate.Fixture.mkv");
+    std::fs::write(&separate, b"media").unwrap();
+    let library = shelf.path().join("Library.Fixture.mkv");
+    std::os::unix::fs::symlink(&separate, &library).unwrap();
+    let imports = record_unsettled_library_file(&mut app, &tracked, &payload, &library).await;
+
+    let result = crate::import::import::run_claimed_download_cleanup(
+        &app,
+        cleanup_record_for(&tracked),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(
+        !payload.join("movie.mkv").exists(),
+        "the payload goes as before"
+    );
+    assert_eq!(std::fs::read(&separate).unwrap(), b"media");
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![(
+            Some(config.id.clone()),
+            None,
+            "client-failed-job".to_string(),
+            true,
+            true
+        )]
+    );
+    let sources = imports
+        .download_import_sources(&tracked.download_id)
+        .await
+        .unwrap();
+    assert!(!sources.library_holds_payload, "{sources:?}");
+    assert!(sources.library_file_unsettled.is_empty(), "{sources:?}");
+}
+
+/// A cleanup that cannot settle an unsettled library file, here because the
+/// download's folder takes no rename, defers and removes nothing: no client
+/// request, the payload intact, and the question still open.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cleanup_that_cannot_settle_an_unsettled_library_file_defers_and_removes_nothing() {
+    let (mut app, user, client, _repository, _config, tracked) =
+        client_failure_fixture("weaver", true).await;
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let shelf = tempfile::tempdir().unwrap();
+    let library = shelf.path().join("Library.Fixture.mkv");
+    std::os::unix::fs::symlink(payload.join("movie.mkv"), &library).unwrap();
+    let imports = record_unsettled_library_file(&mut app, &tracked, &payload, &library).await;
+
+    let result = {
+        let _read_only = ReadOnlyFolder::new(&payload);
+        crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .unwrap()
+    };
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert_eq!(std::fs::read(payload.join("movie.mkv")).unwrap(), b"media");
+    assert!(client.deleted_requests.lock().await.is_empty());
+    let sources = imports
+        .download_import_sources(&tracked.download_id)
+        .await
+        .unwrap();
+    assert_eq!(sources.library_file_unsettled.len(), 1, "{sources:?}");
 }
 
 #[test]
@@ -3929,6 +4235,10 @@ impl DownloadSubmissionRepository for SeedGoalOnlySubmissionRepo {
     }
 
     async fn list_for_title(&self, _: &str) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(vec![])
+    }
+
+    async fn list_for_client_item_ids(&self, _: &[String]) -> AppResult<Vec<DownloadSubmission>> {
         Ok(vec![])
     }
 
@@ -4862,7 +5172,7 @@ async fn rtorrent_cleanup_deletes_a_direct_completed_file() {
 }
 
 #[tokio::test]
-async fn an_ignored_torrent_is_removed_without_deleting_its_data() {
+async fn an_ignored_torrent_is_left_in_its_client() {
     let download_client = Arc::new(StubDownloadClient::default());
     let (app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
     let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
@@ -4886,19 +5196,10 @@ async fn an_ignored_torrent_is_removed_without_deleting_its_data() {
     )
     .await;
 
-    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
-    assert_eq!(
-        download_client.deleted_requests.lock().await.clone(),
-        // Ignoring a download says "stop tracking this", not "delete what you
-        // downloaded" — the operator may still want the payload.
-        vec![(
-            Some(config.id.clone()),
-            None,
-            "torrent-ignored-1".to_string(),
-            true,
-            false
-        )]
-    );
+    // Ignoring a download says "stop tracking this": its entry keeps seeding
+    // and its data stays, so cleanup settles without asking the client.
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::NotConfigured);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -6614,6 +6915,7 @@ async fn nzbget_script_failure_defers_history_until_verified_payload_cleanup() {
     let outcome = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: tracked.title_id.clone(),
             client_id: tracked.client_id.clone(),

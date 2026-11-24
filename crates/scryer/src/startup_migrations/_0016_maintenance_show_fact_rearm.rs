@@ -34,23 +34,23 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
     let rows = SqlRuntime::fetch_all(
         datastore.read_exec(),
         "SELECT rules.id AS rule_set_id, rules.current_revision_number, revisions.rego_source
-           FROM maintenance_rule_sets rules
-           JOIN maintenance_rule_revisions revisions
+           FROM lifecycle_rule_sets rules
+           JOIN lifecycle_rule_revisions revisions
              ON revisions.rule_set_id = rules.id
             AND revisions.revision_number = rules.current_revision_number
-          WHERE rules.subject_kind = 'title'
-            AND rules.effect_arming = 'destructive'
-            AND rules.destructive_rearm_required = {}
+          WHERE rules.state = 'enabled'
+            AND rules.destructive_confirmed_revision = rules.current_revision_number
+            AND rules.edited_since_enabled = {}
             AND (
                 EXISTS (
                     SELECT 1
-                      FROM maintenance_rule_set_libraries scope
+                      FROM lifecycle_rule_set_libraries scope
                       JOIN libraries library ON library.id = scope.library_id
                      WHERE scope.rule_set_id = rules.id
                        AND library.facet IN ('series', 'anime')
                 )
                 OR NOT EXISTS (
-                    SELECT 1 FROM maintenance_rule_set_libraries scope
+                    SELECT 1 FROM lifecycle_rule_set_libraries scope
                      WHERE scope.rule_set_id = rules.id
                 )
             )
@@ -67,7 +67,7 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         let rego_source = row.text("rego_source").map_err(|error| error.to_string())?;
         let digest = scryer_rules::runtime::content_hash(&rego_source);
-        let review_detail = match scryer_rules::validation::maintenance_referenced_facts(
+        let review_detail = match scryer_rules::validation::lifecycle_referenced_facts(
             &rego_source,
             &rule_set_id,
         ) {
@@ -121,20 +121,23 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
                     }
                     // Compare the current revision in the write as well as in
                     // the read: an operator edit already disarms the rule and
-                    // must not receive a stale compatibility flag.
+                    // must not receive a stale compatibility flag. Dropping to
+                    // dry run clears the deletion confirmation with it.
                     let disarmed = SqlRuntime::execute(
                         SqlExec::Tx(tx),
-                        "UPDATE maintenance_rule_sets
-                            SET effect_arming = {}, destructive_rearm_required = {}, updated_at = {}
+                        "UPDATE lifecycle_rule_sets
+                            SET state = {}, edited_since_enabled = {},
+                                destructive_confirmed_revision = NULL, updated_at = {}
                           WHERE id = {} AND current_revision_number = {}
-                            AND effect_arming = {}",
+                            AND state = {} AND destructive_confirmed_revision = {}",
                         &[
-                            SqlArg::Text("none".to_string()),
+                            SqlArg::Text("dry_run".to_string()),
                             SqlArg::Bool(true),
                             SqlArg::Timestamp(Utc::now()),
                             SqlArg::Text(rule_set_id),
                             SqlArg::I64(revision_number),
-                            SqlArg::Text("destructive".to_string()),
+                            SqlArg::Text("enabled".to_string()),
+                            SqlArg::I64(revision_number),
                         ],
                     )
                     .await?;
@@ -180,10 +183,11 @@ mod tests {
         let now = Utc::now();
         SqlRuntime::execute_write(
             datastore,
-            "seed_maintenance_rule_set",
-            "INSERT INTO maintenance_rule_sets
-             (id, name, effect_arming, subject_kind, current_revision_number, created_at, updated_at)
-             VALUES ({}, {}, 'destructive', 'title', 1, {}, {})",
+            "seed_lifecycle_rule_set",
+            "INSERT INTO lifecycle_rule_sets
+             (id, name, state, destructive_confirmed_revision, current_revision_number,
+              created_at, updated_at)
+             VALUES ({}, {}, 'enabled', 1, 1, {}, {})",
             vec![
                 SqlArg::Text(id.to_string()),
                 SqlArg::Text(id.to_string()),
@@ -195,10 +199,10 @@ mod tests {
         .expect("seed rule set");
         SqlRuntime::execute_write(
             datastore,
-            "seed_maintenance_rule_revision",
-            "INSERT INTO maintenance_rule_revisions
-             (id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
-              matcher_content_hash, created_at)
+            "seed_lifecycle_rule_revision",
+            "INSERT INTO lifecycle_rule_revisions
+             (id, rule_set_id, revision_number, rego_source, declared_actions_json, grace_days,
+              source_content_hash, created_at)
              VALUES ({}, {}, 1, {}, {}, 0, {}, {})",
             vec![
                 SqlArg::Text(format!("{id}:revision")),
@@ -214,8 +218,8 @@ mod tests {
         if let Some(library_id) = library_id {
             SqlRuntime::execute_write(
                 datastore,
-                "seed_maintenance_rule_scope",
-                "INSERT INTO maintenance_rule_set_libraries (rule_set_id, library_id, position)
+                "seed_lifecycle_rule_scope",
+                "INSERT INTO lifecycle_rule_set_libraries (rule_set_id, library_id, position)
                  VALUES ({}, {}, 0)",
                 vec![
                     SqlArg::Text(id.to_string()),
@@ -227,19 +231,21 @@ mod tests {
         }
     }
 
-    async fn rule_state(datastore: &StoreDatastore, id: &str) -> (String, bool) {
+    async fn rule_state(datastore: &StoreDatastore, id: &str) -> (String, bool, Option<i64>) {
         let row = SqlRuntime::fetch_optional(
             datastore.read_exec(),
-            "SELECT effect_arming, destructive_rearm_required
-               FROM maintenance_rule_sets WHERE id = {}",
+            "SELECT state, edited_since_enabled, destructive_confirmed_revision
+               FROM lifecycle_rule_sets WHERE id = {}",
             &[SqlArg::Text(id.to_string())],
         )
         .await
         .expect("read rule")
         .expect("rule exists");
         (
-            row.text("effect_arming").expect("arming"),
-            row.bool("destructive_rearm_required").expect("review flag"),
+            row.text("state").expect("state"),
+            row.bool("edited_since_enabled").expect("review flag"),
+            row.opt_i64("destructive_confirmed_revision")
+                .expect("confirmed revision"),
         )
     }
 
@@ -283,15 +289,15 @@ mod tests {
 
         assert_eq!(
             rule_state(&datastore, "global-show-fact").await,
-            ("none".into(), true)
+            ("dry_run".into(), true, None)
         );
         assert_eq!(
             rule_state(&datastore, "global-unrelated").await,
-            ("destructive".into(), false)
+            ("enabled".into(), false, Some(1))
         );
         assert_eq!(
             rule_state(&datastore, "movie-only-show-fact").await,
-            ("destructive".into(), false)
+            ("enabled".into(), false, Some(1))
         );
 
         // The compatibility journal makes a failed outer migration-ledger
@@ -299,8 +305,9 @@ mod tests {
         SqlRuntime::execute_write(
             &datastore,
             "operator_rearm",
-            "UPDATE maintenance_rule_sets
-                SET effect_arming = 'destructive', destructive_rearm_required = {} WHERE id = {}",
+            "UPDATE lifecycle_rule_sets
+                SET state = 'enabled', destructive_confirmed_revision = 1,
+                    edited_since_enabled = {} WHERE id = {}",
             vec![SqlArg::Bool(false), SqlArg::Text("global-show-fact".into())],
         )
         .await
@@ -308,7 +315,7 @@ mod tests {
         migrate(&datastore).await.expect("idempotent migration");
         assert_eq!(
             rule_state(&datastore, "global-show-fact").await,
-            ("destructive".into(), false)
+            ("enabled".into(), false, Some(1))
         );
     }
 }

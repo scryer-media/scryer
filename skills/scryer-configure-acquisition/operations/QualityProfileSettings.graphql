@@ -29,6 +29,8 @@ query QualityProfileSettings {
         minScoreToGrab
         cutoffScore
         minUpgradeScoreDelta
+        minMissingEpisodesForPack
+        minMissingPercentForSeriesPack
         decisionPipeline
       }
     }

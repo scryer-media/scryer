@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::{
     AppError, AppResult, AppUseCase, UiCatalogViewUpdate, UiDashboardBreakpoint, UiDashboardLayout,
     UiSettings, UiSettingsFacet, UiSettingsUpdate, UiTableColumnSetting, UiTableViewMode,
+    UiTourOutcome,
 };
 use scryer_domain::User;
 
@@ -52,6 +53,13 @@ const MAX_DASHBOARD_COLUMNS: i32 = 24;
 const MAX_DASHBOARD_ITEMS: usize = 64;
 /// Longest dashboard panel id accepted.
 const MAX_DASHBOARD_PANEL_ID_LEN: usize = 64;
+/// Largest serialized size of one dashboard panel's settings object.
+const MAX_DASHBOARD_PANEL_SETTINGS_BYTES: usize = 2048;
+
+/// Longest guided tour id accepted, e.g. `onboarding` or `release-0.23.0`.
+const MAX_TOUR_ID_LEN: usize = 64;
+/// Most tours one progress update may record.
+const MAX_TOURS_PER_UPDATE: usize = 32;
 
 impl AppUseCase {
     pub async fn get_my_ui_settings(&self, actor: &User) -> AppResult<UiSettings> {
@@ -139,6 +147,60 @@ impl AppUseCase {
             .unwrap_or_else(|| UiSettings::defaults_for_user(actor.id.clone()));
         Ok(without_unknown_table_columns(settings))
     }
+
+    /// Records that the caller finished or skipped the named guided tours, so
+    /// the web does not offer them again.
+    pub async fn record_my_ui_tours(
+        &self,
+        actor: &User,
+        tour_ids: Vec<String>,
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings> {
+        let tour_ids = validate_tour_ids(tour_ids)?;
+        let settings = self
+            .services
+            .identity
+            .ui_settings
+            .record_tours(&actor.id, &tour_ids, outcome)
+            .await?;
+        Ok(without_unknown_table_columns(settings))
+    }
+}
+
+/// Trims, de-duplicates and checks tour ids. Tour ids are opaque here: the web
+/// owns the tour registry.
+fn validate_tour_ids(tour_ids: Vec<String>) -> AppResult<Vec<String>> {
+    use crate::error_reasons::settings;
+
+    let mut seen = HashSet::new();
+    let mut accepted = Vec::with_capacity(tour_ids.len());
+    for tour_id in tour_ids {
+        let tour_id = tour_id.trim().to_string();
+        if tour_id.is_empty()
+            || tour_id.len() > MAX_TOUR_ID_LEN
+            || !tour_id.starts_with(|ch: char| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            || !tour_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.'
+            })
+        {
+            return Err(AppError::validation_refused(
+                settings::UI_TOUR_ID_INVALID,
+                format!(
+                    "tour ids must be 1 to {MAX_TOUR_ID_LEN} lowercase letters, digits, dots or hyphens"
+                ),
+            ));
+        }
+        if seen.insert(tour_id.clone()) {
+            accepted.push(tour_id);
+        }
+    }
+    if accepted.is_empty() || accepted.len() > MAX_TOURS_PER_UPDATE {
+        return Err(AppError::validation_refused(
+            settings::UI_TOUR_COUNT_OUT_OF_RANGE,
+            format!("a tour progress update must name 1 to {MAX_TOURS_PER_UPDATE} tours"),
+        ));
+    }
+    Ok(accepted)
 }
 
 fn validate_dashboard_layout(layout: &UiDashboardLayout) -> AppResult<()> {
@@ -199,8 +261,38 @@ fn validate_dashboard_layout(layout: &UiDashboardLayout) -> AppResult<()> {
                 ),
             ));
         }
+        if let Some(panel_settings) = item.settings.as_ref() {
+            validate_dashboard_panel_settings(panel_id, panel_settings)?;
+        }
     }
     Ok(())
+}
+
+/// Accepts a panel's settings when they are a JSON object whose serialized
+/// form fits [`MAX_DASHBOARD_PANEL_SETTINGS_BYTES`]. What the keys mean is the
+/// web's concern.
+fn validate_dashboard_panel_settings(
+    panel_id: &str,
+    panel_settings: &serde_json::Value,
+) -> AppResult<()> {
+    use crate::error_reasons::settings;
+
+    let fits = panel_settings.is_object()
+        && serde_json::to_vec(panel_settings)
+            .is_ok_and(|serialized| serialized.len() <= MAX_DASHBOARD_PANEL_SETTINGS_BYTES);
+    if fits {
+        return Ok(());
+    }
+    Err(AppError::validation_refused_with_facts(
+        settings::DASHBOARD_PANEL_SETTINGS_INVALID,
+        format!(
+            "dashboard panel {panel_id:?} settings must be a JSON object of at most {MAX_DASHBOARD_PANEL_SETTINGS_BYTES} bytes"
+        ),
+        vec![
+            crate::RefusalFact::new("panelId", panel_id),
+            crate::RefusalFact::new("maxBytes", MAX_DASHBOARD_PANEL_SETTINGS_BYTES.to_string()),
+        ],
+    ))
 }
 
 fn validate_ui_settings_update(mut input: UiSettingsUpdate) -> AppResult<UiSettingsUpdate> {
@@ -344,4 +436,128 @@ fn validate_table_column(column: &UiTableColumnSetting) -> AppResult<()> {
 fn without_unknown_table_columns(mut settings: UiSettings) -> UiSettings {
     settings.table_columns.retain(is_known_table_column);
     settings
+}
+
+#[cfg(test)]
+mod tour_id_tests {
+    use super::{MAX_TOURS_PER_UPDATE, validate_tour_ids};
+    use crate::{AppError, error_reasons::settings};
+
+    fn reason(error: AppError) -> Option<&'static str> {
+        error.validation_reason()
+    }
+
+    #[test]
+    fn tour_ids_are_trimmed_and_deduplicated_in_order() {
+        let accepted = validate_tour_ids(vec![
+            " onboarding ".into(),
+            "release-0.23.0".into(),
+            "onboarding".into(),
+        ])
+        .expect("valid tour ids");
+        assert_eq!(accepted, vec!["onboarding", "release-0.23.0"]);
+    }
+
+    #[test]
+    fn malformed_tour_ids_are_refused_with_a_reason() {
+        for tour_id in ["", "Onboarding", "-leading", "has space", &"a".repeat(65)] {
+            let error = validate_tour_ids(vec![tour_id.to_string()]).expect_err(tour_id);
+            assert_eq!(
+                reason(error),
+                Some(settings::UI_TOUR_ID_INVALID),
+                "{tour_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_update_names_between_one_and_the_most_tours() {
+        let error = validate_tour_ids(Vec::new()).expect_err("no tours");
+        assert_eq!(reason(error), Some(settings::UI_TOUR_COUNT_OUT_OF_RANGE));
+        let too_many = (0..=MAX_TOURS_PER_UPDATE)
+            .map(|index| format!("tour-{index}"))
+            .collect();
+        let error = validate_tour_ids(too_many).expect_err("too many tours");
+        assert_eq!(reason(error), Some(settings::UI_TOUR_COUNT_OUT_OF_RANGE));
+    }
+}
+
+#[cfg(test)]
+mod dashboard_layout_tests {
+    use super::{MAX_DASHBOARD_PANEL_SETTINGS_BYTES, validate_dashboard_layout};
+    use crate::{
+        AppError, RefusalFact, UiDashboardBreakpoint, UiDashboardLayout, UiDashboardLayoutItem,
+        error_reasons::settings,
+    };
+
+    fn layout_with(settings: Option<serde_json::Value>) -> UiDashboardLayout {
+        UiDashboardLayout {
+            breakpoint: UiDashboardBreakpoint::Lg,
+            columns: 12,
+            items: vec![UiDashboardLayoutItem {
+                panel_id: "lifecycle-upcoming--a1b2c3".into(),
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 3,
+                settings,
+            }],
+        }
+    }
+
+    fn reason(error: &AppError) -> Option<&'static str> {
+        error.validation_reason()
+    }
+
+    #[test]
+    fn panels_without_settings_or_with_an_object_are_accepted() {
+        validate_dashboard_layout(&layout_with(None)).expect("no settings");
+        validate_dashboard_layout(&layout_with(Some(serde_json::json!({
+            "actions": ["delete_files"],
+            "name": "Soon"
+        }))))
+        .expect("object settings");
+    }
+
+    #[test]
+    fn non_object_panel_settings_are_refused_with_a_reason() {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!("text"),
+            serde_json::json!(3),
+            serde_json::json!(["delete_files"]),
+        ] {
+            let error = validate_dashboard_layout(&layout_with(Some(value.clone())))
+                .expect_err("non-object settings");
+            assert_eq!(
+                reason(&error),
+                Some(settings::DASHBOARD_PANEL_SETTINGS_INVALID),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_panel_settings_are_refused_with_the_limit_as_a_fact() {
+        let fits =
+            serde_json::json!({ "name": "x".repeat(MAX_DASHBOARD_PANEL_SETTINGS_BYTES - 11) });
+        assert_eq!(
+            serde_json::to_vec(&fits).unwrap().len(),
+            MAX_DASHBOARD_PANEL_SETTINGS_BYTES
+        );
+        validate_dashboard_layout(&layout_with(Some(fits))).expect("settings at the limit");
+
+        let oversized =
+            serde_json::json!({ "name": "x".repeat(MAX_DASHBOARD_PANEL_SETTINGS_BYTES - 10) });
+        let error =
+            validate_dashboard_layout(&layout_with(Some(oversized))).expect_err("oversized");
+        assert_eq!(
+            reason(&error),
+            Some(settings::DASHBOARD_PANEL_SETTINGS_INVALID)
+        );
+        assert!(error.refusal_facts().contains(&RefusalFact::new(
+            "maxBytes",
+            MAX_DASHBOARD_PANEL_SETTINGS_BYTES.to_string()
+        )));
+    }
 }

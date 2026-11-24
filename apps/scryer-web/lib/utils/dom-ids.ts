@@ -382,6 +382,12 @@ export function approveMediaRequestLeaseOptionId(value: string): string {
   return selectorId("approve-media-request-lease-option", value);
 }
 
+/// The "suggested by a rule" marker beside an approve-dialog field a rule's
+/// shaping prefilled, keyed by the shaping head (`SET_QUALITY_PROFILE`, ...).
+export function approveMediaRequestSuggestedId(head: string): string {
+  return selectorId("approve-media-request-suggested", head);
+}
+
 /// Mirrors `TitleTagsPicker`'s own remove-button id exactly — the picker keeps
 /// the label's case and only collapses whitespace, so this cannot go through
 /// `selectorId`, which lowercases.
@@ -449,16 +455,8 @@ export function settingsRequestRuleDeleteId(ruleSetId: string): string {
   return selectorId("settings-request-rule-delete", ruleSetId);
 }
 
-export function settingsRequestRuleLibraryId(libraryId: string): string {
-  return selectorId("settings-request-rule-library", libraryId);
-}
-
 export function settingsRequestTemplateId(templateId: string): string {
   return selectorId("settings-request-template", templateId);
-}
-
-export function settingsRequestUserId(userId: string): string {
-  return selectorId("settings-request-user", userId);
 }
 
 export function settingsRequestPreviewTitleResultId(key: string): string {

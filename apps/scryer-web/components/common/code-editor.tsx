@@ -40,7 +40,7 @@ import {
   type ScriptEditorLanguage,
 } from "./script-editor-assistance";
 import type { ScriptTriggerValue } from "@/lib/types/scripts";
-import type { RegoFamily } from "@/lib/utils/rego-assistance";
+import type { RegoFamily, RegoHeadAssist } from "@/lib/utils/rego-assistance";
 import { useTheme } from "next-themes";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
@@ -73,6 +73,9 @@ export type CodeEditorProps = {
   language?: CodeEditorLanguage;
   regoFamily?: RegoFamily;
   regoTranslate?: (key: string) => string;
+  /// Rule heads the editor completes and explains; keep the array stable
+  /// between renders, since a new one reconfigures the assistance.
+  regoHeads?: readonly RegoHeadAssist[];
   scriptTrigger?: ScriptTriggerValue;
   scriptTranslate?: (key: string) => string;
   copyable?: boolean;
@@ -457,6 +460,7 @@ export default function CodeEditor({
   language = "plain",
   regoFamily,
   regoTranslate,
+  regoHeads,
   scriptTrigger,
   scriptTranslate,
   copyable = false,
@@ -534,6 +538,7 @@ export default function CodeEditor({
       diagnosticField,
       diagnosticTheme,
       EditorView.lineWrapping,
+      EditorView.contentAttributes.of(id ? { id: `${id}-content` } : {}),
       ...(language === "rego" ? [regoHighlightTheme, regoHighlightPlugin] : []),
     ];
 
@@ -558,10 +563,10 @@ export default function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-    // Only a language switch creates a new editor. Compartments preserve history.
+    // Changing the language or editor identity creates a new editor.
     // Value and diagnostics are synchronized by dedicated effects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language]);
+  }, [id, language]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -570,7 +575,7 @@ export default function CodeEditor({
       effects: [
         assistance.reconfigure(
           language === "rego" && regoFamily && regoTranslate
-            ? regoAssistance(regoFamily, regoTranslate, readOnly)
+            ? regoAssistance(regoFamily, regoTranslate, readOnly, regoHeads)
             : scriptTrigger &&
                 scriptTranslate &&
                 ["shell", "python", "powershell", "batch", "go"].includes(
@@ -605,6 +610,7 @@ export default function CodeEditor({
     language,
     regoFamily,
     regoTranslate,
+    regoHeads,
     scriptTrigger,
     scriptTranslate,
     readOnly,

@@ -1,9 +1,9 @@
 # Rule input fields
 
-A rule reads only these paths. The validator rejects any other `input.` path
+A rule reads only these paths. Validator rejects any other `input.` path
 (`RULE_UNKNOWN_INPUT_PATH`) and any path it cannot resolve statically, such as
-`input.release[x]` (`RULE_DYNAMIC_INPUT_PATH`). `?` means the value can be
-null. Language codes are ISO 639-3 (`eng`, `jpn`, `fra`).
+`input.release[x]` (`RULE_DYNAMIC_INPUT_PATH`). `?` = can be null. Language
+codes are ISO 639-3 (`eng`, `jpn`, `fra`).
 
 ## input.release: the release being scored
 
@@ -26,7 +26,7 @@ null. Language codes are ISO 639-3 (`eng`, `jpn`, `fra`).
 | `revision` | int | 0 original, 1 PROPER/REPACK/RERIP, 2 REPACK2, ... |
 | `is_ai_enhanced`, `is_hardcoded_subs`, `is_uncensored`, `is_dubs_only`, `is_obfuscated`, `is_retagged` | bool | Name markers |
 | `is_password_protected` | bool? | Indexer flag; null when unknown |
-| `has_release_group` | bool | A non-empty group was parsed |
+| `has_release_group` | bool | Non-empty group parsed |
 | `release_group` | string? | |
 | `streaming_service` | string? | Service tag when present |
 | `edition` | string? | `extended`, `IMAX`, `criterion`, ... |
@@ -36,12 +36,12 @@ null. Language codes are ISO 639-3 (`eng`, `jpn`, `fra`).
 | `year` | number? | |
 | `parse_confidence` | float | 0.0 to 1.0 |
 | `size_bytes` | number? | Use `scryer.size_gib()`; may be null |
-| `age_days` | number? | Days since the indexer published it |
+| `age_days` | number? | Days since indexer published it |
 | `thumbs_up`, `thumbs_down` | number? | Indexer votes |
 | `normalized_tokens` | string[] | Ordered parser tokens |
 | `stereoscopy_tokens` | string[] | `stereo:three_d`, `stereo:layout:<layout>`, ... |
 | `stereoscopy` | object? | `presentation`, `layout?`, `sampling?`, `encoding?` |
-| `extra` | object | Indexer attributes as `input.release.extra.<key>`. Can be empty, so a missing key is undefined, not null. |
+| `extra` | object | Indexer attributes as `input.release.extra.<key>`. Can be empty: missing key is undefined, not null. |
 
 ## input.profile: the quality profile in force
 
@@ -54,10 +54,8 @@ null. Language codes are ISO 639-3 (`eng`, `jpn`, `fra`).
 `efficient`, `compatible`).
 
 `scoring_overrides`: `allow_x265_non4k?`, `block_dv_without_fallback?`,
-`prefer_compact_encodes?`, `prefer_lossless_audio?`, `block_upscaled?`. Null
-means the persona default applies.
-
-`input.profile.id` lets one rule set score differently per profile.
+`prefer_compact_encodes?`, `prefer_lossless_audio?`, `block_upscaled?`. Null =
+persona default applies.
 
 ## input.context: the title being searched for
 
@@ -71,7 +69,7 @@ means the persona default applies.
 | `inferred_original_audio_language` | string | Assumed for unlabeled releases |
 | `tags` | string[] | Title tags, lowercase |
 | `has_existing_file` | bool | |
-| `existing_score` | number? | Built-in score of the current file |
+| `existing_score` | number? | Built-in score of current file |
 | `search_mode` | string | `auto` or `post_download` |
 | `runtime_minutes` | number? | |
 | `coverage_total_runtime_minutes`, `coverage_member_runtime_minutes`, `coverage_member_count` | number? | Pack coverage |
@@ -83,8 +81,8 @@ means the persona default applies.
 
 ## input.file: the downloaded file, after media analysis
 
-`input.file` is **null before download**. Guard every use with
-`input.file != null`, or the rule simply never matches during search.
+`input.file` is **null before download**. Guard every use with `input.file != null`, or the
+rule never matches during search.
 
 `video_codec?`, `video_width?`, `video_height?`, `video_bitrate_kbps?`,
 `video_bit_depth?`, `video_hdr_format?`, `dovi_profile?`, `dovi_bl_compat_id?`,
@@ -98,15 +96,14 @@ means the persona default applies.
 
 ## Builtins
 
-| Function | Returns |
-|---|---|
-| `scryer.block_score()` | -10000 |
-| `scryer.size_gib(bytes)` | GiB as a float (0 for a non-number) |
-| `scryer.lang_matches(code, pattern)` | bool. Matches ISO 639 codes including common aliases. |
-| `scryer.normalize_source(raw)` | normalized source string |
-| `scryer.normalize_codec(raw)` | normalized codec string |
+- `scryer.block_score()`: -10000
+- `scryer.size_gib(bytes)`: GiB as float (0 for a non-number)
+- `scryer.lang_matches(code, pattern)`: bool; matches ISO 639 codes including
+  common aliases
+- `scryer.normalize_source(raw)`: normalized source string
+- `scryer.normalize_codec(raw)`: normalized codec string
 
 Standard Rego builtins work, including `regex.match`, `contains`, `lower`,
-`startswith`, `count` and `object.get`. Network, random and runtime builtins
-are not built in. `time.now_ns()` works but makes results time dependent,
-so avoid it.
+`startswith`, `count`, `object.get`. Network, random and runtime builtins are
+not built in. `time.now_ns()` works but makes results time dependent; avoid
+it.

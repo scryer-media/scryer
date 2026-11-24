@@ -322,6 +322,7 @@ async fn run_recovery_import_with_submissions(
         services
             .with_libraries(libraries)
             .with_imports(import_repo.clone())
+            .with_media_files(Arc::new(crate::lib_tests::MockMediaFileRepo::default()))
             .with_srrdb_filename_lookup(lookup as Arc<dyn SrrdbFilenameLookup>)
     });
 
@@ -822,6 +823,9 @@ impl DownloadSubmissionRepository for GrabbedNamesRepo {
         Ok(vec![])
     }
     async fn list_for_title(&self, _: &str) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(vec![])
+    }
+    async fn list_for_client_item_ids(&self, _: &[String]) -> AppResult<Vec<DownloadSubmission>> {
         Ok(vec![])
     }
     async fn find_by_title_and_request_signature(

@@ -999,7 +999,7 @@ pub(crate) fn series_hydration_ref(target: &HydrationTarget) -> Option<SeriesTit
 const SERIES_METADATA_MISSING_TITLE: &str = "series metadata response missing title";
 
 /// The failure reported for a series SMG's title surface does not have.
-fn series_missing_from_gateway(reference: &SeriesTitleRef) -> AppError {
+pub(crate) fn series_missing_from_gateway(reference: &SeriesTitleRef) -> AppError {
     match reference.smg_id {
         Some(smg_id) => AppError::not_found_reason(
             crate::error_reasons::catalog::SMG_NO_SERIES_NOT_FOUND,

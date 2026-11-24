@@ -72,6 +72,7 @@ use std::path::{Path, PathBuf};
 use scryer_domain::{LibraryPermission, Title, User};
 
 use crate::LibraryRootDraft;
+use crate::disk::{Disk, EntryKind};
 use crate::library::recycle_bin::RECYCLE_DIR_NAME;
 use crate::location::classify::reason_codes;
 use crate::location::collisions::{CollisionNaming, PathCaseRule};
@@ -727,26 +728,18 @@ impl AppUseCase {
         source_root: &Path,
         destination_root: &Path,
     ) -> AppResult<RootScopePathFacts> {
-        let source_root_is_symlink = tokio::fs::symlink_metadata(source_root)
-            .await
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false);
-        let source_root_is_directory = tokio::fs::metadata(source_root)
-            .await
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false);
+        let disk = Disk::process();
+        let source_root_is_symlink = disk.uncached(source_root).await.is(EntryKind::Symlink);
+        let source_root_is_directory = disk.follow(source_root).await.is(EntryKind::Directory);
 
-        let destination = match tokio::fs::metadata(destination_root).await {
-            Ok(metadata) if metadata.is_dir() => DestinationPathState::Directory {
-                empty: directory_is_empty(destination_root).await,
+        let destination = match disk.follow(destination_root).await.kind() {
+            Some(EntryKind::Directory) => DestinationPathState::Directory {
+                empty: matches!(disk.has_entries(destination_root).await, Ok(false)),
             },
-            Ok(_) => DestinationPathState::NotADirectory,
-            Err(_) => DestinationPathState::Missing {
+            Some(_) => DestinationPathState::NotADirectory,
+            None => DestinationPathState::Missing {
                 parent_exists: match destination_root.parent() {
-                    Some(parent) => tokio::fs::metadata(parent)
-                        .await
-                        .map(|metadata| metadata.is_dir())
-                        .unwrap_or(false),
+                    Some(parent) => disk.follow(parent).await.is(EntryKind::Directory),
                     None => false,
                 },
             },
@@ -939,11 +932,14 @@ impl AppUseCase {
             // A resumed run reaching the tail a second time.
             library
         } else {
-            self.services
+            let library = self
+                .services
                 .catalog
                 .libraries
                 .set_root_path(&tail.root_id, &tail.destination_root_path)
-                .await?
+                .await?;
+            self.install_disk_volumes().await;
+            library
         };
 
         self.assert_root_post_conditions(
@@ -1238,7 +1234,8 @@ impl AppUseCase {
             // A resumed run reaching the tail a second time.
             library
         } else {
-            self.services
+            let library = self
+                .services
                 .catalog
                 .libraries
                 .update(
@@ -1247,7 +1244,9 @@ impl AppUseCase {
                     library.slug.clone(),
                     desired,
                 )
-                .await?
+                .await?;
+            self.install_disk_volumes().await;
+            library
         };
 
         // The one post-condition only this branch has: the root it retired is
@@ -1340,10 +1339,7 @@ pub(super) async fn scan_root_entries(
             if excluded(&path) {
                 continue;
             }
-            let size = tokio::fs::symlink_metadata(&path)
-                .await
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
+            let size = Disk::process().fresh(&path).await.size().unwrap_or(0);
             sizes.insert(path, size);
         }
     }
@@ -1353,36 +1349,25 @@ pub(super) async fn scan_root_entries(
     Ok(entries)
 }
 
-async fn directory_is_empty(path: &Path) -> bool {
-    match tokio::fs::read_dir(path).await {
-        Ok(mut entries) => matches!(entries.next_entry().await, Ok(None)),
-        Err(_) => false,
-    }
-}
-
 /// True when the only thing standing between `path` and removal is Scryer's own
 /// recycle bin (D6): every remaining entry is the bin directory.
 ///
 /// Unreadable directories answer `false` — the honest fallback is the generic
 /// "still holds content" sentence, not a claim about a bin we could not see.
 async fn only_the_recycle_bin_remains(path: &Path) -> bool {
-    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
-        return false;
-    };
-    let mut saw_the_bin = false;
-    loop {
-        match entries.next_entry().await {
-            Ok(Some(entry)) => {
-                if entry.file_name() == RECYCLE_DIR_NAME {
-                    saw_the_bin = true;
-                } else {
-                    return false;
-                }
+    let disk = Disk::process();
+    // Whether the bin was seen, and whether nothing else was.
+    let seen = disk.visit(path, (false, true), |(bin, only), entry| {
+        match entry {
+            Ok(entry) if entry.name() == RECYCLE_DIR_NAME => *bin = true,
+            _ => {
+                *only = false;
+                return std::ops::ControlFlow::Break(());
             }
-            Ok(None) => return saw_the_bin,
-            Err(_) => return false,
         }
-    }
+        std::ops::ControlFlow::Continue(())
+    });
+    matches!(seen.await, Ok((true, true)))
 }
 
 /// The path as the filesystem resolves it, or lexically normalized when it does
@@ -1393,11 +1378,11 @@ async fn only_the_recycle_bin_remains(path: &Path) -> bool {
 /// what exists and normalizing what does not is what makes "these two overlap"
 /// and "this is already a configured root" answerable.
 pub(super) async fn canonical_or_lexical(path: &Path) -> PathBuf {
-    if let Ok(resolved) = tokio::fs::canonicalize(path).await {
+    if let Ok(resolved) = Disk::process().canonicalize(path).await {
         return resolved;
     }
     if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
-        && let Ok(resolved) = tokio::fs::canonicalize(parent).await
+        && let Ok(resolved) = Disk::process().canonicalize(parent).await
     {
         return resolved.join(name);
     }

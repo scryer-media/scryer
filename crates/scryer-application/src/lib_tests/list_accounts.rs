@@ -329,6 +329,25 @@ async fn seed_expired(harness: &MediaRequestTestHarness) -> UserListAccount {
     account
 }
 #[tokio::test]
+async fn a_member_reads_their_own_list_policy() {
+    let harness = harness(Arc::new(Auth::default())).await;
+    assert_eq!(
+        harness.app.my_list_policy(&harness.user).await.unwrap(),
+        ListPolicy::Approval
+    );
+    set_member_list_policy(&harness, ListPolicy::None).await;
+    assert_eq!(
+        harness.app.my_list_policy(&harness.user).await.unwrap(),
+        ListPolicy::None
+    );
+    // Another member's policy is untouched by this one's.
+    assert_eq!(
+        harness.app.my_list_policy(&harness.manager).await.unwrap(),
+        ListPolicy::Approval
+    );
+}
+
+#[tokio::test]
 async fn a_committed_account_is_not_revoked_when_its_event_fails() {
     let auth = Arc::new(Auth::default());
     let harness = harness(auth.clone()).await;

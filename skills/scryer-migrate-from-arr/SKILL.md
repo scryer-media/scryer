@@ -1,13 +1,13 @@
 ---
 name: scryer-migrate-from-arr
-description: Migrates a Sonarr and/or Radarr setup into Scryer. It runs the setup wizard's own Sonarr/Radarr import through Scryer's GraphQL API (the same calls, in the same order, as the web wizard), then verifies the result and carries over what the import leaves out, keeping bulk data in files. Use it when an operator wants to "move from Sonarr", "switch from Radarr", "import my arr library", bring over custom formats, quality profiles, delay profiles, naming, tags or notifications, compare Scryer scoring with arr history, or plan the cutover from arr to Scryer.
+description: Migrates a Sonarr and/or Radarr setup into Scryer. Runs the setup wizard's own Sonarr/Radarr import through Scryer's GraphQL API (same calls, same order as the web wizard), verifies the result and carries over what the import leaves out, keeping bulk data in files. Use when an operator wants to "move from Sonarr", "switch from Radarr", "import my arr library", bring over custom formats, quality profiles, delay profiles, naming, tags or notifications, compare Scryer scoring with arr history, or plan the cutover from arr to Scryer.
 ---
 
 # Migrate from Sonarr / Radarr
 
-Set the arr variables (URLs without a trailing slash, including any base
-path; keys from arr's Settings → General). Steps a and b need only these;
-`scryer-connect` comes in step c.
+Set arr variables (URLs without trailing slash, including any base path; keys
+from arr's Settings → General). Steps a and b need only these; `scryer-connect`
+comes in step c.
 
 ```sh
 export SONARR_URL=http://sonarr.example.lan:8989 SONARR_API_KEY=...   # and/or
@@ -17,18 +17,18 @@ gql()  { "$C/scripts/gql.sh" "$@"; }
 poll() { "$M/scripts/poll.sh" "$@"; }
 ```
 
-Ask the operator to set the keys in their shell. Never print, echo or paste a
-key. Work in a directory the operator chooses; snapshot files hold arr
-configuration and are written mode 600.
+Operator sets the keys in their shell. Never print, echo or paste a key. Work
+in a directory the operator chooses; snapshot files hold arr config and are
+written mode 600.
 
 ## Rules for this skill
 
-- Sonarr and Radarr are only read (GET). Any arr change is made by the
-  operator in arr's UI.
-- Read-only steps run directly. Every Scryer write shows the operator
-  a short summary (counts, names, the first few items) and waits for a yes.
-- Never delete anything: not arr data, not media, not Scryer titles, roots or
-  rule sets. Never send `removedRootIds`.
+- Sonarr and Radarr are only read (GET). Any arr change is made by the operator
+  in arr's UI.
+- Read-only steps run directly. Every Scryer write: show a short summary
+  (counts, names, first few items), wait for a yes.
+- Never delete anything: not arr data, media, Scryer titles, roots or rule
+  sets. Never send `removedRootIds`.
 - Read summaries and jq projections only (`references/token-budget.md`).
 - Branch on `extensions.code` and `extensions.reason`, never on message text.
 
@@ -39,110 +39,114 @@ configuration and are written mode 600.
 jq . snap/summary.json
 ```
 
-`failedEndpoints` above 0 names a missing file under `snap/<app>/` with
-`_error`. An older arr may lack an endpoint; carry on and mark that area
-manual. `HISTORY_LIMIT=1000` widens the history sample.
+`failedEndpoints` above 0: the missing file under `snap/<app>/` has `_error`.
+Older arr may lack an endpoint; carry on, mark that area manual.
+`HISTORY_LIMIT=1000` widens the history sample.
 
 ## b. Plan and prepare (read-only)
 
-Present `references/what-migrates.md` filled in with the summary's counts and
-ask which areas the operator wants. Then settle what the import will need:
+Present `references/what-migrates.md` filled with the summary's counts; ask
+which areas the operator wants. Then settle:
 
-- **The arr URL as Scryer reaches it.** Scryer connects to arr itself. When
-  Scryer runs in a container, `localhost` is the container. Agree the URL
-  Scryer must use for each app, and for Prowlarr if they use it.
-- **A Scryer-side path for every root.** List `rootFolders` from the summary.
-  For each, ask where Scryer sees that folder and which library it belongs to
-  (anime is its own library facet).
-- **Secrets to enter again.** Arr hides some secrets from its API, so the
-  import cannot always copy them. The import's preview names each client and
-  indexer that needs one (`built-in-import.md`, step 4). Ask the operator to
-  have download client passwords and indexer API keys at hand, to put in
-  environment variables or files when that step asks.
+- **Arr URL as Scryer reaches it.** Scryer connects to arr itself. In a
+  container, `localhost` is the container. Agree the URL Scryer must use per
+  app, and for Prowlarr if used.
+- **Scryer-side path for every root.** List `rootFolders` from the summary.
+  For each: where Scryer sees it, which library it belongs to (anime is its
+  own library facet).
+- **Secrets to re-enter.** Arr hides some secrets from its API, so the import
+  cannot always copy them. Preview names each client and indexer needing one
+  (`built-in-import.md`, step 4). Operator keeps download client passwords and
+  indexer API keys at hand, to put in env variables or files when that step
+  asks.
 
-## c. Setup state and the Scryer connection
+## c. Setup state and Scryer connection
 
 Only a signed-in browser session can create an API key, and until first-run
 setup is complete the web UI sends every page to the setup wizard. If Scryer
-still opens its wizard, ask the operator to choose **Skip setup entirely** on
-its first screen and then create the key. That is the only browser step; the
-agent then re-enters setup through the API (step d), as **Settings → General
-→ Run setup wizard** does in the web UI.
+still opens its wizard, operator chooses **Skip setup entirely** on its first
+screen, then creates the key. Only browser step; agent then re-enters setup
+through the API (step d), as **Settings → General → Run setup wizard** does in
+the web UI.
 
-Then complete `scryer-connect` and read the state:
+Then complete `scryer-connect` and read state:
 
 ```sh
 gql "$O/SetupStatus.graphql" | jq -c .data.setupStatus
 ```
 
 `setupComplete` is `true` once a key works. `hasDownloadClients` or
-`hasIndexers` `true` means some exist already: name them before importing.
+`hasIndexers` `true`: some exist already; name them before importing.
 
-## d. The setup wizard's import (agent, through the API)
+## d. Setup wizard's import (agent, through the API)
 
-Follow `references/built-in-import.md`. It is the wizard's Connect,
-Libraries, Quality, Sources and Summary steps in the wizard's order, ending
-with `completeSetup` for the import run and the hinted scans, as the wizard
-does. The import itself creates the download clients, indexers and library
-roots.
+Follow `references/built-in-import.md`: wizard's Connect, Libraries, Quality,
+Sources, Summary steps in wizard order, ending with `completeSetup` for the
+import run and the hinted scans. The import itself creates download clients,
+indexers and library roots.
 
-## e. Check what the import produced (read-only)
+## e. Check import result (read-only)
 
-Run the first seven rows of `references/verification.md` (libraries and
-roots, titles, scan results, monitored state, download clients, indexers)
-against the snapshot. Report gaps before going on.
+Run first seven rows of `references/verification.md` (libraries and roots,
+titles, scan results, monitored state, download clients, indexers) against the
+snapshot. Report gaps before going on.
 
 ## f. Custom formats
 
-Follow `references/custom-formats.md`:
+Follow `references/custom-formats.md`. Primary path, once per arr app
+(job key `EXTERNAL_RULE_IMPORT`, needs `MANAGE_CATALOG_SETTINGS`):
 
-1. Translate in review mode and list formats that cannot be translated.
-2. Settle the score decision with the operator explicitly: arr scores are
-   per quality profile, the translated rule set applies to every profile. Use
-   `qualityProfiles.distinctScoreSets` from the summary.
-3. Translate with the agreed scores and validate.
-4. Replay arr's grab history and report mismatches only:
+1. With a yes, `StartExternalRuleImport.graphql` (`source` `SONARR` or
+   `RADARR`, `baseUrl`, `apiKey`, a `requestKey` you keep). Scryer reads the
+   custom formats and quality-profile scores itself and saves one **disabled**
+   rule per format, named `(Sonarr) <format name>` / `(Radarr) <format name>`.
+2. Poll `ExternalRuleImportStatus.graphql` until `active` is `false`.
+3. Report each item by `state`: `SAVED`; `SAVED_NEEDS_REVIEW` (named
+   `(Radarr) REVIEW - <format name>`, scores 0, per-profile table commented
+   out); `SKIPPED_EXISTS` (name already exists, as on a re-run); `FAILED`
+   (untranslatable, nothing saved).
+4. Replay arr grab history against saved rules, report mismatches only:
 
 ```sh
-"$M/scripts/replay-history.sh" snap/sonarr arr-formats.rego series,anime <arr-profile-id> > replay.tsv
+"$M/scripts/replay-history.sh" snap/sonarr rule.rego series,anime <arr-profile-id> > replay.tsv
 ```
 
-5. Save disabled, then enable after the operator agrees.
+5. Fix REVIEW rules with the operator, then enable after they agree.
+
+Only when Scryer cannot reach arr: the paste-JSON fallback in the same
+reference, which builds one rule set from the snapshot.
 
 ## g. The rest
 
-`references/manual-areas.md` has one section per area with arr → Scryer field
-tables and the exact operations: titles with no files, quality profiles,
-delay profiles, naming, remote path mappings, tags, notifications and Sonarr
-release profiles. Import lists, list exclusions, auto-tagging and history
-are manual or unsupported; that file says what to tell the operator.
+`references/manual-areas.md`: one section per area with arr → Scryer field
+maps and exact operations: titles with no files, quality profiles, delay
+profiles, naming, remote path mappings, tags, notifications, Sonarr release
+profiles. Import lists, list exclusions, auto-tagging and history are manual or
+unsupported; that file says what to tell the operator.
 
 ## h. Verify
 
-Work through the rest of `references/verification.md` and report one line per
-check with the gap.
+Rest of `references/verification.md`; one line per check with the gap.
 
 ## i. Cutover
 
-Follow `references/cutover.md`: run both side by side with Scryer's automatic
-search off, have the operator turn off arr's RSS, automatic search and
-Completed Download Handling first, then turn Scryer on. Keep all arr data
-until the operator has verified Scryer. Rollback is the reverse.
+Follow `references/cutover.md`: run side by side with Scryer's automatic
+search off; operator turns off arr's RSS, automatic search and Completed
+Download Handling first, then Scryer goes on. Keep all arr data until operator
+has verified Scryer. Rollback is the reverse.
 
 ## Scripts
 
-| Script | Does |
-|---|---|
-| `scripts/snapshot.sh <dir>` | GETs arr config and history into files, writes counts to `summary.json` |
-| `scripts/poll.sh <op> <vars> '<jq cond>' [interval] [max]` | Polls an operation until the condition holds (exit 0), times out (3) or fails |
-| `scripts/replay-history.sh <snap/app> <rule.rego> <facets> [arr-profile-id]` | Scores arr's grabbed releases with a draft rule set; TSV of match, mismatch, skipped |
+- `scripts/snapshot.sh <dir>`: GETs arr config and history into files, counts to `summary.json`.
+- `scripts/poll.sh <op> <vars> '<jq cond>' [interval] [max]`: polls an operation until condition holds (exit 0), times out (3) or fails.
+- `scripts/replay-history.sh <snap/app> <rule.rego> <facets> [arr-profile-id]`: scores arr's grabbed releases with a draft rule set; TSV of match, mismatch, skipped.
 
-All three need `curl` and `jq`, and find `gql.sh` in the sibling
-`scryer-connect` skill (override with `GQL=`).
+All need `curl` and `jq`, and find `gql.sh` in sibling `scryer-connect` skill
+(override with `GQL=`).
 
 ## When something fails
 
 - `gql.sh` exit 1 prints `code [reason]`. Look the reason up in
-  `scryer-connect/references/errors.md` or in the reference for that phase.
-- `MFA_STEP_UP_REQUIRED`: config writes need the security setting described
-  in `scryer-connect`. Ask the operator; do not work around it.
+  `scryer-connect/references/errors.md` or the reference for that phase.
+- `MFA_STEP_UP_REQUIRED`: config writes need the security setting described in
+  `scryer-connect`. Ask the operator; do not work around it.

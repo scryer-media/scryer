@@ -88,7 +88,6 @@ pub struct UserRuleInput {
 /// Available as `input.file` in Rego during post-download evaluation.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileDoc {
-    pub details: scryer_media_types::AnalysisDetails,
     /// Video stream codec name (e.g. "hevc", "av1", "h264").
     pub video_codec: Option<String>,
     pub video_width: Option<i32>,
@@ -303,6 +302,17 @@ pub struct BuiltinScoreDoc {
     pub codes: Vec<String>,
 }
 
+/// One field of the serialized input's `builtin_score` object.
+fn builtin_score_field<'a>(
+    document: &'a mut serde_json::Value,
+    field: &str,
+) -> Result<&'a mut serde_json::Value, RulesError> {
+    document
+        .get_mut("builtin_score")
+        .and_then(|score| score.get_mut(field))
+        .ok_or_else(|| RulesError::Evaluation(format!("builtin score has no {field}")))
+}
+
 /// A single scoring entry produced by a user rule.
 #[derive(Debug, Clone)]
 pub struct UserRuleEntry {
@@ -406,7 +416,7 @@ pub(crate) fn score_entry_wrapper_policy_path(rule_id: &str) -> String {
 ///
 /// Release has no fact envelopes and no hold: every field of a release document
 /// is either present or absent, and absence is an answer. What it does have,
-/// and maintenance does not, is per-rule applicability (facets) and a managed
+/// and lifecycle does not, is per-rule applicability (facets) and a managed
 /// origin whose scores are held to a contract at build and at evaluation.
 pub struct ReleaseFamily;
 
@@ -512,6 +522,7 @@ impl PolicyFamily for ReleaseFamily {
         rule_id: &str,
         rule_name: &str,
         extra: &Self::RuleExtra,
+        _facet: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         Ok(UserRulesEvaluator::extract_entries(
             value,
@@ -528,7 +539,11 @@ impl PolicyFamily for ReleaseFamily {
         Ok(())
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        _kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         RuleEvalError {
             rule_set_id: rule.id.clone(),
             rule_set_name: rule.name.clone(),
@@ -690,31 +705,56 @@ impl UserRulesEvaluator {
         facet: &str,
     ) -> Result<EvalResult, RulesError> {
         let outcome = if self.rules.iter().any(|rule| rule.extra.baseline) {
-            let mut phased_input = input.clone();
-            phased_input.builtin_score.total = 0;
-            let mut baseline =
-                self.evaluate_policies_where(&phased_input, facet, "baseline", |extra| {
-                    extra.baseline
-                })?;
+            // The input is serialized once. The baseline phase reads the
+            // document with a zero subtotal; the additional phase reads the
+            // same document with the baseline subtotal and codes patched in.
+            let mut shared: Option<serde_json::Value> = None;
+            let mut baseline = self.evaluate_document_where(
+                |_| {
+                    let mut first = serde_json::to_value(input)?;
+                    let untouched = first.clone();
+                    *builtin_score_field(&mut first, "total")? = serde_json::Value::from(0);
+                    shared = Some(untouched);
+                    Ok(first)
+                },
+                facet,
+                "baseline",
+                |rule| rule.extra.baseline,
+            )?;
             let subtotal = baseline
                 .records
                 .iter()
                 .flat_map(|record| &record.decision)
                 .try_fold(0_i64, |sum, entry| sum.checked_add(i64::from(entry.delta)))
                 .ok_or_else(|| RulesError::Evaluation("baseline score overflow".into()))?;
-            phased_input.builtin_score.total =
-                subtotal.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-            phased_input.builtin_score.codes.extend(
-                baseline
-                    .records
-                    .iter()
-                    .flat_map(|record| &record.decision)
-                    .map(|entry| entry.code.clone()),
-            );
-            let additional =
-                self.evaluate_policies_where(&phased_input, facet, "additional", |extra| {
-                    !extra.baseline
-                })?;
+            let total = subtotal.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+            let baseline_codes: Vec<serde_json::Value> = baseline
+                .records
+                .iter()
+                .flat_map(|record| &record.decision)
+                .map(|entry| serde_json::Value::from(entry.code.clone()))
+                .collect();
+            let additional = self.evaluate_document_where(
+                |_| {
+                    let mut second = match shared {
+                        Some(document) => document,
+                        None => serde_json::to_value(input)?,
+                    };
+                    *builtin_score_field(&mut second, "total")? = serde_json::Value::from(total);
+                    match builtin_score_field(&mut second, "codes")? {
+                        serde_json::Value::Array(codes) => codes.extend(baseline_codes),
+                        _ => {
+                            return Err(RulesError::Evaluation(
+                                "builtin score codes are not a list".into(),
+                            ));
+                        }
+                    }
+                    Ok(second)
+                },
+                facet,
+                "additional",
+                |rule| !rule.extra.baseline,
+            )?;
             baseline.records.extend(additional.records);
             baseline.errors.extend(additional.errors);
             baseline
@@ -2210,7 +2250,6 @@ score_entry["internal"] := 300 if {
 
     fn test_file_doc() -> FileDoc {
         FileDoc {
-            details: Default::default(),
             video_codec: Some("hevc".to_string()),
             video_width: Some(3840),
             video_height: Some(2160),
@@ -2247,6 +2286,104 @@ score_entry["internal"] := 300 if {
             duration_seconds: Some(7200),
             num_chapters: Some(1),
             container_format: Some("matroska".to_string()),
+        }
+    }
+
+    fn user_policy(id: &str, body: &str) -> UserPolicy {
+        UserPolicy {
+            id: id.to_string(),
+            name: id.to_string(),
+            rego_source: format!("package scryer.rules.user.{id}\n{body}\n"),
+            origin: PolicyOrigin::User,
+            applied_facets: vec![],
+        }
+    }
+
+    /// The scoring templates the web ships, read from the file it builds.
+    fn shipped_scoring_templates() -> Vec<(String, String)> {
+        let source = include_str!("../../../apps/scryer-web/lib/constants/rule-templates.ts");
+        let mut templates = Vec::new();
+        for (index, chunk) in source.split("regoSource: `").skip(1).enumerate() {
+            let body = chunk.split('`').next().expect("template body is closed");
+            templates.push((format!("shipped_template_{index}"), body.to_string()));
+        }
+        templates
+    }
+
+    /// The lifecycle family's source scan (action heads, host helpers,
+    /// `with` targets, foreign `data`) never reaches a scoring rule: a scoring
+    /// source that uses `with`, defines rules named like lifecycle heads or
+    /// helpers, or is one of the shipped templates validates and scores as it
+    /// always has.
+    #[test]
+    fn scoring_sources_are_untouched_by_the_lifecycle_source_contract() {
+        let cases = [
+            (
+                "with_override",
+                "import rego.v1\n\n\
+                 score_entry[\"forced\"] := 100 if {\n\
+                 \tfreeleech with input.release.extra.freeleech as true\n\
+                 }\n\n\
+                 freeleech if input.release.extra.freeleech == true\n",
+                vec![("forced", 100)],
+            ),
+            (
+                "lifecycle_names",
+                "import rego.v1\n\n\
+                 delete_files := true\n\
+                 unmonitor := 1\n\
+                 days_since(x) := x\n\
+                 match if true\n\n\
+                 score_entry[\"named\"] := 50 if {\n\
+                 \tdelete_files\n\
+                 \tunmonitor == days_since(1)\n\
+                 \tmatch\n\
+                 }\n",
+                vec![("named", 50)],
+            ),
+        ];
+        for (id, body, expected) in cases {
+            let policy = user_policy(id, body);
+            let validation = crate::validation::validate_user_rule(&policy.rego_source, id)
+                .expect("validation runs");
+            assert!(validation.valid, "{id}: {:?}", validation.diagnostics);
+            assert!(
+                validation.warnings.is_empty(),
+                "{id}: {:?}",
+                validation.warnings
+            );
+
+            let result = UserRulesEngine::build(&[policy])
+                .expect("scoring rule loads")
+                .evaluator()
+                .evaluate(&test_input(), "movie")
+                .expect("scoring runs");
+            assert!(result.errors.is_empty(), "{id}: {result:?}");
+            let entries: Vec<(&str, i32)> = result
+                .entries
+                .iter()
+                .map(|entry| (entry.code.as_str(), entry.delta))
+                .collect();
+            assert_eq!(entries, expected, "{id}");
+        }
+
+        let templates = shipped_scoring_templates();
+        assert_eq!(templates.len(), 12, "every shipped template is read");
+        for (id, body) in templates {
+            let policy = user_policy(&id, &body);
+            let validation = crate::validation::validate_user_rule(&policy.rego_source, &id)
+                .expect("validation runs");
+            assert!(
+                validation.valid,
+                "{id}: {:?}\n{body}",
+                validation.diagnostics
+            );
+            let result = UserRulesEngine::build(&[policy])
+                .expect("template loads")
+                .evaluator()
+                .evaluate(&test_input(), "movie")
+                .expect("template scores");
+            assert!(result.errors.is_empty(), "{id}: {result:?}");
         }
     }
 }

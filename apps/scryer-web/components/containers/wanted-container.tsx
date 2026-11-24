@@ -6,6 +6,7 @@ import type {
   WantedSection,
 } from "@/components/root/types";
 import { useClient, useMutation } from "urql";
+import { useGrab } from "@/lib/hooks/use-grab";
 import { WantedView } from "@/components/views/wanted-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
 import {
@@ -27,9 +28,6 @@ import {
   triggerTitleMismatchRecoverySearchMutation,
   pauseWantedItemMutation,
   resumeWantedItemMutation,
-  queueBestReleaseMutation,
-  queueReplacementMutation,
-  forceGrabPendingReleaseMutation,
   dismissPendingReleaseMutation,
 } from "@/lib/graphql/mutations";
 import type {
@@ -53,7 +51,6 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
-import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { releaseQueueScopeInput } from "@/lib/utils/release-queue-scope";
 import { createWantedNavigationCountsCache } from "@/lib/utils/wanted-navigation-counts";
 import { createWantedDetailsRequests } from "@/lib/utils/wanted-details-request";
@@ -102,20 +99,6 @@ function storeAcquisitionSearchJobId(id: string | null) {
 
 function cutoffItemKey(item: CutoffUnmetItem) {
   return item.episodeId?.trim() || item.titleId;
-}
-
-function cutoffItemEpisodeCode(item: CutoffUnmetItem): string | null {
-  const seasonDigits = item.seasonNumber?.match(/\d+/)?.[0] ?? null;
-  const episodeDigits = item.episodeNumber?.match(/\d+/)?.[0] ?? null;
-  if (!seasonDigits || !episodeDigits) {
-    return null;
-  }
-  return `S${seasonDigits.padStart(2, "0")}E${episodeDigits.padStart(2, "0")}`;
-}
-
-function cutoffItemLabel(item: CutoffUnmetItem) {
-  const episodeCode = cutoffItemEpisodeCode(item);
-  return episodeCode ? `${item.titleName} ${episodeCode}` : item.titleName;
 }
 
 function cutoffConflictMessage(item: CutoffUnmetItem) {
@@ -211,7 +194,7 @@ export const WantedContainer = memo(function WantedContainer({
   const [pendingLoading, setPendingLoading] = useState(false);
   const [pendingLoadingMore, setPendingLoadingMore] = useState(false);
   const pendingLoadInFlightRef = useRef(false);
-  const [, executeForceGrab] = useMutation(forceGrabPendingReleaseMutation);
+  const grab = useGrab();
   const [, executeDismiss] = useMutation(dismissPendingReleaseMutation);
 
   useEffect(() => {
@@ -346,21 +329,22 @@ export const WantedContainer = memo(function WantedContainer({
 
   const forceGrabPending = useCallback(
     async (id: string) => {
-      const { data, error } = await executeForceGrab({ id });
-      if (error) {
+      try {
+        const outcome = await grab({ pending: id });
+        if (outcome.pending?.grabbed === false) {
+          setGlobalStatus(t("pending.grabRejected"), { level: "ERROR" });
+        } else {
+          setGlobalStatus(t("pending.grabbed"));
+        }
+        void refreshPending();
+      } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
-      } else if (data?.forceGrabPendingRelease?.grabbed === false) {
-        setGlobalStatus(t("pending.grabRejected"), { level: "ERROR" });
-        void refreshPending();
-      } else {
-        setGlobalStatus(t("pending.grabbed"));
-        void refreshPending();
       }
     },
-    [executeForceGrab, refreshPending, setGlobalStatus, t],
+    [grab, refreshPending, setGlobalStatus, t],
   );
 
   const dismissPending = useCallback(
@@ -814,66 +798,27 @@ export const WantedContainer = memo(function WantedContainer({
 
   // --- Cutoff search actions ---
 
-  const searchAndQueueCutoffItem = useCallback(
-    async (
-      cutoffItem: CutoffUnmetItem,
-      options: { allowReplaceConfirmation?: boolean } = {},
-    ) => {
-      const input = {
-        titleId: cutoffItem.titleId,
-        scope: cutoffQueueScope(cutoffItem),
-      };
-      const submit = async (
-        nextInput: typeof input & { replaceInProgress?: boolean },
-      ) => {
-        const { data, error } = await client
-          .mutation(queueBestReleaseMutation, { input: nextInput })
-          .toPromise();
-        if (error) throw error;
-        return data?.queueBestRelease;
-      };
-      const payload = options.allowReplaceConfirmation
-        ? await retryWithReplaceOnConflict(
-            input,
-            submit,
-            cutoffConflictMessage(cutoffItem),
-            confirmReplaceConflict,
-          )
-        : await submit(input);
-      assertNoReplaceConflict(payload, cutoffConflictMessage(cutoffItem));
-      setGlobalStatus(
-        t("cutoff.searchTriggered", { name: cutoffItemLabel(cutoffItem) }),
-      );
-    },
-    [client, confirmReplaceConflict, t, setGlobalStatus],
-  );
-
+  // A row's automatic search runs as the background search job: a search
+  // waits on its indexers, so it never holds a request open.
   const cutoffTriggerAutoSearch = useCallback(
     async (item: CutoffUnmetItem) => {
       const itemKey = cutoffItemKey(item);
+      const episodeId = item.episodeId?.trim();
       setCutoffAutoSearchingId(itemKey);
       try {
-        await searchAndQueueCutoffItem(item, {
-          allowReplaceConfirmation: true,
+        await startAcquisitionSearch({
+          wantedItemId: episodeId
+            ? `episode:${episodeId}`
+            : `title:${item.titleId}`,
         });
-      } catch (error) {
-        const outcome = autoSearchOutcomeMessage(
-          error,
-          t,
-          cutoffItemLabel(item),
-        );
-        if (outcome) {
-          setGlobalStatus(outcome, { level: "WARNING" });
-        } else {
-          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
-            level: "ERROR",
-          });
-        }
       } finally {
-        setCutoffAutoSearchingId(null);
+        // Only this row's flag: a search started since keeps its own.
+        setCutoffAutoSearchingId((current) =>
+          current === itemKey ? null : current,
+        );
       }
     },
-    [searchAndQueueCutoffItem, setGlobalStatus, t],
+    [startAcquisitionSearch],
   );
 
   const cutoffTriggerInteractiveSearch = useCallback(
@@ -945,7 +890,9 @@ export const WantedContainer = memo(function WantedContainer({
           { level: "ERROR" },
         );
       } finally {
-        setCutoffInteractiveSearchingId(null);
+        setCutoffInteractiveSearchingId((current) =>
+          current === itemKey ? null : current,
+        );
       }
     },
     [client, setGlobalStatus, t],
@@ -970,11 +917,8 @@ export const WantedContainer = memo(function WantedContainer({
         const payload = await retryWithReplaceOnConflict(
           input,
           async (nextInput) => {
-            const { data, error } = await client
-              .mutation(queueReplacementMutation, { input: nextInput })
-              .toPromise();
-            if (error) throw error;
-            return data?.queueReplacementRelease;
+            const outcome = await grab({ replacement: nextInput });
+            return outcome.queued;
           },
           conflictMessage,
           confirmReplaceConflict,
@@ -989,7 +933,7 @@ export const WantedContainer = memo(function WantedContainer({
         });
       }
     },
-    [client, confirmReplaceConflict, setGlobalStatus, t],
+    [confirmReplaceConflict, grab, setGlobalStatus, t],
   );
 
   // "Search All" is one server job over the filtered Upgrades scope set

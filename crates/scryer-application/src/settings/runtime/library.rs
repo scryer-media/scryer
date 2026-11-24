@@ -1,6 +1,6 @@
 /// Monitoring choices a library of this facet may save as its default. The
 /// first entry is the built-in default used when nothing valid is saved.
-fn default_monitor_type_choices(facet: &MediaFacet) -> &'static [&'static str] {
+pub(crate) fn default_monitor_type_choices(facet: &MediaFacet) -> &'static [&'static str] {
     if *facet == MediaFacet::Movie {
         &["MONITORED", "UNMONITORED"]
     } else {

@@ -12,7 +12,8 @@ use crate::scripts::runner::{
     run_script_cancellable,
 };
 use crate::scripts::scheduler::{
-    CustomJobDispatcher, CustomJobSource, DueCustomJob, run_custom_job_scheduler,
+    CustomJobDispatcher, CustomJobSource, CustomJobTarget, DueCustomJob, ScheduledLifecycleRule,
+    run_custom_job_scheduler,
 };
 use async_trait::async_trait;
 use scryer_domain::{
@@ -372,7 +373,8 @@ impl AppUseCase {
         ensure_runnable_custom_job(&script)?;
 
         let scripts_dir = self.services.config.scripts_dir.clone();
-        tokio::fs::create_dir_all(&scripts_dir)
+        crate::disk::Disk::process()
+            .create_dir(&scripts_dir, crate::disk::Parents::Create)
             .await
             .map_err(|error| {
                 AppError::Repository(format!(
@@ -508,11 +510,109 @@ impl CustomJobSource for AppUseCase {
             .list_enabled_scheduled()
             .await
     }
+
+    /// Rules that can run on a schedule, each with what its schedule anchors
+    /// on. A rule whose current revision cannot be acted on (saved before
+    /// rules declared their actions, or unreadable) is not scheduled: every
+    /// fire would only refuse. Three reads in all, whatever the rule count.
+    async fn load_scheduled_lifecycle_rules(&self) -> AppResult<Vec<ScheduledLifecycleRule>> {
+        let repo = &self.services.customization.lifecycle_rule_sets;
+        let rules: Vec<_> = repo
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .filter(|rule| rule.evaluates())
+            .collect();
+        if rules.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys: Vec<(String, i64)> = rules
+            .iter()
+            .map(|rule| (rule.id.clone(), rule.current_revision_number))
+            .collect();
+        let revisions = repo.get_revisions(&keys).await?;
+        let mut loadable = Vec::with_capacity(rules.len());
+        for (rule, revision) in rules.into_iter().zip(revisions) {
+            let declared = revision.as_ref().map(|revision| {
+                crate::lifecycle_rules::LifecycleDeclaredActions::from_persisted_json(
+                    &revision.declared_actions_json,
+                )
+            });
+            match declared {
+                Some(Ok(Some(_))) => loadable.push(rule),
+                Some(Ok(None)) => info!(
+                    rule_set_id = %rule.id,
+                    reason = crate::error_reasons::lifecycle::RULE_ACTIONS_UNREADABLE,
+                    "lifecycle rule is not scheduled until its source is saved again"
+                ),
+                Some(Err(error)) => warn!(
+                    rule_set_id = %rule.id,
+                    error = %error,
+                    "lifecycle rule is not scheduled: its stored actions are unreadable"
+                ),
+                None => warn!(
+                    rule_set_id = %rule.id,
+                    revision = rule.current_revision_number,
+                    "lifecycle rule is not scheduled: its current revision is missing"
+                ),
+            }
+        }
+        let ids: Vec<String> = loadable.iter().map(|rule| rule.id.clone()).collect();
+        let mut anchors = self
+            .services
+            .customization
+            .lifecycle_evaluation
+            .rule_schedule_anchors(&ids)
+            .await?;
+        Ok(loadable
+            .into_iter()
+            .map(|rule| {
+                let anchor = anchors.remove(&rule.id).unwrap_or_default();
+                ScheduledLifecycleRule {
+                    id: rule.id,
+                    name: rule.name,
+                    schedule: rule.schedule,
+                    last_run_at: anchor.last_run_at,
+                    in_flight: anchor.in_flight,
+                }
+            })
+            .collect())
+    }
 }
 
 #[async_trait]
 impl CustomJobDispatcher for AppUseCase {
     async fn dispatch(&self, due: DueCustomJob) {
+        if due.target == CustomJobTarget::LifecycleRule {
+            // A restore or shutdown drain has begun: no new rule work starts,
+            // and work already running is tracked so the drain waits for it.
+            if self.restore_coordinator().shutdown_workers.is_cancelled()
+                || self.restore_coordinator().blocks_application()
+            {
+                info!(rule_set_id = %due.script_id, "background work is stopping; skipping this lifecycle rule fire");
+                return;
+            }
+            let Some(guard) = self
+                .runtime
+                .jobs
+                .custom_job_scheduler
+                .begin_lifecycle_rule_fire(&due.script_id)
+            else {
+                info!(rule_set_id = %due.script_id, "lifecycle rule is still running; skipping this fire");
+                return;
+            };
+            let app = self.clone();
+            self.restore_coordinator().spawn_task(
+                async move {
+                    let _guard = guard;
+                    if let Err(error) = app.run_scheduled_lifecycle_rule(&due.script_id).await {
+                        warn!(rule_set_id = %due.script_id, error = %error, "scheduled lifecycle rule run failed");
+                    }
+                }
+                .in_current_span(),
+            );
+            return;
+        }
         if let Err(error) = self
             .start_custom_job_run(&due.script_id, due.execution_mode, due.trigger_source, None)
             .await

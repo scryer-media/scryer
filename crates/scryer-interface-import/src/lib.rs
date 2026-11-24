@@ -2489,6 +2489,37 @@ impl ExternalImportMutations {
         source_import_payload(&app, &actor, run_id.as_str()).await
     }
 
+    /// Start importing Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules. Sonarr and Radarr require catalog-settings management and Maintainerr requires system-settings management; repeating a request key returns the run it started.
+    async fn start_external_rule_import(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Stable caller-generated request identity reused when a response is lost."
+        )]
+        request_key: String,
+        #[graphql(desc = "Application, base URL and, for Sonarr or Radarr, API key to read.")]
+        input: ExternalRuleImportInput,
+    ) -> GqlResult<JobRunPayload> {
+        let source = scryer_interface_media::mappers::to_rule_import_source(input.source);
+        let actor = require_config_app_permission(ctx, source.required_permission()).await?;
+        let app = app_from_ctx(ctx)?;
+        let run = app
+            .start_rule_import(
+                &actor,
+                &request_key,
+                scryer_application::rule_import::RuleImportConnection {
+                    source,
+                    base_url: input.base_url,
+                    api_key: input.api_key,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(scryer_interface_media::mappers::from_job_run(
+            scryer_application::JobRun::from_record(&run, None),
+        ))
+    }
+
     /// Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
     async fn skip_external_import_source(
         &self,
@@ -2739,6 +2770,8 @@ async fn source_import_selections(
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,

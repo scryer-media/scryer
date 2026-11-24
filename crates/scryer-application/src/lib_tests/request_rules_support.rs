@@ -11,8 +11,7 @@ use super::*;
 use crate::lib_tests::support_events_requests::MockMediaRequestRepo;
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
-    RequestRuleRevision, RequestRuleSet,
+    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleRevision, RequestRuleSet,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct InMemoryRequestRuleRepo {
     rule_sets: Mutex<Vec<RequestRuleSet>>,
     revisions: Mutex<Vec<RequestRuleRevision>>,
+    builder_models: Mutex<HashMap<String, String>>,
 }
 
 #[async_trait]
@@ -44,9 +44,16 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         &self,
         rule_set: &RequestRuleSet,
         revision: &RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()> {
         self.rule_sets.lock().await.push(rule_set.clone());
         self.revisions.lock().await.push(revision.clone());
+        if let Some(model) = builder_model_json {
+            self.builder_models
+                .lock()
+                .await
+                .insert(rule_set.id.clone(), model.to_string());
+        }
         Ok(())
     }
 
@@ -54,6 +61,7 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         &self,
         revision: &RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
         let rule_set = rule_sets
@@ -75,7 +83,26 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         rule_set.current_revision_number = revision.revision_number;
         rule_set.updated_at = updated_at;
         revisions.push(revision.clone());
+        match builder_model_json {
+            None => {}
+            Some(None) => {
+                self.builder_models
+                    .lock()
+                    .await
+                    .remove(&revision.rule_set_id);
+            }
+            Some(Some(model)) => {
+                self.builder_models
+                    .lock()
+                    .await
+                    .insert(revision.rule_set_id.clone(), model.to_string());
+            }
+        }
         Ok(())
+    }
+
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>> {
+        Ok(self.builder_models.lock().await.get(rule_set_id).cloned())
     }
 
     async fn get_revision(
@@ -127,10 +154,9 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         Ok(())
     }
 
-    async fn update_rule_set_evaluation_mode(
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -139,7 +165,6 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
             .iter_mut()
             .find(|rule_set| rule_set.id == id)
             .ok_or_else(|| AppError::NotFound(id.to_string()))?;
-        rule_set.evaluation_mode = mode;
         rule_set.enabled = enabled;
         rule_set.updated_at = updated_at;
         Ok(())
@@ -163,6 +188,8 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
 pub(super) struct InMemoryRequestRuleDecisionRepo {
     decisions: Mutex<Vec<RequestRuleDecisionRecord>>,
     pub(super) fail_writes: std::sync::atomic::AtomicBool,
+    /// How many batched count reads ran.
+    pub(super) count_batches: std::sync::atomic::AtomicUsize,
 }
 
 impl InMemoryRequestRuleDecisionRepo {
@@ -238,6 +265,108 @@ impl crate::ports::RequestRuleDecisionRepository for InMemoryRequestRuleDecision
             .iter()
             .filter(|decision| decision.votes_json.contains(rule_set_id))
             .count() as u64)
+    }
+
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>> {
+        self.count_batches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let decisions = self.decisions.lock().await;
+        let mut counts = std::collections::HashMap::new();
+        for rule_set_id in rule_set_ids {
+            let rule_set_id = rule_set_id.trim();
+            if rule_set_id.is_empty() {
+                continue;
+            }
+            let count = decisions
+                .iter()
+                .filter(|decision| decision.votes_json.contains(rule_set_id))
+                .count() as u64;
+            if count > 0 {
+                counts.insert(rule_set_id.to_string(), count);
+            }
+        }
+        Ok(counts)
+    }
+
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize> {
+        let mut decisions = self.decisions.lock().await;
+        let mut removed = 0usize;
+        decisions.retain(|decision| {
+            let preflight = decision
+                .request_id
+                .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX);
+            if preflight && removed < limit {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        Ok(removed)
+    }
+
+    async fn delete_traces_beyond_latest_per_rule_set(
+        &self,
+        keep: usize,
+        limit: usize,
+    ) -> AppResult<usize> {
+        if keep == 0 {
+            return Ok(0);
+        }
+        let voted = |decision: &RequestRuleDecisionRecord| -> Vec<String> {
+            serde_json::from_str::<Vec<serde_json::Value>>(&decision.votes_json)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|vote| vote.get("rule_set_id")?.as_str().map(str::to_string))
+                .collect()
+        };
+        let mut decisions = self.decisions.lock().await;
+        let mut newest_first: Vec<&RequestRuleDecisionRecord> = decisions.iter().collect();
+        newest_first.sort_by(|left, right| {
+            right
+                .evaluated_at
+                .cmp(&left.evaluated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut doomed = std::collections::HashSet::new();
+        let mut unlinked = 0usize;
+        for decision in newest_first {
+            let rule_sets = voted(decision);
+            // Pre-flight traces have their own purge.
+            let mut kept_by_any = false;
+            if rule_sets.is_empty() {
+                if decision
+                    .request_id
+                    .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX)
+                {
+                    continue;
+                }
+                unlinked += 1;
+                kept_by_any = unlinked <= keep;
+            }
+            for rule_set in rule_sets {
+                let rank = seen.entry(rule_set).or_default();
+                *rank += 1;
+                kept_by_any |= *rank <= keep;
+            }
+            if !kept_by_any && doomed.len() < limit {
+                doomed.insert(decision.id.clone());
+            }
+        }
+        decisions.retain(|decision| !doomed.contains(&decision.id));
+        Ok(doomed.len())
+    }
+}
+
+impl InMemoryRequestRuleDecisionRepo {
+    /// Store a trace as an older build would have, bypassing the evaluation.
+    #[allow(dead_code)]
+    pub(super) async fn seed(&self, decision: RequestRuleDecisionRecord) {
+        self.decisions.lock().await.push(decision);
     }
 }
 
@@ -362,7 +491,7 @@ impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
         if let Some((guards, title_id, observed)) = self.read_guard_probe.lock().await.clone()
             && title_ids.contains(&title_id)
             && guards
-                .try_acquire(&format!("maintenance-title:{title_id}"))
+                .try_acquire(&format!("lifecycle-title:{title_id}"))
                 .await
                 .is_none()
         {
@@ -464,7 +593,12 @@ impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
         {
             claim.state = LifecycleClaimState::Active;
             claim.starts_at = Some(starts_at);
-            claim.expires_at = expires_at;
+            // `CASE WHEN expires_at > ? THEN expires_at ELSE ? END`, NULL
+            // comparisons included.
+            claim.expires_at = match (claim.expires_at, expires_at) {
+                (Some(stored), Some(given)) if stored > given => Some(stored),
+                (_, given) => given,
+            };
             // The write time, not the lease's start: a reconcile pass backdates
             // `starts_at` to the import it missed.
             claim.updated_at = now;

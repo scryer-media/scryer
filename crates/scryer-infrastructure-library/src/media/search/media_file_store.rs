@@ -13,25 +13,26 @@ use scryer_application::{
     derive_primary_quality_label,
 };
 use scryer_domain::Id;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::media::id_list_statements::{id_list_statements, max_binds};
-use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
 use crate::storage::sql::json::canonical_json_text;
 
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
-/// Same-path upgrades stage the verified replacement beside the final file
-/// under this prefix (`import::upgrade::sibling_guard_path`) and only rename it
-/// onto the final path once the old file is safely aside. The staged row exists
-/// in `media_files` for the whole copy, so every live query has to treat it the
-/// same way it treats a recycled file: not part of the library yet.
-const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
+// Same-path upgrades stage the verified replacement beside the final file
+// under `UPGRADE_REPLACEMENT_PREFIX` (or, from older releases, the legacy
+// prefix) and only rename it onto the final path once the old file is safely
+// aside. The staged row exists in `media_files` for the whole copy, so every
+// live query has to treat it the same way it treats a recycled file: not part
+// of the library yet.
+use scryer_application::{LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX};
 
 #[derive(Clone)]
 pub struct MediaFileStore {
@@ -50,7 +51,25 @@ impl MediaFileStore {
     }
 }
 
-const INSERT_MEDIA_FILE_SQL: &str =
+/// One stored hash column as an upsert leaves it: kept while the row's size
+/// and signature are unchanged, cleared when either changes, since a hash
+/// describes the file the row described before.
+macro_rules! hash_column_kept_while_unchanged {
+    ($column:literal) => {
+        concat!(
+            "\n        ",
+            $column,
+            " = CASE WHEN media_files.size_bytes = excluded.size_bytes",
+            " AND COALESCE(media_files.source_signature_scheme, '') = COALESCE(excluded.source_signature_scheme, '')",
+            " AND COALESCE(media_files.source_signature_value, '') = COALESCE(excluded.source_signature_value, '')",
+            " THEN media_files.",
+            $column,
+            " ELSE NULL END"
+        )
+    };
+}
+
+const INSERT_MEDIA_FILE_SQL: &str = concat!(
     "INSERT INTO media_files
      (id, title_id, file_path, size_bytes, announced_size_bytes, role, quality_id, scan_status, created_at,
       source_signature_scheme, source_signature_value,
@@ -90,7 +109,77 @@ const INSERT_MEDIA_FILE_SQL: &str =
         edition = excluded.edition,
         original_file_path = COALESCE(excluded.original_file_path, media_files.original_file_path),
         release_hash = excluded.release_hash,
-        release_listing_json = excluded.release_listing_json";
+        release_listing_json = excluded.release_listing_json,",
+    hash_column_kept_while_unchanged!("full_blake3"),
+    ",",
+    hash_column_kept_while_unchanged!("move_crc"),
+    ",",
+    hash_column_kept_while_unchanged!("move_crc_algorithm"),
+    ",",
+    hash_column_kept_while_unchanged!("hash_computed_at"),
+    ",",
+    hash_column_kept_while_unchanged!("full_hash_mark"),
+);
+
+/// Clear one row's stored hash unless the size and signature it is about to
+/// be given equal the ones it holds. A signature that appears where there was
+/// none is a change.
+const CLEAR_HASH_UNLESS_UNCHANGED_SQL: &str = "UPDATE media_files SET
+        full_blake3 = NULL, move_crc = NULL, move_crc_algorithm = NULL,
+        hash_computed_at = NULL, full_hash_mark = NULL
+     WHERE id = {} AND full_blake3 IS NOT NULL
+       AND NOT (size_bytes = {}
+            AND COALESCE(source_signature_scheme, '') = COALESCE({}, '')
+            AND COALESCE(source_signature_value, '') = COALESCE({}, ''))";
+
+async fn clear_hash_unless_unchanged_tx(
+    tx: &mut SqlTx<'_>,
+    file_id: &str,
+    size_bytes: i64,
+    source_signature_scheme: Option<String>,
+    source_signature_value: Option<String>,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        CLEAR_HASH_UNLESS_UNCHANGED_SQL,
+        &[
+            SqlArg::Text(file_id.to_string()),
+            SqlArg::I64(size_bytes),
+            SqlArg::OptText(source_signature_scheme),
+            SqlArg::OptText(source_signature_value),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+const WRITE_CONTENT_HASHES_SQL: &str = "UPDATE media_files SET
+        full_blake3 = {},
+        move_crc = {},
+        move_crc_algorithm = {},
+        hash_computed_at = {},
+        full_hash_mark = {}
+     WHERE id = {}";
+
+fn content_hash_args(
+    file_id: &str,
+    hashes: &scryer_application::location::model::PersistedContentHashes,
+) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(hashes.full_blake3.clone()),
+        // Stored as text: a u64 does not fit either engine's signed 64-bit
+        // integer column without wrapping.
+        SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
+        SqlArg::OptText(
+            hashes
+                .crc_algorithm
+                .map(|algorithm| algorithm.as_str().to_string()),
+        ),
+        SqlArg::OptTimestamp(hashes.hash_computed_at),
+        SqlArg::OptText(hashes.mark.clone()),
+        SqlArg::Text(file_id.to_string()),
+    ]
+}
 
 fn media_file_insert_args(
     datastore: &StoreDatastore,
@@ -119,7 +208,7 @@ fn media_file_insert_args(
         SqlArg::OptText(input.scoring_log.clone()),
         SqlArg::OptText(input.indexer_source.clone()),
         SqlArg::OptText(input.grabbed_release_title.clone()),
-        opt_timestamp_arg_for_datastore(datastore, input.grabbed_at.as_deref())?,
+        datastore.opt_timestamp_text_arg(input.grabbed_at.as_deref())?,
         SqlArg::OptText(input.edition.clone()),
         SqlArg::OptText(input.original_file_path.clone()),
         SqlArg::OptText(input.release_hash.clone()),
@@ -645,6 +734,34 @@ impl MediaFileStore {
         fetch_media_files(self.datastore.read_exec(), &sql, &args).await
     }
 
+    async fn list_series_movie_link_ids_with_files_for_titles_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let sql = format!(
+            "SELECT DISTINCT fsmlm.series_movie_link_id
+             FROM media_files mf
+             INNER JOIN file_series_movie_link_map fsmlm ON fsmlm.file_id = mf.id
+             WHERE mf.title_id IN ({placeholders})
+               AND {}",
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter()
+            .map(|row| row.text("series_movie_link_id"))
+            .collect()
+    }
+
     async fn list_title_media_size_summaries_statement(
         &self,
         title_ids: &[String],
@@ -1090,12 +1207,14 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<ClaimedMediaFile> {
         let id = Id::new().0;
         let args = media_file_insert_args(&self.datastore, input, &id)?;
         let file_path = input.file_path.clone();
         let input = input.clone();
         let associations = associations.clone();
+        let hashes = hashes.cloned();
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "claim_import_destination",
@@ -1104,6 +1223,7 @@ impl MediaFileRepository for MediaFileStore {
                 let file_path = file_path.clone();
                 let input = input.clone();
                 let associations = associations.clone();
+                let hashes = hashes.clone();
                 Box::pin(async move {
                     if let Some(existing) = load_media_file_ownership_tx(tx, &file_path).await? {
                         if !import_destination_ownership_matches(
@@ -1121,6 +1241,18 @@ impl MediaFileRepository for MediaFileStore {
                             &associations,
                         )
                         .await?;
+                        // The row now describes the file this import left
+                        // at its path: it takes that file's size and
+                        // signature, and keeps its stored hash only when
+                        // neither changed.
+                        clear_hash_unless_unchanged_tx(
+                            tx,
+                            &existing.media_file_id,
+                            input.size_bytes,
+                            input.source_signature_scheme.clone(),
+                            input.source_signature_value.clone(),
+                        )
+                        .await?;
                         // A reuse that carries a grab's listing snapshot
                         // overwrites the one an earlier import left; a reuse
                         // without a grab behind it (an adopted or manual
@@ -1129,14 +1261,28 @@ impl MediaFileRepository for MediaFileStore {
                         SqlRuntime::execute(
                             SqlExec::Tx(tx),
                             "UPDATE media_files
-                                SET release_listing_json = COALESCE({}, release_listing_json)
+                                SET release_listing_json = COALESCE({}, release_listing_json),
+                                    size_bytes = {},
+                                    source_signature_scheme = {},
+                                    source_signature_value = {}
                               WHERE id = {}",
                             &[
                                 SqlArg::OptText(input.release_listing_json.clone()),
+                                SqlArg::I64(input.size_bytes),
+                                SqlArg::OptText(input.source_signature_scheme.clone()),
+                                SqlArg::OptText(input.source_signature_value.clone()),
                                 SqlArg::Text(existing.media_file_id.clone()),
                             ],
                         )
                         .await?;
+                        if let Some(hashes) = &hashes {
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                WRITE_CONTENT_HASHES_SQL,
+                                &content_hash_args(&existing.media_file_id, hashes),
+                            )
+                            .await?;
+                        }
                         return Ok(ClaimedMediaFile {
                             media_file_id: existing.media_file_id,
                             disposition: MediaFileCatalogDisposition::Reused,
@@ -1144,6 +1290,14 @@ impl MediaFileRepository for MediaFileStore {
                     }
                     let file_id = insert_media_file_tx(tx, &file_path, &args).await?;
                     reconcile_media_file_associations_tx(tx, &file_id, &associations).await?;
+                    if let Some(hashes) = &hashes {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            WRITE_CONTENT_HASHES_SQL,
+                            &content_hash_args(&file_id, hashes),
+                        )
+                        .await?;
+                    }
                     Ok(ClaimedMediaFile {
                         media_file_id: file_id,
                         disposition: MediaFileCatalogDisposition::Created,
@@ -1314,7 +1468,7 @@ impl MediaFileRepository for MediaFileStore {
                     "media_files.series_movie_link_ids_json",
                 ),
                 quality_label: row.opt_text("quality_id")?,
-                created_at: timestamp_text(row, "created_at")?,
+                created_at: row.timestamp_text("created_at")?,
             })
         })
         .collect()
@@ -1379,10 +1533,11 @@ impl MediaFileRepository for MediaFileStore {
             .map(SqlArg::Text)
             .collect::<Vec<_>>();
         args.push(SqlArg::Text(title_id.to_string()));
+        let mut decoder = MediaFileRowDecoder::default();
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
-            .map(row_to_episode_scoped_media_file)
+            .map(|row| row_to_episode_scoped_media_file(&mut decoder, row))
             .collect()
     }
 
@@ -1441,6 +1596,7 @@ impl MediaFileRepository for MediaFileStore {
         let mut files_by_id: HashMap<String, EpisodeScopedMediaFile> = HashMap::new();
         let mut order: Vec<(String, String)> = Vec::new();
         let statement_count = statements.len();
+        let mut decoder = MediaFileRowDecoder::default();
         for (title_ids, episode_ids) in statements {
             let sql = format!(
                 "SELECT {},
@@ -1471,7 +1627,7 @@ impl MediaFileRepository for MediaFileStore {
                 .map(SqlArg::Text)
                 .collect::<Vec<_>>();
             for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
-                let file = row_to_episode_scoped_media_file(&row)?;
+                let file = row_to_episode_scoped_media_file(&mut decoder, &row)?;
                 if !files_by_id.contains_key(&file.media_file.id) {
                     order.push((
                         file.media_file.created_at.clone(),
@@ -1558,6 +1714,26 @@ impl MediaFileRepository for MediaFileStore {
         rows.iter()
             .map(|row| row.text("series_movie_link_id"))
             .collect()
+    }
+
+    async fn list_series_movie_link_ids_with_files_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut link_ids = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for chunk in title_ids.chunks(per_statement) {
+            for link_id in self
+                .list_series_movie_link_ids_with_files_for_titles_statement(chunk)
+                .await?
+            {
+                if seen.insert(link_id.clone()) {
+                    link_ids.push(link_id);
+                }
+            }
+        }
+        Ok(link_ids)
     }
 
     async fn list_title_media_size_summaries(
@@ -1782,7 +1958,7 @@ impl MediaFileRepository for MediaFileStore {
                     season_number: row.opt_text("season_number")?,
                     episode_number: row.opt_text("episode_number")?,
                     air_date: row.opt_text("air_date")?,
-                    title_created_at: timestamp_text(row, "title_created_at")?,
+                    title_created_at: row.timestamp_text("title_created_at")?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -1822,7 +1998,7 @@ impl MediaFileRepository for MediaFileStore {
                         .opt_text("movie_release_dates_json")?
                         .map(|value| serde_json::from_str(&value).map_err(repo_err))
                         .transpose()?,
-                    created_at: timestamp_text(row, "created_at")?,
+                    created_at: row.timestamp_text("created_at")?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -1865,7 +2041,7 @@ impl MediaFileRepository for MediaFileStore {
                         title_facet: row.text("facet")?,
                         continuity_status: row.opt_text("continuity_status")?,
                         movie_digital_release_date: row.opt_text("movie_digital_release_date")?,
-                        link_created_at: timestamp_text(row, "link_created_at")?,
+                        link_created_at: row.timestamp_text("link_created_at")?,
                     })
                 })
                 .collect::<AppResult<Vec<_>>>()?;
@@ -2104,7 +2280,7 @@ impl MediaFileRepository for MediaFileStore {
              ORDER BY mf.analysis_revision, mf.analysis_attempted_at, mf.id LIMIT {{}}",
             media_file_select_columns(dialect, "NULL", "mf.role"),
         );
-        fetch_media_files(
+        fetch_distinct_media_files(
             self.datastore.read_exec(),
             &query,
             &[
@@ -2228,8 +2404,11 @@ impl MediaFileRepository for MediaFileStore {
         source_signature_value: Option<String>,
         invalidate_full_hashes: bool,
     ) -> AppResult<()> {
+        // Without an invalidation the stored hash still goes when the size or
+        // signature changes, a signature appearing where there was none
+        // included: it describes the file the row described before.
         let invalidation = if invalidate_full_hashes {
-            ", full_blake3 = NULL, move_crc = NULL, move_crc_algorithm = NULL, hash_computed_at = NULL"
+            ", full_blake3 = NULL, move_crc = NULL, move_crc_algorithm = NULL, hash_computed_at = NULL, full_hash_mark = NULL"
         } else {
             ""
         };
@@ -2238,19 +2417,42 @@ impl MediaFileRepository for MediaFileStore {
                 source_signature_scheme = {{}}, source_signature_value = {{}}{invalidation}
              WHERE id = {{}}"
         );
-        execute_write(
+        let file_id = file_id.to_string();
+        SqlRuntime::run_in_transaction(
             &self.datastore,
             "update_media_file_source_signature",
-            &sql,
-            vec![
-                SqlArg::I64(size_bytes),
-                SqlArg::OptText(source_signature_scheme),
-                SqlArg::OptText(source_signature_value),
-                SqlArg::Text(file_id.to_string()),
-            ],
+            move |tx| {
+                let sql = sql.clone();
+                let file_id = file_id.clone();
+                let scheme = source_signature_scheme.clone();
+                let value = source_signature_value.clone();
+                Box::pin(async move {
+                    if !invalidate_full_hashes {
+                        clear_hash_unless_unchanged_tx(
+                            tx,
+                            &file_id,
+                            size_bytes,
+                            scheme.clone(),
+                            value.clone(),
+                        )
+                        .await?;
+                    }
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &sql,
+                        &[
+                            SqlArg::I64(size_bytes),
+                            SqlArg::OptText(scheme),
+                            SqlArg::OptText(value),
+                            SqlArg::Text(file_id),
+                        ],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()> {
@@ -2777,6 +2979,26 @@ impl MediaFileRepository for MediaFileStore {
         Ok(owners)
     }
 
+    async fn list_media_file_paths(&self, file_ids: &[String]) -> AppResult<Vec<(String, String)>> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Same id space and no liveness filter, as `get_media_file_by_id`.
+        let (file_ids, per_statement) = self.title_id_statements(file_ids);
+        let mut paths = Vec::with_capacity(file_ids.len());
+        for chunk in file_ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT mf.id, mf.file_path FROM media_files mf WHERE mf.id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                paths.push((row.text("id")?, row.text("file_path")?));
+            }
+        }
+        Ok(paths)
+    }
+
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
         let dialect = dialect_for_datastore(&self.datastore);
         let (where_clause, args) = media_file_path_predicate(file_path);
@@ -2825,7 +3047,9 @@ impl MediaFileRepository for MediaFileStore {
                  WHERE {where_clause}",
                 media_file_select_columns(dialect, "NULL", "mf.role")
             );
-            for media_file in fetch_media_files(self.datastore.read_exec(), &sql, &args).await? {
+            for media_file in
+                fetch_distinct_media_files(self.datastore.read_exec(), &sql, &args).await?
+            {
                 // Attribute each row to the path the caller asked for, using the
                 // same equivalence the predicate above matched on.
                 if let Some(requested_paths) =
@@ -2859,12 +3083,33 @@ impl MediaFileRepository for MediaFileStore {
         // `full_blake3 IS NULL` is exactly migration 0205's partial index
         // (`idx_media_files_full_hash_missing`), and ordering by id keeps the
         // cursor a single opaque value that survives a restart.
+        //
+        // A library with the backfill turned off is left out here, so the job
+        // never learns of its files and never touches its disks. Its title
+        // check is a primary-key lookup per queued row. A title without a
+        // library belongs to its facet's default library, as everywhere else.
         let mut sql = String::from(
             "SELECT mf.id, mf.title_id, mf.file_path, mf.size_bytes
                FROM media_files mf
-              WHERE mf.full_blake3 IS NULL",
+              WHERE mf.full_blake3 IS NULL
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM titles t
+                      JOIN libraries l
+                        ON l.id = COALESCE(
+                               t.library_id,
+                               CASE t.facet
+                                   WHEN 'movie' THEN 'movie_default_library'
+                                   WHEN 'series' THEN 'series_default_library'
+                                   WHEN 'anime' THEN 'anime_default_library'
+                                   ELSE 'movie_default_library'
+                               END
+                           )
+                     WHERE t.id = mf.title_id
+                       AND l.full_hash_backfill_enabled = {}
+                )",
         );
-        let mut args = Vec::new();
+        let mut args = vec![SqlArg::Bool(false)];
         if let Some(after_id) = after_id {
             sql.push_str(" AND mf.id > {}");
             args.push(SqlArg::Text(after_id.to_string()));
@@ -2894,25 +3139,8 @@ impl MediaFileRepository for MediaFileStore {
         execute_write(
             &self.datastore,
             "update_media_file_content_hashes",
-            "UPDATE media_files SET
-                full_blake3 = {},
-                move_crc = {},
-                move_crc_algorithm = {},
-                hash_computed_at = {}
-             WHERE id = {}",
-            vec![
-                SqlArg::Text(hashes.full_blake3.clone()),
-                // Stored as text: a u64 does not fit either engine's signed
-                // 64-bit integer column without wrapping.
-                SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
-                SqlArg::OptText(
-                    hashes
-                        .crc_algorithm
-                        .map(|algorithm| algorithm.as_str().to_string()),
-                ),
-                SqlArg::OptTimestamp(hashes.hash_computed_at),
-                SqlArg::Text(file_id.to_string()),
-            ],
+            WRITE_CONTENT_HASHES_SQL,
+            content_hash_args(file_id, hashes),
         )
         .await?;
         Ok(())
@@ -2927,11 +3155,11 @@ impl MediaFileRepository for MediaFileStore {
             &self.datastore,
             "publish_unchanged_media_file_hashes",
             "UPDATE media_files SET full_blake3 = {}, move_crc = {},
-                move_crc_algorithm = {}, hash_computed_at = {}
+                move_crc_algorithm = {}, hash_computed_at = {}, full_hash_mark = {}
              WHERE id = {} AND title_id = {} AND file_path = {} AND size_bytes = {}
                AND COALESCE(source_signature_scheme, '') = {}
                AND COALESCE(source_signature_value, '') = {}
-               AND full_blake3 IS NULL",
+               AND full_blake3 IS NULL AND full_hash_mark IS NULL",
             vec![
                 SqlArg::Text(hashes.full_blake3.clone()),
                 SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
@@ -2941,6 +3169,7 @@ impl MediaFileRepository for MediaFileStore {
                         .map(|algorithm| algorithm.as_str().to_string()),
                 ),
                 SqlArg::OptTimestamp(hashes.hash_computed_at),
+                SqlArg::OptText(hashes.mark.clone()),
                 SqlArg::Text(expected.id.clone()),
                 SqlArg::Text(expected.title_id.clone()),
                 SqlArg::Text(expected.file_path.clone()),
@@ -2965,9 +3194,61 @@ impl MediaFileRepository for MediaFileStore {
                 full_blake3 = NULL,
                 move_crc = NULL,
                 move_crc_algorithm = NULL,
-                hash_computed_at = NULL
+                hash_computed_at = NULL,
+                full_hash_mark = NULL
              WHERE id = {} AND full_blake3 IS NOT NULL",
             vec![SqlArg::Text(file_id.to_string())],
+        )
+        .await?;
+        Ok(affected > 0)
+    }
+
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &scryer_application::disk::HashRow,
+    ) -> AppResult<Option<scryer_application::location::model::PersistedContentHashes>> {
+        let (filter, args) = hash_row_filter(row);
+        let sql = format!(
+            "SELECT full_blake3, move_crc, move_crc_algorithm, hash_computed_at, full_hash_mark
+             FROM media_files WHERE {filter} AND full_blake3 IS NOT NULL
+             LIMIT 1"
+        );
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        match rows.first() {
+            Some(found) => row_to_persisted_content_hashes(found),
+            None => Ok(None),
+        }
+    }
+
+    async fn record_media_file_full_hash(
+        &self,
+        row: &scryer_application::disk::HashRow,
+        size_bytes: i64,
+        hashes: &scryer_application::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let (filter, row_args) = hash_row_filter(row);
+        let mut args = vec![
+            SqlArg::Text(hashes.full_blake3.clone()),
+            SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
+            SqlArg::OptText(
+                hashes
+                    .crc_algorithm
+                    .map(|algorithm| algorithm.as_str().to_string()),
+            ),
+            SqlArg::OptTimestamp(hashes.hash_computed_at),
+            SqlArg::OptText(hashes.mark.clone()),
+        ];
+        args.extend(row_args);
+        args.push(SqlArg::I64(size_bytes));
+        let affected = execute_write(
+            &self.datastore,
+            "record_media_file_full_hash",
+            &format!(
+                "UPDATE media_files SET full_blake3 = {{}}, move_crc = {{}},
+                    move_crc_algorithm = {{}}, hash_computed_at = {{}}, full_hash_mark = {{}}
+                 WHERE {filter} AND size_bytes = {{}}"
+            ),
+            args,
         )
         .await?;
         Ok(affected > 0)
@@ -3004,7 +3285,8 @@ impl MediaFileRepository for MediaFileStore {
                 SqlArg::OptText(snapshot.release_group.clone()),
                 SqlArg::OptText(snapshot.indexer_source.clone()),
                 SqlArg::OptText(snapshot.grabbed_release_title.clone()),
-                opt_timestamp_arg_for_datastore(&self.datastore, snapshot.grabbed_at.as_deref())?,
+                self.datastore
+                    .opt_timestamp_text_arg(snapshot.grabbed_at.as_deref())?,
                 SqlArg::OptText(snapshot.edition.clone()),
                 SqlArg::OptText(snapshot.release_hash.clone()),
                 SqlArg::OptText(snapshot.release_listing_json.clone()),
@@ -3198,11 +3480,13 @@ fn live_media_file_predicate(dialect: SqlDialect, alias: &str) -> String {
     match dialect {
         SqlDialect::Sqlite => format!(
             "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
-              AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0)"
+              AND instr({alias}.file_path, '/{UPGRADE_REPLACEMENT_PREFIX}') = 0
+              AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0)"
         ),
         SqlDialect::Postgres => format!(
             "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
-              AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0)"
+              AND POSITION('/{UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
+              AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0)"
         ),
     }
 }
@@ -3373,7 +3657,7 @@ fn media_file_select_columns(dialect: SqlDialect, episode_expr: &str, role_expr:
             mf.file_path,
             mf.size_bytes, mf.announced_size_bytes, {role_expr} AS role,
             mf.source_signature_scheme, mf.source_signature_value,
-            mf.full_blake3, mf.move_crc, mf.move_crc_algorithm, mf.hash_computed_at,
+            mf.full_blake3, mf.move_crc, mf.move_crc_algorithm, mf.hash_computed_at, mf.full_hash_mark,
             mf.quality_id, mf.scan_status, mf.created_at,
             mf.video_codec, mf.video_width, mf.video_height,
             mf.video_bitrate_kbps, mf.video_bit_depth,
@@ -3467,7 +3751,25 @@ fn bool_column_is_true(dialect: SqlDialect, column: &str) -> String {
     }
 }
 
+/// Reads media file rows from a statement that can return one file on several
+/// rows (one per linked episode), decoding each file's analysis once.
 async fn fetch_media_files(
+    exec: SqlExec<'_, '_>,
+    sql: &str,
+    args: &[SqlArg],
+) -> AppResult<Vec<TitleMediaFile>> {
+    let mut decoder = MediaFileRowDecoder::default();
+    SqlRuntime::fetch_all(exec, sql, args)
+        .await?
+        .iter()
+        .map(|row| decoder.title_media_file(row))
+        .collect()
+}
+
+/// Reads media file rows from a statement that returns each file at most
+/// once. Every row's analysis is decoded and moved into its result, with
+/// nothing kept for later rows.
+async fn fetch_distinct_media_files(
     exec: SqlExec<'_, '_>,
     sql: &str,
     args: &[SqlArg],
@@ -3491,9 +3793,14 @@ async fn fetch_optional_media_file(
         .transpose()
 }
 
+/// `succeeded_parts` yields the stored analysis's report and disc; it is
+/// called only for a succeeded attempt.
 fn media_analysis_attempt_from_row(
     row: &SqlRow,
-    analysis: &serde_json::Value,
+    succeeded_parts: impl FnOnce() -> (
+        Option<scryer_media_types::ProbeReport>,
+        Option<scryer_media_types::DiscMetadata>,
+    ),
 ) -> AppResult<Option<scryer_media_types::AnalysisAttempt>> {
     let Some(revision) = row
         .opt_i64("analysis_attempt_revision")?
@@ -3506,68 +3813,304 @@ fn media_analysis_attempt_from_row(
     };
     let status = row.opt_text("analysis_attempt_status")?.unwrap_or_default();
     let succeeded = status == "succeeded";
-    let document = if succeeded {
-        Some(analysis.clone())
+    let (report, disc) = if succeeded {
+        succeeded_parts()
     } else {
-        row.opt_text("analysis_attempt_json")?
-            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        let document = row
+            .opt_text("analysis_attempt_json")?
+            .and_then(|json| serde_json::from_str::<JsonValue>(&json).ok());
+        let details = document
+            .as_ref()
+            .and_then(|document| document.get("details"));
+        (
+            details
+                .and_then(|details| details.get("report"))
+                .and_then(|report| scryer_media_types::ProbeReport::deserialize(report).ok()),
+            details
+                .and_then(|details| details.get("disc"))
+                .and_then(|disc| scryer_media_types::DiscMetadata::deserialize(disc).ok()),
+        )
     };
-    let report = document
-        .as_ref()
-        .and_then(|document| document.get("details")?.get("report"))
-        .and_then(|report| serde_json::from_value(report.clone()).ok())
-        .unwrap_or_else(|| scryer_media_types::ProbeReport {
-            status: serde_json::from_value(serde_json::Value::String(status)).unwrap_or_default(),
-            ..Default::default()
-        });
+    let report = report.unwrap_or_else(|| scryer_media_types::ProbeReport {
+        status: serde_json::from_value(JsonValue::String(status)).unwrap_or_default(),
+        ..Default::default()
+    });
     Ok(Some(scryer_media_types::AnalysisAttempt {
         revision,
         attempted_at,
         succeeded,
         report,
-        disc: document
-            .as_ref()
-            .and_then(|document| document.get("details")?.get("disc"))
-            .and_then(|disc| serde_json::from_value(disc.clone()).ok()),
+        disc,
     }))
 }
 
+/// Decodes one media file row on its own, moving its decoded analysis into
+/// the result.
 fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
-    let analysis = analysis_json_from_row(row);
-    let mut audio_streams: Vec<scryer_application::AudioStreamDetail> =
-        analysis_array_field(&analysis, "audio_streams");
-    let mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> =
-        analysis_array_field(&analysis, "subtitle_streams");
-
-    let audio_language_values: Vec<String> = analysis_array_field(&analysis, "audio_languages");
-    let audio_languages = scryer_application::normalize_detected_audio_languages(
-        audio_language_values.iter().map(String::as_str),
-    );
-    for stream in &mut audio_streams {
-        stream.language = stream
-            .language
-            .as_deref()
-            .and_then(scryer_application::normalize_detected_audio_language_code);
-    }
-    let subtitle_language_values: Vec<String> =
-        analysis_array_field(&analysis, "subtitle_languages");
-    let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
-        subtitle_language_values.iter().map(String::as_str),
-    );
-    for stream in &mut subtitle_streams {
-        stream.language = stream
-            .language
-            .as_deref()
-            .and_then(scryer_application::normalize_detected_subtitle_language_code);
-    }
-
+    let mut analysis = {
+        let stored = row.opt_bytes("analysis").ok();
+        AnalysisParts::from_stored(stored.as_ref().map(|stored| stored.as_deref()))
+    };
+    let analysis_attempt = media_analysis_attempt_from_row(row, || {
+        (analysis.attempt_report.take(), analysis.attempt_disc.take())
+    })?;
+    let AnalysisParts {
+        details,
+        audio_languages,
+        audio_streams,
+        subtitle_languages,
+        subtitle_codecs,
+        subtitle_streams,
+        dovi_profile,
+        dovi_bl_compat_id,
+        ..
+    } = analysis;
     Ok(TitleMediaFile {
-        analysis_details: analysis
-            .get("details")
-            .cloned()
-            .and_then(|details| serde_json::from_value(details).ok())
-            .unwrap_or_default(),
-        analysis_attempt: media_analysis_attempt_from_row(row, &analysis)?,
+        analysis_details: details,
+        dovi_profile,
+        dovi_bl_compat_id,
+        audio_languages,
+        audio_streams,
+        subtitle_languages,
+        subtitle_codecs,
+        subtitle_streams,
+        ..title_media_file_columns(row, analysis_attempt)?
+    })
+}
+
+/// What a file's stored analysis contributes to a decoded media file row.
+#[derive(Clone)]
+struct AnalysisParts {
+    details: scryer_media_types::AnalysisDetails,
+    audio_languages: Vec<String>,
+    audio_streams: Vec<scryer_application::AudioStreamDetail>,
+    subtitle_languages: Vec<String>,
+    subtitle_codecs: Vec<String>,
+    subtitle_streams: Vec<scryer_application::SubtitleStreamDetail>,
+    dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
+    /// `details.report` when the document carries a readable one; a succeeded
+    /// attempt reports it.
+    attempt_report: Option<scryer_media_types::ProbeReport>,
+    /// `details.disc` when the document carries a readable one.
+    attempt_disc: Option<scryer_media_types::DiscMetadata>,
+}
+
+/// The analysis fields a media file row reads, deserialized straight from the
+/// stored document. Any field that does not deserialize sends the whole
+/// document through [`AnalysisParts::from_value`], which falls back field by
+/// field.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct StoredAnalysisFields {
+    details: Option<scryer_media_types::AnalysisDetails>,
+    audio_languages: Vec<String>,
+    audio_streams: Vec<scryer_application::AudioStreamDetail>,
+    subtitle_languages: Vec<String>,
+    subtitle_codecs: Vec<String>,
+    subtitle_streams: Vec<scryer_application::SubtitleStreamDetail>,
+    dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
+}
+
+impl AnalysisParts {
+    /// Reads a stored analysis column value. A file without a stored analysis
+    /// reads as the empty document, as a blank one always did; an unreadable
+    /// one reads as null. Both give every field its default.
+    fn from_stored(stored: Option<Option<&[u8]>>) -> Self {
+        let empty = || Self::from_value(&JsonValue::Object(Default::default()));
+        let stored = match stored {
+            Some(Some(stored)) => stored,
+            Some(None) => return empty(),
+            None => return Self::from_value(&JsonValue::Null),
+        };
+        match scryer_infrastructure_sql::compressed_blob::decompress_text(
+            stored,
+            ANALYSIS_MAX_BYTES,
+        ) {
+            Ok(json) if json.trim().is_empty() => empty(),
+            Ok(json) => Self::from_json(&json),
+            Err(_) => Self::from_value(&JsonValue::Null),
+        }
+    }
+
+    fn from_json(json: &str) -> Self {
+        if json.trim_start().starts_with('{')
+            && let Ok(fields) = serde_json::from_str::<StoredAnalysisFields>(json)
+        {
+            let (details, attempt_report) = match fields.details {
+                None => (Default::default(), None),
+                // A default report may also mean the details carry no report,
+                // which a succeeded attempt reads differently; settle it from
+                // the document itself.
+                Some(details) if details.report == scryer_media_types::ProbeReport::default() => {
+                    let attempt_report = serde_json::from_str::<JsonValue>(json)
+                        .ok()
+                        .as_ref()
+                        .and_then(attempt_report_from_value);
+                    (details, attempt_report)
+                }
+                Some(details) => {
+                    let attempt_report = Some(details.report.clone());
+                    (details, attempt_report)
+                }
+            };
+            let attempt_disc = details.disc.clone();
+            return Self::normalized(
+                details,
+                fields.audio_languages,
+                fields.audio_streams,
+                fields.subtitle_languages,
+                fields.subtitle_codecs,
+                fields.subtitle_streams,
+                fields.dovi_profile,
+                fields.dovi_bl_compat_id,
+                attempt_report,
+                attempt_disc,
+            );
+        }
+        Self::from_value(&serde_json::from_str(json).unwrap_or(JsonValue::Null))
+    }
+
+    /// Reads each field on its own, so one unreadable field falls back to its
+    /// default without affecting the others.
+    fn from_value(analysis: &JsonValue) -> Self {
+        Self::normalized(
+            analysis
+                .get("details")
+                .and_then(|details| scryer_media_types::AnalysisDetails::deserialize(details).ok())
+                .unwrap_or_default(),
+            analysis_array_field(analysis, "audio_languages"),
+            analysis_array_field(analysis, "audio_streams"),
+            analysis_array_field(analysis, "subtitle_languages"),
+            analysis_array_field(analysis, "subtitle_codecs"),
+            analysis_array_field(analysis, "subtitle_streams"),
+            analysis_u8_field(analysis, "dovi_profile"),
+            analysis_u8_field(analysis, "dovi_bl_compat_id"),
+            attempt_report_from_value(analysis),
+            analysis
+                .get("details")
+                .and_then(|details| details.get("disc"))
+                .and_then(|disc| scryer_media_types::DiscMetadata::deserialize(disc).ok()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn normalized(
+        details: scryer_media_types::AnalysisDetails,
+        audio_language_values: Vec<String>,
+        mut audio_streams: Vec<scryer_application::AudioStreamDetail>,
+        subtitle_language_values: Vec<String>,
+        subtitle_codecs: Vec<String>,
+        mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail>,
+        dovi_profile: Option<u8>,
+        dovi_bl_compat_id: Option<u8>,
+        attempt_report: Option<scryer_media_types::ProbeReport>,
+        attempt_disc: Option<scryer_media_types::DiscMetadata>,
+    ) -> Self {
+        let audio_languages = scryer_application::normalize_detected_audio_languages(
+            audio_language_values.iter().map(String::as_str),
+        );
+        for stream in &mut audio_streams {
+            stream.language = stream
+                .language
+                .as_deref()
+                .and_then(scryer_application::normalize_detected_audio_language_code);
+        }
+        let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
+            subtitle_language_values.iter().map(String::as_str),
+        );
+        for stream in &mut subtitle_streams {
+            stream.language = stream
+                .language
+                .as_deref()
+                .and_then(scryer_application::normalize_detected_subtitle_language_code);
+        }
+        Self {
+            details,
+            audio_languages,
+            audio_streams,
+            subtitle_languages,
+            subtitle_codecs,
+            subtitle_streams,
+            dovi_profile,
+            dovi_bl_compat_id,
+            attempt_report,
+            attempt_disc,
+        }
+    }
+}
+
+fn attempt_report_from_value(analysis: &JsonValue) -> Option<scryer_media_types::ProbeReport> {
+    analysis
+        .get("details")
+        .and_then(|details| details.get("report"))
+        .and_then(|report| scryer_media_types::ProbeReport::deserialize(report).ok())
+}
+
+type StoredAnalysis = Option<Option<Vec<u8>>>;
+
+/// Decodes the media file rows of one read. A statement that returns a file
+/// on several rows, one per episode, decodes its stored analysis once.
+#[derive(Default)]
+struct MediaFileRowDecoder {
+    analyses: HashMap<String, (StoredAnalysis, std::sync::Arc<AnalysisParts>)>,
+}
+
+impl MediaFileRowDecoder {
+    fn analysis(&mut self, row: &SqlRow) -> std::sync::Arc<AnalysisParts> {
+        let stored = row.opt_bytes("analysis").ok();
+        let decode = |stored: &StoredAnalysis| {
+            std::sync::Arc::new(AnalysisParts::from_stored(
+                stored.as_ref().map(|stored| stored.as_deref()),
+            ))
+        };
+        let Ok(id) = row.text("id") else {
+            return decode(&stored);
+        };
+        if let Some((cached_stored, parts)) = self.analyses.get(&id)
+            && *cached_stored == stored
+        {
+            return parts.clone();
+        }
+        let parts = decode(&stored);
+        self.analyses.insert(id, (stored, parts.clone()));
+        parts
+    }
+
+    fn title_media_file(&mut self, row: &SqlRow) -> AppResult<TitleMediaFile> {
+        let analysis = self.analysis(row);
+        let analysis_attempt = media_analysis_attempt_from_row(row, || {
+            (
+                analysis.attempt_report.clone(),
+                analysis.attempt_disc.clone(),
+            )
+        })?;
+        Ok(TitleMediaFile {
+            analysis_details: analysis.details.clone(),
+            // Dolby Vision has no dedicated column: it rides in the serialized
+            // analysis, so rows written before it was captured read as `None`.
+            dovi_profile: analysis.dovi_profile,
+            dovi_bl_compat_id: analysis.dovi_bl_compat_id,
+            audio_languages: analysis.audio_languages.clone(),
+            audio_streams: analysis.audio_streams.clone(),
+            subtitle_languages: analysis.subtitle_languages.clone(),
+            subtitle_codecs: analysis.subtitle_codecs.clone(),
+            subtitle_streams: analysis.subtitle_streams.clone(),
+            ..title_media_file_columns(row, analysis_attempt)?
+        })
+    }
+}
+
+/// Every column-backed field of a media file row, with `analysis_attempt`
+/// placed first; the fields read from the stored analysis are left at their
+/// defaults for the caller to fill.
+fn title_media_file_columns(
+    row: &SqlRow,
+    analysis_attempt: Option<scryer_media_types::AnalysisAttempt>,
+) -> AppResult<TitleMediaFile> {
+    Ok(TitleMediaFile {
+        analysis_attempt,
         id: row.text("id")?,
         title_id: row.text("title_id")?,
         episode_id: row.opt_text("episode_id")?,
@@ -3589,28 +4132,19 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         content_hashes: row_to_persisted_content_hashes(row)?,
         quality_label: row.opt_text("quality_id")?,
         scan_status: row.text("scan_status")?,
-        created_at: timestamp_text(row, "created_at")?,
+        created_at: row.timestamp_text("created_at")?,
         video_codec: parse_stored_video_codec(row.opt_text("video_codec")?)?,
         video_width: row.opt_i32("video_width")?,
         video_height: row.opt_i32("video_height")?,
         video_bitrate_kbps: row.opt_i32("video_bitrate_kbps")?,
         video_bit_depth: row.opt_i32("video_bit_depth")?,
         video_hdr_format: row.opt_text("video_hdr_format")?,
-        // Dolby Vision has no dedicated column: it rides in the serialized
-        // analysis, so rows written before it was captured read as `None`.
-        dovi_profile: analysis_u8_field(&analysis, "dovi_profile"),
-        dovi_bl_compat_id: analysis_u8_field(&analysis, "dovi_bl_compat_id"),
         video_frame_rate: row.opt_text("video_frame_rate")?,
         video_profile: row.opt_text("video_profile")?,
         audio_codec: row.opt_text("audio_codec")?,
         audio_profile: row.opt_text("audio_profile")?,
         audio_channels: row.opt_i32("audio_channels")?,
         audio_bitrate_kbps: row.opt_i32("audio_bitrate_kbps")?,
-        audio_languages,
-        audio_streams,
-        subtitle_languages,
-        subtitle_codecs: analysis_array_field(&analysis, "subtitle_codecs"),
-        subtitle_streams,
         has_multiaudio: row.opt_bool("has_multiaudio")?.unwrap_or(false),
         duration_seconds: row.opt_i32("duration_seconds")?,
         num_chapters: row.opt_i32("num_chapters")?,
@@ -3626,12 +4160,26 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         scoring_log: row.opt_text("scoring_log")?,
         indexer_source: row.opt_text("indexer_source")?,
         grabbed_release_title: row.opt_text("grabbed_release_title")?,
-        grabbed_at: opt_timestamp_text(row, "grabbed_at")?,
+        grabbed_at: row.opt_timestamp_text("grabbed_at")?,
         edition: row.opt_text("edition")?,
         original_file_path: row.opt_text("original_file_path")?,
         release_hash: row.opt_text("release_hash")?,
         release_listing_json: row.opt_text("release_listing_json")?,
+        ..Default::default()
     })
+}
+
+/// The `WHERE` filter, and its arguments, naming one media file row: by its
+/// id, or by its title and stored path. Both are served by an index.
+fn hash_row_filter(row: &scryer_application::disk::HashRow) -> (&'static str, Vec<SqlArg>) {
+    use scryer_application::disk::HashRow;
+    match row {
+        HashRow::Id(id) => ("id = {}", vec![SqlArg::Text(id.clone())]),
+        HashRow::TitlePath { title_id, path } => (
+            "title_id = {} AND file_path = {}",
+            vec![SqlArg::Text(title_id.clone()), SqlArg::Text(path.clone())],
+        ),
+    }
 }
 
 /// Reads the migration-0205 columns off a media file row.
@@ -3667,6 +4215,9 @@ fn row_to_persisted_content_hashes(
         move_crc,
         crc_algorithm,
         hash_computed_at: row.opt_timestamp("hash_computed_at")?,
+        mark: row
+            .opt_text("full_hash_mark")?
+            .filter(|mark| !mark.trim().is_empty()),
     }))
 }
 
@@ -3702,8 +4253,11 @@ fn parse_stored_video_codec(
     .transpose()
 }
 
-fn row_to_episode_scoped_media_file(row: &SqlRow) -> AppResult<EpisodeScopedMediaFile> {
-    let media_file = row_to_title_media_file(row)?;
+fn row_to_episode_scoped_media_file(
+    decoder: &mut MediaFileRowDecoder,
+    row: &SqlRow,
+) -> AppResult<EpisodeScopedMediaFile> {
+    let media_file = decoder.title_media_file(row)?;
     let title_role = row
         .opt_text("title_role")?
         .as_deref()
@@ -3736,21 +4290,6 @@ fn encode_media_analysis(analysis_json: &str) -> AppResult<Vec<u8>> {
     scryer_infrastructure_sql::compressed_blob::compress_text(analysis_json, ANALYSIS_MAX_BYTES)
 }
 
-/// A file without a stored analysis reads as the empty document, as a blank
-/// one always did; an unreadable one reads as null.
-fn analysis_json_from_row(row: &SqlRow) -> JsonValue {
-    let stored = match row.opt_bytes("analysis") {
-        Ok(Some(stored)) => stored,
-        Ok(None) => return JsonValue::Object(Default::default()),
-        Err(_) => return JsonValue::Null,
-    };
-    match scryer_infrastructure_sql::compressed_blob::decompress_text(&stored, ANALYSIS_MAX_BYTES) {
-        Ok(json) if json.trim().is_empty() => JsonValue::Object(Default::default()),
-        Ok(json) => serde_json::from_str(&json).unwrap_or(JsonValue::Null),
-        Err(_) => JsonValue::Null,
-    }
-}
-
 fn analysis_u8_field(analysis: &JsonValue, field: &str) -> Option<u8> {
     analysis
         .get(field)
@@ -3761,38 +4300,8 @@ fn analysis_u8_field(analysis: &JsonValue, field: &str) -> Option<u8> {
 fn analysis_array_field<T: DeserializeOwned>(analysis: &JsonValue, field: &str) -> Vec<T> {
     analysis
         .get(field)
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
+        .and_then(|value| Vec::<T>::deserialize(value).ok())
         .unwrap_or_default()
-}
-
-fn opt_timestamp_arg_for_datastore(
-    datastore: &StoreDatastore,
-    value: Option<&str>,
-) -> AppResult<SqlArg> {
-    match datastore {
-        StoreDatastore::Sqlite { .. } => Ok(SqlArg::OptText(value.map(str::to_string))),
-        StoreDatastore::Postgres { .. } => value
-            .map(parse_utc_datetime)
-            .transpose()
-            .map(SqlArg::OptTimestamp),
-    }
-}
-
-fn timestamp_text(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(_) => row.text(column),
-        SqlRow::Postgres(_) => row.timestamp(column).map(|value| value.to_rfc3339()),
-    }
-}
-
-fn opt_timestamp_text(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
-    match row {
-        SqlRow::Sqlite(_) => row.opt_text(column),
-        SqlRow::Postgres(_) => row
-            .opt_timestamp(column)
-            .map(|value| value.map(|value| value.to_rfc3339())),
-    }
 }
 
 async fn execute_write(
@@ -3858,6 +4367,151 @@ mod tests {
         Collection, CollectionType, Episode, MediaFacet, MovieEntity, SeriesMovieLink, Title,
     };
     use scryer_infrastructure_datastore::SqliteServices;
+
+    /// The stored path of each asked file that has a row, in one read; ids
+    /// with no row are left out.
+    #[tokio::test]
+    async fn media_file_paths_are_read_for_the_asked_ids_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("paths.db").to_string_lossy())
+            .await
+            .unwrap();
+        title_store(&services)
+            .create(make_test_series_title("selected"))
+            .await
+            .unwrap();
+        let files = media_file_store(&services);
+        let mut ids = Vec::new();
+        for name in ["first", "second", "unasked"] {
+            ids.push(
+                files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: "selected".into(),
+                        file_path: format!("/synthetic/{name}.mkv"),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let mut paths = files
+            .list_media_file_paths(&[ids[0].clone(), ids[1].clone(), "no-such-file".into()])
+            .await
+            .unwrap();
+        paths.sort();
+        let mut expected = vec![
+            (ids[0].clone(), "/synthetic/first.mkv".to_string()),
+            (ids[1].clone(), "/synthetic/second.mkv".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(paths, expected);
+        assert!(files.list_media_file_paths(&[]).await.unwrap().is_empty());
+    }
+
+    /// The several-title read answers every link id the one-title read
+    /// answers for any of the titles, each once.
+    #[tokio::test]
+    async fn series_movie_links_with_files_read_for_several_titles_as_one_by_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("links.db").to_string_lossy())
+            .await
+            .unwrap();
+        for id in ["series-a", "series-b", "series-c"] {
+            title_store(&services)
+                .create(make_test_series_title(id))
+                .await
+                .unwrap();
+        }
+        let datastore = services.datastore();
+        execute_write(
+            &datastore,
+            "test_movie_entity",
+            "INSERT INTO movie_entities (id, title, created_at, updated_at)
+             VALUES ('entity-1', 'Synthetic Interlude', '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z')",
+            vec![],
+        )
+        .await
+        .unwrap();
+        for (link, series) in [
+            ("link-a", "series-a"),
+            ("link-b", "series-b"),
+            ("link-c", "series-c"),
+        ] {
+            execute_write(
+                &datastore,
+                "test_series_movie_link",
+                "INSERT INTO series_movie_links (id, series_title_id, movie_entity_id,
+                                                 created_at, updated_at)
+                 VALUES ({}, {}, 'entity-1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                vec![SqlArg::Text(link.into()), SqlArg::Text(series.into())],
+            )
+            .await
+            .unwrap();
+        }
+        let files = media_file_store(&services);
+        // Series a's file carries its own link and series b's; series b's
+        // carries b's; series c has a link but no file.
+        for (series, links) in [
+            ("series-a", vec!["link-a", "link-b"]),
+            ("series-b", vec!["link-b"]),
+        ] {
+            let file_id = files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: series.into(),
+                    file_path: format!("/synthetic/{series}.mkv"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            for link in links {
+                execute_write(
+                    &datastore,
+                    "test_file_link",
+                    "INSERT INTO file_series_movie_link_map (file_id, series_movie_link_id)
+                     VALUES ({}, {})",
+                    vec![SqlArg::Text(file_id.clone()), SqlArg::Text(link.into())],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let titles: Vec<String> = ["series-a", "series-b", "series-c"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let mut one_by_one = std::collections::BTreeSet::new();
+        for title in &titles {
+            one_by_one.extend(
+                files
+                    .list_series_movie_link_ids_with_files_for_title(title)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let together = files
+            .list_series_movie_link_ids_with_files_for_titles(&titles)
+            .await
+            .unwrap();
+        let unique: std::collections::BTreeSet<String> = together.iter().cloned().collect();
+        assert_eq!(
+            together.len(),
+            unique.len(),
+            "each link id once: {together:?}"
+        );
+        assert_eq!(unique, one_by_one);
+        assert_eq!(
+            unique.into_iter().collect::<Vec<_>>(),
+            vec!["link-a".to_string(), "link-b".to_string()]
+        );
+        assert!(
+            files
+                .list_series_movie_link_ids_with_files_for_titles(&[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn score_evaluation_episode_selection_deduplicates_shared_files() {
@@ -4237,6 +4891,11 @@ mod tests {
             (
                 &title.id,
                 "/synthetic/.scryer-upgrade-replacement-staged.mkv",
+                MediaFileRole::Primary,
+            ),
+            (
+                &title.id,
+                "/synthetic/.scry-ur-staged.mkv",
                 MediaFileRole::Primary,
             ),
             (
@@ -4828,6 +5487,7 @@ mod tests {
             move_crc: None,
             crc_algorithm: None,
             hash_computed_at: Some(Utc::now()),
+            mark: None,
         };
         files
             .update_media_file_content_hashes(&id, &hashes)
@@ -4967,6 +5627,7 @@ mod tests {
             move_crc: Some(u64::MAX - 1),
             crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
             hash_computed_at: Some(computed_at),
+            mark: None,
         };
         let expected = media_files
             .get_media_file_by_id(&ids[0])
@@ -5068,6 +5729,314 @@ mod tests {
                 .await
                 .expect("clear an unhashed row")
         );
+    }
+
+    #[tokio::test]
+    async fn a_full_hash_is_stored_and_read_with_its_mark_by_id_or_title_and_path() {
+        use scryer_application::disk::HashRow;
+        use scryer_application::location::model::{MoveCrcAlgorithm, PersistedContentHashes};
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_hash_rows_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-hash-rows");
+        titles.create(title.clone()).await.expect("insert title");
+        let path = "/library/show/file-a.mkv".to_string();
+        let id = media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.clone(),
+                size_bytes: 4096,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        let by_id = HashRow::Id(id.clone());
+        let by_path = HashRow::TitlePath {
+            title_id: title.id.clone(),
+            path: path.clone(),
+        };
+
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&by_id)
+                .await
+                .unwrap(),
+            None,
+            "an unhashed row stores nothing"
+        );
+
+        let hashes = PersistedContentHashes {
+            full_blake3: "cd".repeat(32),
+            move_crc: Some(u64::MAX - 2),
+            crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(Utc::now()),
+            mark: Some("synthetic-mark".to_string()),
+        };
+        assert!(
+            !media_files
+                .record_media_file_full_hash(&by_path, 4097, &hashes)
+                .await
+                .unwrap(),
+            "a row recording another size is not written"
+        );
+        assert!(
+            media_files
+                .record_media_file_full_hash(&by_path, 4096, &hashes)
+                .await
+                .unwrap()
+        );
+
+        for row in [&by_id, &by_path] {
+            let stored = media_files
+                .stored_media_file_full_hash(row)
+                .await
+                .unwrap()
+                .expect("stored hash");
+            assert_eq!(stored.full_blake3, hashes.full_blake3);
+            assert_eq!(stored.move_crc, hashes.move_crc);
+            assert_eq!(stored.mark.as_deref(), Some("synthetic-mark"));
+        }
+        let other_title = HashRow::TitlePath {
+            title_id: "title-elsewhere".to_string(),
+            path,
+        };
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&other_title)
+                .await
+                .unwrap(),
+            None,
+            "a path is only ever read under its own title"
+        );
+
+        // The mark goes with the hash: an invalidation clears both.
+        media_files
+            .refresh_media_file_source_signature(
+                &id,
+                4096,
+                Some("stat-v1".into()),
+                Some("replacement".into()),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&by_id)
+                .await
+                .unwrap(),
+            None
+        );
+        media_files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        assert!(
+            media_files
+                .clear_media_file_content_hashes(&id)
+                .await
+                .unwrap()
+        );
+        let cleared = media_files
+            .get_media_file_by_id(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.content_hashes.is_none());
+        let unmarked = PersistedContentHashes {
+            mark: None,
+            ..hashes.clone()
+        };
+        media_files
+            .update_media_file_content_hashes(&id, &unmarked)
+            .await
+            .unwrap();
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&by_id)
+                .await
+                .unwrap()
+                .expect("stored hash")
+                .mark,
+            None,
+            "a clear leaves no mark behind for a later hash stored without one"
+        );
+    }
+
+    /// A stored hash describes the file its row described when it was taken:
+    /// every writer that changes the row's size or signature clears it, a
+    /// signature appearing where there was none included, and keeps it while
+    /// neither changes. A claim that reuses a row writes the new size,
+    /// signature and hash together.
+    #[tokio::test]
+    async fn a_stored_hash_goes_when_its_rows_size_or_signature_changes() {
+        use scryer_application::disk::HashRow;
+        use scryer_application::location::model::{MoveCrcAlgorithm, PersistedContentHashes};
+
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("hash-writers.db").to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title("title-hash-writers");
+        title_store(&services).create(title.clone()).await.unwrap();
+        let files = media_file_store(&services);
+        let path = "/synthetic/show/file-hash-writers.mkv".to_string();
+        let row = HashRow::TitlePath {
+            title_id: title.id.clone(),
+            path: path.clone(),
+        };
+        let input = |size_bytes: i64, signature: Option<&str>| InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: path.clone(),
+            size_bytes,
+            role: MediaFileRole::Primary,
+            source_signature_scheme: signature.map(|_| "stat-v1".to_string()),
+            source_signature_value: signature.map(str::to_string),
+            ..Default::default()
+        };
+        let hashes = PersistedContentHashes {
+            full_blake3: "ef".repeat(32),
+            move_crc: Some(7),
+            crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(Utc::now()),
+            mark: Some("synthetic-mark".to_string()),
+        };
+        let stored = || async { files.stored_media_file_full_hash(&row).await.unwrap() };
+
+        let id = files
+            .insert_media_file(&input(4096, Some("one")))
+            .await
+            .unwrap();
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+
+        // The upsert by path.
+        files
+            .insert_media_file(&input(4096, Some("one")))
+            .await
+            .unwrap();
+        assert!(
+            stored().await.is_some(),
+            "an unchanged upsert keeps the hash"
+        );
+        files
+            .insert_media_file(&input(4096, Some("two")))
+            .await
+            .unwrap();
+        assert_eq!(stored().await, None, "a new signature clears the hash");
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        files
+            .insert_media_file(&input(8192, Some("two")))
+            .await
+            .unwrap();
+        assert_eq!(stored().await, None, "a new size clears the hash");
+
+        // A refresh that does not ask to invalidate.
+        files.insert_media_file(&input(8192, None)).await.unwrap();
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        files
+            .refresh_media_file_source_signature(&id, 8192, None, None, false)
+            .await
+            .unwrap();
+        assert!(
+            stored().await.is_some(),
+            "an unchanged refresh keeps the hash"
+        );
+        files
+            .refresh_media_file_source_signature(
+                &id,
+                8192,
+                Some("stat-v1".into()),
+                Some("three".into()),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stored().await,
+            None,
+            "a signature appearing where there was none clears the hash"
+        );
+
+        // A claim that reuses a row an import claimed.
+        let claimed_path = "/synthetic/show/file-hash-claimed.mkv".to_string();
+        let claimed_row = HashRow::TitlePath {
+            title_id: title.id.clone(),
+            path: claimed_path.clone(),
+        };
+        let input = |size_bytes: i64, signature: Option<&str>| InsertMediaFileInput {
+            file_path: claimed_path.clone(),
+            original_file_path: Some("/synthetic/downloads/file-hash-claimed.mkv".to_string()),
+            ..input(size_bytes, signature)
+        };
+        let stored = || async {
+            files
+                .stored_media_file_full_hash(&claimed_row)
+                .await
+                .unwrap()
+        };
+        let id = files
+            .claim_import_destination(
+                &input(512, Some("zero")),
+                &MediaFileAssociations::default(),
+                None,
+            )
+            .await
+            .unwrap()
+            .media_file_id;
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        let claimed = files
+            .claim_import_destination(
+                &input(1024, Some("four")),
+                &MediaFileAssociations::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.disposition, MediaFileCatalogDisposition::Reused);
+        assert_eq!(
+            stored().await,
+            None,
+            "a reuse of another file clears the hash"
+        );
+        let placed = PersistedContentHashes {
+            full_blake3: "a1".repeat(32),
+            mark: Some("placed-mark".to_string()),
+            ..hashes.clone()
+        };
+        files
+            .claim_import_destination(
+                &input(2048, Some("five")),
+                &MediaFileAssociations::default(),
+                Some(&placed),
+            )
+            .await
+            .unwrap();
+        let reused = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(reused.size_bytes, 2048);
+        assert_eq!(reused.source_signature_value.as_deref(), Some("five"));
+        let written = stored().await.expect("the claim's hash");
+        assert_eq!(written.full_blake3, placed.full_blake3);
+        assert_eq!(written.mark.as_deref(), Some("placed-mark"));
     }
 
     #[tokio::test]
@@ -6049,7 +7018,7 @@ mod tests {
             series_movie_link_ids: Vec::new(),
         };
         let created = media_files
-            .claim_import_destination(&input, &associations)
+            .claim_import_destination(&input, &associations, None)
             .await
             .expect("media file and associations should insert atomically");
         assert_eq!(created.disposition, MediaFileCatalogDisposition::Created);
@@ -6089,6 +7058,7 @@ mod tests {
                     ..input.clone()
                 },
                 &associations,
+                None,
             )
             .await
             .expect("matching ownership should be reusable");
@@ -6117,7 +7087,7 @@ mod tests {
             .await
             .expect("partial association should insert");
         let recovered = media_files
-            .claim_import_destination(&partial_input, &associations)
+            .claim_import_destination(&partial_input, &associations, None)
             .await
             .expect("a partial same-target pack should be recovered");
         assert_eq!(recovered.media_file_id, partial_id);
@@ -6136,6 +7106,7 @@ mod tests {
                     episode_ids: vec!["episode-path-ownership-1".to_string()],
                     series_movie_link_ids: Vec::new(),
                 },
+                None,
             )
             .await
             .expect_err("an additional existing association must remain a conflict");
@@ -6156,11 +7127,12 @@ mod tests {
                     ..unassociated_input.clone()
                 },
                 &MediaFileAssociations::default(),
+                None,
             )
             .await
             .expect_err("unassociated rows require matching source provenance");
         let recovered = media_files
-            .claim_import_destination(&unassociated_input, &MediaFileAssociations::default())
+            .claim_import_destination(&unassociated_input, &MediaFileAssociations::default(), None)
             .await
             .expect("matching source provenance should recover an unassociated row");
         assert_eq!(recovered.media_file_id, unassociated_id);
@@ -6773,6 +7745,7 @@ mod tests {
                     episode_ids: vec!["missing-episode".to_string()],
                     series_movie_link_ids: Vec::new(),
                 },
+                None,
             )
             .await
             .expect_err("a missing association must roll back the media row");
@@ -6812,7 +7785,7 @@ mod tests {
             ..Default::default()
         };
         let created = media_files
-            .claim_import_destination(&first, &MediaFileAssociations::default())
+            .claim_import_destination(&first, &MediaFileAssociations::default(), None)
             .await
             .expect("destination should be claimed");
         assert_eq!(created.disposition, MediaFileCatalogDisposition::Created);
@@ -6841,6 +7814,7 @@ mod tests {
                     ..first.clone()
                 },
                 &MediaFileAssociations::default(),
+                None,
             )
             .await
             .expect("same import target should reuse the row");
@@ -6858,6 +7832,7 @@ mod tests {
                     ..first
                 },
                 &MediaFileAssociations::default(),
+                None,
             )
             .await
             .expect("same import target should reuse the row");
@@ -8674,5 +9649,520 @@ mod tests {
 
         files.delete_media_file(&file_id).await.unwrap();
         assert!(stored_analysis(&services, &file_id).await.is_none());
+    }
+
+    /// The row decode as it stood before analysis documents were decoded
+    /// once per file and deserialized without an intermediate tree, kept
+    /// verbatim as the reference the current decode must match.
+    mod reference_decode {
+        use super::super::*;
+
+        fn analysis_json_from_row(row: &SqlRow) -> JsonValue {
+            let stored = match row.opt_bytes("analysis") {
+                Ok(Some(stored)) => stored,
+                Ok(None) => return JsonValue::Object(Default::default()),
+                Err(_) => return JsonValue::Null,
+            };
+            match scryer_infrastructure_sql::compressed_blob::decompress_text(
+                &stored,
+                ANALYSIS_MAX_BYTES,
+            ) {
+                Ok(json) if json.trim().is_empty() => JsonValue::Object(Default::default()),
+                Ok(json) => serde_json::from_str(&json).unwrap_or(JsonValue::Null),
+                Err(_) => JsonValue::Null,
+            }
+        }
+
+        fn array_field<T: DeserializeOwned>(analysis: &JsonValue, field: &str) -> Vec<T> {
+            analysis
+                .get(field)
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default()
+        }
+
+        fn attempt(
+            row: &SqlRow,
+            analysis: &serde_json::Value,
+        ) -> AppResult<Option<scryer_media_types::AnalysisAttempt>> {
+            let Some(revision) = row
+                .opt_i64("analysis_attempt_revision")?
+                .and_then(|value| u32::try_from(value).ok())
+            else {
+                return Ok(None);
+            };
+            let Some(attempted_at) = row.opt_text("analysis_attempted_at")? else {
+                return Ok(None);
+            };
+            let status = row.opt_text("analysis_attempt_status")?.unwrap_or_default();
+            let succeeded = status == "succeeded";
+            let document = if succeeded {
+                Some(analysis.clone())
+            } else {
+                row.opt_text("analysis_attempt_json")?
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            };
+            let report = document
+                .as_ref()
+                .and_then(|document| document.get("details")?.get("report"))
+                .and_then(|report| serde_json::from_value(report.clone()).ok())
+                .unwrap_or_else(|| scryer_media_types::ProbeReport {
+                    status: serde_json::from_value(serde_json::Value::String(status))
+                        .unwrap_or_default(),
+                    ..Default::default()
+                });
+            Ok(Some(scryer_media_types::AnalysisAttempt {
+                revision,
+                attempted_at,
+                succeeded,
+                report,
+                disc: document
+                    .as_ref()
+                    .and_then(|document| document.get("details")?.get("disc"))
+                    .and_then(|disc| serde_json::from_value(disc.clone()).ok()),
+            }))
+        }
+
+        /// The analysis-derived fields of one row, as the old decode built
+        /// them, in a comparable form.
+        pub(super) fn analysis_view(row: &SqlRow) -> String {
+            let analysis = analysis_json_from_row(row);
+            let mut audio_streams: Vec<scryer_application::AudioStreamDetail> =
+                array_field(&analysis, "audio_streams");
+            let mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> =
+                array_field(&analysis, "subtitle_streams");
+            let audio_language_values: Vec<String> = array_field(&analysis, "audio_languages");
+            let audio_languages = scryer_application::normalize_detected_audio_languages(
+                audio_language_values.iter().map(String::as_str),
+            );
+            for stream in &mut audio_streams {
+                stream.language = stream
+                    .language
+                    .as_deref()
+                    .and_then(scryer_application::normalize_detected_audio_language_code);
+            }
+            let subtitle_language_values: Vec<String> =
+                array_field(&analysis, "subtitle_languages");
+            let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
+                subtitle_language_values.iter().map(String::as_str),
+            );
+            for stream in &mut subtitle_streams {
+                stream.language = stream
+                    .language
+                    .as_deref()
+                    .and_then(scryer_application::normalize_detected_subtitle_language_code);
+            }
+            let details: scryer_media_types::AnalysisDetails = analysis
+                .get("details")
+                .cloned()
+                .and_then(|details| serde_json::from_value(details).ok())
+                .unwrap_or_default();
+            format!(
+                "{:?}",
+                (
+                    row.text("id").unwrap(),
+                    row.opt_text("episode_id").unwrap(),
+                    details,
+                    attempt(row, &analysis).unwrap(),
+                    audio_languages,
+                    audio_streams,
+                    subtitle_languages,
+                    array_field::<String>(&analysis, "subtitle_codecs"),
+                    subtitle_streams,
+                    analysis_u8_field(&analysis, "dovi_profile"),
+                    analysis_u8_field(&analysis, "dovi_bl_compat_id"),
+                )
+            )
+        }
+    }
+
+    fn decoded_analysis_view(file: &TitleMediaFile) -> String {
+        format!(
+            "{:?}",
+            (
+                &file.id,
+                &file.episode_id,
+                &file.analysis_details,
+                &file.analysis_attempt,
+                &file.audio_languages,
+                &file.audio_streams,
+                &file.subtitle_languages,
+                &file.subtitle_codecs,
+                &file.subtitle_streams,
+                file.dovi_profile,
+                file.dovi_bl_compat_id,
+            )
+        )
+    }
+
+    #[tokio::test]
+    async fn row_decode_matches_the_reference_decode_over_seeded_analyses() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("decode.db").to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title("decode-title");
+        title_store(&services).create(title.clone()).await.unwrap();
+        let shows = show_store(&services);
+        let episode_ids = ["decode-ep-1", "decode-ep-2", "decode-ep-3"];
+        for id in episode_ids {
+            shows
+                .create_episode(Episode {
+                    id: id.into(),
+                    title_id: title.id.clone(),
+                    collection_id: None,
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: None,
+                    season_number: Some("1".into()),
+                    episode_label: None,
+                    title: None,
+                    air_date: None,
+                    duration_seconds: Some(1800),
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: false,
+                    created_at: Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let mut full = stream_analysis("en");
+        full.dovi_profile = Some(8);
+        full.dovi_bl_compat_id = Some(1);
+        full.subtitle_languages = vec!["English".into(), "und".into(), "fre".into()];
+        full.subtitle_codecs = vec!["subrip".into()];
+        full.subtitle_streams = vec![scryer_application::SubtitleStreamDetail {
+            codec: Some("subrip".into()),
+            language: Some("en".into()),
+            name: Some("Synthetic".into()),
+            forced: false,
+            default: true,
+        }];
+        full.details.revision = 3;
+        full.details.duration_seconds = Some(1799.5);
+        full.details.report.status = scryer_media_types::ProbeStatus::Complete;
+        full.details.report.bytes_read = 4096;
+        full.details.disc = Some(scryer_media_types::DiscMetadata::default());
+        let full_json = serde_json::to_string(&full).unwrap();
+        let mut default_report = stream_analysis("de");
+        default_report.details.revision = 2;
+        let default_report_json = serde_json::to_string(&default_report).unwrap();
+
+        // (analysis bytes, attempt status, attempt json, linked episodes)
+        let compressed = |json: &str| Some(encode_media_analysis(json).unwrap());
+        type AnalysisCase<'a> = (
+            Option<Vec<u8>>,
+            Option<&'a str>,
+            Option<&'a str>,
+            Vec<&'a str>,
+        );
+        let cases: Vec<AnalysisCase<'_>> = vec![
+            (
+                compressed(&full_json),
+                Some("succeeded"),
+                None,
+                episode_ids.to_vec(),
+            ),
+            (compressed(&full_json), None, None, vec![]),
+            (
+                compressed(&default_report_json),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"details":{"revision":1},"audio_languages":["ja"]}"#),
+                Some("succeeded"),
+                None,
+                vec!["decode-ep-1"],
+            ),
+            (
+                compressed(r#"{"details":{"revision":1,"report":{"status":"malformed"}}}"#),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(
+                    r#"{"audio_streams":"not a list","audio_languages":["fr"],"dovi_profile":5}"#,
+                ),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"details":null,"dovi_profile":300,"dovi_bl_compat_id":2}"#),
+                Some("failed"),
+                Some(r#"{"details":{"report":{"status":"encrypted"},"disc":{}}}"#),
+                vec![],
+            ),
+            (
+                compressed(r#"{"details":{"revision":"bad","report":{"status":"complete"}}}"#),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"subtitle_streams":[{"codec":"ass"}],"subtitle_codecs":["ass"]}"#),
+                None,
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"audio_languages":["en"],"audio_languages":["de"]}"#),
+                None,
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"[{"audio_languages":["en"]}]"#),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed("{\"audio_languages\":[\"en\"]"),
+                None,
+                None,
+                vec![],
+            ),
+            (compressed("   "), Some("succeeded"), None, vec![]),
+            (
+                Some(br#"{"audio_languages":["it"],"dovi_profile":7.0}"#.to_vec()),
+                None,
+                None,
+                vec![],
+            ),
+            // A damaged frame: the magic and then garbage.
+            (
+                Some([0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x01, 0x02, 0x03].to_vec()),
+                Some("succeeded"),
+                None,
+                vec!["decode-ep-2", "decode-ep-3"],
+            ),
+            (None, Some("failed"), Some("not json"), vec![]),
+            (None, None, None, vec![]),
+        ];
+
+        let files = media_file_store(&services);
+        for (index, (analysis, status, attempt_json, linked)) in cases.into_iter().enumerate() {
+            let id = files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/synthetic/decode/{index:02}.mkv"),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            if let Some(analysis) = analysis {
+                sqlx::query(
+                    "INSERT INTO media_file_analyses (media_file_id, analysis) VALUES (?, ?)",
+                )
+                .bind(&id)
+                .bind(analysis)
+                .execute(services.pool())
+                .await
+                .unwrap();
+            }
+            if let Some(status) = status {
+                sqlx::query(
+                    "UPDATE media_files SET analysis_attempt_revision = 4,
+                            analysis_attempted_at = '2026-01-01T00:00:00Z',
+                            analysis_attempt_status = ?, analysis_attempt_json = ?
+                      WHERE id = ?",
+                )
+                .bind(status)
+                .bind(attempt_json)
+                .bind(&id)
+                .execute(services.pool())
+                .await
+                .unwrap();
+            }
+            for episode in linked {
+                files.link_file_to_episode(&id, episode).await.unwrap();
+            }
+        }
+
+        // One row per file and episode link, so linked files repeat.
+        let sql = format!(
+            "SELECT {}
+               FROM media_files mf
+               LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
+              ORDER BY mf.file_path, fem.episode_id",
+            media_file_select_columns(SqlDialect::Sqlite, "fem.episode_id", "mf.role")
+        );
+        let rows = SqlRuntime::fetch_all(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        let expected: Vec<String> = rows.iter().map(reference_decode::analysis_view).collect();
+        let decoded = fetch_media_files(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        assert_eq!(decoded.len(), 20);
+        let actual: Vec<String> = decoded.iter().map(decoded_analysis_view).collect();
+        for (expected, actual) in expected.iter().zip(&actual) {
+            assert_eq!(expected, actual);
+        }
+        assert_eq!(expected.len(), actual.len());
+
+        // Each row decoded on its own matches too.
+        for (row, expected) in rows.iter().zip(&expected) {
+            let single = row_to_title_media_file(row).unwrap();
+            assert_eq!(&decoded_analysis_view(&single), expected);
+        }
+
+        // The uncached reader returns exactly what the cached one does, field
+        // for field and in the same order, repeated file ids included.
+        let distinct = fetch_distinct_media_files(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            distinct
+                .iter()
+                .filter(|file| file.file_path == "/synthetic/decode/00.mkv")
+                .count(),
+            3
+        );
+        assert_eq!(format!("{distinct:?}"), format!("{decoded:?}"));
+
+        // The repeated file shares one decoded analysis across its rows.
+        let mut decoder = MediaFileRowDecoder::default();
+        let shared: Vec<_> = rows
+            .iter()
+            .filter(|row| row.text("file_path").unwrap() == "/synthetic/decode/00.mkv")
+            .map(|row| decoder.analysis(row))
+            .collect();
+        assert_eq!(shared.len(), 3);
+        assert!(std::sync::Arc::ptr_eq(&shared[0], &shared[1]));
+        assert!(std::sync::Arc::ptr_eq(&shared[0], &shared[2]));
+        assert_eq!(shared[0].dovi_profile, Some(8));
+    }
+
+    /// A library with the full-hash backfill off contributes nothing to the
+    /// queue, including titles with no library of their own, which belong to
+    /// their facet's default library.
+    #[tokio::test]
+    async fn backfill_queue_omits_files_in_libraries_with_the_backfill_off() {
+        use crate::media::libraries::store::LibraryStore;
+        use scryer_application::LibraryRepository;
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_backfill_toggle_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        sqlx::query(
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ('spun-down', 'series', 'Archive', 'archive', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(services.pool())
+        .await
+        .unwrap();
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+        let libraries = LibraryStore::new(services.datastore());
+
+        let in_default = make_test_series_title("title-in-default");
+        let mut in_archive = make_test_series_title("title-in-archive");
+        in_archive.library_id = "spun-down".to_string();
+        let without_library = make_test_series_title("title-without-library");
+        for title in [&in_default, &in_archive, &without_library] {
+            titles.create(title.clone()).await.expect("insert title");
+        }
+        sqlx::query("UPDATE titles SET library_id = NULL WHERE id = 'title-without-library'")
+            .execute(services.pool())
+            .await
+            .unwrap();
+        for title in [&in_default, &in_archive, &without_library] {
+            media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/library/{}/file.mkv", title.id),
+                    size_bytes: 100,
+                    role: MediaFileRole::Primary,
+                    ..Default::default()
+                })
+                .await
+                .expect("insert media file");
+        }
+        let queued_titles = || async {
+            let mut queued: Vec<String> = media_files
+                .list_media_files_missing_full_hash(None, 10)
+                .await
+                .expect("read queue")
+                .into_iter()
+                .map(|row| row.title_id)
+                .collect();
+            queued.sort();
+            queued
+        };
+
+        // Every library starts with the job on, existing ones included.
+        let ids = vec![
+            "series_default_library".to_string(),
+            "spun-down".to_string(),
+        ];
+        let flags = libraries.full_hash_backfill_enabled(&ids).await.unwrap();
+        assert_eq!(flags.get("series_default_library"), Some(&true));
+        assert_eq!(flags.get("spun-down"), Some(&true));
+        assert_eq!(
+            queued_titles().await,
+            vec![
+                "title-in-archive",
+                "title-in-default",
+                "title-without-library"
+            ]
+        );
+
+        assert!(
+            libraries
+                .set_full_hash_backfill_enabled("spun-down", false)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            queued_titles().await,
+            vec!["title-in-default", "title-without-library"]
+        );
+
+        // A title with no library falls under its facet's default library.
+        assert!(
+            libraries
+                .set_full_hash_backfill_enabled("series_default_library", false)
+                .await
+                .unwrap()
+        );
+        assert!(queued_titles().await.is_empty());
+        let flags = libraries.full_hash_backfill_enabled(&ids).await.unwrap();
+        assert_eq!(flags.get("series_default_library"), Some(&false));
+        assert_eq!(flags.get("spun-down"), Some(&false));
+
+        // Turning it back on returns the library's files to the queue, and an
+        // unknown library is reported rather than silently accepted.
+        assert!(
+            libraries
+                .set_full_hash_backfill_enabled("spun-down", true)
+                .await
+                .unwrap()
+        );
+        assert_eq!(queued_titles().await, vec!["title-in-archive"]);
+        assert!(
+            !libraries
+                .set_full_hash_backfill_enabled("no-such-library", false)
+                .await
+                .unwrap()
+        );
     }
 }

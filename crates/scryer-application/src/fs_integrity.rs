@@ -5,13 +5,13 @@
 //! sampled content proof used by import cleanup: file size plus a BLAKE3 digest of
 //! the first and last sample windows. This is intentionally not a full-file hash.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 use std::path::Path;
 
 use crate::{AppError, AppResult};
 use scryer_domain::ImportContentProof;
 
-pub const IMPORT_CONTENT_PROOF_SAMPLE_BYTES: usize = 1024 * 1024;
+pub const IMPORT_CONTENT_PROOF_SAMPLE_BYTES: usize = crate::disk::CONTENT_SAMPLE_BYTES;
 
 /// Retain an import filesystem failure's native kind beside its diagnostic.
 pub fn import_io_failure(error: &std::io::Error, message: String) -> AppError {
@@ -28,7 +28,8 @@ pub fn import_io_failure(error: &std::io::Error, message: String) -> AppError {
 /// Compute the import content proof for `path`: file size plus a BLAKE3 digest
 /// over the first and last `IMPORT_CONTENT_PROOF_SAMPLE_BYTES` bytes.
 pub fn import_content_proof(path: &Path) -> AppResult<ImportContentProof> {
-    let mut file = std::fs::File::open(path).map_err(|error| {
+    let opened = crate::disk::Disk::process().open_blocking(path, crate::disk::Open::read());
+    let mut file = opened.map_err(std::io::Error::from).map_err(|error| {
         import_io_failure(
             &error,
             format!(
@@ -61,44 +62,20 @@ pub fn sampled_content_proof_from_reader<R: Read + Seek>(
     label: &str,
     size_bytes: u64,
 ) -> AppResult<ImportContentProof> {
-    let first_len = size_bytes.min(IMPORT_CONTENT_PROOF_SAMPLE_BYTES as u64) as usize;
-    let mut sample = Vec::with_capacity(first_len.saturating_mul(2));
-    read_import_content_sample(reader, label, 0, first_len, &mut sample)?;
-
-    let remaining_after_first = size_bytes.saturating_sub(first_len as u64);
-    let last_len = remaining_after_first.min(IMPORT_CONTENT_PROOF_SAMPLE_BYTES as u64) as usize;
-    if last_len > 0 {
-        let last_offset = size_bytes - last_len as u64;
-        read_import_content_sample(reader, label, last_offset, last_len, &mut sample)?;
-    }
-
-    Ok(ImportContentProof {
-        size_bytes,
-        sample_bytes: sample.len() as u64,
-        sample_blake3: blake3::hash(&sample).to_hex().to_string(),
-    })
-}
-
-fn read_import_content_sample<R: Read + Seek>(
-    reader: &mut R,
-    label: &str,
-    offset: u64,
-    len: usize,
-    sample: &mut Vec<u8>,
-) -> AppResult<()> {
-    reader.seek(SeekFrom::Start(offset)).map_err(|error| {
+    let sample = crate::disk::sample_reader(reader, size_bytes).map_err(|(step, error)| {
+        let step = match step {
+            crate::disk::SampleStep::Seek => "seek",
+            crate::disk::SampleStep::Read => "read",
+        };
         import_io_failure(
             &error,
-            format!("failed to seek import content proof path: {label}: {error}"),
+            format!("failed to {step} import content proof path: {label}: {error}"),
         )
     })?;
-    let start = sample.len();
-    sample.resize(start + len, 0);
-    reader.read_exact(&mut sample[start..]).map_err(|error| {
-        import_io_failure(
-            &error,
-            format!("failed to read import content proof path: {label}: {error}"),
-        )
+    Ok(ImportContentProof {
+        size_bytes: sample.size_bytes,
+        sample_bytes: sample.sample_bytes,
+        sample_blake3: sample.sample_blake3,
     })
 }
 
@@ -134,22 +111,10 @@ pub fn verify_same_file(source: &Path, dest: &Path) -> AppResult<()> {
     )
 }
 
-/// Async wrapper that runs the (blocking) sampled verification on a blocking
-/// thread so large media files do not stall the async runtime.
-pub async fn verify_same_file_async(source: &Path, dest: &Path) -> AppResult<()> {
-    let source = source.to_path_buf();
-    let dest = dest.to_path_buf();
-    tokio::task::spawn_blocking(move || verify_same_file(&source, &dest))
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!("content verification task failed to join: {error}"))
-        })?
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
+    use std::io::{self, SeekFrom};
 
     struct RecordingReader {
         bytes: Vec<u8>,

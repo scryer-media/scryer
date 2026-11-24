@@ -52,6 +52,10 @@ export type QualityProfileCriteriaPayload = {
   /** Score at which upgrade searching stops; null means no score cutoff. */
   cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  /** Missing episodes before an automatic search takes a pack. */
+  min_missing_episodes_for_pack: number;
+  /** A multi-season pack needs more than this percentage missing. */
+  min_missing_percent_for_series_pack: number;
   /** Ordered comparison steps before score; empty compares by score only. */
   decision_pipeline: QualityDecisionGate[];
 };
@@ -88,6 +92,8 @@ export type QualityProfileGraphCriteriaPayload = {
   minScoreToGrab: number | null;
   cutoffScore: number | null;
   minUpgradeScoreDelta: number;
+  minMissingEpisodesForPack: number;
+  minMissingPercentForSeriesPack: number;
   decisionPipeline: QualityDecisionGate[];
 };
 
@@ -133,6 +139,10 @@ export type QualityProfileDraft = {
   /** Score at which upgrade searching stops; null means no score cutoff. */
   cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  /** Missing episodes before an automatic search takes a pack. */
+  min_missing_episodes_for_pack: number;
+  /** A multi-season pack needs more than this percentage missing. */
+  min_missing_percent_for_series_pack: number;
   /** Ordered comparison steps before score; empty compares by score only. */
   decision_pipeline: QualityDecisionGate[];
 };

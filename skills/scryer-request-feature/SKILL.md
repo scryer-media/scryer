@@ -5,39 +5,37 @@ description: Drafts a Scryer feature request for the operator to review and file
 
 # Request a Scryer feature
 
-Turn the operator's need into a short request that matches the
-repository's feature form. The operator files it. The agent does not
-submit or post anything.
+Turn the operator's need into a short request matching the repository's
+feature form. Operator files it. The agent does not submit or post anything.
 
 ## Prerequisites
 
-- None required. `scryer-connect` helps for step 1 when the request touches
-  indexers, download clients or profiles.
+None. `scryer-connect` helps for step 1 when the request touches indexers,
+download clients or profiles.
 
 ## Rules
 
-- Do not read the GraphQL schema or Scryer's source code.
+- No schema or source reads.
 - Keep the request about the operator's problem and use case, not a design.
 - Never submit or post anything on the operator's behalf unless they
   explicitly ask in this conversation.
 
 ## Procedure
 
-1. **Check whether it is already possible.** Spend at most a few reads:
-   - Indexers, download clients, routing, quality profiles, delay
-     profiles: the field tables in
-     `../scryer-configure-acquisition/references/` list what can be set.
+1. **Check whether it is already possible.** At most a few reads:
+   - Indexers, download clients, routing, quality profiles, delay profiles:
+     field lists in `../scryer-configure-acquisition/references/` say what
+     can be set.
    - Release scoring and custom conditions: `scryer-write-rules`.
    - Moving from another media manager: `scryer-migrate-from-arr`.
-   - If it exists, show the operator the setting or UI path and ask whether
-     it solves the problem. If yes, stop. If partly, note what is missing
-     for field 3.
+   - If it exists, show the setting or UI path and ask whether it solves the
+     problem. Yes: stop. Partly: note what is missing for field 3.
 
 2. **Route elsewhere when it is not a feature request.**
-   - Something that should already work but does not: `scryer-report-bug`.
-   - Open-ended ideas, design discussion or roadmap questions: point to
+   - Should already work but does not: `scryer-report-bug`.
+   - Open-ended ideas, design discussion, roadmap questions:
      `https://github.com/scryer-media/scryer/discussions`.
-   - Help with setup: Discord, `https://discord.gg/SQmtZTanqm`.
+   - Setup help: Discord, `https://discord.gg/SQmtZTanqm`.
 
 3. **Ask for the problem**, in this order, one short question at a time,
    stopping when you have enough:
@@ -46,9 +44,9 @@ submit or post anything.
    - What would you see if it worked?
    - What have you tried?
 
-4. **Write the draft.** Load `references/feature-form.md` and write
-   `./scryer-feature-request.md` with the four form fields, in order,
-   nothing more. Show the operator the full draft.
+4. **Write the draft.** Load `references/feature-form.md`; write
+   `./scryer-feature-request.md` with the four form fields, in order, nothing
+   more. Show the operator the full draft.
 
 5. **Revise** until the operator is satisfied.
 
@@ -56,11 +54,11 @@ submit or post anything.
    - the draft path
    - the form: `https://github.com/scryer-media/scryer/issues/new?template=feature_request.yml`
      (title prefix `[Feature]: `)
-   - that nothing has been posted
+   - nothing has been posted
 
 ## Stop and ask
 
 - After step 1, if an existing setting may cover the need.
 - Before including any detail the operator did not give.
 - If the operator asks the agent to file it: show exactly what will be
-  posted and where, and wait for an explicit yes.
+  posted and where, wait for an explicit yes.

@@ -11,7 +11,7 @@ permissions:
 jobs:
   eligible:
     name: eligible-pr-image
-    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.pull_requests[0].number != null }}
+    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.pull_requests[0].number != null }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
@@ -33,6 +33,10 @@ jobs:
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" |
             jq -e --arg sha "$HEAD_SHA" '.state == "open" and .head.sha == $sha' > /dev/null || exit 0
+          # The RC publishes once its own build context is prepared; the other
+          # lanes of the run need not pass.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' |
+            jq -e -s 'any(.name == "docker-prepare-pr-rc" and .conclusion == "success")' > /dev/null || exit 0
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" |
             jq -e --arg name "$ARTIFACT_NAME" '.artifacts | any(.name == $name and .expired == false)' > /dev/null || exit 0
           echo "ready=true" >> "$GITHUB_OUTPUT"

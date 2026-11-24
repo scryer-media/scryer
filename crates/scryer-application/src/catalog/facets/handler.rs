@@ -245,6 +245,8 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         digital_release_date: movie.tmdb_release_date,
         movie_release_dates: movie.movie_release_dates,
         ratings: Some(movie.ratings),
+        content_ratings: Some(movie.content_ratings),
+        awards: Some(movie.awards),
         credits: Some(movie.credits),
         extra_external_ids,
         ..Default::default()
@@ -380,6 +382,8 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         metadata_language: Some(language.to_string()),
         metadata_fetched_at: Some(Utc::now().to_rfc3339()),
         ratings: Some(series.ratings),
+        content_ratings: Some(series.content_ratings),
+        awards: Some(series.awards),
         credits: Some(series.credits),
         extra_external_ids,
         ..Default::default()

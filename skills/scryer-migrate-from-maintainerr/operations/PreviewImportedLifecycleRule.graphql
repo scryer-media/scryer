@@ -1,0 +1,21 @@
+# Evaluate one stored lifecycle rule against the first titles of a library without saving or acting. Read-only.
+# Variables: {"input": {"ruleSetId": "<ruleSetId>", "libraryId": "<library id>", "limit": 50}}
+mutation PreviewImportedLifecycleRule($input: PreviewLifecycleRuleInput!) {
+  previewLifecycleRule(input: $input) {
+    ruleSetId
+    evaluatedAt
+    titles {
+      titleName
+      subjectLabel
+      subjectKind
+      outcome
+      excluded
+      dueAt
+      dueAtIsEstimate
+      fileCount
+      totalSizeBytes
+      reasonCodes
+      errorCode
+    }
+  }
+}

@@ -113,6 +113,25 @@ impl ImportOrigin {
         refusal
     }
 
+    /// Whether a refusal blocks its release from being grabbed again. Only a
+    /// grab's file that lost the comparison with the library qualifies: a
+    /// download added by hand was never Scryer's to repeat, and an operator's
+    /// explicit import decision says nothing about the release.
+    fn blocks_release_that_lost_to_library(
+        self,
+        refusal: &ImportAdmissionRefusal,
+        operator_intent: bool,
+    ) -> bool {
+        let grabbed = match self {
+            Self::Automatic | Self::OperatorQueued => true,
+            Self::DownloaderObservation => false,
+        };
+        grabbed
+            && !operator_intent
+            && refusal.lost_library_comparison
+            && refusal.disposition == RejectionDisposition::Skip
+    }
+
     pub(crate) fn held_rejection(
         self,
         mut rejection: ImportedFileRejection,
@@ -278,6 +297,11 @@ pub(crate) enum ImportDecisionOutcome {
         /// The library file that already holds this scope at equal or better
         /// quality, when that is the whole reason for the refusal.
         better_library_copy: Option<BetterLibraryCopy>,
+        /// A block on the release name, on every indexer, when a grab's file
+        /// lost the comparison with the library: offered again, the same
+        /// release would only be downloaded and refused again. Written by the
+        /// caller, once per download, without recycling or reopening anything.
+        blocklist: Option<BlocklistDirective>,
     },
 }
 
@@ -295,6 +319,9 @@ pub(crate) struct ImportAdmissionRefusal {
     pub rejection: ImportedFileRejection,
     pub disposition: RejectionDisposition,
     pub better_library_copy: Option<BetterLibraryCopy>,
+    /// The candidate lost a comparison with the library copy (see
+    /// [`lost_library_comparison`]).
+    pub lost_library_comparison: bool,
 }
 
 /// Decide whether this file may take this scope. **The one import decision.**
@@ -335,6 +362,7 @@ pub(crate) async fn decide_import(
                     rejection,
                     disposition: RejectionDisposition::Hold,
                     better_library_copy: None,
+                    blocklist: None,
                 };
             }
             crate::post_download_gate::TruthVerdictAction::ImportAndBlocklist { code, reason } => {
@@ -345,6 +373,7 @@ pub(crate) async fn decide_import(
                     rejection: input.origin.held_rejection(rejection),
                     disposition: input.origin.rejection_disposition(),
                     better_library_copy: None,
+                    blocklist: None,
                 };
             }
         }
@@ -367,10 +396,15 @@ pub(crate) async fn decide_import(
     ) {
         Err(refusal) => {
             let refusal = input.origin.hold_lost_library_comparison(*refusal);
+            let blocklist = input
+                .origin
+                .blocks_release_that_lost_to_library(&refusal, input.operator_intent)
+                .then(not_an_upgrade_blocklist);
             ImportDecisionOutcome::Reject {
                 rejection: refusal.rejection,
                 disposition: refusal.disposition,
                 better_library_copy: refusal.better_library_copy,
+                blocklist,
             }
         }
         Ok(admitted) => ImportDecisionOutcome::Admit(Box::new(ImportAdmitPlan {
@@ -416,6 +450,7 @@ pub(crate) fn evaluate_import_admission(
                     rejection: admission_rejection_to_import(scope_label, &rejection),
                     disposition: disposition_for(&rejection.reason),
                     better_library_copy: better_library_copy(&rejection),
+                    lost_library_comparison: lost_library_comparison(&rejection.reason),
                 }));
             }
             crate::admission::AdmissionVerdict::Admit {
@@ -438,6 +473,7 @@ pub(crate) fn evaluate_import_admission(
             rejection: missing_incumbent_rejection(scope_label),
             disposition: RejectionDisposition::Hold,
             better_library_copy: None,
+            lost_library_comparison: false,
         }));
     }
 
@@ -486,13 +522,11 @@ fn score_landed(
 /// — most likely `Skip`, which is the one that quietly does nothing.
 ///
 /// The split is "did this release lose a comparison" (`Skip`) versus "can nobody
-/// decide this without an operator" (`Hold`). **No admission refusal ever
-/// blocklists**: a release that is merely not an upgrade is a perfectly good
-/// release for some other scope or some later day, and burning it is how a
-/// library ends up unable to re-grab anything. Sonarr's equivalents
-/// (`DiskCustomFormatScore`, `DiskHigherPreference`, `DiskHigherRevision`,
-/// `SameEpisodesImportSpecification`, `DiskUpgradesNotAllowed`) are all plain
-/// rejections there too; only dangerous files get blocklisted.
+/// decide this without an operator" (`Hold`). **No admission refusal burns its
+/// release**: nothing is recycled and no scope reopens. The one cost a lost
+/// comparison carries is separate from the disposition: a grab's file that lost
+/// to the library blocks its release name, so the same download is not fetched
+/// and refused again (see [`lost_library_comparison`]).
 pub(crate) fn disposition_for(
     reason: &crate::admission::AdmissionRejectionReason,
 ) -> RejectionDisposition {
@@ -507,7 +541,10 @@ pub(crate) fn disposition_for(
         | Reason::LowerRevision { .. }
         | Reason::LostAtStep { .. }
         | Reason::QueuedEqualOrBetter { .. }
-        | Reason::QueuedSameRelease { .. } => RejectionDisposition::Skip,
+        | Reason::QueuedSameRelease { .. }
+        // Grab-only: import never consults the queue. Skipping is the queued
+        // refusals' answer, and it burns nothing.
+        | Reason::QueuedItemBlocksUpgrade { .. } => RejectionDisposition::Skip,
         // Reopening a scope whose profile forbids upgrades is pure churn: the
         // search would find candidates the same guard refuses.
         Reason::UpgradesDisabled
@@ -545,6 +582,7 @@ pub(crate) fn better_library_copy(
         | Reason::LostAtStep { .. } => {}
         Reason::QueuedEqualOrBetter { .. }
         | Reason::QueuedSameRelease { .. }
+        | Reason::QueuedItemBlocksUpgrade { .. }
         | Reason::FormatCutoffReached { .. }
         | Reason::UpgradesDisabled
         | Reason::BroaderIncumbentSpan
@@ -556,6 +594,43 @@ pub(crate) fn better_library_copy(
         file_id: file_id.to_string(),
         path: path.to_string(),
     })
+}
+
+/// Whether a refusal says the candidate lost a comparison with what the library
+/// already holds: a lower score, quality tier, revision or language fit, or a
+/// loss at one of the profile's steps.
+///
+/// Exhaustive on purpose. A release still in the queue is no verdict on this
+/// one, so the queued refusals are not losses; nor are a cutoff, a profile that
+/// forbids upgrades, a broader span or an incomplete season, which hold for an
+/// operator instead.
+pub(crate) fn lost_library_comparison(reason: &crate::admission::AdmissionRejectionReason) -> bool {
+    use crate::admission::AdmissionRejectionReason as Reason;
+
+    match reason {
+        Reason::NotAnUpgrade { .. }
+        | Reason::LowerQualityTier
+        | Reason::LowerLanguagePreference { .. }
+        | Reason::FewerOptionalLanguages { .. }
+        | Reason::LowerRevision { .. }
+        | Reason::LostAtStep { .. } => true,
+        Reason::QueuedEqualOrBetter { .. }
+        | Reason::QueuedSameRelease { .. }
+        | Reason::QueuedItemBlocksUpgrade { .. }
+        | Reason::FormatCutoffReached { .. }
+        | Reason::UpgradesDisabled
+        | Reason::BroaderIncumbentSpan
+        | Reason::SeasonIncomplete => false,
+    }
+}
+
+/// The block a grab's losing file earns. Its reason is the code alone; the
+/// operator surfaces translate it.
+fn not_an_upgrade_blocklist() -> BlocklistDirective {
+    BlocklistDirective {
+        code: crate::error_reasons::blocklist::IMPORT_NOT_AN_UPGRADE,
+        reason: crate::error_reasons::blocklist::IMPORT_NOT_AN_UPGRADE.to_string(),
+    }
 }
 
 /// What a refusal raised *before* the decision — by `prepare_import_candidate`'s
@@ -664,7 +739,9 @@ pub(crate) fn admission_rejection_to_import(
                  profile disallows upgrades"
             ),
         ),
-        Reason::QueuedEqualOrBetter { .. } | Reason::QueuedSameRelease { .. } => (
+        Reason::QueuedEqualOrBetter { .. }
+        | Reason::QueuedSameRelease { .. }
+        | Reason::QueuedItemBlocksUpgrade { .. } => (
             "already_imported",
             ImportSkipReason::AlreadyImported,
             rejection.message.clone(),
@@ -714,6 +791,23 @@ pub(crate) fn identical_incumbent_rejection(
             "existing file {incumbent_path} for {scope_label} already holds identical contents"
         ),
         recycle_reason: "already_imported",
+        skip_reason: Some(ImportSkipReason::AlreadyImported),
+        blocking_rule_codes: Vec::new(),
+    }
+}
+
+/// The settlement for a source whose would-be incumbent is a library file an
+/// earlier pass of the same download placed. The library file stays as it is,
+/// even when something outside the import has since rewritten its bytes.
+pub(crate) fn placed_by_this_download_rejection(
+    scope_label: &str,
+    incumbent_path: &str,
+) -> ImportedFileRejection {
+    ImportedFileRejection {
+        message: format!(
+            "existing file {incumbent_path} for {scope_label} was placed by this download"
+        ),
+        recycle_reason: crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD,
         skip_reason: Some(ImportSkipReason::AlreadyImported),
         blocking_rule_codes: Vec::new(),
     }
@@ -886,6 +980,84 @@ mod tests {
             rejection: admission_rejection_to_import("this title", &rejection),
             disposition: disposition_for(&rejection.reason),
             better_library_copy: better_library_copy(&rejection),
+            lost_library_comparison: lost_library_comparison(&rejection.reason),
+        }
+    }
+
+    /// Only a grab's file that lost the comparison blocks its release; a queued
+    /// release, a cutoff or a profile rule says nothing about this one.
+    #[test]
+    fn only_a_grab_that_lost_to_the_library_blocks_its_release() {
+        use crate::admission::AdmissionRejectionReason as Reason;
+        let lost = [
+            Reason::NotAnUpgrade {
+                incumbent_score: 120,
+                candidate_score: 90,
+                required_delta: 0,
+            },
+            Reason::LowerQualityTier,
+            Reason::LowerLanguagePreference {
+                incumbent_preferred_rank: 0,
+                candidate_preferred_rank: 1,
+            },
+            Reason::FewerOptionalLanguages {
+                incumbent_optional_hits: 2,
+                candidate_optional_hits: 1,
+            },
+            Reason::LowerRevision {
+                incumbent_revision: 2,
+                candidate_revision: 1,
+            },
+            Reason::LostAtStep {
+                step: crate::decision_pipeline::DecisionGate::ALL[0],
+            },
+        ];
+        let not_lost = [
+            Reason::QueuedEqualOrBetter {
+                queued_title: "Lantern.Cove.2026.1080p.WEB-DL".to_string(),
+                queued_score: 120,
+                candidate_score: 90,
+            },
+            Reason::QueuedSameRelease {
+                queued_title: "Lantern.Cove.2026.1080p.WEB-DL".to_string(),
+            },
+            Reason::FormatCutoffReached {
+                incumbent_score: 120,
+                cutoff_score: 100,
+            },
+            Reason::UpgradesDisabled,
+            Reason::BroaderIncumbentSpan,
+            Reason::SeasonIncomplete,
+        ];
+        for reason in lost {
+            assert!(lost_library_comparison(&reason), "{reason:?}");
+            for origin in [ImportOrigin::Automatic, ImportOrigin::OperatorQueued] {
+                let refusal =
+                    origin.hold_lost_library_comparison(library_comparison_refusal(reason.clone()));
+                assert!(
+                    origin.blocks_release_that_lost_to_library(&refusal, false),
+                    "{origin:?} {reason:?}"
+                );
+                assert!(
+                    !origin.blocks_release_that_lost_to_library(&refusal, true),
+                    "an operator's import decision blocks nothing: {reason:?}"
+                );
+            }
+            let origin = ImportOrigin::DownloaderObservation;
+            let refusal =
+                origin.hold_lost_library_comparison(library_comparison_refusal(reason.clone()));
+            assert!(
+                !origin.blocks_release_that_lost_to_library(&refusal, false),
+                "a download added by hand was never grabbed: {reason:?}"
+            );
+        }
+        for reason in not_lost {
+            assert!(!lost_library_comparison(&reason), "{reason:?}");
+            let refusal = library_comparison_refusal(reason.clone());
+            assert!(
+                !ImportOrigin::Automatic.blocks_release_that_lost_to_library(&refusal, false),
+                "{reason:?}"
+            );
         }
     }
 

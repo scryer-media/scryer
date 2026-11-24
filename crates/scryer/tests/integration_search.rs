@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -57,6 +59,8 @@ fn new_nzbgeek_client(uri: &str) -> Arc<dyn IndexerClient> {
         rate_limit_seconds: None,
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         last_health_status: None,
         last_error_message: None,
@@ -613,6 +617,8 @@ async fn nzbgeek_search_no_api_key_fails() {
         rate_limit_seconds: None,
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         last_health_status: None,
         last_error_message: None,

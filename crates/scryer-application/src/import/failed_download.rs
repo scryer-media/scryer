@@ -50,12 +50,26 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
-    if !tracked_download_has_grabbed_submission(app, td).await {
-        warn_download_not_grabbed(td);
-        td.state = TrackedDownloadState::Downloading;
-        td.skip_reacquire_on_failure = false;
-        td.manual_failure_cleanup = false;
-        return;
+    match tracked_download_grabbed_submission_lookup(app, td).await {
+        Ok(true) => {}
+        Ok(false) => {
+            warn_download_not_grabbed(td);
+            td.state = TrackedDownloadState::Downloading;
+            td.skip_reacquire_on_failure = false;
+            td.manual_failure_cleanup = false;
+            return;
+        }
+        Err(error) => {
+            // A failed read is not "no grab on record": the download stays
+            // where it was and the next poll asks again.
+            tracing::warn!(
+                %error,
+                reason_code = crate::error_reasons::download_origin::LOOKUP_FAILED,
+                id = %td.id,
+                "could not read whether Scryer grabbed this failed download; keeping its state"
+            );
+            return;
+        }
     }
 
     if !td.manual_failure_cleanup
@@ -81,11 +95,19 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
-    let failure_reason = td
-        .client_item
-        .attention_reason
-        .as_deref()
-        .unwrap_or("Failed download detected");
+    // Import's verdict lives in the status messages: the client item is the
+    // client's own report and is refreshed on every poll.
+    let unwanted_executables = td.status_messages.iter().find(|message| {
+        message.kind == crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables
+    });
+    let failure_code =
+        unwanted_executables.map(|_| crate::error_reasons::download_failure::UNWANTED_EXECUTABLES);
+    let failure_reason = unwanted_executables
+        .map(|message| message.text.as_str())
+        .or(td.client_item.attention_reason.as_deref())
+        .unwrap_or("Failed download detected")
+        .to_owned();
+    let failure_reason = failure_reason.as_str();
 
     tracing::warn!(
         id = %td.id,
@@ -109,12 +131,13 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
                 .clone()
                 .unwrap_or_else(|| td.client_item.title_name.clone()),
             reason: failure_reason.to_string(),
-            // Only the import gate routes a download here with this flag set
-            // (a download holding nothing but unwanted executables); the
-            // blocklist then names the import's verdict, not the client.
+            // The import gate and the warning timeout route a download here
+            // with this flag set; the blocklist then names Scryer's verdict,
+            // not the client.
             blocklist_reason: td
                 .burned_by_import_gate
                 .then(|| format!("import rejected: {failure_reason}")),
+            failure_code,
             skip_reacquire: td.skip_reacquire_on_failure,
         },
         td.manual_failure_cleanup,
@@ -177,30 +200,34 @@ fn tracked_download_has_scryer_failure_origin(td: &TrackedDownload) -> bool {
     td.client_item.is_scryer_origin
 }
 
+#[cfg(test)]
 pub(crate) async fn tracked_download_has_grabbed_submission(
     app: &AppUseCase,
     td: &TrackedDownload,
 ) -> bool {
-    let Some(identity) = tracked_download_failure_submission_identity(td) else {
-        return false;
-    };
-
-    download_submission_exists_for_download(app, td.canonical_download_id(), &identity).await
+    tracked_download_grabbed_submission_lookup(app, td)
+        .await
+        .unwrap_or(false)
 }
 
-pub(crate) async fn download_submission_exists_for_download(
+/// Whether Scryer's own grab is on record for this download, keeping a failed
+/// read apart from "no grab on record" so a caller that reports the answer to
+/// an operator does not state the second when only the first is known.
+pub(crate) async fn tracked_download_grabbed_submission_lookup(
     app: &AppUseCase,
-    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
-    identity: &ClientJobLocator,
-) -> bool {
-    app.services
+    td: &TrackedDownload,
+) -> crate::AppResult<bool> {
+    let Some(identity) = tracked_download_failure_submission_identity(td) else {
+        return Ok(false);
+    };
+
+    Ok(app
+        .services
         .workflow
         .download_submissions
-        .find_by_client_item_id_for_download(canonical_download_id, identity)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
+        .find_by_client_item_id_for_download(td.canonical_download_id(), &identity)
+        .await?
+        .is_some())
 }
 
 pub(crate) fn warn_download_not_grabbed(td: &mut TrackedDownload) {

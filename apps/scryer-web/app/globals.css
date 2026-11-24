@@ -455,7 +455,7 @@ body {
   z-index: 40;
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   [data-slot="root-shell-frame"] {
     height: calc(100dvh - var(--root-shell-top-offset, 0px));
     max-height: calc(100dvh - var(--root-shell-top-offset, 0px));
@@ -638,7 +638,7 @@ body {
   top: 0;
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   [data-slot="card"][data-ui="series-episodes"]
     > [data-slot="card-header"][data-sticky] {
     top: 0;
@@ -697,7 +697,7 @@ body {
 
 /* Where the panel itself scrolls, sit flush with its top edge instead of
    below its padding, so no rows show above the bar. */
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   [data-slot="title-context-scroll"]
     [data-slot="card"][data-ui="series-episodes"]
     > [data-slot="card-header"][data-sticky] {

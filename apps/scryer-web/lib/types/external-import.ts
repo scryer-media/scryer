@@ -3,6 +3,8 @@
 // crates/scryer-interface-media-types/src/lib.rs and the selection sets in
 // lib/graphql/{mutations,queries}.ts.
 
+import type { JobRunStatus } from "./jobs";
+
 export type ExternalArrSourceKind = "SONARR" | "RADARR";
 export type ExternalImportConnectionKind = "SONARR" | "RADARR" | "PROWLARR";
 
@@ -163,4 +165,69 @@ export type ExternalImportAggregateWarmupProgress = {
   titlesFetched: number;
   titlesTotal: number;
   errorMessage: string | null;
+};
+
+export type ExternalRuleImportSource = "SONARR" | "RADARR" | "MAINTAINERR";
+
+export type ExternalRuleImportPhase =
+  "QUEUED" | "FETCHING" | "PLANNING" | "SAVING" | "FINISHED";
+
+export type ExternalRuleImportItemState =
+  | "PENDING"
+  | "SAVED"
+  | "SAVED_NEEDS_REVIEW"
+  | "SAVED_FAILED_TRANSLATION"
+  | "SKIPPED_EXISTS"
+  | "FAILED";
+
+/** Connection for one rule import. Maintainerr has no API key; it is ignored. */
+export type ExternalRuleImportInput = {
+  source: ExternalRuleImportSource;
+  baseUrl: string;
+  apiKey?: string | null;
+};
+
+/** A coded observation; `message` is display copy, `code` decides behavior. */
+export type ExternalRuleImportFact = {
+  code: string;
+  message: string;
+  details: unknown;
+};
+
+export type ExternalRuleImportItem = {
+  key: string;
+  sourceName: string;
+  savedName: string | null;
+  ruleSetId: string | null;
+  state: ExternalRuleImportItemState;
+  reason: string | null;
+  message: string | null;
+  facts: ExternalRuleImportFact[];
+};
+
+export type ExternalRuleImportCounts = {
+  total: number;
+  pending: number;
+  saved: number;
+  savedNeedsReview: number;
+  savedFailedTranslation: number;
+  skippedExists: number;
+  failed: number;
+};
+
+/** Per-item report of one rule import run. */
+export type ExternalRuleImportStatus = {
+  runId: string;
+  status: JobRunStatus;
+  active: boolean;
+  revision: number;
+  updatedAt: string;
+  source: ExternalRuleImportSource;
+  baseUrl: string;
+  phase: ExternalRuleImportPhase;
+  reason: string | null;
+  message: string | null;
+  counts: ExternalRuleImportCounts;
+  items: ExternalRuleImportItem[];
+  facts: ExternalRuleImportFact[];
 };

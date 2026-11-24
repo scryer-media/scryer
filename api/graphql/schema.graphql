@@ -2443,6 +2443,14 @@ input CreateIndexerConfigInput {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Monthly request limit; at least 1, or null for unlimited.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Monthly grab limit; at least 1, or null for unlimited.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	Whether the indexer is enabled.
 	"""
 	isEnabled: Boolean
@@ -2497,13 +2505,9 @@ input CreateLibraryRootInput {
 }
 
 """
-Creates a maintenance rule set together with its first matcher revision.
+Creates a lifecycle rule set together with its first matcher revision.
 """
-input CreateMaintenanceRuleSetInput {
-	"""
-	Defaults to title scope when omitted.
-	"""
-	subjectKind: MaintenanceRuleSubjectKind
+input CreateLifecycleRuleSetInput {
 	"""
 	Rule-set name.
 	"""
@@ -2518,16 +2522,6 @@ input CreateMaintenanceRuleSetInput {
 	"""
 	regoSource: String!
 	"""
-	Legacy action the first revision authorizes. Supply this or
-	`actionSequence`, never both.
-	"""
-	action: MaintenanceActionInput
-	"""
-	Ordered actions the first revision authorizes. Supply this or `action`,
-	never both.
-	"""
-	actionSequence: MaintenanceActionSequenceInput
-	"""
 	Days a subject must match continuously before the action becomes due;
 	defaults to zero.
 	"""
@@ -2537,10 +2531,20 @@ input CreateMaintenanceRuleSetInput {
 	"""
 	libraryIds: [String!]
 	"""
-	Configured library root whose capacity and owned files this revision
-	uses. Required when the matcher reads a storage fact.
+	The simple builder's document for the source, or omitted for a rule
+	written by hand.
 	"""
-	storageRootId: String
+	builderModel: JSON
+	"""
+	When the rule runs. Omitted means every eight hours.
+	"""
+	schedule: ScriptScheduleInput
+	"""
+	The most titles the rule may act on in one run, at least one.
+	Required when the rule deletes files or titles; omitted means no
+	limit otherwise.
+	"""
+	maxTitlesPerRun: Int
 }
 
 """
@@ -2899,13 +2903,18 @@ input CreateProxyConfigInput {
 	"""
 	tunnelKeepaliveSeconds: Int
 	"""
+	Challenge solvers only: an enabled transport proxy or tunnel to reach
+	the solver through. Omit to reach the solver directly.
+	"""
+	reachThroughProxyConfigId: ID
+	"""
 	Whether the proxy is enabled.
 	"""
 	isEnabled: Boolean
 }
 
 """
-Creates a request rule set together with its first matcher revision. The
+Creates a request rule set together with its first source revision. The
 rule set is always created disabled; enabling it is a second, deliberate call.
 """
 input CreateRequestRuleSetInput {
@@ -2918,7 +2927,7 @@ input CreateRequestRuleSetInput {
 	"""
 	description: String
 	"""
-	Matcher source as written in the editor. The package declaration is
+	Rule source as written in the editor. The package declaration is
 	applied by the server.
 	"""
 	regoSource: String!
@@ -2926,6 +2935,11 @@ input CreateRequestRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	"""
+	The visual builder's document, stored as given: a JSON object of at
+	most 64 KiB. Omitted or null stores none.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -2956,6 +2970,11 @@ input CreateRuleSetInput {
 	Optional enabled state.
 	"""
 	enabled: Boolean
+	"""
+	The simple builder's document for the source, or omitted for a rule
+	written by hand.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -3711,9 +3730,9 @@ type DeleteLibraryPayload {
 }
 
 """
-Identifier returned after removing a maintenance exclusion.
+Identifier returned after removing a lifecycle exclusion.
 """
-type DeleteMaintenanceExclusionPayload {
+type DeleteLifecycleExclusionPayload {
 	"""
 	Removed exclusion ID.
 	"""
@@ -3721,9 +3740,9 @@ type DeleteMaintenanceExclusionPayload {
 }
 
 """
-Identifier returned after deleting a maintenance rule set.
+Identifier returned after deleting a lifecycle rule set.
 """
-type DeleteMaintenanceRuleSetPayload {
+type DeleteLifecycleRuleSetPayload {
 	"""
 	Deleted rule-set ID.
 	"""
@@ -5462,6 +5481,10 @@ enum DomainEventTypeValue {
 	A list was followed, changed, turned on or off, or unfollowed.
 	"""
 	LIST_SUBSCRIPTION_CHANGED
+	"""
+	A lifecycle rule applied its actions and sent its own message.
+	"""
+	LIFECYCLE_RULE_NOTIFIED
 }
 
 """
@@ -6857,9 +6880,9 @@ enum EpisodeTypeValue {
 }
 
 """
-Excludes one subject from maintenance rules.
+Excludes one subject from lifecycle rules.
 """
-input ExcludeMaintenanceSubjectInput {
+input ExcludeLifecycleSubjectInput {
 	"""
 	Required for episode or season scope.
 	"""
@@ -6867,7 +6890,7 @@ input ExcludeMaintenanceSubjectInput {
 	"""
 	Defaults to title scope when omitted.
 	"""
-	subjectKind: MaintenanceRuleSubjectKind
+	subjectKind: LifecycleRuleSubjectKind
 	"""
 	Title to exclude.
 	"""
@@ -7805,6 +7828,246 @@ enum ExternalReleaseStatusValue {
 }
 
 """
+Number of report lines in each state.
+"""
+type ExternalRuleImportCountsPayload {
+	"""
+	Every report line.
+	"""
+	total: Int!
+	"""
+	Lines not yet saved.
+	"""
+	pending: Int!
+	"""
+	Lines saved as exact translations.
+	"""
+	saved: Int!
+	"""
+	Lines saved but needing review.
+	"""
+	savedNeedsReview: Int!
+	"""
+	Lines saved as untranslated placeholders.
+	"""
+	savedFailedTranslation: Int!
+	"""
+	Lines skipped because the rule already exists.
+	"""
+	skippedExists: Int!
+	"""
+	Lines where nothing was saved.
+	"""
+	failed: Int!
+}
+
+"""
+A coded observation about an import run or one of its items.
+"""
+type ExternalRuleImportFactPayload {
+	"""
+	Stable reason code.
+	"""
+	code: String!
+	"""
+	The server's sentence: the fallback for an unrecognized code.
+	"""
+	message: String!
+	"""
+	Values the code refers to, such as a settings id or a limit, or null.
+	"""
+	details: JSON
+}
+
+"""
+Where an external rule import reads from.
+"""
+input ExternalRuleImportInput {
+	"""
+	Application the URL serves.
+	"""
+	source: ExternalRuleImportSource!
+	"""
+	Base URL of the application, including any URL base or BASE_PATH prefix.
+	"""
+	baseUrl: String!
+	"""
+	API key; required for Sonarr and Radarr. Maintainerr has no API authentication, so a key sent with a Maintainerr import is ignored.
+	"""
+	apiKey: String
+}
+
+"""
+Report line for one source object.
+"""
+type ExternalRuleImportItemPayload {
+	"""
+	Stable identity within the source, such as customformat:12.
+	"""
+	key: String!
+	"""
+	Name in the source application.
+	"""
+	sourceName: String!
+	"""
+	Name the saved rule received, or null when nothing was saved.
+	"""
+	savedName: String
+	"""
+	Saved rule set identity, or null when nothing was saved.
+	"""
+	ruleSetId: ID
+	"""
+	Outcome.
+	"""
+	state: ExternalRuleImportItemState!
+	"""
+	Stable reason code for a skipped, failed or partial outcome, or null.
+	"""
+	reason: String
+	"""
+	The server's failure sentence: the fallback for an unrecognized reason.
+	"""
+	message: String
+	"""
+	Translation observations about this item.
+	"""
+	facts: [ExternalRuleImportFactPayload!]!
+}
+
+"""
+Outcome of one imported source object.
+"""
+enum ExternalRuleImportItemState {
+	"""
+	Planned and not yet saved.
+	"""
+	PENDING
+	"""
+	Saved as an exact translation.
+	"""
+	SAVED
+	"""
+	Saved, but the translation needs review.
+	"""
+	SAVED_NEEDS_REVIEW
+	"""
+	Saved as a placeholder because the source rule could not be translated.
+	"""
+	SAVED_FAILED_TRANSLATION
+	"""
+	A rule with this name already exists; nothing was written.
+	"""
+	SKIPPED_EXISTS
+	"""
+	Nothing was saved.
+	"""
+	FAILED
+}
+
+"""
+Step an external rule import has reached.
+"""
+enum ExternalRuleImportPhase {
+	"""
+	Accepted and not yet started.
+	"""
+	QUEUED
+	"""
+	Reading the source.
+	"""
+	FETCHING
+	"""
+	Translating what was read.
+	"""
+	PLANNING
+	"""
+	Saving translated rules.
+	"""
+	SAVING
+	"""
+	Done; the report is final.
+	"""
+	FINISHED
+}
+
+"""
+Application an external rule import reads from.
+"""
+enum ExternalRuleImportSource {
+	"""
+	Sonarr custom formats, imported as disabled scoring rule sets.
+	"""
+	SONARR
+	"""
+	Radarr custom formats, imported as disabled scoring rule sets.
+	"""
+	RADARR
+	"""
+	Maintainerr rule groups, imported as disabled lifecycle rules.
+	"""
+	MAINTAINERR
+}
+
+"""
+An external rule import run and its per-item report. Credentials are never returned.
+"""
+type ExternalRuleImportStatusPayload {
+	"""
+	Job run identity.
+	"""
+	runId: ID!
+	"""
+	Job run status.
+	"""
+	status: JobRunStatusValue!
+	"""
+	Whether the run is still working.
+	"""
+	active: Boolean!
+	"""
+	Report revision; a higher revision is newer.
+	"""
+	revision: Int!
+	"""
+	Last persisted update time.
+	"""
+	updatedAt: DateTime!
+	"""
+	Application read.
+	"""
+	source: ExternalRuleImportSource!
+	"""
+	Base URL read.
+	"""
+	baseUrl: String!
+	"""
+	Step reached.
+	"""
+	phase: ExternalRuleImportPhase!
+	"""
+	Stable reason the run stopped short, or null.
+	"""
+	reason: String
+	"""
+	The server's sentence for that reason: the fallback for an unrecognized code.
+	"""
+	message: String
+	"""
+	Per-state counts.
+	"""
+	counts: ExternalRuleImportCountsPayload!
+	"""
+	One line per source object, at most 1000.
+	"""
+	items: [ExternalRuleImportItemPayload!]!
+	"""
+	Observations about the fetch that belong to no single item.
+	"""
+	facts: [ExternalRuleImportFactPayload!]!
+}
+
+"""
 Subtitle provider record blocked for a media file.
 """
 type ExternalSubtitleBlocklistEntryPayload {
@@ -8256,6 +8519,66 @@ type GeneralSettingsPayload {
 	Additional trusted plugin HTTP certificates.
 	"""
 	pluginHttpTrustedCertificates: [PluginHttpTrustedCertificatePayload!]!
+}
+
+"""
+A signed candidate queued with an operator-selected client and category.
+"""
+input GrabIndexerSearchAssignmentInput {
+	"""
+	Signed candidate token and submission options; the token supplies the release identity.
+	"""
+	input: QueueDownloadInput!
+	"""
+	Operator-selected client and optional category override.
+	"""
+	routing: IndexerGrabSelectionInput!
+	"""
+	Whether this release replaces existing owned media.
+	"""
+	replacement: Boolean!
+}
+
+"""
+Outcome of a finished background grab. Exactly one field is set: the one
+matching the kind of grab that was started, holding what the matching
+synchronous mutation would have returned.
+"""
+type GrabJobResultPayload {
+	"""
+	Outcome of an `existing`, `replacement` or `indexerSearchAssignment` grab.
+	"""
+	queued: QueueDownloadPayload
+	"""
+	Outcome of an `unlinked` grab.
+	"""
+	unlinked: QueueUnlinkedReleasePayload
+	"""
+	Outcome of a `standby` grab.
+	"""
+	standby: QueueStandbyReleasePayload
+	"""
+	Outcome of a `pending` grab.
+	"""
+	pending: ForceGrabPendingReleasePayload
+}
+
+"""
+A saved standby candidate to queue.
+"""
+input GrabStandbyReleaseInput {
+	"""
+	The saved standby candidate to queue.
+	"""
+	id: ID!
+	"""
+	What to do about downloads of this title that are already running.
+	"""
+	choice: StandbyQueueChoiceValue! = CHECK
+	"""
+	The conflicts the operator saw and confirmed; any other running download is listed again instead.
+	"""
+	confirmed: [StandbyConflictIdentityInput!]! = []
 }
 
 """
@@ -8824,6 +9147,10 @@ enum ImportSkipReasonValue {
 	"""
 	ARCHIVE_EXTRACTION_TIMED_OUT
 	"""
+	Archive extraction failed on every allowed attempt; retry the import to try again.
+	"""
+	ARCHIVE_EXTRACTION_BLOCKED
+	"""
 	The title's folder must be resolved before the import can run.
 	"""
 	TITLE_FOLDER_CONFLICT
@@ -9221,6 +9548,14 @@ type IndexerConfigPayload {
 	host limiter and go out later.
 	"""
 	maxQueriesPerMinute: Int
+	"""
+	Maximum Scryer-observed requests per UTC calendar month; null means unlimited.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Maximum Scryer-initiated grabs reserved in a UTC calendar month; null means unlimited.
+	"""
+	maxGrabsPerMonth: Long
 	"""
 	UTC time until which the indexer is disabled, or null when not disabled.
 	"""
@@ -10044,7 +10379,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	Stable code for a failure the operator must act on, such as
 	`ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
-	not loaded; null for other failures and when the indexer did not fail.
+	not loaded, or the monthly limit reason when `skipReason` is
+	`MONTHLY_LIMIT`; null for other failures and when the indexer did not
+	fail.
 	"""
 	failureReasonCode: String
 	"""
@@ -10178,6 +10515,11 @@ enum InteractiveReleaseSearchSkipReasonValue {
 	The indexer takes no text query.
 	"""
 	NO_TEXT_SEARCH
+	"""
+	A local monthly limit on the indexer refused the search, or its usage
+	could not be checked. `failureReasonCode` carries the reason code.
+	"""
+	MONTHLY_LIMIT
 }
 
 """
@@ -10430,13 +10772,9 @@ enum JobKeyValue {
 	"""
 	ARTWORK_ENCODING
 	"""
-	Scheduled maintenance rule evaluation.
+	Scheduled lifecycle rule evaluation.
 	"""
-	MAINTENANCE_RULE_EVALUATION
-	"""
-	Scheduled maintenance lifecycle action handling.
-	"""
-	LIFECYCLE_ACTION_HANDLING
+	LIFECYCLE_RULE_EVALUATION
 	"""
 	Scheduled media-server watch-signal synchronization.
 	"""
@@ -10478,6 +10816,10 @@ enum JobKeyValue {
 	"""
 	ACQUISITION_SEARCH
 	"""
+	One operator-chosen release handed to a download client.
+	"""
+	RELEASE_GRAB
+	"""
 	Application upgrade.
 	"""
 	APPLICATION_UPGRADE
@@ -10489,6 +10831,10 @@ enum JobKeyValue {
 	Background import of selected indexers and download clients.
 	"""
 	SOURCE_IMPORT
+	"""
+	Background import of rules from Sonarr, Radarr, or Maintainerr.
+	"""
+	EXTERNAL_RULE_IMPORT
 	"""
 	A user-defined scheduled script; each script is told apart by its
 	`customJobId`.
@@ -10871,6 +11217,12 @@ type LibraryPayload {
 	Titles removed from the catalog because the root under them was dropped by this mutation; zero everywhere else.
 	"""
 	removedTitleCount: Int!
+	"""
+	Whether the background full-hash job reads this library's files. Off,
+	a file's full hash is read only when something needs it, one file at a
+	time. Readable by anyone who can see the library.
+	"""
+	fullHashBackfillEnabled: Boolean!
 	"""
 	Required audio languages a new title in this library inherits: the
 	library's own, else its facet's. An empty list requires none. The
@@ -11475,6 +11827,622 @@ type LibrarySettingsPayload {
 }
 
 """
+An action a lifecycle rule's source can define.
+
+Each value is a Rego rule name: `unmonitor if { … }`,
+`set_quality_profile := "Name" if { … }`, and so on.
+"""
+enum LifecycleActionHead {
+	"""
+	`unmonitor`: stop monitoring the subject and everything under it.
+	"""
+	UNMONITOR
+	"""
+	`delete_files`: unmonitor the subject, then delete its files.
+	"""
+	DELETE_FILES
+	"""
+	`delete_title`: delete the title and its files. Title rules only.
+	"""
+	DELETE_TITLE
+	"""
+	`search`: search for the title.
+	"""
+	SEARCH
+	"""
+	`set_quality_profile`: change the title's quality profile, by name.
+	"""
+	SET_QUALITY_PROFILE
+	"""
+	`add_tags`: add tags to the title.
+	"""
+	ADD_TAGS
+	"""
+	`remove_tags`: remove tags from the title.
+	"""
+	REMOVE_TAGS
+	"""
+	`monitor`: monitor the subject.
+	"""
+	MONITOR
+	"""
+	`move_to_library`: move the title into another library, by name.
+	"""
+	MOVE_TO_LIBRARY
+	"""
+	`move_to_root`: move the title to another root folder, by path.
+	"""
+	MOVE_TO_ROOT
+	"""
+	`notify`: send a notification naming the rule and the subject.
+	"""
+	NOTIFY
+	"""
+	`fetch_subtitles`: search for subtitles.
+	"""
+	FETCH_SUBTITLES
+	"""
+	`monitor_season`: monitor one season.
+	"""
+	MONITOR_SEASON
+	"""
+	`unmonitor_season`: stop monitoring one season and its episodes.
+	"""
+	UNMONITOR_SEASON
+	"""
+	`delete_season_files`: unmonitor one season, then delete its files.
+	"""
+	DELETE_SEASON_FILES
+	"""
+	`fetch_season_subtitles`: search for one season's subtitles.
+	"""
+	FETCH_SEASON_SUBTITLES
+	"""
+	`notify_season`: send a notification naming the rule and the season.
+	"""
+	NOTIFY_SEASON
+	"""
+	`monitor_episode`: monitor one episode.
+	"""
+	MONITOR_EPISODE
+	"""
+	`unmonitor_episode`: stop monitoring one episode.
+	"""
+	UNMONITOR_EPISODE
+	"""
+	`delete_episode_files`: unmonitor one episode, then delete its files.
+	"""
+	DELETE_EPISODE_FILES
+	"""
+	`fetch_episode_subtitles`: search for one episode's subtitles.
+	"""
+	FETCH_EPISODE_SUBTITLES
+	"""
+	`notify_episode`: send a notification naming the rule and the episode.
+	"""
+	NOTIFY_EPISODE
+}
+
+"""
+Durable receipt for an external job requested by a schema-2 action step.
+"""
+type LifecycleActionJobReceipt {
+	"""
+	Dispatch ordinal for this durable external-job request.
+	"""
+	dispatchAttempt: Int!
+	"""
+	Idempotent key identifying the requested external job.
+	"""
+	logicalRequestKey: String!
+	"""
+	External job-run identifier after the request is accepted.
+	"""
+	jobRunId: ID
+	"""
+	Latest reconciliation state of the external job request.
+	"""
+	state: String!
+	"""
+	UTC time this receipt was created.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC time this receipt was last reconciled.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+How a lifecycle candidate or action run records its actions.
+"""
+enum LifecycleActionKind {
+	"""
+	The actions run as an ordered step sequence. Read `actionSequence` for
+	the steps.
+	"""
+	ACTION_SEQUENCE
+}
+
+"""
+One recorded action-handler attempt on one candidate, holds included.
+"""
+type LifecycleActionRun {
+	"""
+	Exact subject display label from execution evidence or the current catalog.
+	"""
+	subjectLabel: String!
+	"""
+	Persisted per-file outcomes and policy provenance.
+	"""
+	detail: String!
+	"""
+	Persisted subject scope: title, season, or episode.
+	"""
+	subjectKind: String!
+	"""
+	Persisted Scryer title, collection, or episode ID targeted by this attempt.
+	"""
+	subjectId: ID!
+	"""
+	Action-run ID.
+	"""
+	id: ID!
+	"""
+	Rule set the attempt belongs to.
+	"""
+	ruleSetId: ID!
+	"""
+	Candidate the attempt acted on.
+	"""
+	candidateId: ID!
+	"""
+	Title the attempt acted on.
+	"""
+	titleId: ID!
+	"""
+	Display name of the title, or its stored ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	How the attempt records its actions.
+	"""
+	actionKind: LifecycleActionKind!
+	"""
+	The immutable sequence this attempt executed.
+	"""
+	actionSequence: LifecycleActionSequence
+	"""
+	Ordered latest evidence for every step in the immutable sequence.
+	"""
+	sequenceSteps: [LifecycleActionStepProgress!]!
+	"""
+	Match generation of the candidate at attempt time.
+	"""
+	matchGeneration: Int!
+	"""
+	Attempt number for this candidate generation, starting at one.
+	"""
+	attempt: Int!
+	"""
+	Outcome: running, succeeded, already_satisfied, failed, or held.
+	"""
+	status: String!
+	"""
+	Why a held attempt was refused; null otherwise.
+	"""
+	holdReason: String
+	"""
+	Error text of a failed attempt; null otherwise.
+	"""
+	error: String
+	"""
+	Stable code behind the hold or failure, when the cause carried one.
+	"""
+	causeCode: String
+	"""
+	UTC start time of the attempt.
+	"""
+	startedAt: DateTime!
+	"""
+	UTC finish time; null while the attempt is running.
+	"""
+	finishedAt: DateTime
+}
+
+"""
+The authoritative, schema-versioned sequence a revision authorizes.
+"""
+type LifecycleActionSequence {
+	"""
+	Schema version that defines the accepted step representation.
+	"""
+	schemaVersion: Int!
+	"""
+	Ordered steps that make up the revision's action sequence.
+	"""
+	steps: [LifecycleActionStep!]!
+}
+
+"""
+One ordered action in a revision-bound sequence.
+"""
+type LifecycleActionStep {
+	"""
+	Stable identifier used by durable execution receipts and history.
+	"""
+	id: ID!
+	"""
+	Catalog primitive this ordered step executes.
+	"""
+	kind: LifecycleActionStepKind!
+	"""
+	Typed parameters accepted by this step's catalog primitive.
+	"""
+	parameters: LifecycleActionStepParameters!
+}
+
+"""
+The closed catalog of sequence step kinds. These kinds are intentionally
+separate from the legacy lifecycle-action catalog: a sequence never
+serializes as a synthetic legacy action.
+"""
+enum LifecycleActionStepKind {
+	"""
+	Stop monitoring the selected scope and, when configured, its descendants.
+	"""
+	UNMONITOR
+	"""
+	Delete only the selected scope's authorized media files.
+	"""
+	DELETE_FILES
+	"""
+	Change the selected title's quality profile.
+	"""
+	CHANGE_QUALITY_PROFILE
+	"""
+	Request an acquisition search for the selected title.
+	"""
+	SEARCH
+	"""
+	Add configured tags to the selected title.
+	"""
+	ADD_TAGS
+	"""
+	Remove configured tags from the selected title.
+	"""
+	REMOVE_TAGS
+	"""
+	Delete the selected title record and its authorized files.
+	"""
+	DELETE_TITLE_AND_FILES
+	"""
+	Monitor the selected scope.
+	"""
+	MONITOR
+	"""
+	Search for subtitles for the selected scope's files.
+	"""
+	FETCH_SUBTITLES
+	"""
+	Move the selected title into another library.
+	"""
+	MOVE_TO_LIBRARY
+	"""
+	Move the selected title to another root folder of its library.
+	"""
+	MOVE_TO_ROOT
+}
+
+"""
+One typed parameter set for a sequence step. The action catalog decides
+which fields are meaningful for each `kind`; the application rejects every
+other shape before the sequence can be stored.
+"""
+type LifecycleActionStepParameters {
+	"""
+	Whether a title-level unmonitor step also unmonitors its seasons and
+	episodes. This is required before a title file-deletion step can cover
+	a show completely.
+	"""
+	includeDescendants: Boolean
+	"""
+	Target profile for a quality-profile step.
+	"""
+	targetQualityProfileId: String
+	"""
+	Dispatch condition for a search step.
+	"""
+	searchCondition: LifecycleSearchCondition
+	"""
+	Tags written by an add-tags or remove-tags step.
+	"""
+	tags: [String!]!
+	"""
+	Library name a move-to-library step sends the title to.
+	"""
+	targetLibrary: String
+	"""
+	Root folder path a move-to-root step sends the title to.
+	"""
+	targetRoot: String
+}
+
+"""
+One configured step with the latest outcome and any durable job receipts.
+"""
+type LifecycleActionStepProgress {
+	"""
+	Immutable step definition from the sequence revision.
+	"""
+	step: LifecycleActionStep!
+	"""
+	Latest durable checkpoint for this step, or null before execution starts.
+	"""
+	run: LifecycleActionStepRun
+	"""
+	Durable external-job receipts associated with this step.
+	"""
+	receipts: [LifecycleActionJobReceipt!]!
+}
+
+"""
+The latest durable checkpoint for one ordered schema-2 step.
+"""
+type LifecycleActionStepRun {
+	"""
+	Stable identifier of the sequence step this checkpoint belongs to.
+	"""
+	stepId: ID!
+	"""
+	Stored catalog kind for the step checkpoint.
+	"""
+	stepKind: String!
+	"""
+	Latest durable state for this step.
+	"""
+	state: String!
+	"""
+	Number of durable attempts made for this step.
+	"""
+	attempt: Int!
+	"""
+	Reason execution is waiting, when the step is held.
+	"""
+	holdReason: String
+	"""
+	Failure message for the latest step attempt, when any.
+	"""
+	error: String
+	"""
+	Stable code behind the hold or failure, when the cause carried one.
+	"""
+	causeCode: String
+	"""
+	UTC time the step checkpoint was created.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC time the step checkpoint was last updated.
+	"""
+	updatedAt: DateTime!
+	"""
+	UTC time the latest step attempt finished, or null while active.
+	"""
+	finishedAt: DateTime
+}
+
+"""
+A conflicting action one rule decided for a title and a season or episode
+of it, as seen from one side of the pair.
+"""
+type LifecycleActionsConflict {
+	"""
+	This candidate's head in the pair, such as `delete_season_files`.
+	"""
+	head: String!
+	"""
+	The other subject's scope: title, season, or episode.
+	"""
+	otherSubjectKind: String!
+	"""
+	Scryer title, collection, or episode ID of the other subject.
+	"""
+	otherSubjectId: ID!
+	"""
+	The other subject's head in the pair, such as `monitor`.
+	"""
+	otherHead: String!
+}
+
+"""
+One subject's durable membership in one lifecycle rule set.
+
+A candidate records that a rule matched the subject, how long its grace
+period still has to run, and, once the handler has acted, what happened.
+`state` is the authority on which of those a given row is: opening a
+candidate never acts on anything, and only `EXECUTING`, `SUCCEEDED`, and
+`FAILED` mean an action was attempted.
+"""
+type LifecycleCandidate {
+	"""
+	Number of current subject files, or null if the subject is unavailable.
+	"""
+	fileCount: Int
+	"""
+	Current subject file size in bytes, or null if the subject is unavailable.
+	"""
+	totalSizeBytes: Int
+	"""
+	Exact subject display label, falling back to its ID if unavailable.
+	"""
+	subjectLabel: String!
+	"""
+	Subject scope: title, season, or episode.
+	"""
+	subjectKind: String!
+	"""
+	Scryer title, collection, or episode ID identifying this candidate's subject.
+	"""
+	subjectId: ID!
+	"""
+	Candidate ID.
+	"""
+	id: ID!
+	"""
+	Rule set that produced the candidate.
+	"""
+	ruleSetId: ID!
+	"""
+	Name of that rule set.
+	"""
+	ruleName: String!
+	"""
+	Rule revision in force when the candidate was opened.
+	"""
+	revisionNumber: Int!
+	"""
+	Subject title ID.
+	"""
+	titleId: ID!
+	"""
+	Subject title name, or the stored title ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Library the subject belonged to when the candidate was opened.
+	"""
+	libraryId: String!
+	"""
+	Media facet of the subject.
+	"""
+	facet: String!
+	"""
+	Current lifecycle state.
+	"""
+	state: LifecycleCandidateState!
+	"""
+	Why the candidate is in that state.
+	"""
+	stateReason: String!
+	"""
+	Stable code for what caused that state, when it has one beyond
+	`stateReason`: the refusal code a move gave, or the code of the
+	failure a retrying step hit.
+	"""
+	stateCauseCode: String
+	"""
+	Reason codes the matcher emitted on the most recent match.
+	"""
+	reasonCodes: [String!]!
+	"""
+	How the candidate records its actions.
+	"""
+	actionKind: LifecycleActionKind!
+	"""
+	What the rule decided for this subject on its latest match. Null only
+	for candidates opened before rules declared their own actions.
+	"""
+	actions: LifecycleDecidedActions
+	"""
+	The action the same rule decided for an enclosing or contained subject
+	that conflicts with this candidate's, as the latest evaluation found
+	it. While set, the candidate is held with `actions_conflict` and runs
+	nothing. Null when there is none.
+	"""
+	actionsConflict: LifecycleActionsConflict
+	"""
+	The immutable schema-2 sequence that opened this candidate. Legacy
+	candidates retain their original `actionKind` and leave this null.
+	"""
+	actionSequence: LifecycleActionSequence
+	"""
+	Ordered latest evidence for each schema-2 step. An empty sequence is an
+	observe-only candidate rather than a missing action.
+	"""
+	sequenceSteps: [LifecycleActionStepProgress!]!
+	"""
+	Days the subject must match continuously before the action is due.
+	"""
+	graceDays: Int!
+	"""
+	Increments each time a fresh candidate is opened for this subject, so a
+	cancel-then-rematch is distinguishable from a continuing membership.
+	"""
+	matchGeneration: Int!
+	"""
+	When the subject started matching. Never reset while the candidate lives.
+	"""
+	firstMatchedAt: DateTime!
+	"""
+	When the subject most recently matched.
+	"""
+	lastMatchedAt: DateTime!
+	"""
+	When the grace period elapses, equal to `firstMatchedAt` for a zero-day
+	grace period.
+	"""
+	dueAt: DateTime!
+	"""
+	Set while the latest evaluation could not decide, and null otherwise.
+	"""
+	heldSince: DateTime
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+Lifecycle state of one lifecycle candidate.
+
+Two writers move a candidate through these states. The scheduled evaluator
+opens and closes membership, writing only `OBSERVING`, `CANCELED`, and
+`EXCLUDED`. The action handler owns the rest: it leases a due candidate into
+`EXECUTING` and writes the outcome, and it only ever selects candidates of a
+rule that is enabled and whose matching instance effect gate is on.
+"""
+enum LifecycleCandidateState {
+	"""
+	Matching, with the grace clock running.
+	"""
+	OBSERVING
+	"""
+	Grace elapsed and the rule's state permits the action; awaiting the
+	handler.
+	"""
+	PENDING_ACTION
+	"""
+	Eligible to execute now.
+	"""
+	DUE
+	"""
+	An action lease is held for this candidate.
+	"""
+	EXECUTING
+	"""
+	The action completed.
+	"""
+	SUCCEEDED
+	"""
+	The action failed terminally.
+	"""
+	FAILED
+	"""
+	The subject stopped matching, or its rule revision was superseded.
+	"""
+	CANCELED
+	"""
+	An exclusion covers the subject.
+	"""
+	EXCLUDED
+	"""
+	A safety precondition refused the action.
+	"""
+	BLOCKED
+}
+
+"""
 What a lifecycle claim is.
 """
 enum LifecycleClaimKindValue {
@@ -11521,6 +12489,595 @@ enum LifecycleClaimStateValue {
 	it with no expiry.
 	"""
 	CONVERTED
+}
+
+"""
+What a rule decided for one subject, in the order the actions run.
+Deleting files unmonitors first, so `DELETE_FILES` comes with `UNMONITOR`.
+"""
+type LifecycleDecidedActions {
+	"""
+	The decided action heads, in execution order.
+	"""
+	heads: [LifecycleActionHead!]!
+	"""
+	Quality profile name to set, or null when the profile is not changed.
+	"""
+	qualityProfile: String
+	"""
+	Tags to add.
+	"""
+	addTags: [String!]!
+	"""
+	Tags to remove.
+	"""
+	removeTags: [String!]!
+	"""
+	Library name to move the title into, or null.
+	"""
+	library: String
+	"""
+	Root folder path to move the title to, or null.
+	"""
+	root: String
+	"""
+	Notification text to send, or null.
+	"""
+	notification: String
+}
+
+"""
+Everything a rule's source declares it can do, read from the source
+without running it. Every list holds each value once, in source order.
+"""
+type LifecycleDeclaredActions {
+	"""
+	Every action head the source defines.
+	"""
+	heads: [LifecycleActionHead!]!
+	"""
+	Whether any defined head deletes media. Enabling such a rule needs the
+	candidate-count confirmation.
+	"""
+	destructive: Boolean!
+	"""
+	Every quality profile name written for `set_quality_profile`.
+	"""
+	qualityProfiles: [String!]!
+	"""
+	Every tag written for `add_tags`.
+	"""
+	addTags: [String!]!
+	"""
+	Every tag written for `remove_tags`.
+	"""
+	removeTags: [String!]!
+	"""
+	Every library name written for `move_to_library`.
+	"""
+	libraries: [String!]!
+	"""
+	Every root folder path written for `move_to_root`.
+	"""
+	roots: [String!]!
+	"""
+	Every notification text written for `notify`.
+	"""
+	notifications: [String!]!
+}
+
+"""
+One rule set's pass through one evaluation run.
+"""
+type LifecycleEvaluationRun {
+	"""
+	Evaluation-run ID.
+	"""
+	id: ID!
+	"""
+	Rule set that was evaluated.
+	"""
+	ruleSetId: ID!
+	"""
+	Rule revision that was evaluated.
+	"""
+	revisionNumber: Int!
+	"""
+	One of running, succeeded, or failed. A run left running is the trace of
+	an interrupted pass.
+	"""
+	status: String!
+	"""
+	When the pass started.
+	"""
+	startedAt: DateTime!
+	"""
+	When the pass finished, or null while it is still running.
+	"""
+	finishedAt: DateTime
+	"""
+	Subjects the matcher was run against.
+	"""
+	evaluatedCount: Int!
+	"""
+	Subjects the matcher matched.
+	"""
+	matchedCount: Int!
+	"""
+	Subjects the matcher did not match.
+	"""
+	noMatchCount: Int!
+	"""
+	Subjects the matcher could not decide, which are held.
+	"""
+	unknownCount: Int!
+	"""
+	Subjects whose evaluation failed, which are also held.
+	"""
+	errorCount: Int!
+	"""
+	How long the pass took, or null while it is still running.
+	"""
+	durationMs: Int
+	"""
+	Why the pass failed, or null when it did not.
+	"""
+	error: String
+}
+
+"""
+Outcome of asking for an immediate evaluation pass.
+"""
+type LifecycleEvaluationTriggerPayload {
+	"""
+	Whether a pass was started. False when a gate, a disabled rule, or a
+	run already in progress stopped it.
+	"""
+	started: Boolean!
+	"""
+	What happened, suitable for showing to an operator.
+	"""
+	message: String
+}
+
+"""
+A subject a lifecycle rule must never act on.
+"""
+type LifecycleExclusion {
+	"""
+	Exact excluded subject label, falling back to its ID if unavailable.
+	"""
+	subjectLabel: String!
+	"""
+	Excluded scope: title, season, or episode. Parent exclusions cover descendants.
+	"""
+	subjectKind: String!
+	"""
+	Scryer title, collection, or episode ID of the excluded subject.
+	"""
+	subjectId: ID!
+	"""
+	Exclusion ID.
+	"""
+	id: ID!
+	"""
+	Rule the exclusion is confined to, or null when it is global.
+	"""
+	ruleSetId: ID
+	"""
+	Excluded title ID.
+	"""
+	titleId: ID!
+	"""
+	Excluded title name, or the stored title ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Why the subject was excluded; empty when the author gave no reason.
+	"""
+	reason: String!
+	"""
+	ID of the user who added the exclusion, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+}
+
+"""
+The two instance-wide lifecycle switches. An unconfigured instance has
+lifecycle off and actions paused, and both are read at the start of every
+scheduled pass so a change takes effect on the next run without a restart.
+
+A switch is only ever the instance half of a permission. Executing an action
+additionally requires the individual rule to be `ENABLED`, so unpausing
+actions cannot by itself start anything.
+"""
+type LifecycleInstanceGates {
+	"""
+	Whether rules are evaluated and their candidates shown. While this is
+	off no rule is evaluated and no candidate is opened or closed.
+	"""
+	enabled: Boolean!
+	"""
+	Whether every action is paused. While this is off, enabled rules act on
+	their due candidates, including deleting files for rules that do so.
+	"""
+	actionsPaused: Boolean!
+}
+
+"""
+What a matcher decided for one subject.
+"""
+enum LifecycleOutcome {
+	"""
+	The rule matched the subject.
+	"""
+	MATCH
+	"""
+	The rule did not match the subject.
+	"""
+	NO_MATCH
+	"""
+	A fact the rule needs could not be observed, so the rule is held.
+	"""
+	UNKNOWN
+}
+
+"""
+Outcome of running one matcher against a bounded subject selection. Preview
+persists nothing.
+"""
+type LifecyclePreviewPayload {
+	"""
+	Stored rule set the preview ran, or the throwaway ID an unsaved draft
+	compiled under.
+	"""
+	ruleSetId: String!
+	"""
+	Hash of the exact source that produced these outcomes.
+	"""
+	sourceContentHash: String!
+	"""
+	UTC time the preview evaluated the selection.
+	"""
+	evaluatedAt: DateTime!
+	"""
+	One entry per evaluated subject, including its owning title.
+	"""
+	titles: [LifecyclePreviewTitle!]!
+}
+
+"""
+One subject's preview outcome. `outcome` is null exactly when `error` is set:
+a rule that failed produced no decision, and a failure is never rendered as
+a no-match.
+"""
+type LifecyclePreviewTitle {
+	"""
+	Whether a direct or inherited exclusion protects this subject.
+	"""
+	excluded: Boolean!
+	"""
+	Existing grace deadline, or an estimated deadline for a new match.
+	"""
+	dueAt: DateTime
+	"""
+	True when the deadline is estimated rather than persisted on a candidate.
+	"""
+	dueAtIsEstimate: Boolean!
+	"""
+	Display label for the exact title, season, or episode being evaluated.
+	"""
+	subjectLabel: String!
+	"""
+	Number of current files associated with this subject.
+	"""
+	fileCount: Int!
+	"""
+	Combined size in bytes of this subject's current files.
+	"""
+	totalSizeBytes: Int!
+	"""
+	Subject scope: title, season, or episode.
+	"""
+	subjectKind: String!
+	"""
+	Scryer title, collection, or episode ID for the selected scope.
+	"""
+	subjectId: ID!
+	"""
+	Evaluated title ID.
+	"""
+	titleId: ID!
+	"""
+	Evaluated title name.
+	"""
+	titleName: String!
+	"""
+	Media facet of the evaluated title.
+	"""
+	facet: String!
+	"""
+	Library containing the evaluated title.
+	"""
+	libraryId: String!
+	"""
+	Decision the matcher reached, or null when evaluation failed.
+	"""
+	outcome: LifecycleOutcome
+	"""
+	Reason codes the matcher emitted; empty when it emitted none.
+	"""
+	reasonCodes: [String!]!
+	"""
+	Why evaluation failed for this subject, or null when it succeeded.
+	"""
+	error: String
+	"""
+	Stable code for `error`, such as `RULE_RUNTIME_ERROR` or
+	`RULE_OUTPUT_INVALID`; null exactly when `error` is null.
+	"""
+	errorCode: String
+	"""
+	What the rule decided for this subject, or null unless it matched.
+	"""
+	actions: LifecycleDecidedActions
+	"""
+	The input document the rule evaluated for this subject: its `facts`
+	and their `observations`, with the subject and library. Null unless
+	the caller may manage permissions, because the document names who
+	watched and who requested the subject.
+	"""
+	facts: JSON
+}
+
+"""
+What the operator reviewed before enabling a rule that can delete files.
+"""
+input LifecycleRuleArmingConfirmationInput {
+	"""
+	The reviewed matcher/action revision.
+	"""
+	revisionNumber: Int!
+	"""
+	The reviewed library scope. An empty list explicitly acknowledges all
+	libraries.
+	"""
+	libraryIds: [ID!]!
+	"""
+	The candidate count the operator saw; must equal the rule's current
+	non-terminal count.
+	"""
+	candidateCount: Int!
+}
+
+"""
+One immutable revision of a lifecycle rule set's matcher and action.
+"""
+type LifecycleRuleRevision {
+	"""
+	Revision ID.
+	"""
+	id: ID!
+	"""
+	ID of the rule set this revision belongs to.
+	"""
+	ruleSetId: ID!
+	"""
+	Revision number, starting at one and incremented on every matcher edit.
+	"""
+	revisionNumber: Int!
+	"""
+	Rego source as the editor should show it, with the package declaration
+	and the rego.v1 import stripped.
+	"""
+	regoSource: String!
+	"""
+	Days a subject must match continuously before the action becomes due.
+	"""
+	graceDays: Int!
+	"""
+	Hash of the exact stored source, used to attribute a decision to the
+	revision that produced it.
+	"""
+	sourceContentHash: String!
+	"""
+	ID of the user who wrote the revision, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+}
+
+"""
+A lifecycle rule set: identity, scope, and evaluation state. The source,
+which declares both when the rule matches and what it does, lives on the
+revision.
+"""
+type LifecycleRuleSet {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Rule-set name.
+	"""
+	name: String!
+	"""
+	Rule-set description; empty when the author supplied none.
+	"""
+	description: String!
+	"""
+	Disabled, dry run, or enabled.
+	"""
+	state: LifecycleRuleState!
+	"""
+	The rule can delete media and was enabled when its source or scope last
+	changed, so it fell back to dry run. Review its candidates and enable it
+	again.
+	"""
+	editedSinceEnabled: Boolean!
+	"""
+	Shipped with Scryer: name and source are fixed and the rule
+	cannot be deleted.
+	"""
+	systemOwned: Boolean!
+	"""
+	Libraries the rule is confined to. Empty means every library.
+	"""
+	libraryIds: [String!]!
+	"""
+	Revision number of the matcher currently in force.
+	"""
+	currentRevisionNumber: Int!
+	"""
+	Grace period of the revision currently in force, in days.
+	"""
+	graceDays: Int!
+	"""
+	The actions the source of the revision currently in force declares.
+	"""
+	declaredActions: LifecycleDeclaredActions!
+	"""
+	Stable reason code when the revision in force cannot be evaluated or
+	run, such as `LIFECYCLE_RULE_ACTIONS_UNREADABLE` for a rule
+	saved before rules declared their own actions. The rule matches nothing
+	and cannot be enabled until its source is saved again. An armed rule
+	that deletes with no most titles per run shows
+	`LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN`: it still evaluates
+	and previews, but its actions do not run until a maximum is set. Null
+	when the rule is usable.
+	"""
+	loadRefusal: String
+	"""
+	When the rule evaluates and then acts on what it decided. A rule saved
+	without one runs every eight hours.
+	"""
+	schedule: ScriptSchedulePayload!
+	"""
+	The most titles the rule acts on in one run. Due titles beyond it wait
+	for the next run. Null means no limit.
+	"""
+	maxTitlesPerRun: Int
+	"""
+	UTC time of the next scheduled run. Null while the rule is disabled,
+	when its schedule is manual, or before the scheduler has loaded it.
+	"""
+	nextRunAt: DateTime
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+A rule set together with the revision currently in force.
+"""
+type LifecycleRuleSetDetail {
+	"""
+	The rule set itself.
+	"""
+	ruleSet: LifecycleRuleSet!
+	"""
+	The revision currently in force.
+	"""
+	revision: LifecycleRuleRevision!
+	"""
+	The actions that revision's source declares.
+	"""
+	declaredActions: LifecycleDeclaredActions!
+	"""
+	The simple builder's document for the revision's source, or null when
+	the source was written by hand.
+	"""
+	builderModel: JSON
+}
+
+"""
+The one control of a lifecycle rule set.
+"""
+enum LifecycleRuleState {
+	"""
+	Stored but never evaluated. A disabled rule opens no candidates and runs
+	no actions, and it is the state every new rule set is created in.
+	"""
+	DISABLED
+	"""
+	Evaluate and record candidates, never act.
+	"""
+	DRY_RUN
+	"""
+	Evaluate and act on due candidates with the effects the rule's own
+	action can have, while the instance does not pause actions.
+	"""
+	ENABLED
+}
+
+"""
+Granularity a lifecycle rule set is scoped to.
+"""
+enum LifecycleRuleSubjectKind {
+	"""
+	The rule evaluates whole titles, both movies and shows.
+	"""
+	TITLE
+	"""
+	The rule evaluates each season independently, including specials.
+	"""
+	SEASON
+	"""
+	The rule evaluates each episode independently.
+	"""
+	EPISODE
+}
+
+"""
+Result of validating lifecycle rule source without saving it.
+"""
+type LifecycleRuleValidationPayload {
+	"""
+	Structured conditions and source locations.
+	"""
+	diagnostics: [RuleValidationDiagnosticPayload!]!
+	"""
+	Whether the source is valid.
+	"""
+	valid: Boolean!
+	"""
+	Validation errors; empty when valid.
+	"""
+	errors: [String!]!
+	"""
+	Conditions worth fixing that do not stop the source from saving.
+	"""
+	warnings: [RuleValidationDiagnosticPayload!]!
+	"""
+	The actions the source declares, or null when it does not parse.
+	"""
+	declaredActions: LifecycleDeclaredActions
+}
+
+"""
+The explicit condition a search step applies before requesting work.
+"""
+enum LifecycleSearchCondition {
+	"""
+	Always request the search when the step executes.
+	"""
+	UNCONDITIONAL
+	"""
+	Request the search only when the preceding profile step changed a profile.
+	"""
+	PREVIOUS_PROFILE_CHANGED
 }
 
 """
@@ -15221,6 +16778,28 @@ type LocationTransferSnapshotPayload {
 }
 
 """
+Why one title in a location transfer did not simply finish: the sentence,
+and beside it the stable reason code and facts of the error that failed it.
+"""
+type LocationTransferTitleOutcomePayload {
+	"""
+	The title's detail sentence, as `locationTransferTitleDetail` gives it.
+	"""
+	detail: String
+	"""
+	Stable reason code of the error that failed the title, when it carried
+	one. Clients translate known codes and fall back to `detail`.
+	"""
+	refusalReason: String
+	"""
+	Facts that error carried, as one object keyed by fact name whose values
+	are a string or a list of strings, in the shape a GraphQL error
+	extension gives them. Null when the error carried none.
+	"""
+	refusalFacts: JSON
+}
+
+"""
 One title's live progress inside a location transfer, as Activity shows it.
 """
 type LocationTransferTitlePayload {
@@ -15504,1276 +17083,6 @@ input LoginWithPlexInput {
 Signed 64-bit integer scalar for counts, sizes, sequences, and other values that exceed GraphQL `Int` range.
 """
 scalar Long
-
-"""
-Static registry entry describing one maintenance action to the rule builder.
-"""
-type MaintenanceActionDescriptor {
-	"""
-	Scopes for which this build implements the action.
-	"""
-	supportedRuleScopes: [MaintenanceRuleSubjectKind!]!
-	"""
-	Catalog action this descriptor describes.
-	"""
-	kind: MaintenanceActionKind!
-	"""
-	Subjects the action may be configured against.
-	"""
-	supportedSubjects: [MaintenanceActionSubject!]!
-	"""
-	Risk class governing the controls the action requires.
-	"""
-	riskClass: MaintenanceRiskClass!
-	"""
-	Effect classes the action declares for conflict arbitration.
-	"""
-	effectClasses: [String!]!
-	"""
-	When a due action becomes eligible to execute.
-	"""
-	timingMode: String!
-	"""
-	Repeat semantics the registry allows for the action.
-	"""
-	allowedRepeatModes: [String!]!
-	"""
-	Whether configuring the action requires a target quality profile.
-	"""
-	requiresTargetQualityProfile: Boolean!
-	"""
-	Whether configuring the action requires at least one title tag.
-	"""
-	requiresTags: Boolean!
-	"""
-	Whether this action remains valid when a configured storage root limits
-	the files it may affect.
-	"""
-	supportsStorageScope: Boolean!
-}
-
-"""
-Selects one catalog action and its parameters.
-"""
-input MaintenanceActionInput {
-	"""
-	Catalog action to authorize.
-	"""
-	kind: MaintenanceActionKind!
-	"""
-	Target quality profile. Required by the quality-profile action and
-	rejected for every other kind.
-	"""
-	targetQualityProfileId: String
-	"""
-	Tags to add or remove. Required by the tag actions, ignored by every
-	other kind, and rejected unless every label is already defined in the
-	title-tag registry.
-	"""
-	tags: [String!]
-}
-
-"""
-Durable receipt for an external job requested by a schema-2 action step.
-"""
-type MaintenanceActionJobReceipt {
-	"""
-	Dispatch ordinal for this durable external-job request.
-	"""
-	dispatchAttempt: Int!
-	"""
-	Idempotent key identifying the requested external job.
-	"""
-	logicalRequestKey: String!
-	"""
-	External job-run identifier after the request is accepted.
-	"""
-	jobRunId: ID
-	"""
-	Latest reconciliation state of the external job request.
-	"""
-	state: String!
-	"""
-	UTC time this receipt was created.
-	"""
-	createdAt: DateTime!
-	"""
-	UTC time this receipt was last reconciled.
-	"""
-	updatedAt: DateTime!
-}
-
-"""
-The closed catalog of actions a maintenance rule revision can authorize.
-"""
-enum MaintenanceActionKind {
-	"""
-	This revision contains an ordered action sequence. Read
-	`actionSequence` for the authoritative steps; it is never a legacy
-	action input value.
-	"""
-	ACTION_SEQUENCE
-	"""
-	Track membership only, and mutate no media.
-	"""
-	DO_NOTHING
-	"""
-	Unmonitor the matched scope and keep its files.
-	"""
-	UNMONITOR_SCOPE_KEEP_FILES
-	"""
-	Delete the title and its files.
-	"""
-	DELETE_TITLE_AND_FILES
-	"""
-	Unmonitor the title and delete its files while preserving the title.
-	"""
-	UNMONITOR_TITLE_DELETE_ALL_FILES
-	"""
-	Unmonitor the show and its seasons, and delete existing episode files.
-	"""
-	UNMONITOR_SHOW_DELETE_EXISTING_FILES
-	"""
-	Unmonitor the season or episode scope and delete its files.
-	"""
-	UNMONITOR_SCOPE_DELETE_FILES
-	"""
-	Unmonitor the season and delete its files, then delete the show when a
-	fresh parent check proves it is empty.
-	"""
-	UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY
-	"""
-	Unmonitor the season, then unmonitor the show when a fresh parent check
-	proves it is empty.
-	"""
-	UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY
-	"""
-	Change the quality profile and search only when the current profile
-	differs from the target.
-	"""
-	CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED
-	"""
-	Add the configured user tags to the matched title.
-	"""
-	ADD_TAGS
-	"""
-	Remove the configured user tags from the matched title.
-	"""
-	REMOVE_TAGS
-}
-
-"""
-One recorded action-handler attempt on one candidate, holds included.
-"""
-type MaintenanceActionRun {
-	"""
-	Exact subject display label from execution evidence or the current catalog.
-	"""
-	subjectLabel: String!
-	"""
-	Persisted per-file outcomes and policy provenance.
-	"""
-	detail: String!
-	"""
-	Persisted subject scope: title, season, or episode.
-	"""
-	subjectKind: String!
-	"""
-	Persisted Scryer title, collection, or episode ID targeted by this attempt.
-	"""
-	subjectId: ID!
-	"""
-	Action-run ID.
-	"""
-	id: ID!
-	"""
-	Rule set the attempt belongs to.
-	"""
-	ruleSetId: ID!
-	"""
-	Candidate the attempt acted on.
-	"""
-	candidateId: ID!
-	"""
-	Title the attempt acted on.
-	"""
-	titleId: ID!
-	"""
-	Display name of the title, or its stored ID when the title is gone.
-	"""
-	titleName: String!
-	"""
-	Action the attempt performed or refused.
-	"""
-	actionKind: MaintenanceActionKind!
-	"""
-	The immutable schema-2 sequence this attempt executed. Legacy attempts
-	retain their original `actionKind` and leave this null.
-	"""
-	actionSequence: MaintenanceActionSequence
-	"""
-	Ordered latest evidence for every step in the immutable sequence.
-	"""
-	sequenceSteps: [MaintenanceActionStepProgress!]!
-	"""
-	Match generation of the candidate at attempt time.
-	"""
-	matchGeneration: Int!
-	"""
-	Attempt number for this candidate generation, starting at one.
-	"""
-	attempt: Int!
-	"""
-	Outcome: running, succeeded, already_satisfied, failed, or held.
-	"""
-	status: String!
-	"""
-	Why a held attempt was refused; null otherwise.
-	"""
-	holdReason: String
-	"""
-	Error text of a failed attempt; null otherwise.
-	"""
-	error: String
-	"""
-	UTC start time of the attempt.
-	"""
-	startedAt: DateTime!
-	"""
-	UTC finish time; null while the attempt is running.
-	"""
-	finishedAt: DateTime
-}
-
-"""
-The authoritative, schema-versioned sequence a revision authorizes.
-"""
-type MaintenanceActionSequence {
-	"""
-	Schema version that defines the accepted step representation.
-	"""
-	schemaVersion: Int!
-	"""
-	Ordered steps that make up the revision's action sequence.
-	"""
-	steps: [MaintenanceActionStep!]!
-}
-
-"""
-A versioned ordered sequence. An empty sequence is a valid observe-only
-rule and is not represented with a placeholder action.
-"""
-input MaintenanceActionSequenceInput {
-	"""
-	Schema version that defines this sequence input representation.
-	"""
-	schemaVersion: Int!
-	"""
-	Ordered steps to store in the new immutable revision.
-	"""
-	steps: [MaintenanceActionStepInput!]!
-}
-
-"""
-The closed, schema-versioned action configuration a rule revision stores.
-"""
-type MaintenanceActionSpec {
-	"""
-	Catalog action the revision authorizes.
-	"""
-	kind: MaintenanceActionKind!
-	"""
-	Schema version the stored parameters were validated against.
-	"""
-	schemaVersion: Int!
-	"""
-	Target quality profile, set only for the quality-profile action and null
-	for every other kind.
-	"""
-	targetQualityProfileId: String
-	"""
-	Tags the action writes, set only for the tag actions and empty for every
-	other kind. Labels are registry-defined and stored lowercase.
-	"""
-	tags: [String!]!
-}
-
-"""
-One ordered action in a revision-bound sequence.
-"""
-type MaintenanceActionStep {
-	"""
-	Stable identifier used by durable execution receipts and history.
-	"""
-	id: ID!
-	"""
-	Catalog primitive this ordered step executes.
-	"""
-	kind: MaintenanceActionStepKind!
-	"""
-	Typed parameters accepted by this step's catalog primitive.
-	"""
-	parameters: MaintenanceActionStepParameters!
-}
-
-"""
-Backend-owned capabilities for one schema-2 primitive.
-"""
-type MaintenanceActionStepDescriptor {
-	"""
-	Stable catalog identifier for this primitive.
-	"""
-	id: String!
-	"""
-	Primitive represented by this descriptor.
-	"""
-	kind: MaintenanceActionStepKind!
-	"""
-	Operator-facing label for the primitive.
-	"""
-	label: String!
-	"""
-	Subjects that may use this primitive.
-	"""
-	supportedSubjects: [MaintenanceActionSubject!]!
-	"""
-	Name of the typed parameter shape accepted by this primitive.
-	"""
-	parameterSchema: String!
-	"""
-	Effects used when arbitrating conflicts with other steps.
-	"""
-	effectClasses: [String!]!
-	"""
-	Risk class that determines the required arming level.
-	"""
-	riskClass: MaintenanceRiskClass!
-	"""
-	Preconditions this primitive requires before it can execute.
-	"""
-	requires: [String!]!
-	"""
-	Whether this primitive ends the sequence when it succeeds.
-	"""
-	terminal: Boolean!
-	"""
-	How completion for this primitive is determined.
-	"""
-	completionPolicy: String!
-	"""
-	Whether this primitive is permitted for a storage-root-scoped rule.
-	"""
-	storageRootAllowed: Boolean!
-}
-
-"""
-One ordered input action with a caller-stable identifier.
-"""
-input MaintenanceActionStepInput {
-	"""
-	Caller-stable identifier used for durable step receipts and history.
-	"""
-	id: ID!
-	"""
-	Catalog primitive this input step configures.
-	"""
-	kind: MaintenanceActionStepKind!
-	"""
-	Typed parameters accepted by the selected primitive.
-	"""
-	parameters: MaintenanceActionStepParametersInput!
-}
-
-"""
-The closed catalog of sequence step kinds. These kinds are intentionally
-separate from the legacy maintenance-action catalog: a sequence never
-serializes as a synthetic legacy action.
-"""
-enum MaintenanceActionStepKind {
-	"""
-	Stop monitoring the selected scope and, when configured, its descendants.
-	"""
-	UNMONITOR
-	"""
-	Delete only the selected scope's authorized media files.
-	"""
-	DELETE_FILES
-	"""
-	Change the selected title's quality profile.
-	"""
-	CHANGE_QUALITY_PROFILE
-	"""
-	Request an acquisition search for the selected title.
-	"""
-	SEARCH
-	"""
-	Add configured tags to the selected title.
-	"""
-	ADD_TAGS
-	"""
-	Remove configured tags from the selected title.
-	"""
-	REMOVE_TAGS
-	"""
-	Delete the selected title record and its authorized files.
-	"""
-	DELETE_TITLE_AND_FILES
-}
-
-"""
-One typed parameter set for a sequence step. The action catalog decides
-which fields are meaningful for each `kind`; the application rejects every
-other shape before the sequence can be stored.
-"""
-type MaintenanceActionStepParameters {
-	"""
-	Whether a title-level unmonitor step also unmonitors its seasons and
-	episodes. This is required before a title file-deletion step can cover
-	a show completely.
-	"""
-	includeDescendants: Boolean
-	"""
-	Target profile for a quality-profile step.
-	"""
-	targetQualityProfileId: String
-	"""
-	Dispatch condition for a search step.
-	"""
-	searchCondition: MaintenanceSearchCondition
-	"""
-	Tags written by an add-tags or remove-tags step.
-	"""
-	tags: [String!]!
-}
-
-"""
-Parameters for one input sequence step. The selected `kind` determines the
-accepted subset. Keeping this input closed and validated by the server
-prevents Rego or the web client from inventing effects.
-"""
-input MaintenanceActionStepParametersInput {
-	"""
-	Include monitored descendants when unmonitoring a whole title.
-	"""
-	includeDescendants: Boolean
-	"""
-	Quality-profile identifier for a change-quality-profile step.
-	"""
-	targetQualityProfileId: String
-	"""
-	Condition that controls whether a search step requests work.
-	"""
-	searchCondition: MaintenanceSearchCondition
-	"""
-	Tags to add or remove for a tag step.
-	"""
-	tags: [String!]
-}
-
-"""
-One configured step with the latest outcome and any durable job receipts.
-"""
-type MaintenanceActionStepProgress {
-	"""
-	Immutable step definition from the sequence revision.
-	"""
-	step: MaintenanceActionStep!
-	"""
-	Latest durable checkpoint for this step, or null before execution starts.
-	"""
-	run: MaintenanceActionStepRun
-	"""
-	Durable external-job receipts associated with this step.
-	"""
-	receipts: [MaintenanceActionJobReceipt!]!
-}
-
-"""
-The latest durable checkpoint for one ordered schema-2 step.
-"""
-type MaintenanceActionStepRun {
-	"""
-	Stable identifier of the sequence step this checkpoint belongs to.
-	"""
-	stepId: ID!
-	"""
-	Stored catalog kind for the step checkpoint.
-	"""
-	stepKind: String!
-	"""
-	Latest durable state for this step.
-	"""
-	state: String!
-	"""
-	Number of durable attempts made for this step.
-	"""
-	attempt: Int!
-	"""
-	Reason execution is waiting, when the step is held.
-	"""
-	holdReason: String
-	"""
-	Failure message for the latest step attempt, when any.
-	"""
-	error: String
-	"""
-	UTC time the step checkpoint was created.
-	"""
-	createdAt: DateTime!
-	"""
-	UTC time the step checkpoint was last updated.
-	"""
-	updatedAt: DateTime!
-	"""
-	UTC time the latest step attempt finished, or null while active.
-	"""
-	finishedAt: DateTime
-}
-
-"""
-A media subject a maintenance action can be configured against.
-"""
-enum MaintenanceActionSubject {
-	"""
-	A movie title.
-	"""
-	MOVIE
-	"""
-	A show title.
-	"""
-	SHOW
-	"""
-	One season of a show.
-	"""
-	SEASON
-	"""
-	One episode of a show.
-	"""
-	EPISODE
-}
-
-"""
-One subject's durable membership in one maintenance rule set.
-
-A candidate records that a rule matched the subject, how long its grace
-period still has to run, and, once the handler has acted, what happened.
-`state` is the authority on which of those a given row is: opening a
-candidate never acts on anything, and only `EXECUTING`, `SUCCEEDED`, and
-`FAILED` mean an action was attempted.
-"""
-type MaintenanceCandidate {
-	"""
-	Number of current subject files, or null if the subject is unavailable.
-	"""
-	fileCount: Int
-	"""
-	Current subject file size in bytes, or null if the subject is unavailable.
-	"""
-	totalSizeBytes: Int
-	"""
-	Number of unambiguously owned current subject files on the root selected
-	by this candidate's pinned revision, or null when no root is selected or
-	exact root ownership cannot be established.
-	"""
-	storageRootFileCount: Int
-	"""
-	Total bytes of unambiguously owned current subject files on the root
-	selected by this candidate's pinned revision. It is null under the same
-	conditions as `storageRootFileCount`.
-	"""
-	storageRootTotalSizeBytes: Int
-	"""
-	Exact subject display label, falling back to its ID if unavailable.
-	"""
-	subjectLabel: String!
-	"""
-	Subject scope: title, season, or episode.
-	"""
-	subjectKind: String!
-	"""
-	Scryer title, collection, or episode ID identifying this candidate's subject.
-	"""
-	subjectId: ID!
-	"""
-	Candidate ID.
-	"""
-	id: ID!
-	"""
-	Rule set that produced the candidate.
-	"""
-	ruleSetId: ID!
-	"""
-	Name of that rule set.
-	"""
-	ruleName: String!
-	"""
-	Rule revision in force when the candidate was opened.
-	"""
-	revisionNumber: Int!
-	"""
-	Subject title ID.
-	"""
-	titleId: ID!
-	"""
-	Subject title name, or the stored title ID when the title is gone.
-	"""
-	titleName: String!
-	"""
-	Library the subject belonged to when the candidate was opened.
-	"""
-	libraryId: String!
-	"""
-	Media facet of the subject.
-	"""
-	facet: String!
-	"""
-	Current lifecycle state.
-	"""
-	state: MaintenanceCandidateState!
-	"""
-	Why the candidate is in that state.
-	"""
-	stateReason: String!
-	"""
-	Reason codes the matcher emitted on the most recent match.
-	"""
-	reasonCodes: [String!]!
-	"""
-	Action the rule revision authorizes, and the one the handler will run if
-	this candidate becomes due while the rule is in `OBSERVE` mode, armed for
-	the action's risk class, and its instance effect gate is on.
-	"""
-	actionKind: MaintenanceActionKind!
-	"""
-	The immutable schema-2 sequence that opened this candidate. Legacy
-	candidates retain their original `actionKind` and leave this null.
-	"""
-	actionSequence: MaintenanceActionSequence
-	"""
-	Ordered latest evidence for each schema-2 step. An empty sequence is an
-	observe-only candidate rather than a missing action.
-	"""
-	sequenceSteps: [MaintenanceActionStepProgress!]!
-	"""
-	Days the subject must match continuously before the action is due.
-	"""
-	graceDays: Int!
-	"""
-	Increments each time a fresh candidate is opened for this subject, so a
-	cancel-then-rematch is distinguishable from a continuing membership.
-	"""
-	matchGeneration: Int!
-	"""
-	When the subject started matching. Never reset while the candidate lives.
-	"""
-	firstMatchedAt: DateTime!
-	"""
-	When the subject most recently matched.
-	"""
-	lastMatchedAt: DateTime!
-	"""
-	When the grace period elapses, equal to `firstMatchedAt` for a zero-day
-	grace period.
-	"""
-	dueAt: DateTime!
-	"""
-	Set while the latest evaluation could not decide, and null otherwise.
-	"""
-	heldSince: DateTime
-	"""
-	UTC last-update time.
-	"""
-	updatedAt: DateTime!
-}
-
-"""
-Lifecycle state of one maintenance candidate.
-
-Two writers move a candidate through these states. The scheduled evaluator
-opens and closes membership, writing only `OBSERVING`, `CANCELED`, and
-`EXCLUDED`. The action handler owns the rest: it leases a due candidate into
-`EXECUTING` and writes the outcome, and it only ever selects candidates of a
-rule that is in `OBSERVE` mode, is armed, and whose matching instance effect
-gate is on.
-"""
-enum MaintenanceCandidateState {
-	"""
-	Matching, with the grace clock running.
-	"""
-	OBSERVING
-	"""
-	Grace elapsed and effect arming permits the action; awaiting the handler.
-	"""
-	PENDING_ACTION
-	"""
-	Eligible to execute now.
-	"""
-	DUE
-	"""
-	An action lease is held for this candidate.
-	"""
-	EXECUTING
-	"""
-	The action completed.
-	"""
-	SUCCEEDED
-	"""
-	The action failed terminally.
-	"""
-	FAILED
-	"""
-	The subject stopped matching, or its rule revision was superseded.
-	"""
-	CANCELED
-	"""
-	An exclusion covers the subject.
-	"""
-	EXCLUDED
-	"""
-	A safety precondition refused the action.
-	"""
-	BLOCKED
-}
-
-"""
-The class of effects a rule's action can have.
-"""
-enum MaintenanceEffectArming {
-	"""
-	Evaluate and track candidates, never act.
-	"""
-	NONE
-	"""
-	Low- and medium-risk actions may execute.
-	"""
-	REVERSIBLE
-	"""
-	High-risk actions may additionally execute. Requires acknowledging the
-	rule's current candidate count when set.
-	"""
-	DESTRUCTIVE
-}
-
-"""
-One rule set's pass through one evaluation run.
-"""
-type MaintenanceEvaluationRun {
-	"""
-	Evaluation-run ID.
-	"""
-	id: ID!
-	"""
-	Rule set that was evaluated.
-	"""
-	ruleSetId: ID!
-	"""
-	Rule revision that was evaluated.
-	"""
-	revisionNumber: Int!
-	"""
-	One of running, succeeded, or failed. A run left running is the trace of
-	an interrupted pass.
-	"""
-	status: String!
-	"""
-	When the pass started.
-	"""
-	startedAt: DateTime!
-	"""
-	When the pass finished, or null while it is still running.
-	"""
-	finishedAt: DateTime
-	"""
-	Subjects the matcher was run against.
-	"""
-	evaluatedCount: Int!
-	"""
-	Subjects the matcher matched.
-	"""
-	matchedCount: Int!
-	"""
-	Subjects the matcher did not match.
-	"""
-	noMatchCount: Int!
-	"""
-	Subjects the matcher could not decide, which are held.
-	"""
-	unknownCount: Int!
-	"""
-	Subjects whose evaluation failed, which are also held.
-	"""
-	errorCount: Int!
-	"""
-	How long the pass took, or null while it is still running.
-	"""
-	durationMs: Int
-	"""
-	Why the pass failed, or null when it did not.
-	"""
-	error: String
-}
-
-"""
-Outcome of asking for an immediate evaluation pass.
-"""
-type MaintenanceEvaluationTriggerPayload {
-	"""
-	Whether a pass was started. False when a gate, a disabled rule, or a
-	run already in progress stopped it.
-	"""
-	started: Boolean!
-	"""
-	What happened, suitable for showing to an operator.
-	"""
-	message: String
-}
-
-"""
-A subject a maintenance rule must never act on.
-"""
-type MaintenanceExclusion {
-	"""
-	Exact excluded subject label, falling back to its ID if unavailable.
-	"""
-	subjectLabel: String!
-	"""
-	Excluded scope: title, season, or episode. Parent exclusions cover descendants.
-	"""
-	subjectKind: String!
-	"""
-	Scryer title, collection, or episode ID of the excluded subject.
-	"""
-	subjectId: ID!
-	"""
-	Exclusion ID.
-	"""
-	id: ID!
-	"""
-	Rule the exclusion is confined to, or null when it is global.
-	"""
-	ruleSetId: ID
-	"""
-	Excluded title ID.
-	"""
-	titleId: ID!
-	"""
-	Excluded title name, or the stored title ID when the title is gone.
-	"""
-	titleName: String!
-	"""
-	Why the subject was excluded; empty when the author gave no reason.
-	"""
-	reason: String!
-	"""
-	ID of the user who added the exclusion, or null when unattributed.
-	"""
-	createdBy: ID
-	"""
-	UTC creation time.
-	"""
-	createdAt: DateTime!
-}
-
-"""
-The two instance-wide maintenance switches. An unconfigured instance has
-maintenance off and actions paused, and both are read at the start of every
-scheduled pass so a change takes effect on the next run without a restart.
-
-A switch is only ever the instance half of a permission. Executing an action
-additionally requires the individual rule to be `ENABLED`, so unpausing
-actions cannot by itself start anything.
-"""
-type MaintenanceInstanceGates {
-	"""
-	Whether rules are evaluated and their candidates shown. While this is
-	off no rule is evaluated and no candidate is opened or closed.
-	"""
-	enabled: Boolean!
-	"""
-	Whether every action is paused. While this is off, enabled rules act on
-	their due candidates, including deleting files for rules that do so.
-	"""
-	actionsPaused: Boolean!
-}
-
-"""
-What a matcher decided for one subject.
-"""
-enum MaintenanceOutcome {
-	"""
-	The rule matched the subject.
-	"""
-	MATCH
-	"""
-	The rule did not match the subject.
-	"""
-	NO_MATCH
-	"""
-	A fact the rule needs could not be observed, so the rule is held.
-	"""
-	UNKNOWN
-}
-
-"""
-Outcome of running one matcher against a bounded subject selection. Preview
-persists nothing.
-"""
-type MaintenancePreviewPayload {
-	"""
-	Stored rule set the preview ran, or the throwaway ID an unsaved draft
-	compiled under.
-	"""
-	ruleSetId: String!
-	"""
-	Hash of the exact source that produced these outcomes.
-	"""
-	matcherContentHash: String!
-	"""
-	UTC time the preview evaluated the selection.
-	"""
-	evaluatedAt: DateTime!
-	"""
-	One entry per evaluated subject, including its owning title.
-	"""
-	titles: [MaintenancePreviewTitle!]!
-}
-
-"""
-One subject's preview outcome. `outcome` is null exactly when `error` is set:
-a rule that failed produced no decision, and a failure is never rendered as
-a no-match.
-"""
-type MaintenancePreviewTitle {
-	"""
-	Whether a direct or inherited exclusion protects this subject.
-	"""
-	excluded: Boolean!
-	"""
-	Existing grace deadline, or an estimated deadline for a new match.
-	"""
-	dueAt: DateTime
-	"""
-	True when the deadline is estimated rather than persisted on a candidate.
-	"""
-	dueAtIsEstimate: Boolean!
-	"""
-	Display label for the exact title, season, or episode being evaluated.
-	"""
-	subjectLabel: String!
-	"""
-	Number of current files associated with this subject.
-	"""
-	fileCount: Int!
-	"""
-	Combined size in bytes of this subject's current files.
-	"""
-	totalSizeBytes: Int!
-	"""
-	Number of files eligible for deletion on the selected storage root, or
-	null when this matcher does not select a resolvable root.
-	"""
-	storageRootFileCount: Int
-	"""
-	Combined bytes eligible for deletion on the selected storage root, or
-	null when this matcher does not select a resolvable root.
-	"""
-	storageRootTotalSizeBytes: Int
-	"""
-	Subject scope: title, season, or episode.
-	"""
-	subjectKind: String!
-	"""
-	Scryer title, collection, or episode ID for the selected scope.
-	"""
-	subjectId: ID!
-	"""
-	Evaluated title ID.
-	"""
-	titleId: ID!
-	"""
-	Evaluated title name.
-	"""
-	titleName: String!
-	"""
-	Media facet of the evaluated title.
-	"""
-	facet: String!
-	"""
-	Library containing the evaluated title.
-	"""
-	libraryId: String!
-	"""
-	Decision the matcher reached, or null when evaluation failed.
-	"""
-	outcome: MaintenanceOutcome
-	"""
-	Reason codes the matcher emitted; empty when it emitted none.
-	"""
-	reasonCodes: [String!]!
-	"""
-	Why evaluation failed for this subject, or null when it succeeded.
-	"""
-	error: String
-	"""
-	The input document the rule evaluated for this subject: its `facts`
-	and their `observations`, with the subject and library. Null unless
-	the caller may manage permissions, because the document names who
-	watched and who requested the subject.
-	"""
-	facts: JSON
-}
-
-"""
-How destructive a maintenance action is, and therefore the minimum control
-its execution requires.
-"""
-enum MaintenanceRiskClass {
-	"""
-	Mutates no managed media or catalog state.
-	"""
-	NONE
-	"""
-	Reversible Scryer state, a notification, or a bounded refresh.
-	"""
-	LOW
-	"""
-	Changes acquisition intent, starts external work, or reorganizes files.
-	"""
-	MEDIUM
-	"""
-	Deletes, blocklists, or can otherwise make media unavailable.
-	"""
-	HIGH
-}
-
-"""
-What the operator reviewed before enabling a rule that can delete files.
-"""
-input MaintenanceRuleArmingConfirmationInput {
-	"""
-	The reviewed matcher/action revision.
-	"""
-	revisionNumber: Int!
-	"""
-	The reviewed library scope. An empty list explicitly acknowledges all
-	libraries.
-	"""
-	libraryIds: [ID!]!
-	"""
-	The candidate count the operator saw; must equal the rule's current
-	non-terminal count.
-	"""
-	candidateCount: Int!
-}
-
-"""
-One immutable revision of a maintenance rule set's matcher and action.
-"""
-type MaintenanceRuleRevision {
-	"""
-	Revision ID.
-	"""
-	id: ID!
-	"""
-	ID of the rule set this revision belongs to.
-	"""
-	ruleSetId: ID!
-	"""
-	Revision number, starting at one and incremented on every matcher edit.
-	"""
-	revisionNumber: Int!
-	"""
-	Rego source as the editor should show it, with the package declaration
-	and the rego.v1 import stripped.
-	"""
-	regoSource: String!
-	"""
-	Days a subject must match continuously before the action becomes due.
-	"""
-	graceDays: Int!
-	"""
-	Configured library root whose capacity and owned files this revision
-	uses, or null when it is not storage-scoped.
-	"""
-	storageRootId: String
-	"""
-	Hash of the exact stored source, used to attribute a decision to the
-	revision that produced it.
-	"""
-	matcherContentHash: String!
-	"""
-	ID of the user who wrote the revision, or null when unattributed.
-	"""
-	createdBy: ID
-	"""
-	UTC creation time.
-	"""
-	createdAt: DateTime!
-}
-
-"""
-A maintenance rule set: identity, scope, and evaluation state. The matcher
-and the action it authorizes live on the revision, never here.
-"""
-type MaintenanceRuleSet {
-	"""
-	Rule-set ID.
-	"""
-	id: ID!
-	"""
-	Rule-set name.
-	"""
-	name: String!
-	"""
-	Rule-set description; empty when the author supplied none.
-	"""
-	description: String!
-	"""
-	Disabled, dry run, or enabled.
-	"""
-	state: MaintenanceRuleState!
-	"""
-	What enabling this rule arms. `DESTRUCTIVE` means enabling it requires
-	the candidate-count confirmation.
-	"""
-	enabledArming: MaintenanceEffectArming!
-	"""
-	The rule was enabled when its matcher, action, or scope last changed, so
-	it fell back to dry run. Review its candidates and enable it again.
-	"""
-	editedSinceEnabled: Boolean!
-	"""
-	Shipped with Scryer: name, matcher and action are fixed and the rule
-	cannot be deleted.
-	"""
-	systemOwned: Boolean!
-	"""
-	Libraries the rule is confined to. Empty means every library.
-	"""
-	libraryIds: [String!]!
-	"""
-	Granularity the rule is scoped to.
-	"""
-	subjectKind: MaintenanceRuleSubjectKind!
-	"""
-	Revision number of the matcher currently in force.
-	"""
-	currentRevisionNumber: Int!
-	"""
-	Grace period of the revision currently in force, in days.
-	"""
-	graceDays: Int!
-	"""
-	Action the revision currently in force authorizes.
-	"""
-	actionSpec: MaintenanceActionSpec!
-	"""
-	Ordered schema-2 actions for the revision currently in force. Legacy
-	rows expose their unchanged action spec and leave this null.
-	"""
-	actionSequence: MaintenanceActionSequence
-	"""
-	UTC creation time.
-	"""
-	createdAt: DateTime!
-	"""
-	UTC last-update time.
-	"""
-	updatedAt: DateTime!
-}
-
-"""
-A rule set together with the revision currently in force.
-"""
-type MaintenanceRuleSetDetail {
-	"""
-	The rule set itself.
-	"""
-	ruleSet: MaintenanceRuleSet!
-	"""
-	The revision currently in force.
-	"""
-	revision: MaintenanceRuleRevision!
-	"""
-	The action that revision authorizes, already decoded.
-	"""
-	actionSpec: MaintenanceActionSpec!
-	"""
-	Ordered actions for a schema-2 revision. Legacy revisions keep this
-	null and continue to expose their original `actionSpec` unchanged.
-	"""
-	actionSequence: MaintenanceActionSequence
-}
-
-"""
-The one control of a maintenance rule set.
-"""
-enum MaintenanceRuleState {
-	"""
-	Stored but never evaluated. A disabled rule opens no candidates and runs
-	no actions, and it is the state every new rule set is created in.
-	"""
-	DISABLED
-	"""
-	Evaluate and record candidates, never act.
-	"""
-	DRY_RUN
-	"""
-	Evaluate and act on due candidates with the effects the rule's own
-	action can have, while the instance does not pause actions.
-	"""
-	ENABLED
-}
-
-"""
-Granularity a maintenance rule set is scoped to.
-"""
-enum MaintenanceRuleSubjectKind {
-	"""
-	The rule evaluates whole titles, both movies and shows.
-	"""
-	TITLE
-	"""
-	The rule evaluates each season independently, including specials.
-	"""
-	SEASON
-	"""
-	The rule evaluates each episode independently.
-	"""
-	EPISODE
-}
-
-"""
-Result of validating maintenance rule source without saving it.
-"""
-type MaintenanceRuleValidationPayload {
-	"""
-	Structured conditions and source locations.
-	"""
-	diagnostics: [RuleValidationDiagnosticPayload!]!
-	"""
-	Whether the source is valid.
-	"""
-	valid: Boolean!
-	"""
-	Validation errors; empty when valid.
-	"""
-	errors: [String!]!
-}
-
-"""
-The explicit condition a search step applies before requesting work.
-"""
-enum MaintenanceSearchCondition {
-	"""
-	Always request the search when the step executes.
-	"""
-	UNCONDITIONAL
-	"""
-	Request the search only when the preceding profile step changed a profile.
-	"""
-	PREVIOUS_PROFILE_CHANGED
-}
 
 """
 Maps a persisted manual-import candidate to an episode, series-movie link, or title-level movie target.
@@ -18374,8 +18683,9 @@ type MediaRequestPayload {
 	"""
 	decision: RequestRuleDecision
 	"""
-	Tags the policy emitted for this request. Stamped on the title only when
-	the request is approved.
+	Tags the policy emitted for this request, narrowed to the labels the
+	tag registry defines. Stamped on the title only when the request is
+	approved. The rules add none to a request they deny.
 	"""
 	policyTags: [String!]!
 	"""
@@ -20400,6 +20710,15 @@ type MutationRoot {
 		input: SetMyDashboardLayoutInput!
 	): UiSettingsPayload!
 	"""
+	Records that the authenticated actor finished or skipped guided tours, so they are not offered again.
+	"""
+	recordMyUiTours(
+		"""
+		Tours to record; a tour recorded before takes the new outcome.
+		"""
+		input: RecordMyUiToursInput!
+	): UiSettingsPayload!
+	"""
 	Forgets the authenticated actor's saved dashboard layout so the default layout applies again.
 	"""
 	resetMyDashboardLayout(
@@ -21082,6 +21401,17 @@ type MutationRoot {
 		input: UpdateLibraryInput!
 	): LibraryPayload!
 	"""
+	Turn the background full-hash job on or off for one library. Off, the
+	job never reads the library's files, and a file's full hash is read
+	only when something needs it.
+	"""
+	setLibraryFullHashBackfill(
+		"""
+		Library identity and whether the background full-hash job reads its files.
+		"""
+		input: SetLibraryFullHashBackfillInput!
+	): LibraryPayload!
+	"""
 	Accept a background job that deletes the library identified by the
 	supplied ID and removes its titles from the catalog. Files on disk are
 	left alone.
@@ -21380,6 +21710,19 @@ type MutationRoot {
 		id: ID!
 	): ResumeLocationOperationPayload!
 	"""
+	Read a request subject's metadata once and keep it for the previews and the submit that follow; requires request permission on the target library.
+	
+	The request dialog calls this when it opens. `previewMyRequestDecision`
+	reads the staged record and never fetches metadata itself, so a subject
+	that was not staged previews as metadata unavailable.
+	"""
+	stageMyRequestMetadata(
+		"""
+		Target library, facet, and external identifiers of the subject.
+		"""
+		input: StageMediaRequestMetadataInput!
+	): StageMediaRequestMetadataPayload!
+	"""
 	Create a media request with the requested metadata and acquisition preferences.
 	"""
 	submitMediaRequest(
@@ -21515,6 +21858,18 @@ type MutationRoot {
 		"""
 		id: ID!
 	): CancelAcquisitionSearchPayload!
+	"""
+	Start a grab in the background and return its job at once.
+	The grab runs exactly as the matching synchronous mutation does, and
+	`grabJobResult` returns that mutation's payload or error once the job
+	has finished.
+	"""
+	startGrab(
+		"""
+		The one grab to run.
+		"""
+		input: StartGrabInput!
+	): StartGrabPayload!
 	"""
 	Create a catalog rule set with optional facet scope, priority, and enabled state.
 	"""
@@ -21699,73 +22054,73 @@ type MutationRoot {
 		revision: Long!
 	): DeleteTrackedRulePackPayload!
 	"""
-	Create a maintenance rule set together with its first matcher revision.
+	Create a lifecycle rule set together with its first matcher revision.
 	"""
-	createMaintenanceRuleSet(
+	createLifecycleRuleSet(
 		"""
-		Rule name, matcher source, action, and optional description, grace period, and library scope.
+		Rule name, source, and optional description, grace period, and library scope.
 		"""
-		input: CreateMaintenanceRuleSetInput!
-	): MaintenanceRuleSetDetail!
+		input: CreateLifecycleRuleSetInput!
+	): LifecycleRuleSetDetail!
 	"""
-	Replace a rule set's matcher, action, and grace period by appending a revision.
+	Replace a rule set's source and grace period by appending a revision.
 	"""
-	updateMaintenanceRuleMatcher(
+	updateLifecycleRuleSource(
 		"""
-		Rule-set identity, replacement matcher source and action, and optional grace period.
+		Rule-set identity, replacement source, and optional grace period.
 		"""
-		input: UpdateMaintenanceRuleMatcherInput!
-	): MaintenanceRuleSetDetail!
+		input: UpdateLifecycleRuleSourceInput!
+	): LifecycleRuleSetDetail!
 	"""
-	Rename and re-scope a rule set without touching its matcher, so no revision is created.
+	Rename, re-scope or reschedule a rule set without touching its matcher, so no revision is created.
 	"""
-	updateMaintenanceRuleMetadata(
+	updateLifecycleRuleMetadata(
 		"""
-		Rule-set identity, replacement name, and optional description and library scope.
+		Rule-set identity, replacement name, and optional description, library scope and schedule.
 		"""
-		input: UpdateMaintenanceRuleMetadataInput!
-	): MaintenanceRuleSet!
+		input: UpdateLifecycleRuleMetadataInput!
+	): LifecycleRuleSet!
 	"""
-	Delete a maintenance rule set and every revision it owns.
+	Delete a lifecycle rule set and every revision it owns.
 	
 	Refused for a rule that has already run actions, because the delete
 	cascades and would take the record of what it did with it, and for one
 	that is still tracking subjects. Set the rule's mode to `DISABLED`
 	instead: it stops just as completely and keeps its history.
 	"""
-	deleteMaintenanceRuleSet(
+	deleteLifecycleRuleSet(
 		"""
-		Maintenance rule-set identity to delete.
+		Lifecycle rule-set identity to delete.
 		"""
 		id: ID!
-	): DeleteMaintenanceRuleSetPayload!
+	): DeleteLifecycleRuleSetPayload!
 	"""
-	Compile and check maintenance rule source without saving it.
+	Compile and check lifecycle rule source without saving it.
 	"""
-	validateMaintenanceRule(
+	validateLifecycleRule(
 		"""
 		Matcher source to validate.
 		"""
-		input: ValidateMaintenanceRuleInput!
-	): MaintenanceRuleValidationPayload!
+		input: ValidateLifecycleRuleInput!
+	): LifecycleRuleValidationPayload!
 	"""
 	Evaluate one matcher against a bounded title selection without saving anything.
 	"""
-	previewMaintenanceRule(
+	previewLifecycleRule(
 		"""
 		Either a stored rule set or an unsaved matcher, plus either the titles or the library to evaluate.
 		"""
-		input: PreviewMaintenanceRuleInput!
-	): MaintenancePreviewPayload!
+		input: PreviewLifecycleRuleInput!
+	): LifecyclePreviewPayload!
 	"""
-	Set a maintenance rule to Disabled, Dry run, or Enabled.
+	Set a lifecycle rule to Disabled, Dry run, or Enabled.
 	
 	Enabled arms the effects the rule's own action can have. Enabling a rule
 	that can delete files requires a confirmation of the reviewed revision,
 	library scope, and current candidate count. A rule moved back to
 	Disabled keeps the candidates it already opened.
 	"""
-	setMaintenanceRuleState(
+	setLifecycleRuleState(
 		"""
 		Rule-set ID.
 		"""
@@ -21773,85 +22128,94 @@ type MutationRoot {
 		"""
 		The state to store.
 		"""
-		state: MaintenanceRuleState!,
+		state: LifecycleRuleState!,
 		"""
 		Required when enabling a rule that can delete files.
 		"""
-		confirmation: MaintenanceRuleArmingConfirmationInput
-	): MaintenanceRuleSet!
+		confirmation: LifecycleRuleArmingConfirmationInput
+	): LifecycleRuleSet!
 	"""
-	Run the maintenance action handler immediately instead of waiting for its schedule.
+	Fire one rule now instead of waiting for its next scheduled fire: it is
+	evaluated first, as a scheduled fire does, then its due titles are
+	acted on, including any the evaluation adds that are already due.
+	Rules act only through their own fires, so a call that names no rule
+	is refused with `LIFECYCLE_ACTION_RUN_RULE_REQUIRED`.
 	"""
-	runMaintenanceActionHandlerNow: MaintenanceEvaluationTriggerPayload!
+	runLifecycleActionHandlerNow(
+		"""
+		The rule to act for. Required: omitting it is refused with LIFECYCLE_ACTION_RUN_RULE_REQUIRED.
+		"""
+		ruleSetId: ID
+	): LifecycleEvaluationTriggerPayload!
 	"""
-	Set the instance-wide maintenance switches. Omitted fields keep their stored value.
+	Set the instance-wide lifecycle switches. Omitted fields keep their stored value.
 	"""
-	setMaintenanceInstanceGates(
+	setLifecycleInstanceGates(
 		"""
 		The switches to change; omit a field to leave that switch alone.
 		"""
-		input: SetMaintenanceInstanceGatesInput!
-	): MaintenanceInstanceGates!
+		input: SetLifecycleInstanceGatesInput!
+	): LifecycleInstanceGates!
 	"""
-	Exclude a subject from one maintenance rule, or from every rule when no rule is named.
+	Exclude a subject from one lifecycle rule, or from every rule when no rule is named.
 	
 	The exclusion takes effect at the next evaluation, which is also where an
 	existing candidate for the subject moves to the excluded state.
 	"""
-	excludeMaintenanceSubject(
+	excludeLifecycleSubject(
 		"""
 		Subject to exclude, the optional rule to confine it to, and a reason.
 		"""
-		input: ExcludeMaintenanceSubjectInput!
-	): MaintenanceExclusion!
+		input: ExcludeLifecycleSubjectInput!
+	): LifecycleExclusion!
 	"""
-	Remove a maintenance exclusion.
+	Remove a lifecycle exclusion.
 	"""
-	removeMaintenanceExclusion(
+	removeLifecycleExclusion(
 		"""
 		Exclusion identity to remove.
 		"""
 		id: ID!
-	): DeleteMaintenanceExclusionPayload!
+	): DeleteLifecycleExclusionPayload!
 	"""
-	Run maintenance evaluation now.
+	Run lifecycle evaluation now.
 	
 	Without a rule, this starts the ordinary scheduled job so the run shows
 	up in the system-jobs surface, and returns as soon as it is accepted.
 	Scoped to one rule it runs inline instead, because the job seam carries
 	no parameters; that path is bounded by the rule's own library scope.
 	"""
-	runMaintenanceEvaluationNow(
+	runLifecycleEvaluationNow(
 		"""
 		Evaluate only this rule set; omit to evaluate every enabled rule.
 		"""
 		ruleSetId: ID
-	): MaintenanceEvaluationTriggerPayload!
+	): LifecycleEvaluationTriggerPayload!
 	"""
-	Create a request rule set together with its first matcher revision.
+	Create a request rule set together with its first source revision.
 	
 	The rule is created disabled. Enabling it is a second, deliberate call.
 	"""
 	createRequestRuleSet(
 		"""
-		Rule name, matcher source, and optional description and library scope.
+		Rule name, rule source, and optional description and library scope.
 		"""
 		input: CreateRequestRuleSetInput!
 	): RequestRuleSetDetail!
 	"""
-	Replace a rule set's matcher by appending revision N+1.
+	Replace a rule set's source by appending revision N+1.
 	
 	Revision N is left exactly as written, so a decision recorded against it
 	stays attributable.
 	"""
-	updateRequestRuleMatcher(
+	updateRequestRuleSource(
 		"""
-		Rule-set identity and the replacement matcher source.
+		Rule-set identity and the replacement rule source.
 		"""
-		input: UpdateRequestRuleMatcherInput!
+		input: UpdateRequestRuleSourceInput!
 	): RequestRuleSetDetail!
 	"""
-	Rename and re-scope a rule set without touching its matcher, so no revision is created.
+	Rename and re-scope a rule set without touching its source, so no revision is created.
 	"""
 	updateRequestRuleMetadata(
 		"""
@@ -21894,7 +22258,7 @@ type MutationRoot {
 		input: ValidateRequestRuleInput!
 	): RequestRuleValidationPayload!
 	"""
-	Evaluate one matcher against one hypothetical request without saving anything.
+	Evaluate one rule against one hypothetical request without saving anything.
 	
 	This is the author-side preview: it returns the vote, the reasons, the
 	tags, **and** the exact input document the rule saw. The requester-facing
@@ -21903,7 +22267,7 @@ type MutationRoot {
 	"""
 	previewRequestRule(
 		"""
-		Either a stored rule set or an unsaved matcher, plus the sample request to evaluate it against.
+		Either a stored rule set or an unsaved rule source, plus the sample request to evaluate it against.
 		"""
 		input: PreviewRequestRuleInput!
 	): RequestRulePreviewPayload!
@@ -21955,6 +22319,10 @@ type MutationRoot {
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
 	refreshPluginCatalog: [RegistryPluginPayload!]!
+	"""
+	Clear the warnings left by the last backup restore and return the resulting plugin catalog status. Nothing else in the status changes.
+	"""
+	dismissPluginRestoreWarnings: PluginCatalogStatusPayload!
 	"""
 	Start background installation of a catalog plugin and return the initial progress snapshot.
 	"""
@@ -22280,6 +22648,19 @@ type MutationRoot {
 		"""
 		corrections: [IndexerApiKeyOverrideInput!]!
 	): ExternalImportSourceJobPayload!
+	"""
+	Start importing Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules. Sonarr and Radarr require catalog-settings management and Maintainerr requires system-settings management; repeating a request key returns the run it started.
+	"""
+	startExternalRuleImport(
+		"""
+		Stable caller-generated request identity reused when a response is lost.
+		"""
+		requestKey: String!,
+		"""
+		Application, base URL and, for Sonarr or Radarr, API key to read.
+		"""
+		input: ExternalRuleImportInput!
+	): JobRunPayload!
 	"""
 	Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
 	"""
@@ -24588,20 +24969,16 @@ input PreviewExternalImportInput {
 """
 Runs one matcher against a bounded title selection without saving anything.
 
-Supply either `ruleSetId` to preview a stored rule set, or `regoSource` with
-exactly one action definition (`action` or `actionSequence`) to preview an
-unsaved draft, never both. Select titles with either `titleIds` or
+Supply either `ruleSetId` to preview a stored rule set, or `regoSource` to
+preview an unsaved draft, never both. A draft's source declares its own
+actions. Select titles with either `titleIds` or
 `libraryId`, never both.
 """
-input PreviewMaintenanceRuleInput {
+input PreviewLifecycleRuleInput {
 	"""
 	Selected libraries for an unsaved matcher; empty means all libraries.
 	"""
 	libraryIds: [String!]
-	"""
-	Defaults to title scope when omitted.
-	"""
-	subjectKind: MaintenanceRuleSubjectKind
 	"""
 	Stored rule set to preview at its current revision.
 	"""
@@ -24611,24 +24988,9 @@ input PreviewMaintenanceRuleInput {
 	"""
 	regoSource: String
 	"""
-	Legacy action for the unsaved draft. Supply this or `actionSequence`,
-	never both.
-	"""
-	action: MaintenanceActionInput
-	"""
-	Ordered actions for the unsaved draft. Supply this or `action`, never
-	both.
-	"""
-	actionSequence: MaintenanceActionSequenceInput
-	"""
 	Grace period for the unsaved draft; defaults to zero.
 	"""
 	graceDays: Int
-	"""
-	Configured library root for an unsaved matcher. Required when its
-	matcher reads a storage fact.
-	"""
-	storageRootId: String
 	"""
 	Optional exact subjects, requiring their owning `titleIds`.
 	"""
@@ -24649,7 +25011,7 @@ input PreviewMaintenanceRuleInput {
 }
 
 """
-Runs one matcher against one hypothetical request without saving anything.
+Runs one rule against one hypothetical request without saving anything.
 
 Supply either `ruleSetId` to preview a stored rule set or `regoSource` to
 preview an unsaved draft, never both: they answer different questions, and
@@ -24661,11 +25023,11 @@ input PreviewRequestRuleInput {
 	"""
 	ruleSetId: ID
 	"""
-	Unsaved matcher source to preview, as written in the editor.
+	Unsaved rule source to preview, as written in the editor.
 	"""
 	regoSource: String
 	"""
-	The request to evaluate the matcher against.
+	The request to evaluate the rule against.
 	"""
 	sample: RequestRuleSampleInput!
 }
@@ -24929,6 +25291,12 @@ type ProxyConfigPayload {
 	default. Zero means keepalive is switched off.
 	"""
 	tunnelKeepaliveSeconds: Int
+	"""
+	Challenge solvers only: the transport proxy or tunnel Scryer reaches
+	this solver through, and through which it sends its own requests that
+	reuse the solver's clearance. Null reaches the solver directly.
+	"""
+	reachThroughProxyConfigId: ID
 	"""
 	Host key pinned on the first successful tunnel connect, formatted as
 	OpenSSH prints it, or null before the first connect. A host key is
@@ -25196,6 +25564,20 @@ input QualityProfileCriteriaInput {
 	"""
 	minUpgradeScoreDelta: Int
 	"""
+	Optional count of wanted episodes that must be missing before an
+	automatic search takes a pack; at least 1. Omitting it keeps the stored
+	value, and sending the default (2) stores the profile as using the
+	default.
+	"""
+	minMissingEpisodesForPack: Int
+	"""
+	Optional percentage, 0 to 100, of a multi-season pack's monitored,
+	aired episodes that must be exceeded by the missing ones. Omitting it
+	keeps the stored value, and sending the default (30) stores the profile
+	as using the default.
+	"""
+	minMissingPercentForSeriesPack: Int
+	"""
 	Optional decision order; each step at most once. Omitting it keeps the
 	stored order, and an empty list ranks on score alone. When sent,
 	whether it lists `REVISION` sets `ignoreProperRepack`.
@@ -25290,6 +25672,20 @@ type QualityProfileCriteriaPayload {
 	an upgrade. Profiles that never set it report the default, 120.
 	"""
 	minUpgradeScoreDelta: Int!
+	"""
+	Wanted episodes that must be missing before an automatic search takes
+	a pack. At 1, a search for one missing episode may take a pack.
+	Profiles that never set it report the default, 2. Changing it does
+	not re-open searches already covered.
+	"""
+	minMissingEpisodesForPack: Int!
+	"""
+	A multi-season pack is taken only when more than this percentage of
+	its monitored, aired episodes is missing. Profiles that never set it
+	report the default, 30. Changing it does not re-open searches already
+	covered.
+	"""
+	minMissingPercentForSeriesPack: Int!
 	"""
 	The steps releases are compared on, in order, before the score
 	decides. Profiles that never set it report `QUALITY_TIER, REVISION,
@@ -25789,6 +26185,21 @@ type QueryRoot {
 		"""
 		titleId: ID!
 	): String
+	"""
+	Why a title did not simply finish: its detail sentence, and the stable
+	reason code and facts of the error that failed it. Null when the
+	operation has no row for the title.
+	"""
+	locationTransferTitleOutcome(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!,
+		"""
+		Identity of the title whose outcome to read.
+		"""
+		titleId: ID!
+	): LocationTransferTitleOutcomePayload
 	"""
 	Read progress while a background task settles a selected set of folder conflicts.
 	"""
@@ -26774,6 +27185,20 @@ type QueryRoot {
 		titleId: ID!
 	): TitleAcquisitionDiagnosticsPayload!
 	"""
+	Return the outcome of a finished background grab started with `startGrab`.
+	The payload is what the matching synchronous mutation would have returned,
+	and a grab that was refused or failed raises that mutation's error here.
+	Null while the grab is still running, when the caller did not start it,
+	and once the outcome is no longer held; outcomes are kept in memory and a
+	restart drops them, while the job run keeps how the grab ended.
+	"""
+	grabJobResult(
+		"""
+		Job run ID returned by `startGrab`.
+		"""
+		id: ID!
+	): GrabJobResultPayload
+	"""
 	Return progress for an interactive acquisition-search job, or null when no such job exists.
 	"""
 	acquisitionSearchJob(
@@ -26796,44 +27221,46 @@ type QueryRoot {
 		id: ID!
 	): RuleSetPayload
 	"""
-	List maintenance rule sets; requires catalog-settings management permission.
+	What the rule builder offers for one rule family (`lifecycle` or
+	`scoring`): its outputs, how each value is entered and bounded, and
+	which outputs exclude each other. A family with no schema is refused
+	with `RULE_BUILDER_FAMILY_UNKNOWN`.
 	"""
-	maintenanceRuleSets: [MaintenanceRuleSet!]!
-	"""
-	Return one maintenance rule set with the revision currently in force, or null when no such rule set exists.
-	"""
-	maintenanceRuleSet(
+	ruleBuilderSchema(
 		"""
-		Maintenance rule-set ID to load.
+		Rule family whose builder schema to return.
+		"""
+		family: String!
+	): RuleBuilderSchema!
+	"""
+	List lifecycle rule sets; requires system-settings management permission.
+	"""
+	lifecycleRuleSets: [LifecycleRuleSet!]!
+	"""
+	Return one lifecycle rule set with the revision currently in force, or null when no such rule set exists.
+	"""
+	lifecycleRuleSet(
+		"""
+		Lifecycle rule-set ID to load.
 		"""
 		id: ID!
-	): MaintenanceRuleSetDetail
+	): LifecycleRuleSetDetail
 	"""
-	List every stored revision of one maintenance rule set, newest first.
+	List every stored revision of one lifecycle rule set, newest first.
 	"""
-	maintenanceRuleRevisions(
+	lifecycleRuleRevisions(
 		"""
-		Maintenance rule-set ID whose revisions are returned.
+		Lifecycle rule-set ID whose revisions are returned.
 		"""
 		ruleSetId: ID!
-	): [MaintenanceRuleRevision!]!
+	): [LifecycleRuleRevision!]!
 	"""
-	List the static maintenance action catalog the rule builder chooses from.
-	"""
-	maintenanceActionDescriptors: [MaintenanceActionDescriptor!]!
-	"""
-	List the backend-owned schema-2 action-sequence catalog. Authoring
-	clients use its parameter and dependency descriptors directly rather
-	than maintaining a parallel effect matrix.
-	"""
-	maintenanceActionStepDescriptors: [MaintenanceActionStepDescriptor!]!
-	"""
-	List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+	List lifecycle candidates the lifecycle evaluator has recorded; requires system-settings management permission.
 	
 	Candidates are ordered by due time across rules, soonest first, and
-	none are returned while maintenance is switched off for the instance.
+	none are returned while lifecycle is switched off for the instance.
 	"""
-	maintenanceCandidates(
+	lifecycleCandidates(
 		"""
 		Return candidates of this rule set only.
 		"""
@@ -26841,24 +27268,32 @@ type QueryRoot {
 		"""
 		Return candidates in these lifecycle states only.
 		"""
-		states: [MaintenanceCandidateState!],
+		states: [LifecycleCandidateState!],
 		"""
 		Return candidates whose subject belongs to this library only.
 		"""
 		libraryId: ID,
 		"""
+		Return candidates whose decided actions include at least one of these heads, as their `actions.heads` reports them; a season or episode head matches only a season or episode subject that decided the title head it narrows. A candidate recorded without decided actions matches none. Null or empty applies no action filter.
+		"""
+		actions: [LifecycleActionHead!],
+		"""
+		Return candidates of rules currently in one of these states, as the rule list reports them. Null or empty applies no rule-state filter.
+		"""
+		ruleStates: [LifecycleRuleState!],
+		"""
 		Maximum number of candidates to return; defaults to 50, at most 200.
 		"""
 		limit: Int
-	): [MaintenanceCandidate!]!
+	): [LifecycleCandidate!]!
 	"""
-	List recorded maintenance evaluation runs, newest first.
+	List recorded lifecycle evaluation runs, newest first.
 	
 	Runs carry counts and timing rather than subjects, so the result-display
 	gate does not hide them: they are how an operator sees that dark
 	evaluation is working at all.
 	"""
-	maintenanceEvaluationRuns(
+	lifecycleEvaluationRuns(
 		"""
 		Return runs of this rule set only.
 		"""
@@ -26867,27 +27302,27 @@ type QueryRoot {
 		Maximum number of runs to return; defaults to 50, at most 200.
 		"""
 		limit: Int
-	): [MaintenanceEvaluationRun!]!
+	): [LifecycleEvaluationRun!]!
 	"""
-	Read the two instance-wide maintenance switches; requires system-settings management permission.
+	Read the two instance-wide lifecycle switches; requires system-settings management permission.
 	"""
-	maintenanceInstanceGates: MaintenanceInstanceGates!
+	lifecycleInstanceGates: LifecycleInstanceGates!
 	"""
-	List maintenance exclusions, newest first.
+	List lifecycle exclusions, newest first.
 	
 	Narrowing by rule returns that rule's own exclusions together with every
 	global one, because both are what actually stop it acting.
 	"""
-	maintenanceExclusions(
+	lifecycleExclusions(
 		"""
 		Return the exclusions that apply to this rule set.
 		"""
 		ruleSetId: ID
-	): [MaintenanceExclusion!]!
+	): [LifecycleExclusion!]!
 	"""
-	List recorded maintenance action-handler attempts, newest first.
+	List recorded lifecycle action-handler attempts, newest first.
 	"""
-	maintenanceActionRuns(
+	lifecycleActionRuns(
 		"""
 		Return only attempts for this rule set.
 		"""
@@ -26900,7 +27335,7 @@ type QueryRoot {
 		Maximum rows to return; defaults to fifty.
 		"""
 		limit: Int
-	): [MaintenanceActionRun!]!
+	): [LifecycleActionRun!]!
 	"""
 	List request rule sets; requires catalog-settings management permission.
 	"""
@@ -26951,7 +27386,7 @@ type QueryRoot {
 		outcome: RequestDecisionOutcomeValue
 	): [RequestRuleDecision!]!
 	"""
-	The request family's Rules Context Reference: every fact a request matcher may read.
+	The request family's Rules Context Reference: every fact a request rule may read.
 	"""
 	requestRuleInputReference: JSON!
 	"""
@@ -27088,6 +27523,15 @@ type QueryRoot {
 	Read the caller-visible external import setup secret draft; requires system-settings management permission.
 	"""
 	externalImportSetupSecretDraft: ExternalImportSetupSecretDraftPayload
+	"""
+	Read one of the caller's external rule imports and its per-item report; requires the permission its source needs to start, catalog-settings management for Sonarr or Radarr and system-settings management for Maintainerr.
+	"""
+	externalRuleImportStatus(
+		"""
+		Rule import job run identity.
+		"""
+		runId: ID!
+	): ExternalRuleImportStatusPayload!
 	"""
 	Report whether an external import setup secret draft exists and whether the caller owns it.
 	"""
@@ -27416,6 +27860,10 @@ type QueryRoot {
 	Titles no list may add.
 	"""
 	listExclusions: [ListExclusionPayload!]!
+	"""
+	The signed-in member's own list policy.
+	"""
+	myListPolicy: ListPolicy!
 	"""
 	Every member's list policy and recent list requests. Requires list
 	management permission.
@@ -27769,6 +28217,20 @@ enum RecencyLaneValue {
 	Drained under backpressure.
 	"""
 	COLD
+}
+
+"""
+Guided tours to record for the caller, all with one outcome.
+"""
+input RecordMyUiToursInput {
+	"""
+	Tour identifiers: 1 to 32 ids of 1 to 64 lowercase letters, digits, dots or hyphens. Repeated ids count once.
+	"""
+	tourIds: [String!]!
+	"""
+	How the caller left these tours.
+	"""
+	outcome: UiTourOutcomeValue!
 }
 
 """
@@ -28383,6 +28845,54 @@ type ReorderDownloadClientConfigsPayload {
 }
 
 """
+A head a request rule's source can define. Votes decide the outcome; the
+other heads shape what an approval does or say something to the people who
+are notified about the request.
+"""
+enum RequestActionHead {
+	"""
+	Vote to approve.
+	"""
+	APPROVE
+	"""
+	Vote to refuse. Outranks every other vote.
+	"""
+	DENY
+	"""
+	Vote to leave the request for a person.
+	"""
+	MANUAL
+	"""
+	Approve into the named quality profile.
+	"""
+	SET_QUALITY_PROFILE
+	"""
+	Approve with this lease, in days; `0` keeps the title forever.
+	"""
+	SET_LEASE_DAYS
+	"""
+	Approve with this monitoring policy.
+	"""
+	SET_MONITOR
+	"""
+	Approve with these required audio languages.
+	"""
+	SET_REQUIRED_AUDIO_LANGUAGES
+	"""
+	Approve with these preferred audio languages, in order.
+	"""
+	SET_PREFERRED_AUDIO_LANGUAGES
+	"""
+	Stamp these tags on the title an approval creates.
+	"""
+	ADD_TAGS
+	"""
+	Add this text to the notification sent when the request is submitted.
+	"""
+	NOTIFY
+}
+
+"""
 What a request evaluation concluded.
 """
 enum RequestDecisionOutcomeValue {
@@ -28403,8 +28913,47 @@ enum RequestDecisionOutcomeValue {
 }
 
 """
+Every head a request rule's source defines, and every literal value each
+valued head can produce.
+"""
+type RequestDeclaredActions {
+	"""
+	The heads the source defines.
+	"""
+	heads: [RequestActionHead!]!
+	"""
+	Quality profile names `set_quality_profile` can set.
+	"""
+	qualityProfiles: [String!]!
+	"""
+	Lease lengths `set_lease_days` can set; `0` is forever.
+	"""
+	leaseDays: [Int!]!
+	"""
+	Monitoring policies `set_monitor` can set.
+	"""
+	monitors: [String!]!
+	"""
+	Audio language codes `set_required_audio_languages` can set.
+	"""
+	requiredAudioLanguages: [String!]!
+	"""
+	Audio language codes `set_preferred_audio_languages` can set.
+	"""
+	preferredAudioLanguages: [String!]!
+	"""
+	Tags `add_tags` can stamp.
+	"""
+	addTags: [String!]!
+	"""
+	Texts `notify` can send.
+	"""
+	notifications: [String!]!
+}
+
+"""
 Requester-side pre-flight: what would happen if this draft were submitted
-now (FR-020).
+now.
 
 Deliberately has no vote table and no input document. A requester sees the
 outcome, the reasons behind it, and the tags an approval would stamp.
@@ -28419,25 +28968,30 @@ type RequestPreflightPayload {
 	"""
 	reasons: [RequestPreflightReason!]!
 	"""
-	Tags an approval would stamp on the created title.
+	Tags an approval would stamp on the created title. Empty when the
+	draft would be denied.
 	"""
 	tags: [String!]!
 	"""
 	True when the metadata could not be fully established, so the verdict
-	rests on incomplete facts. An unevaluable policy never approves.
+	rests on incomplete facts. A rule that reads a fact that could not be
+	established is held rather than run.
 	"""
 	metadataPartial: Boolean!
 	"""
-	`ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-	"""
-	evaluationMode: RequestRuleEvaluationModeValue!
-	"""
-	Why the verdict fell back to needing approval, when it did. One of the
-	arbitration vocabulary's codes (`rule_manual`, `held`, `error`,
-	`no_rule_matched`), or null when a rule decided outright. It carries no
-	rule internals: it names the shape of the fallback, never a vote.
+	Why the verdict is a fallback rather than a rule's own `approve` or
+	`deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
+	`library_permission` (the Auto-Approve permission approved),
+	`shaping_conflict` or `shaping_invalid`. Null when a rule decided
+	outright. It carries no rule internals: it names the shape of the
+	fallback, never a vote.
 	"""
 	fallbackReason: String
+	"""
+	What an approval would be changed to, or null when nothing would be.
+	Never carries a notification.
+	"""
+	shaping: RequestShaping
 }
 
 """
@@ -28457,11 +29011,17 @@ type RequestPreflightReason {
 }
 
 """
-The durable trace of one request evaluation (FR-016).
+The durable trace of one request evaluation. It outlives the rules that
+made it.
 
 `policyOutcome` is what the rules concluded and `effectiveOutcome` is what
-the instance acted on. They disagree only when a request was held because
-its tags could not be checked.
+the instance acted on. They disagree only when the rules approved and the
+title tag registry could not be read: the request is held for approval,
+with the fallback `error`. When the input facts could not be assembled or
+the rules could not be evaluated, both are `MANUAL_REVIEW` with the
+fallback `error`. Decisions recorded by 0.22 and earlier may also show
+`policyOutcome` `MANUAL_REVIEW` with the Auto-Approve permission's
+`effectiveOutcome` for that case.
 """
 type RequestRuleDecision {
 	"""
@@ -28477,10 +29037,6 @@ type RequestRuleDecision {
 	"""
 	evaluatedAt: DateTime!
 	"""
-	`ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-	"""
-	mode: RequestRuleEvaluationModeValue!
-	"""
 	What actually happened to the request.
 	"""
 	effectiveOutcome: RequestDecisionOutcomeValue!
@@ -28489,9 +29045,10 @@ type RequestRuleDecision {
 	"""
 	policyOutcome: RequestDecisionOutcomeValue!
 	"""
-	Why the decision fell back rather than following a rule vote
-	(`no_rule_matched`, `held`, `error`, `rule_manual`), or null when a rule
-	decided.
+	Why the decision fell back rather than following a rule's own
+	`approve` or `deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
+	`library_permission` (the Auto-Approve permission approved),
+	`shaping_conflict` or `shaping_invalid`. Null when a rule decided.
 	"""
 	fallbackReason: String
 	"""
@@ -28514,24 +29071,15 @@ type RequestRuleDecision {
 	Schema version of the input document the rules were evaluated against.
 	"""
 	inputSchemaVersion: Int!
+	"""
+	What the rules changed an approval to, or null when they changed
+	nothing.
+	"""
+	shaping: RequestShaping
 }
 
 """
-Whether an evaluation consulted an enabled request rule.
-"""
-enum RequestRuleEvaluationModeValue {
-	"""
-	No enabled rule took part.
-	"""
-	DISABLED
-	"""
-	An enabled rule was evaluated, recorded, and acted on.
-	"""
-	ENFORCE
-}
-
-"""
-Author-side preview of one matcher against one hypothetical request.
+Author-side preview of one rule against one hypothetical request.
 
 Nothing is persisted but the trace the evaluation writes, and the caller
 already holds catalog-settings authority, so this is the one place the whole
@@ -28546,7 +29094,7 @@ type RequestRulePreviewPayload {
 	"""
 	Hash of the exact source that produced this outcome.
 	"""
-	matcherContentHash: String!
+	sourceContentHash: String!
 	"""
 	The single rule's verdict, shaped as a decision so the authoring UI and
 	the decision browser render the same component. `effectiveOutcome`
@@ -28572,7 +29120,7 @@ type RequestRulePreviewPayload {
 }
 
 """
-One immutable revision of a request rule set's matcher.
+One immutable revision of a request rule set's source.
 """
 type RequestRuleRevision {
 	"""
@@ -28584,7 +29132,7 @@ type RequestRuleRevision {
 	"""
 	ruleSetId: ID!
 	"""
-	Revision number, starting at one and incremented on every matcher edit.
+	Revision number, starting at one and incremented on every source edit.
 	"""
 	revisionNumber: Int!
 	"""
@@ -28596,7 +29144,7 @@ type RequestRuleRevision {
 	Hash of the exact stored source, used to attribute a decision to the
 	revision that produced it.
 	"""
-	matcherContentHash: String!
+	sourceContentHash: String!
 	"""
 	ID of the user who wrote the revision, or null when unattributed.
 	"""
@@ -28660,7 +29208,7 @@ input RequestRuleSampleInput {
 }
 
 """
-A request rule set: identity, scope, and evaluation state. The matcher lives
+A request rule set: identity, scope, and evaluation state. The source lives
 on the revision, never here.
 """
 type RequestRuleSet {
@@ -28685,7 +29233,7 @@ type RequestRuleSet {
 	"""
 	libraryIds: [String!]!
 	"""
-	Revision number of the matcher currently in force.
+	Revision number of the source currently in force.
 	"""
 	currentRevisionNumber: Int!
 	"""
@@ -28694,6 +29242,11 @@ type RequestRuleSet {
 	disabled.
 	"""
 	decisionCount: Int!
+	"""
+	What the revision in force can do, read from its source. Null when the
+	source cannot be read.
+	"""
+	declaredActions: RequestDeclaredActions
 	"""
 	UTC creation time.
 	"""
@@ -28716,6 +29269,11 @@ type RequestRuleSetDetail {
 	The revision currently in force.
 	"""
 	revision: RequestRuleRevision!
+	"""
+	The visual builder's stored document, or null when the rule was not
+	written with the builder. Read only by the single rule set query.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -28734,6 +29292,14 @@ type RequestRuleValidationPayload {
 	Validation errors; empty when valid.
 	"""
 	errors: [String!]!
+	"""
+	Findings that never block saving.
+	"""
+	warnings: [RuleValidationDiagnosticPayload!]!
+	"""
+	What the source can do, or null when it could not be read.
+	"""
+	declaredActions: RequestDeclaredActions
 }
 
 """
@@ -28778,6 +29344,95 @@ type RequestRuleVote {
 	Why the rule failed, or null when it did not.
 	"""
 	error: String
+}
+
+"""
+One number and the rule set that set it.
+"""
+type RequestShapedNumber {
+	"""
+	The value.
+	"""
+	value: Int!
+	"""
+	Name of the rule set that set it, as it was when the request was
+	evaluated.
+	"""
+	ruleSetName: String!
+}
+
+"""
+One text value and the rule set that set it.
+"""
+type RequestShapedText {
+	"""
+	The value.
+	"""
+	value: String!
+	"""
+	Name of the rule set that set it, as it was when the request was
+	evaluated.
+	"""
+	ruleSetName: String!
+}
+
+"""
+One list of texts and the rule set that set it.
+"""
+type RequestShapedTextList {
+	"""
+	The value.
+	"""
+	value: [String!]!
+	"""
+	Name of the rule set that set it, as it was when the request was
+	evaluated.
+	"""
+	ruleSetName: String!
+}
+
+"""
+What an approval of a request is changed to by its rules.
+
+Applied on an automatic approval, offered to the approver on manual review,
+and kept in the trace only on a denial. A head two rules set to different
+values is listed in `conflicts`, and a head whose value cannot apply to the
+request in `invalid`; neither carries a value.
+"""
+type RequestShaping {
+	"""
+	Quality profile name.
+	"""
+	qualityProfile: RequestShapedText
+	"""
+	Lease in days; `0` keeps the title forever.
+	"""
+	leaseDays: RequestShapedNumber
+	"""
+	Monitoring policy.
+	"""
+	monitor: RequestShapedText
+	"""
+	Required audio language codes.
+	"""
+	requiredAudioLanguages: RequestShapedTextList
+	"""
+	Preferred audio language codes, in order.
+	"""
+	preferredAudioLanguages: RequestShapedTextList
+	"""
+	Texts the rules added to the submission notification, in evaluation
+	order. Always empty on the requester's own surfaces.
+	"""
+	notifications: [RequestShapedText!]!
+	"""
+	Heads two rules set to different values.
+	"""
+	conflicts: [RequestActionHead!]!
+	"""
+	Heads whose value cannot apply to this request.
+	"""
+	invalid: [RequestActionHead!]!
 }
 
 """
@@ -29174,6 +29829,186 @@ type RssSyncReportPayload {
 }
 
 """
+One output the rule builder offers.
+"""
+type RuleBuilderOutput {
+	"""
+	Stable id of the output.
+	"""
+	id: String!
+	"""
+	The Rego rule name the output writes.
+	"""
+	head: String!
+	"""
+	Translation key of the output's label.
+	"""
+	labelKey: String!
+	"""
+	Translation key of the action the output performs, when it differs
+	from the label: a season or episode output is shown by its action
+	under its subject. Outputs with the same key are one action at
+	different subjects. Null otherwise.
+	"""
+	actionLabelKey: String
+	"""
+	Translation key of the output's help, or null when it has none.
+	"""
+	helpKey: String
+	"""
+	How the output's value is entered.
+	"""
+	valueKind: RuleBuilderValueKind!
+	"""
+	The catalog a choice or list draws from, or null.
+	"""
+	options: String
+	"""
+	Smallest number a number output takes, or null.
+	"""
+	min: Long
+	"""
+	Largest number a number output takes, or null.
+	"""
+	max: Long
+	"""
+	Most entries a list output takes, or null.
+	"""
+	maxItems: Int
+	"""
+	Longest a text entry may be, in bytes, or null.
+	"""
+	maxBytes: Int
+	"""
+	Characters every entry must match, as a regular expression, or null.
+	"""
+	pattern: String
+	"""
+	How the output is written into the source.
+	"""
+	template: String!
+	"""
+	Whether the template is written once per list entry.
+	"""
+	perItem: Boolean!
+	"""
+	Whether the output removes media.
+	"""
+	destructive: Boolean!
+	"""
+	The rule variants that may use the output, or null for every one.
+	"""
+	variants: [String!]
+	"""
+	Outputs that cannot be chosen with this one. Each pair is listed once.
+	"""
+	conflictsWith: [String!]!
+}
+
+"""
+A rule about which outputs one rule chooses.
+"""
+type RuleBuilderOutputRule {
+	"""
+	The bound the rule sets.
+	"""
+	rule: RuleBuilderOutputRuleKind!
+	"""
+	The output ids the rule is about, or null for every output.
+	"""
+	of: [String!]
+}
+
+"""
+Which bound an output rule sets.
+"""
+enum RuleBuilderOutputRuleKind {
+	"""
+	At least one of the outputs is chosen.
+	"""
+	AT_LEAST_ONE
+	"""
+	No more than one of the outputs is chosen.
+	"""
+	AT_MOST_ONE
+	"""
+	Exactly one of the outputs is chosen.
+	"""
+	EXACTLY_ONE
+}
+
+"""
+What the rule builder needs to offer one family's outputs.
+"""
+type RuleBuilderSchema {
+	"""
+	The rule family.
+	"""
+	family: String!
+	"""
+	What an action can act on; empty when every output acts on one thing.
+	"""
+	subjects: [RuleBuilderSubject!]!
+	"""
+	The outputs, in the order the builder lists and writes them.
+	"""
+	outputs: [RuleBuilderOutput!]!
+	"""
+	Rules about which outputs one rule chooses.
+	"""
+	outputRules: [RuleBuilderOutputRule!]!
+}
+
+"""
+One thing a rule's action can act on.
+"""
+type RuleBuilderSubject {
+	"""
+	Stable id of the subject.
+	"""
+	id: String!
+	"""
+	Translation key of the subject's label.
+	"""
+	labelKey: String!
+	"""
+	Input path of the subject's own document, whose facts an action at
+	this subject may read beside the title's, or null for the title.
+	"""
+	inputPath: String
+	"""
+	The outputs that act on this subject, in write order.
+	"""
+	outputs: [String!]!
+}
+
+"""
+How the rule builder enters one output's value.
+"""
+enum RuleBuilderValueKind {
+	"""
+	No value: the output is on or off.
+	"""
+	FLAG
+	"""
+	Free text.
+	"""
+	TEXT
+	"""
+	One entry from a catalog the client loads.
+	"""
+	CHOICE
+	"""
+	A whole number.
+	"""
+	NUMBER
+	"""
+	A list of short text entries.
+	"""
+	TEXT_LIST
+}
+
+"""
 Rule-pack registry entry.
 """
 type RulePackRegistryEntryPayload {
@@ -29302,6 +30137,12 @@ type RuleSetPayload {
 	UTC last-update time.
 	"""
 	updatedAt: DateTime!
+	"""
+	The simple builder's document for this rule, or null when the rule was
+	written by hand. Loaded only by `ruleSet(id)`, which is the editor's
+	one reader; lists and mutation payloads return null.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -29989,7 +30830,8 @@ enum ScriptLanguageValue {
 }
 
 """
-Schedule for a scheduled script. Only the fields of the chosen kind are read.
+Schedule for a scheduled script or a lifecycle rule. Only the fields of
+the chosen kind are read.
 """
 input ScriptScheduleInput {
 	"""
@@ -30041,7 +30883,7 @@ enum ScriptScheduleKindValue {
 }
 
 """
-Stored schedule of a scheduled script.
+Stored schedule of a scheduled script or a lifecycle rule.
 """
 type ScriptSchedulePayload {
 	"""
@@ -30216,6 +31058,14 @@ type SecuritySettingsPayload {
 	"""
 	apiKeysRestrictToSystemSettingsUsers: Boolean!
 	"""
+	The saved MCP switch.
+	"""
+	mcpEnabled: Boolean!
+	"""
+	The value SCRYER_MCP_ENABLED forces over the saved switch; null when unset.
+	"""
+	mcpEnabledEnvOverride: Boolean
+	"""
 	Whether configuration changes require MFA step-up.
 	"""
 	mfaRequireConfigStepUp: Boolean!
@@ -30251,6 +31101,15 @@ type SecuritySettingsPayload {
 	Description of the active override, or null when none is active.
 	"""
 	envOverrideDescription: String
+	"""
+	Host names a request served without a login must use, beside IP
+	addresses, localhost and the public URL host. Empty when the check is off.
+	"""
+	localTrustAllowedHosts: [String!]!
+	"""
+	Whether forwarding headers count for local trust only from a listed trusted proxy.
+	"""
+	restrictLocalTrustToTrustedProxies: Boolean!
 }
 
 """
@@ -30622,10 +31481,24 @@ input SetIndexerSeedingProfileInput {
 }
 
 """
-Sets the instance-wide maintenance switches. An omitted field leaves that
+Turns the background full-hash job on or off for one library.
+"""
+input SetLibraryFullHashBackfillInput {
+	"""
+	Library identity to change.
+	"""
+	libraryId: ID!
+	"""
+	Whether the background full-hash job reads this library's files. Off, a file's full hash is read only when something needs it.
+	"""
+	enabled: Boolean!
+}
+
+"""
+Sets the instance-wide lifecycle switches. An omitted field leaves that
 switch exactly as stored.
 """
-input SetMaintenanceInstanceGatesInput {
+input SetLifecycleInstanceGatesInput {
 	"""
 	Whether rules are evaluated and their candidates shown.
 	"""
@@ -30993,6 +31866,35 @@ enum SortDirectionValue {
 }
 
 """
+The subject a requester picked, staged before the request dialog previews it.
+"""
+input StageMediaRequestMetadataInput {
+	"""
+	Library the request would target.
+	"""
+	libraryId: ID!
+	"""
+	Requested media facet.
+	"""
+	facet: MediaFacetValue!
+	"""
+	External provider identifiers of the subject, as a submit would send them.
+	"""
+	externalIds: [ExternalIdInput!]!
+}
+
+"""
+What staging a request subject's metadata established.
+"""
+type StageMediaRequestMetadataPayload {
+	"""
+	True when the metadata could not be fully established, so a preview
+	or a submit of this subject reads some facts as unknown.
+	"""
+	metadataPartial: Boolean!
+}
+
+"""
 One conflicting download the operator confirmed, as the client names it.
 """
 input StandbyConflictIdentityInput {
@@ -31066,6 +31968,47 @@ input StartExternalImportProwlarrWarmupInput {
 	Connection URL and API key.
 	"""
 	connection: ExternalImportConnectionInput!
+}
+
+"""
+The grab to run. Each choice takes what the matching synchronous mutation takes.
+"""
+input StartGrabInput @oneOf {
+	"""
+	As `queueExistingTitleDownload`.
+	"""
+	existing: QueueDownloadInput
+	"""
+	As `queueReplacementRelease`.
+	"""
+	replacement: QueueDownloadInput
+	"""
+	As `queueIndexerSearchAssignment`.
+	"""
+	indexerSearchAssignment: GrabIndexerSearchAssignmentInput
+	"""
+	As `queueUnlinkedRelease`.
+	"""
+	unlinked: QueueUnlinkedReleaseInput
+	"""
+	As `queueStandbyRelease`.
+	"""
+	standby: GrabStandbyReleaseInput
+	"""
+	As `forceGrabPendingRelease`: the pending-release identity to grab.
+	"""
+	pending: ID
+}
+
+"""
+A grab accepted to run in the background.
+"""
+type StartGrabPayload {
+	"""
+	The job doing the grab. Follow it on the job-run event stream, then
+	read its outcome with `grabJobResult`.
+	"""
+	jobRun: JobRunPayload!
 }
 
 """
@@ -33440,6 +34383,17 @@ type TitlePayload {
 	"""
 	ratings: TitleRatingPayload!
 	"""
+	Content ratings from the title's last metadata refresh, one entry per
+	country in the provider's order. Empty until the title is refreshed.
+	"""
+	contentRatings: [DiscoveryContentRatingPayload!]!
+	"""
+	US certification label, such as `PG-13`, or null when the title has
+	none. It is chosen the way the `certification_label` request rule fact
+	chooses it, from the ratings stored at the last metadata refresh.
+	"""
+	certificationLabel: String
+	"""
 	Public lists this title is on or has left, lists it is still on
 	first. Personal lists are never included.
 	"""
@@ -33733,9 +34687,9 @@ type TitleTagRewriteCountsPayload {
 	"""
 	delayProfiles: Int!
 	"""
-	Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+	Lifecycle rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
 	"""
-	maintenanceRuleSets: Int!
+	lifecycleRuleSets: Int!
 	"""
 	Release rule sets whose rule source names the old label; rule sources are never rewritten, so these rules stop matching.
 	"""
@@ -34284,6 +35238,11 @@ type UiDashboardLayoutItem {
 	Height in grid rows.
 	"""
 	h: Int!
+	"""
+	The panel's own settings as saved by the web client, a JSON object, or
+	null when the panel has none.
+	"""
+	settings: JSON
 }
 
 """
@@ -34310,6 +35269,12 @@ input UiDashboardLayoutItemInput {
 	Height in grid rows, at least 1.
 	"""
 	h: Int!
+	"""
+	The panel's own settings: a JSON object of at most 2048 bytes when
+	serialized, stored as given. Omitted or null saves the panel without
+	settings.
+	"""
+	settings: JSON
 }
 
 """
@@ -34528,6 +35493,10 @@ type UiSettingsPayload {
 	Saved dashboard layouts, one per breakpoint that has one; a breakpoint without an entry uses the default layout.
 	"""
 	dashboardLayouts: [UiDashboardLayout!]!
+	"""
+	Guided tours (onboarding and release highlights) the caller has finished or skipped; a tour without an entry has not been shown.
+	"""
+	tours: [UiTourProgressPayload!]!
 }
 
 """
@@ -34638,6 +35607,38 @@ enum UiThemeValue {
 	Follow the system theme.
 	"""
 	SYSTEM
+}
+
+"""
+How the caller left a guided tour. Either way the tour is not offered again.
+"""
+enum UiTourOutcomeValue {
+	"""
+	The caller reached the last step.
+	"""
+	COMPLETED
+	"""
+	The caller dismissed the tour before the end.
+	"""
+	SKIPPED
+}
+
+"""
+A guided tour the caller has finished or skipped.
+"""
+type UiTourProgressPayload {
+	"""
+	Tour identifier from the web's tour registry, e.g. `onboarding`.
+	"""
+	tourId: String!
+	"""
+	How the caller left the tour.
+	"""
+	outcome: UiTourOutcomeValue!
+	"""
+	When the outcome was recorded.
+	"""
+	recordedAt: DateTime!
 }
 
 """
@@ -34886,6 +35887,14 @@ input UpdateIndexerConfigInput {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Request limit per UTC calendar month: omission preserves it, null clears it.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Grab limit per UTC calendar month: omission preserves it, null clears it.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	Replacement enabled state; omission preserves it.
 	"""
 	isEnabled: Boolean
@@ -34966,6 +35975,71 @@ input UpdateLibraryRootInput {
 }
 
 """
+Renames and re-scopes a rule set without touching its matcher.
+"""
+input UpdateLifecycleRuleMetadataInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Replacement name.
+	"""
+	name: String!
+	"""
+	Replacement description; omitted clears it.
+	"""
+	description: String
+	"""
+	Replacement library scope. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
+	"""
+	Replacement schedule. Omitted keeps the current one. Changing it
+	leaves the rule's state alone.
+	"""
+	schedule: ScriptScheduleInput
+	"""
+	Replacement most titles the rule may act on in one run. Omitted keeps
+	the current value, null clears it, and a value of at least one
+	replaces it. A rule that deletes files or titles cannot be cleared.
+	Changing it leaves the rule's state alone.
+	"""
+	maxTitlesPerRun: Int
+}
+
+"""
+Replaces the matcher of an existing rule set, appending a revision.
+"""
+input UpdateLifecycleRuleSourceInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Replacement matcher source as written in the editor.
+	"""
+	regoSource: String!
+	"""
+	Days a subject must match continuously before the action becomes due;
+	defaults to zero.
+	"""
+	graceDays: Int
+	"""
+	The simple builder's document. Omit to keep the current revision's
+	document, pass null to clear it, or pass a document to replace it.
+	"""
+	builderModel: JSON
+	"""
+	Replacement most titles the rule may act on in one run, checked with
+	the new source so a delete head and its maximum can be saved
+	together. Omitted keeps the current value, null clears it, and a
+	value of at least one replaces it.
+	"""
+	maxTitlesPerRun: Int
+}
+
+"""
 Changes to a followed public list or an owned personal list. Omitted fields stay as they are.
 """
 input UpdateListSubscriptionInput {
@@ -34997,62 +36071,6 @@ input UpdateListSubscriptionInput {
 	What happens to a title the list added when it leaves the list.
 	"""
 	onLeave: ListOnLeave
-}
-
-"""
-Replaces the matcher of an existing rule set, appending a revision.
-"""
-input UpdateMaintenanceRuleMatcherInput {
-	"""
-	Rule-set ID.
-	"""
-	id: ID!
-	"""
-	Replacement matcher source as written in the editor.
-	"""
-	regoSource: String!
-	"""
-	Legacy action the new revision authorizes. Supply this or
-	`actionSequence`, never both.
-	"""
-	action: MaintenanceActionInput
-	"""
-	Ordered actions the new revision authorizes. Supply this or `action`,
-	never both.
-	"""
-	actionSequence: MaintenanceActionSequenceInput
-	"""
-	Days a subject must match continuously before the action becomes due;
-	defaults to zero.
-	"""
-	graceDays: Int
-	"""
-	Configured library root. Omission preserves the current root, null
-	clears it, and a value replaces it.
-	"""
-	storageRootId: ID
-}
-
-"""
-Renames and re-scopes a rule set without touching its matcher.
-"""
-input UpdateMaintenanceRuleMetadataInput {
-	"""
-	Rule-set ID.
-	"""
-	id: ID!
-	"""
-	Replacement name.
-	"""
-	name: String!
-	"""
-	Replacement description; omitted clears it.
-	"""
-	description: String
-	"""
-	Replacement library scope. Omitted or empty means every library.
-	"""
-	libraryIds: [String!]
 }
 
 """
@@ -35557,6 +36575,12 @@ input UpdateProxyConfigInput {
 	"""
 	tunnelKeepaliveSeconds: Int
 	"""
+	Challenge solvers only: the transport proxy or tunnel to reach the
+	solver through. Omission preserves it and null reaches the solver
+	directly again.
+	"""
+	reachThroughProxyConfigId: ID
+	"""
 	Replacement enabled state; omission preserves it.
 	"""
 	isEnabled: Boolean
@@ -35581,21 +36605,7 @@ input UpdateRecycleBinSettingsInput {
 }
 
 """
-Replaces the matcher of an existing rule set, appending revision N+1.
-"""
-input UpdateRequestRuleMatcherInput {
-	"""
-	Rule-set ID.
-	"""
-	ruleSetId: ID!
-	"""
-	Replacement matcher source as written in the editor.
-	"""
-	regoSource: String!
-}
-
-"""
-Renames and re-scopes a rule set without touching its matcher, so no
+Renames and re-scopes a rule set without touching its source, so no
 revision is created.
 """
 input UpdateRequestRuleMetadataInput {
@@ -35615,6 +36625,25 @@ input UpdateRequestRuleMetadataInput {
 	Replacement library scope. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+}
+
+"""
+Replaces the source of an existing rule set, appending revision N+1.
+"""
+input UpdateRequestRuleSourceInput {
+	"""
+	Rule-set ID.
+	"""
+	ruleSetId: ID!
+	"""
+	Replacement rule source as written in the editor.
+	"""
+	regoSource: String!
+	"""
+	The visual builder's document: a JSON object of at most 64 KiB.
+	Omitted keeps the stored one; null clears it.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -35651,6 +36680,11 @@ input UpdateRuleSetInput {
 	match. Rejected for user-authored rule sets.
 	"""
 	managedTagFilter: [String!]
+	"""
+	The simple builder's document. Omit to keep the stored one, pass null
+	to clear it, or pass a document to replace it.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -35678,6 +36712,10 @@ input UpdateSecuritySettingsInput {
 	"""
 	apiKeysRestrictToSystemSettingsUsers: Boolean
 	"""
+	Whether the built-in MCP endpoint answers. Needs system-settings permission; omission preserves the saved setting.
+	"""
+	mcpEnabled: Boolean
+	"""
 	Whether sensitive configuration changes require MFA step-up.
 	"""
 	mfaRequireConfigStepUp: Boolean!
@@ -35701,6 +36739,17 @@ input UpdateSecuritySettingsInput {
 	Deprecated alias for `mfaRequireEmbyLogin`. Omission preserves the saved setting.
 	"""
 	totpRequireEmbyLogin: Boolean @deprecated(reason: "Use mfaRequireEmbyLogin.")
+	"""
+	Host names a request served without a login must use, beside IP
+	addresses, localhost and the public URL host. An empty list turns the
+	check off. Needs system-settings permission; omission preserves the saved list.
+	"""
+	localTrustAllowedHosts: [String!]
+	"""
+	Whether forwarding headers count for local trust only from a listed
+	trusted proxy. Needs system-settings permission; omission preserves the saved setting.
+	"""
+	restrictLocalTrustToTrustedProxies: Boolean
 }
 
 """
@@ -36097,9 +37146,9 @@ input ValidateExternalImportConnectionInput {
 }
 
 """
-Validates maintenance rule source without saving it.
+Validates lifecycle rule source without saving it.
 """
-input ValidateMaintenanceRuleInput {
+input ValidateLifecycleRuleInput {
 	"""
 	Matcher source to validate, as written in the editor.
 	"""
@@ -36114,6 +37163,11 @@ input ValidateRequestRuleInput {
 	Matcher source to validate, as written in the editor.
 	"""
 	regoSource: String!
+	"""
+	Libraries the rule would be confined to, which decide the monitoring
+	policies it may set. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
 }
 
 """

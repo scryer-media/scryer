@@ -114,6 +114,11 @@ pub(crate) struct Incumbent {
 pub(crate) struct QueuedRelease {
     /// This claim is retained recent-grab history rather than a live client job.
     pub missing_history: bool,
+    /// The client is still working this job, so an automatic submission that
+    /// overlaps its scope is refused as a conflict. Admission refuses a
+    /// candidate beside it for the same reason rather than admit a grab that
+    /// cannot be submitted.
+    pub blocks_submission: bool,
     /// A recent missing grab has met both the quality and score cutoffs.
     /// Live client jobs do not use the history cutoff.
     pub history_cutoff_reached: bool,
@@ -478,6 +483,12 @@ pub(crate) enum AdmissionRejectionReason {
     /// name, still in flight or still unresolved. Never fetched twice, whatever
     /// the scores say: a second copy of the same bytes is never an upgrade.
     QueuedSameRelease { queued_title: String },
+    /// The candidate would otherwise be admitted, but its scope overlaps a
+    /// download the client is still working. An automatic grab is never
+    /// submitted beside such a download, so it is not admitted either. A pack
+    /// that would fill other missing members waits too: submission refuses any
+    /// overlap, not only an overlap the pack would improve.
+    QueuedItemBlocksUpgrade { queued_title: String },
     /// Every step ahead of `step` tied and what is held wins at `step`: the
     /// refusal of a preference step that does not raise a reason of its own
     /// (see [`crate::acquisition::decision_steps::PreferenceStep::refusal`]).
@@ -515,7 +526,18 @@ impl AdmissionRejectionReason {
             | Self::UpgradesDisabled
             | Self::SeasonIncomplete
             | Self::QueuedEqualOrBetter { .. }
-            | Self::QueuedSameRelease { .. } => None,
+            | Self::QueuedSameRelease { .. }
+            | Self::QueuedItemBlocksUpgrade { .. } => None,
+        }
+    }
+
+    /// The stable code of a refusal that has one of its own.
+    pub(crate) fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::QueuedItemBlocksUpgrade { .. } => {
+                Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
+            }
+            _ => None,
         }
     }
 }
@@ -794,6 +816,23 @@ fn queued_equal_or_better_rejection(
     }
 }
 
+/// The refusal for a candidate that would be admitted beside a download the
+/// client is still working. One construction for the single-scope ladder and
+/// the per-member pack path, so the two cannot drift.
+fn queued_item_blocks_upgrade(queued: &QueuedRelease) -> AdmissionRejection {
+    AdmissionRejection {
+        reason: AdmissionRejectionReason::QueuedItemBlocksUpgrade {
+            queued_title: queued.title.clone(),
+        },
+        message: format!(
+            "{} is still downloading for this scope; a better release is not fetched beside it",
+            queued.title
+        ),
+        incumbent_file_id: String::new(),
+        incumbent_file_path: String::new(),
+    }
+}
+
 fn queued_rejection(
     subject: &AdmissionSubject,
     candidate: CandidateFacts,
@@ -824,6 +863,11 @@ fn queued_rejection(
         // The same pipeline an incumbent gets.
         let win = queued_candidate_win(candidate, queued, policy);
         match win {
+            // Winning does not make room: the submission that follows refuses
+            // any automatic grab whose scope overlaps a download the client is
+            // still working. Admitting it would park a grab that can never be
+            // sent, retried every pass.
+            Some(_) if queued.blocks_submission => Some(queued_item_blocks_upgrade(queued)),
             // A revision upgrade admits regardless of `allow_upgrades`, exactly
             // as it does over a file on disk.
             Some(step) if step.admits_despite_upgrade_guard() => None,
@@ -1183,7 +1227,24 @@ pub(crate) fn evaluate_admission(
     let span_scoped = matches!(subject.scope, AdmissionScope::Episodes(_));
 
     if subject.per_member {
-        return evaluate_any_member(subject, candidate, policy);
+        let verdict = evaluate_any_member(subject, candidate, policy);
+        // A pack the members would admit still cannot be submitted while any
+        // download it overlaps is in the client's working queue: submission
+        // refuses every overlap, whichever members the pack would fill. A
+        // refusal the members already reached keeps its own reason. The queued
+        // list holds only submissions whose scope intersects this one, so
+        // `blocks_submission` is the submission conflict test itself.
+        if verdict.rejection().is_none()
+            && policy.applies_to_queue
+            && !policy.manual_override
+            && let Some(queued) = subject
+                .queued
+                .iter()
+                .find(|queued| queued.blocks_submission)
+        {
+            return AdmissionVerdict::Reject(queued_item_blocks_upgrade(queued));
+        }
+        return verdict;
     }
 
     for incumbent in &subject.incumbents {

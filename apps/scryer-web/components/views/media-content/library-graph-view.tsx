@@ -101,6 +101,7 @@ import {
   convexHull,
   createLayout,
   egoLayout,
+  layoutClusterCenters,
   layoutLoopDecision,
   layoutPositions,
   stepLayout,
@@ -465,6 +466,31 @@ function boundCameraToGraph(
 function restCamera(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
   const origin = sigma.graphToFramedGraph({ x: 0, y: 0 });
   return { x: origin.x, y: origin.y, ratio: 1, angle: 0 };
+}
+
+/** Room kept between neighbouring posters, in node size units (pixels at
+ * rest). */
+const LAYOUT_POSTER_GAP = 2;
+
+/**
+ * How many layout units one unit of node size covers in the current frame.
+ * Both scale alike with the zoom, so it is measured once at rest. Zero when
+ * the view has no size yet, which leaves the posters without room kept.
+ */
+function layoutUnitsPerNodeSize(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+): number {
+  const rest = restCamera(sigma);
+  const unit = 1000;
+  const origin = sigma.graphToViewport({ x: 0, y: 0 }, { cameraState: rest });
+  const along = sigma.graphToViewport({ x: unit, y: 0 }, { cameraState: rest });
+  const pixelsPerUnit = Math.abs(along.x - origin.x) / unit;
+  const pixelsPerSize = sigma.scaleSize(1, 1);
+  return pixelsPerUnit > 0 &&
+    Number.isFinite(pixelsPerUnit) &&
+    Number.isFinite(pixelsPerSize)
+    ? pixelsPerSize / pixelsPerUnit
+    : 0;
 }
 
 // The camera framing the nodes `include` keeps, with `padding` around them,
@@ -2621,13 +2647,44 @@ export default function LibraryGraphView({
         y: [-largeLayout.extent, largeLayout.extent],
       });
     } else {
+      const layoutNodes = displayed.nodes.map((node) => ({
+        key: node.subjectKey,
+        clusterId: node.clusterId,
+        // Ghosts never stretch an outline, so they keep to their links too.
+        free: node.ghost || !namedClusterIdsRef.current.has(node.clusterId),
+      }));
+      // A fixed frame around the cluster ring keeps the camera still while
+      // the layout moves nodes.
+      let extent = 0;
+      for (const center of layoutClusterCenters(
+        layoutNodes,
+        allClusterIds,
+      ).values()) {
+        extent = Math.max(extent, Math.abs(center.x), Math.abs(center.y));
+      }
+      extent += 220;
+      extentRef.current = extent;
+      sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
+      // Posters are sized in screen pixels at rest and scale with the zoom,
+      // so their size in layout units is fixed by the frame: measure it, and
+      // the layout keeps them from overlapping at every zoom.
+      const unitsPerSize = layoutUnitsPerNodeSize(sigma);
       layout = createLayout(
-        displayed.nodes.map((node) => ({
-          key: node.subjectKey,
-          clusterId: node.clusterId,
-          // Ghosts never stretch an outline, so they keep to their links too.
-          free: node.ghost || !namedClusterIdsRef.current.has(node.clusterId),
-        })),
+        displayed.nodes.map((node, index) => {
+          const size =
+            (node.collapsedClusterId !== undefined
+              ? Math.min(36, 10 + Math.sqrt(node.memberCount ?? 1))
+              : node.ghost
+                ? GHOST_NODE_SIZE
+                : (sizes.get(
+                    join.titleBySubjectKey.get(node.subjectKey)?.id ?? "",
+                  ) ?? 4)) + LAYOUT_POSTER_GAP;
+          return {
+            ...layoutNodes[index],
+            halfWidth: size * GRAPH_POSTER_ASPECT_RATIO * unitsPerSize,
+            halfHeight: size * unitsPerSize,
+          };
+        }),
         displayed.edges,
         // New ghosts start beside the node that reached them, so exploring
         // settles the layout rather than restarting it.
@@ -2635,15 +2692,6 @@ export default function LibraryGraphView({
         allClusterIds,
       );
       targets = layoutPositions(layout);
-      // A fixed frame around the cluster ring keeps the camera still while
-      // the layout moves nodes.
-      let extent = 0;
-      for (const center of layout.centers.values()) {
-        extent = Math.max(extent, Math.abs(center.x), Math.abs(center.y));
-      }
-      extent += 220;
-      extentRef.current = extent;
-      sigma.setCustomBBox({ x: [-extent, extent], y: [-extent, extent] });
       for (const [key, point] of targets) positionsRef.current.set(key, point);
     }
     // A node new to the drawing starts where it goes, or in a focused view

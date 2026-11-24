@@ -55,7 +55,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn recycle_bin_config_values(&self) -> (bool, Option<String>, u32) {
+    pub(crate) async fn recycle_bin_config_values(&self) -> (bool, Option<String>, u32) {
         let enabled = self
             .read_setting_string_value_for_scope(
                 SETTINGS_SCOPE_MEDIA,
@@ -224,17 +224,18 @@ impl AppUseCase {
     /// The real path of `candidate`, `None` when nothing is there, or why it
     /// cannot be told apart from either.
     fn resolve_existing_component(candidate: &Path) -> Result<Option<PathBuf>, String> {
-        match std::fs::symlink_metadata(candidate) {
-            Ok(metadata) => match std::fs::canonicalize(candidate) {
+        let disk = crate::disk::Disk::process();
+        match disk.uncached_blocking(candidate) {
+            crate::disk::PathReading::Known { kind, .. } => match disk.canonicalize_blocking(candidate) {
                 Ok(real) => Ok(Some(real)),
-                Err(error) if metadata.file_type().is_symlink() => Err(format!(
+                Err(error) if kind == crate::disk::EntryKind::Symlink => Err(format!(
                     "{} is a link that cannot be followed: {error}",
                     candidate.display()
                 )),
                 Err(error) => Err(format!("{} cannot be resolved: {error}", candidate.display())),
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(format!("{} cannot be inspected: {error}", candidate.display())),
+            crate::disk::PathReading::Missing { .. } => Ok(None),
+            _ => Err(format!("{} cannot be inspected", candidate.display())),
         }
     }
 }
@@ -595,6 +596,7 @@ impl AppUseCase {
             // A JSON null reads back as unset, restoring the per-root default.
             self.upsert_media_setting_json(RECYCLE_BIN_PATH_KEY, &path, updated_by)
                 .await?;
+            self.install_disk_volumes().await;
             changed_keys.push(RECYCLE_BIN_PATH_KEY.to_string());
         }
 
@@ -622,6 +624,7 @@ impl AppUseCase {
                 Ok(after) => {
                     let report = crate::recycle_bin::relocate_recycle_entries(
                         Self::recycle_bin_relocation_plans(&before, &after),
+                        self.resolve_verification_depth().await,
                     )
                     .await;
                     (!report.is_empty()).then_some(report)

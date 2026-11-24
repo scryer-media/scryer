@@ -4,9 +4,9 @@ mod config;
 mod filesystem;
 mod interactive_search;
 mod library;
+mod lifecycle_rules;
 mod lists;
 mod location;
-mod maintenance_rules;
 mod notifications;
 mod recycle_bin;
 mod request_rules;
@@ -15,7 +15,7 @@ mod subtitle;
 mod titles;
 
 use scryer_interface_acquisition::{
-    DownloadMutations, JobMutations, MediaRequestMutations, PostProcessingMutations,
+    DownloadMutations, GrabMutations, JobMutations, MediaRequestMutations, PostProcessingMutations,
     WantedMutations,
 };
 use scryer_interface_import::ExternalImportMutations;
@@ -39,8 +39,9 @@ pub struct MutationRoot(
     location::LocationMutations,
     MediaRequestMutations,
     WantedMutations,
+    GrabMutations,
     rules::RulesMutations,
-    maintenance_rules::MaintenanceRuleMutations,
+    lifecycle_rules::LifecycleRuleMutations,
     request_rules::RequestRuleMutations,
     PluginMutations,
     notifications::NotificationMutations,

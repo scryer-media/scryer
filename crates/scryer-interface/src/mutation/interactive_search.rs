@@ -136,26 +136,6 @@ impl InteractiveSearchMutations {
     ) -> GqlResult<QueueUnlinkedReleasePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let QueueUnlinkedReleaseInput {
-            search_id,
-            download_url,
-            download_client_id,
-            category,
-        } = input;
-        let outcome = app
-            .queue_unlinked_release_with_category(
-                &actor,
-                search_id.as_ref(),
-                &download_url,
-                download_client_id.as_ref(),
-                category,
-            )
-            .await
-            .map_err(to_gql_error)?;
-        Ok(QueueUnlinkedReleasePayload {
-            download_id: outcome.download_id,
-            client_name: outcome.client_name,
-            source_title: outcome.source_title,
-        })
+        scryer_interface_acquisition::queue_unlinked_release(&app, &actor, input).await
     }
 }

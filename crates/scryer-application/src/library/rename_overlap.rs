@@ -15,6 +15,7 @@
 //! builds a fresh one for its own plan.
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
+use std::ops::ControlFlow;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use scryer_domain::MediaFacet;
 
 use super::RenamePlanTitleFolder;
 use crate::catalog_workflow::{library_path_is_under_root, normalize_library_root_path};
+use crate::disk::{Disk, EntryKind, Visited};
 use crate::folder_ownership::{
     folder_case_insensitive, resolved_folder_identity, run_folder_check_blocking,
 };
@@ -297,13 +299,15 @@ impl DiskFacts {
 /// held when it was listed.
 struct ParentListing {
     resolved: PathBuf,
+    /// Each entry's name, and whether it is a directory (a link is not one),
+    /// read from the listing the first time a child asks.
     entries: HashMap<OsString, ListedEntry>,
     /// Every entry name, lowercased.
     folded: HashSet<String>,
 }
 
 enum ListedEntry {
-    Unread(Box<std::fs::DirEntry>),
+    Unread(Visited),
     /// Whether the entry is a directory and not a link.
     Read(bool),
 }
@@ -311,9 +315,7 @@ enum ListedEntry {
 impl ListedEntry {
     fn plain_directory(&mut self) -> bool {
         if let Self::Unread(entry) = self {
-            // The listing's own type when it has one; not a follow of a link.
-            let plain = entry.file_type().is_ok_and(|file_type| file_type.is_dir());
-            *self = Self::Read(plain);
+            *self = Self::Read(entry.kind().is_ok_and(|kind| kind == EntryKind::Directory));
         }
         matches!(self, Self::Read(true))
     }
@@ -324,19 +326,23 @@ impl ParentListing {
         let resolved = resolved_folder_identity(parent).ok()?;
         let mut entries = HashMap::new();
         let mut folded = HashSet::new();
-        match std::fs::read_dir(parent) {
-            Ok(listing) => {
-                for entry in listing {
-                    let entry = entry.ok()?;
-                    let name = entry.file_name();
-                    folded.insert(name.to_string_lossy().to_lowercase());
-                    entries.insert(name, ListedEntry::Unread(Box::new(entry)));
-                }
-            }
+        let mut complete = true;
+        let listed = Disk::process().visit_blocking(parent, |entry| {
+            let Ok(entry) = entry else {
+                complete = false;
+                return ControlFlow::Break(());
+            };
+            let name = entry.name().to_os_string();
+            folded.insert(name.to_string_lossy().to_lowercase());
+            entries.insert(name, ListedEntry::Unread(entry));
+            ControlFlow::Continue(())
+        });
+        match listed {
+            Ok(()) if complete => {}
             // A directory that does not exist yet holds nothing; resolving
             // it walks up to the ancestor that does, as a lone folder would.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return None,
+            Err(error) if error.reason() == crate::disk::reason::DISK_PATH_MISSING => {}
+            _ => return None,
         }
         Some(Self {
             resolved,

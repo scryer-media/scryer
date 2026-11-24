@@ -97,7 +97,7 @@ export function MemberListPoliciesPanel({
                           name: entry.user.username,
                         })}
                         labelClassName="sr-only"
-                        className="space-y-0"
+                        className="gap-0"
                         size="sm"
                         value={entry.policy}
                         options={POLICIES.map((policy) => ({

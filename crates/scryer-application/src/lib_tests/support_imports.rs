@@ -149,6 +149,7 @@ impl FileImporter for CopyingFileImporter {
             source_disposition: scryer_domain::ImportSourceDisposition::Retained,
             source_cleanup: None,
             verification: None,
+            library_file_unsettled: false,
         })
     }
 
@@ -230,6 +231,9 @@ impl FileImporter for ProgressReportingFileImporter {
 pub(crate) struct MockMediaFileRepo {
     pub(super) score_evaluations: Arc<Mutex<HashMap<String, crate::FileScoreEvaluation>>>,
     pub(super) store: Arc<Mutex<Vec<TitleMediaFile>>>,
+    /// Titles in a library with the full-hash backfill off: the SQL queue
+    /// joins them out, so the double leaves them out too.
+    pub(super) full_hash_off_title_ids: Arc<Mutex<std::collections::HashSet<String>>>,
     pub(super) pending_analysis_ids: Arc<Mutex<Vec<String>>>,
     pub(super) analysis_attempts: Arc<Mutex<Vec<(String, MediaFileAnalysis)>>>,
     pub(super) delete_media_file_error: Arc<Mutex<Option<String>>>,
@@ -239,6 +243,8 @@ pub(crate) struct MockMediaFileRepo {
     pub(super) list_media_files_for_title_error: Arc<Mutex<Option<String>>>,
     /// Stands in for a store failure while looking a media file up by path.
     pub(super) get_media_file_by_path_error: Arc<Mutex<Option<String>>>,
+    /// Stands in for a store failure while listing the live files of episodes.
+    pub(super) list_live_media_files_for_episode_ids_error: Arc<Mutex<Option<String>>>,
     /// Optional bridge for the background acquisition cursor: when set, the
     /// derived missing-target sweep reads the seeded acquisition-state rows so a
     /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
@@ -258,6 +264,13 @@ pub(crate) struct MockMediaFileRepo {
     pub(super) title_file_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) primary_cutoff_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// How many single-file lookups by id ran.
+    pub(super) file_id_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// Runs on the store before each single-file lookup by id, so a test can
+    /// change the catalog between two steps of one pass.
+    #[allow(clippy::type_complexity)]
+    pub(super) before_file_id_read:
+        Arc<std::sync::Mutex<Option<Box<dyn Fn(&str, &mut Vec<TitleMediaFile>) + Send + Sync>>>>,
     /// Each file's title-wide role, as `media_files.role` holds it. Episode
     /// elections change only the per-link role (`role` on the link rows in
     /// `store`), the way the real store changes only `file_episode_map`, so
@@ -447,6 +460,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<crate::ClaimedMediaFile> {
         let mut files = self.store.lock().await;
         if let Some(existing) = files
@@ -486,6 +500,21 @@ impl MediaFileRepository for MockMediaFileRepo {
             if input.release_listing_json.is_some() {
                 existing.release_listing_json = input.release_listing_json.clone();
             }
+            // Like the store: the row takes the input's size and signature,
+            // and keeps its hash only when both are unchanged.
+            let unchanged = existing.size_bytes == input.size_bytes
+                && input.source_signature_value.is_some()
+                && existing.source_signature_scheme == input.source_signature_scheme
+                && existing.source_signature_value == input.source_signature_value;
+            if !unchanged {
+                existing.content_hashes = None;
+            }
+            existing.size_bytes = input.size_bytes;
+            existing.source_signature_scheme = input.source_signature_scheme.clone();
+            existing.source_signature_value = input.source_signature_value.clone();
+            if let Some(hashes) = hashes {
+                existing.content_hashes = Some(hashes.clone());
+            }
             return Ok(crate::ClaimedMediaFile {
                 media_file_id: existing.id.clone(),
                 disposition: crate::MediaFileCatalogDisposition::Reused,
@@ -496,6 +525,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         let mut file = mock_media_file(id.clone(), input);
         file.episode_id = associations.episode_ids.first().cloned();
         file.series_movie_link_ids = associations.series_movie_link_ids.clone();
+        file.content_hashes = hashes.cloned();
         files.push(file);
         self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(crate::ClaimedMediaFile {
@@ -764,6 +794,14 @@ impl MediaFileRepository for MockMediaFileRepo {
     ) -> AppResult<Vec<EpisodeScopedMediaFile>> {
         self.scoped_file_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(error) = self
+            .list_live_media_files_for_episode_ids_error
+            .lock()
+            .await
+            .clone()
+        {
+            return Err(AppError::Repository(error));
+        }
         let requested = episode_ids
             .iter()
             .map(String::as_str)
@@ -1252,13 +1290,13 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>> {
-        Ok(self
-            .store
-            .lock()
-            .await
-            .iter()
-            .find(|entry| entry.id == file_id)
-            .cloned())
+        self.file_id_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut store = self.store.lock().await;
+        if let Some(hook) = self.before_file_id_read.lock().unwrap().as_ref() {
+            hook(file_id, &mut store);
+        }
+        Ok(store.iter().find(|entry| entry.id == file_id).cloned())
     }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
@@ -1295,10 +1333,12 @@ impl MediaFileRepository for MockMediaFileRepo {
         after_id: Option<&str>,
         limit: u32,
     ) -> AppResult<Vec<crate::MediaFileHashCandidate>> {
+        let off = self.full_hash_off_title_ids.lock().await.clone();
         let list = self.store.lock().await;
         let mut candidates: Vec<_> = list
             .iter()
             .filter(|entry| entry.content_hashes.is_none())
+            .filter(|entry| !off.contains(&entry.title_id))
             .filter(|entry| after_id.is_none_or(|cursor| entry.id.as_str() > cursor))
             .map(|entry| crate::MediaFileHashCandidate {
                 id: entry.id.clone(),
@@ -1310,6 +1350,45 @@ impl MediaFileRepository for MockMediaFileRepo {
         candidates.sort_by(|left, right| left.id.cmp(&right.id));
         candidates.truncate(limit as usize);
         Ok(candidates)
+    }
+
+    /// Rows by id only, as the store keys them; a title-and-path row is
+    /// left to the store tests.
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+    ) -> AppResult<Option<crate::location::model::PersistedContentHashes>> {
+        let crate::disk::HashRow::Id(id) = row else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .find(|entry| &entry.id == id)
+            .and_then(|entry| entry.content_hashes.clone()))
+    }
+
+    async fn record_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+        size_bytes: i64,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let crate::disk::HashRow::Id(id) = row else {
+            return Ok(false);
+        };
+        let mut list = self.store.lock().await;
+        let mut changed = false;
+        for entry in list
+            .iter_mut()
+            .filter(|entry| &entry.id == id && entry.size_bytes == size_bytes)
+        {
+            entry.content_hashes = Some(hashes.clone());
+            changed = true;
+        }
+        Ok(changed)
     }
 
     async fn update_media_file_content_hashes(
@@ -1425,6 +1504,10 @@ pub(super) struct TrackingImportRepo {
     pub(super) open_selection_roots: Arc<Mutex<Vec<String>>>,
     /// Makes the next hold release fail before it changes anything.
     pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
+    /// The tracked state each finished history retry settled on.
+    pub(super) retry_finished_states: Arc<Mutex<Vec<TrackedDownloadState>>>,
+    /// Held-source reads of one download.
+    pub(super) held_reads_per_download: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
@@ -1555,12 +1638,115 @@ impl ImportRepository for TrackingImportRepo {
         &self,
         download_id: &scryer_domain::download_identity::DownloadId,
     ) -> AppResult<bool> {
+        self.held_reads_per_download
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let canonical_ids = self.canonical_ids.lock().await;
         Ok(self.records.lock().await.iter().any(|record| {
             canonical_ids.get(&record.id) == Some(download_id)
                 && serde_json::from_str::<serde_json::Value>(&record.payload_json)
                     .is_ok_and(|payload| payload["archive_processing_pending"] == true)
         }))
+    }
+
+    async fn download_import_sources(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadImportSources> {
+        self.held_reads_per_download
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let canonical_ids = self.canonical_ids.lock().await;
+        let mut answer = crate::DownloadImportSources::default();
+        for record in self.records.lock().await.iter() {
+            if canonical_ids.get(&record.id) != Some(download_id) {
+                continue;
+            }
+            let payload =
+                serde_json::from_str::<serde_json::Value>(&record.payload_json).unwrap_or_default();
+            answer.held |= payload["archive_processing_pending"] == true;
+            answer.library_holds_payload |= payload[crate::LIBRARY_HOLDS_PAYLOAD_KEY] == true;
+            for file in crate::UnsettledLibraryFile::from_payload(&payload) {
+                if !answer.library_file_unsettled.contains(&file) {
+                    answer.library_file_unsettled.push(file);
+                }
+            }
+        }
+        Ok(answer)
+    }
+
+    async fn record_library_files_unsettled(
+        &self,
+        import_id: &str,
+        files: &[crate::UnsettledLibraryFile],
+    ) -> AppResult<bool> {
+        if !self.canonical_ids.lock().await.contains_key(import_id) {
+            return Ok(false);
+        }
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(false);
+        };
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        let mut recorded = crate::UnsettledLibraryFile::from_payload(&payload);
+        for file in files {
+            if !recorded.contains(file) {
+                recorded.push(file.clone());
+            }
+        }
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                crate::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY.into(),
+                serde_json::to_value(&recorded).unwrap(),
+            );
+        }
+        record.payload_json = payload.to_string();
+        Ok(true)
+    }
+
+    async fn settle_library_files_unsettled(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+        library_holds_payload: bool,
+    ) -> AppResult<()> {
+        let canonical_ids = self.canonical_ids.lock().await;
+        for record in self.records.lock().await.iter_mut() {
+            if canonical_ids.get(&record.id) != Some(download_id) {
+                continue;
+            }
+            let mut payload: serde_json::Value =
+                serde_json::from_str(&record.payload_json).unwrap_or_default();
+            let Some(object) = payload.as_object_mut() else {
+                continue;
+            };
+            if object
+                .remove(crate::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY)
+                .is_none()
+            {
+                continue;
+            }
+            if library_holds_payload {
+                object.insert(crate::LIBRARY_HOLDS_PAYLOAD_KEY.into(), true.into());
+            }
+            record.payload_json = payload.to_string();
+        }
+        Ok(())
+    }
+
+    async fn record_library_holds_download_payload(&self, import_id: &str) -> AppResult<bool> {
+        if !self.canonical_ids.lock().await.contains_key(import_id) {
+            return Ok(false);
+        }
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(false);
+        };
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(crate::LIBRARY_HOLDS_PAYLOAD_KEY.into(), true.into());
+        }
+        record.payload_json = payload.to_string();
+        Ok(true)
     }
 
     async fn queue_import_request_with_identity_for_download(
@@ -1631,6 +1817,7 @@ impl ImportRepository for TrackingImportRepo {
             return Ok(crate::ImportRetryFinishOutcome::Superseded);
         }
         claims.remove(&claim.import_id);
+        self.retry_finished_states.lock().await.push(state);
         let mut records = self.records.lock().await;
         let record = records
             .iter_mut()
@@ -1701,6 +1888,32 @@ impl ImportRepository for TrackingImportRepo {
             .clone()
             .filter(|selection| {
                 selection.id == selection_id && selection.actor_user_id == actor_user_id
+            }))
+    }
+
+    async fn replace_manual_import_selection(
+        &self,
+        selection: crate::ManualImportSelection,
+    ) -> AppResult<()> {
+        *self.manual_import_selection.lock().await = Some(selection);
+        Ok(())
+    }
+
+    async fn find_manual_import_selection(
+        &self,
+        actor_user_id: &str,
+        title_id: &str,
+        source_identity: &ClientJobLocator,
+    ) -> AppResult<Option<crate::ManualImportSelection>> {
+        Ok(self
+            .manual_import_selection
+            .lock()
+            .await
+            .clone()
+            .filter(|selection| {
+                selection.actor_user_id == actor_user_id
+                    && selection.title_id == title_id
+                    && &selection.source_identity == source_identity
             }))
     }
 

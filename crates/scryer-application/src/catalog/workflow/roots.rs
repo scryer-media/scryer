@@ -523,28 +523,25 @@ impl AppUseCase {
             dedup_roots.push(root);
         }
 
-        // Stat each unique filesystem path once, on blocking threads and each
+        // Each unique root is answered from the capacity sampler's cache while
+        // it is current. Otherwise it is read off the async runtime, each
         // behind its own timeout: a dead network mount (an unresponsive NFS or
-        // SMB server) blocks the stat syscall indefinitely, and one such mount
-        // must not hang the dashboard or blank the healthy roots beside it.
+        // SMB server) blocks the call indefinitely, and one such mount must not
+        // hang the dashboard or blank the healthy roots beside it.
         let mut stats = tokio::task::JoinSet::new();
         for (normalized, path) in unique_paths {
+            let capacity = self.runtime.health.storage_capacity.clone();
             stats.spawn(async move {
-                let usage = tokio::time::timeout(
-                    STORAGE_ROOT_STAT_TIMEOUT,
-                    tokio::task::spawn_blocking(move || library_root_filesystem_usage(&path)),
-                )
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten();
-                (normalized, usage)
+                let space = capacity
+                    .current_or_refresh(&path, STORAGE_ROOT_STAT_TIMEOUT)
+                    .await;
+                (normalized, space)
             });
         }
         let mut usage_by_path: HashMap<String, Option<(i64, i64)>> = HashMap::new();
         while let Some(joined) = stats.join_next().await {
-            if let Ok((normalized, usage)) = joined {
-                usage_by_path.insert(normalized, usage);
+            if let Ok((normalized, space)) = joined {
+                usage_by_path.insert(normalized, space.and_then(library_root_filesystem_usage));
             }
         }
 
@@ -565,12 +562,11 @@ impl AppUseCase {
     }
 }
 
-/// Used and total bytes for the filesystem backing `path`, or `None` when it
-/// cannot be inspected. It is the *available* figure that excludes the blocks
+/// Used and total bytes of a probed filesystem, or `None` when a figure does
+/// not fit an `i64`. It is the *available* figure that excludes the blocks
 /// reserved for root, so the used figure reported here (total minus available)
 /// includes them.
-fn library_root_filesystem_usage(path: &str) -> Option<(i64, i64)> {
-    let space = crate::filesystem_space(path)?;
+fn library_root_filesystem_usage(space: crate::helpers::FilesystemSpace) -> Option<(i64, i64)> {
     let used = space.total_bytes.saturating_sub(space.available_bytes);
     Some((
         i64::try_from(used).ok()?,

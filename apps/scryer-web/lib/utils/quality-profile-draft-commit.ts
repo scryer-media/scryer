@@ -108,6 +108,9 @@ function qualityProfileCatalogEntryFromDraft(
       min_score_to_grab: draft.min_score_to_grab,
       cutoff_score: draft.cutoff_score,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
+      min_missing_episodes_for_pack: draft.min_missing_episodes_for_pack,
+      min_missing_percent_for_series_pack:
+        draft.min_missing_percent_for_series_pack,
       decision_pipeline: [...draft.decision_pipeline],
     },
   };

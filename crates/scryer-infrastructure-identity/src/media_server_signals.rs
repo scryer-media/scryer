@@ -23,6 +23,10 @@
 //! `StartIndex`/`Limit`. Keys are read case-insensitively, so a server that
 //! serializes `userData` rather than `UserData` is still read.
 //!
+//! Favourites are a second listing of the same shape, `Filters=IsFavorite`
+//! over `Movie,Series,Season,Episode`, so a favourite nobody played is seen,
+//! and a whole series or one season can be a favourite.
+//!
 //! # Paging
 //!
 //! Every listing is paged until the server's own total is reached
@@ -113,7 +117,7 @@
 //! visibly ignored: an unplayed row in a watched-set listing, or a filtered
 //! history row naming another account or item. Publishing a partial history
 //! could turn an omitted played item into a false "never watched"
-//! maintenance fact.
+//! lifecycle fact.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -128,11 +132,12 @@ use quick_xml::events::Event;
 use reqwest::StatusCode;
 use scryer_application::media_server_signals::reasons;
 use scryer_application::{
-    MediaServerSignalReader, MediaServerSignalSource, ProviderAudiencePlay, ProviderItemPlay,
-    ProviderItemRecheck, ProviderPlayedItem, SignalReadFailure,
+    MediaServerSignalReader, MediaServerSignalSource, ProviderAccountFavorites,
+    ProviderAudiencePlay, ProviderItemPlay, ProviderItemRecheck, ProviderPlayedItem,
+    SignalReadFailure,
 };
 use scryer_domain::{MediaServerConnection, MediaServerProvider, MediaServerSignalKind};
-use scryer_outbound_http::generic_reqwest_client;
+use scryer_outbound_http::{generic_reqwest_client, read_body_bounded};
 use serde_json::Value;
 use tokio::sync::OnceCell;
 use tracing::warn;
@@ -165,6 +170,14 @@ const LOOKUP_BATCH: usize = 100;
 /// [`SIGNAL_PAGE_SIZE`] rows a page this is two million rows, far past any
 /// real watch history, so only a server that is not paging as asked meets it.
 const SIGNAL_PAGE_CEILING: usize = 4_000;
+
+/// The most bytes one answer may decode to before the read gives up on it.
+///
+/// A page of [`SIGNAL_PAGE_SIZE`] rows is kilobytes to a few megabytes, and
+/// the unpaged answers (Jellyfin and Emby `/Users`, Plex `library/sections`,
+/// the plex.tv share list) are smaller still. The limit only stops a server
+/// whose answer never ends; reaching it reads as an unreadable response.
+const SIGNAL_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// How many single-item requests a live re-check keeps in flight where the
 /// provider cannot answer for several items at once (Plex history is read per
@@ -414,6 +427,8 @@ pub struct HttpMediaServerSignalSource {
     plex_service_url: Url,
     /// [`SIGNAL_PAGE_CEILING`], lowered only by tests.
     page_ceiling: usize,
+    /// [`SIGNAL_RESPONSE_MAX_BYTES`], lowered only by tests.
+    response_byte_limit: usize,
 }
 
 impl Default for HttpMediaServerSignalSource {
@@ -428,6 +443,7 @@ impl HttpMediaServerSignalSource {
             client: generic_reqwest_client(),
             plex_service_url: Url::parse(PLEX_SERVICE_URL).expect("valid Plex service URL"),
             page_ceiling: SIGNAL_PAGE_CEILING,
+            response_byte_limit: SIGNAL_RESPONSE_MAX_BYTES,
         }
     }
 
@@ -437,12 +453,19 @@ impl HttpMediaServerSignalSource {
             client: generic_reqwest_client(),
             plex_service_url,
             page_ceiling: SIGNAL_PAGE_CEILING,
+            response_byte_limit: SIGNAL_RESPONSE_MAX_BYTES,
         }
     }
 
     #[cfg(test)]
     fn with_page_ceiling(mut self, page_ceiling: usize) -> Self {
         self.page_ceiling = page_ceiling;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_response_byte_limit(mut self, response_byte_limit: usize) -> Self {
+        self.response_byte_limit = response_byte_limit;
         self
     }
 
@@ -483,15 +506,17 @@ impl HttpMediaServerSignalSource {
         if !status.is_success() {
             return Err(FetchFailure::Status(status));
         }
-        response
-            .json::<Value>()
+        let body = read_body_bounded(response, self.response_byte_limit)
             .await
-            .map_err(|_| FetchFailure::Unreadable)
+            .map_err(|_| FetchFailure::Unreadable)?;
+        serde_json::from_slice::<Value>(&body).map_err(|_| FetchFailure::Unreadable)
     }
 
     // ── Jellyfin and Emby ───────────────────────────────────────────────────
 
-    /// Every played movie and episode for one Jellyfin or Emby user.
+    /// Every played movie and episode for one Jellyfin or Emby user, or with
+    /// [`UserItemListing::Favorites`] every movie, series, season and episode
+    /// they marked as a favourite.
     async fn fetch_user_items(
         &self,
         connection: &MediaServerConnection,
@@ -499,6 +524,7 @@ impl HttpMediaServerSignalSource {
         auth: SignalAuth<'_>,
         fields: &str,
         external_user_id: &str,
+        listing: UserItemListing,
     ) -> ReadResult<Vec<ProviderPlayedItem>> {
         let mut items: Vec<ProviderPlayedItem> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -508,7 +534,7 @@ impl HttpMediaServerSignalSource {
         let mut first_total: Option<i64> = None;
 
         loop {
-            let url = played_items_url(base, external_user_id, start_index, fields)?;
+            let url = user_items_url(base, external_user_id, start_index, fields, listing)?;
             let body = self.fetch_json(url, auth, None).await?;
             // Jellyfin echoes the page's start; a server that answers from
             // elsewhere is not paging as asked. Emby does not echo it.
@@ -524,7 +550,10 @@ impl HttpMediaServerSignalSource {
                 .ok_or_else(unreadable_listing)?;
             let total = field(&body, "TotalRecordCount").and_then(integer_field);
 
-            let (mut normalized, page_skipped) = normalize_jellyfin_items(&page);
+            let (mut normalized, page_skipped) = match listing {
+                UserItemListing::Played => normalize_jellyfin_items(&page),
+                UserItemListing::Favorites => normalize_jellyfin_favorites(&page)?,
+            };
             skipped += page_skipped;
             // A server that ignores `StartIndex` but stays inside its total
             // would otherwise hand back the same rows until the total is
@@ -561,26 +590,40 @@ impl HttpMediaServerSignalSource {
             return Err(unreadable_items());
         }
 
-        self.attach_series_ids(base, auth, external_user_id, &mut items)
+        let resolved = self
+            .attach_series_ids(base, auth, external_user_id, &mut items)
             .await;
+        // A played episode whose series cannot be looked up only goes
+        // unmapped. A favourite season or episode that went unmapped would
+        // read as "nobody favourited this title", so a favourites read with a
+        // series the lookup did not resolve fails instead, and the stored
+        // favourites stay as they were.
+        if !resolved && listing == UserItemListing::Favorites {
+            return Err(SignalReadFailure::new(
+                reasons::RESPONSE_UNREADABLE,
+                "the series of favourite seasons or episodes could not be looked up",
+            ));
+        }
         Ok(items)
     }
 
     /// Resolve the external ids of every distinct series the episodes belong
     /// to, in batches, and attach them.
     ///
-    /// Failure here is not fatal: episodes simply stay unmapped, which is the
-    /// honest outcome. That is why this returns `()` rather than a result.
+    /// Failure here is not fatal to a played read: episodes simply stay
+    /// unmapped, which is the honest outcome. Returns whether every series
+    /// asked about was resolved, so a favourites read can refuse to go on
+    /// without them.
     async fn attach_series_ids(
         &self,
         base: &Url,
         auth: SignalAuth<'_>,
         external_user_id: &str,
         items: &mut [ProviderPlayedItem],
-    ) {
+    ) -> bool {
         let series_ids = distinct_series_ids(items);
         if series_ids.is_empty() {
-            return;
+            return true;
         }
 
         let mut resolved: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
@@ -589,7 +632,7 @@ impl HttpMediaServerSignalSource {
                 Ok(url) => url,
                 Err(error) => {
                     warn!(error = %error, "could not build the series lookup URL");
-                    return;
+                    return false;
                 }
             };
             match self.fetch_json(url, auth, None).await {
@@ -621,12 +664,13 @@ impl HttpMediaServerSignalSource {
                 }
                 Err(error) => {
                     warn!(error = %error, "could not resolve series ids; those episodes stay unmapped");
-                    return;
+                    return false;
                 }
             }
         }
 
         apply_series_ids(items, &resolved);
+        series_ids.iter().all(|id| resolved.contains_key(id))
     }
 
     // ── Plex ────────────────────────────────────────────────────────────────
@@ -730,11 +774,10 @@ impl HttpMediaServerSignalSource {
         if !response.status().is_success() {
             return Err(FetchFailure::Status(response.status()));
         }
-        let body = response
-            .text()
+        let body = read_body_bounded(response, self.response_byte_limit)
             .await
             .map_err(|_| FetchFailure::Unreadable)?;
-        shared_server_tokens(&body).ok_or(FetchFailure::Unreadable)
+        shared_server_tokens(&String::from_utf8_lossy(&body)).ok_or(FetchFailure::Unreadable)
     }
 
     /// One account's played set, straight from the movie and show libraries,
@@ -1133,6 +1176,7 @@ impl HttpMediaServerSignalSource {
                         return Err(unreadable_items());
                     };
                     plays.push(ProviderItemPlay {
+                        is_favorite: false,
                         external_user_id: plex_history_account(account, Some(owner_id)),
                         played: true,
                         last_played_at: Some(viewed_at),
@@ -1283,8 +1327,37 @@ impl MediaServerSignalReader for UserItemsReader {
         let external_user_id = participant_id(external_user_id)?;
         let (auth, fields) = self.auth_and_fields();
         self.source
-            .fetch_user_items(&self.connection, &self.base, auth, fields, external_user_id)
+            .fetch_user_items(
+                &self.connection,
+                &self.base,
+                auth,
+                fields,
+                external_user_id,
+                UserItemListing::Played,
+            )
             .await
+    }
+
+    /// `GET /Users/{userId}/Items` with `Filters=IsFavorite`, paged exactly as
+    /// the played read: one more listing per user per sweep, plus a series
+    /// lookup when favourite seasons or episodes name series.
+    async fn fetch_favorite_items(
+        &self,
+        external_user_id: &str,
+    ) -> Result<Option<Vec<ProviderPlayedItem>>, SignalReadFailure> {
+        let external_user_id = participant_id(external_user_id)?;
+        let (auth, fields) = self.auth_and_fields();
+        self.source
+            .fetch_user_items(
+                &self.connection,
+                &self.base,
+                auth,
+                fields,
+                external_user_id,
+                UserItemListing::Favorites,
+            )
+            .await
+            .map(Some)
     }
 
     /// Every user the admin key can list (`GET /Users`), each read exactly as
@@ -1298,7 +1371,14 @@ impl MediaServerSignalReader for UserItemsReader {
         for user_id in self.list_user_ids().await? {
             let items = self
                 .source
-                .fetch_user_items(&self.connection, &self.base, auth, fields, &user_id)
+                .fetch_user_items(
+                    &self.connection,
+                    &self.base,
+                    auth,
+                    fields,
+                    &user_id,
+                    UserItemListing::Played,
+                )
                 .await?;
             plays.extend(items.into_iter().map(|item| ProviderAudiencePlay {
                 external_account_id: user_id.clone(),
@@ -1306,6 +1386,36 @@ impl MediaServerSignalReader for UserItemsReader {
             }));
         }
         Ok(plays)
+    }
+
+    /// Every user the admin key can list (`GET /Users`), each one's
+    /// favourites read exactly as [`Self::fetch_favorite_items`] reads them:
+    /// one listing per user, paged, plus the batched series lookup when
+    /// favourite seasons or episodes name series. A user whose read fails
+    /// carries that failure; the others' reads stand.
+    async fn fetch_audience_favorites(
+        &self,
+    ) -> Result<Vec<ProviderAccountFavorites>, SignalReadFailure> {
+        let (auth, fields) = self.auth_and_fields();
+        let mut accounts = Vec::new();
+        for user_id in self.list_user_ids().await? {
+            let favorites = self
+                .source
+                .fetch_user_items(
+                    &self.connection,
+                    &self.base,
+                    auth,
+                    fields,
+                    &user_id,
+                    UserItemListing::Favorites,
+                )
+                .await;
+            accounts.push(ProviderAccountFavorites {
+                external_account_id: user_id,
+                favorites,
+            });
+        }
+        Ok(accounts)
     }
 
     /// Each item's user data for every user the admin key can list
@@ -1366,15 +1476,16 @@ impl MediaServerSignalReader for UserItemsReader {
                         "item re-check: the server answered for an item not asked about",
                     ));
                 }
-                states.push((id, user_item_state(entry, &user)?));
+                let parents = item_parent_ids(entry);
+                states.push((id, (user_item_state(entry, &user)?, parents)));
             }
             Ok((user, Some(states)))
         });
-        let answers: Vec<(String, Option<Vec<(String, ProviderItemPlay)>>)> =
-            futures_util::stream::iter(reads)
-                .buffer_unordered(RECHECK_CONCURRENCY)
-                .try_collect()
-                .await?;
+        type ItemAnswer = (String, (ProviderItemPlay, Vec<String>));
+        let answers: Vec<(String, Option<Vec<ItemAnswer>>)> = futures_util::stream::iter(reads)
+            .buffer_unordered(RECHECK_CONCURRENCY)
+            .try_collect()
+            .await?;
         if !answers.is_empty() && answers.iter().all(|(_, states)| states.is_none()) {
             return Err(SignalReadFailure::new(
                 reasons::ACCESS_DENIED,
@@ -1383,8 +1494,15 @@ impl MediaServerSignalReader for UserItemsReader {
         }
 
         let mut states: BTreeMap<(String, String), ProviderItemPlay> = BTreeMap::new();
+        let mut parents: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (user, answer) in answers {
-            for (id, state) in answer.into_iter().flatten() {
+            for (id, (state, item_parents)) in answer.into_iter().flatten() {
+                let known = parents.entry(id.clone()).or_default();
+                for parent in item_parents {
+                    if !known.contains(&parent) {
+                        known.push(parent);
+                    }
+                }
                 states.insert((user.clone(), id), state);
             }
         }
@@ -1401,6 +1519,7 @@ impl MediaServerSignalReader for UserItemsReader {
                     .get(&(user.to_string(), id.clone()))
                     .cloned()
                     .unwrap_or_else(|| ProviderItemPlay {
+                        is_favorite: false,
                         external_user_id: user.to_string(),
                         played: false,
                         last_played_at: None,
@@ -1416,11 +1535,100 @@ impl MediaServerSignalReader for UserItemsReader {
                     .map(|user| state_of(user))
                     .filter(|state| state.played)
                     .collect(),
+                parent_item_ids: parents.remove(&id).unwrap_or_default(),
             };
             rechecks.insert(id, recheck);
         }
         Ok(rechecks)
     }
+
+    /// Each participant's favourite flags for the items, read per
+    /// participant in batches of [`LOOKUP_BATCH`] ids through the same
+    /// `/Users/{userId}/Items?Ids=` read [`Self::recheck_items`] makes. Only
+    /// the participants are read: the favourite facts are theirs alone.
+    async fn recheck_favorites(
+        &self,
+        provider_item_ids: &[String],
+        participants: &[String],
+    ) -> Result<BTreeMap<String, Vec<String>>, SignalReadFailure> {
+        let (auth, fields) = self.auth_and_fields();
+        let ids = recheck_item_ids(provider_item_ids)?;
+        let mut readers: Vec<String> = Vec::new();
+        for participant in participants {
+            let participant = participant_id(participant)?.to_string();
+            if !readers.contains(&participant) {
+                readers.push(participant);
+            }
+        }
+
+        let source = &self.source;
+        let base = &self.base;
+        let jobs: Vec<(String, Vec<String>)> = readers
+            .iter()
+            .flat_map(|user| {
+                ids.chunks(LOOKUP_BATCH)
+                    .map(move |chunk| (user.clone(), chunk.to_vec()))
+            })
+            .collect();
+        let reads = jobs.into_iter().map(|(user, chunk)| async move {
+            let url = items_by_id_url(base, &user, &chunk, fields)?;
+            let entries = match source.request_json(url, auth, None).await {
+                Ok(body) => field(&body, "Items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(unreadable_listing)?,
+                // The item read this one follows already proved the
+                // credential; a participant refused here has no favourites.
+                Err(FetchFailure::Status(StatusCode::NOT_FOUND | StatusCode::FORBIDDEN)) => {
+                    return Ok::<_, SignalReadFailure>((user, Vec::new()));
+                }
+                Err(failure) => return Err(failure.into_failure()),
+            };
+            let mut favourites = Vec::new();
+            for entry in &entries {
+                let id = string_field(entry, "Id").ok_or_else(unreadable_items)?;
+                if !chunk.contains(&id) {
+                    return Err(SignalReadFailure::new(
+                        reasons::FILTER_NOT_HONOURED,
+                        "favourite re-check: the server answered for an item not asked about",
+                    ));
+                }
+                if user_item_state(entry, &user)?.is_favorite {
+                    favourites.push(id);
+                }
+            }
+            Ok((user, favourites))
+        });
+        let answers: Vec<(String, Vec<String>)> = futures_util::stream::iter(reads)
+            .buffer_unordered(RECHECK_CONCURRENCY)
+            .try_collect()
+            .await?;
+
+        let mut favourites: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (user, items) in answers {
+            for id in items {
+                let accounts = favourites.entry(id).or_default();
+                if !accounts.contains(&user) {
+                    accounts.push(user.clone());
+                }
+            }
+        }
+        Ok(favourites)
+    }
+}
+
+/// The series and season an episode answer names, in that order. A movie,
+/// or an answer that names neither, has none.
+fn item_parent_ids(entry: &Value) -> Vec<String> {
+    let mut parents = Vec::new();
+    for key in ["SeriesId", "SeasonId"] {
+        if let Some(id) = string_field(entry, key).filter(|id| !id.trim().is_empty())
+            && !parents.contains(&id)
+        {
+            parents.push(id);
+        }
+    }
+    parents
 }
 
 /// One user's state from a single-item answer. The answer must be the item
@@ -1442,12 +1650,18 @@ fn user_item_state(body: &Value, external_user_id: &str) -> ReadResult<ProviderI
                 "the item answer did not say whether it was played",
             )
         })?;
+    // Read as the sweep reads it: an answer that leaves the flag out is not
+    // a favourite.
+    let is_favorite = field(user_data, "IsFavorite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(ProviderItemPlay {
         external_user_id: external_user_id.to_string(),
         played,
         last_played_at: field(user_data, "LastPlayedDate")
             .and_then(Value::as_str)
             .and_then(parse_timestamp),
+        is_favorite,
     })
 }
 
@@ -1688,6 +1902,8 @@ impl MediaServerSignalReader for PlexReader {
                     ProviderItemRecheck {
                         participants: Vec::with_capacity(participants.len()),
                         history,
+                        // Plex has no favourites to read on a parent.
+                        parent_item_ids: Vec::new(),
                     },
                 )
             })
@@ -1696,11 +1912,13 @@ impl MediaServerSignalReader for PlexReader {
         for participant in participants {
             let external_user_id = participant_id(participant)?;
             let unplayed = || ProviderItemPlay {
+                is_favorite: false,
                 external_user_id: external_user_id.to_string(),
                 played: false,
                 last_played_at: None,
             };
             let as_state = |item: &ProviderPlayedItem| ProviderItemPlay {
+                is_favorite: false,
                 external_user_id: external_user_id.to_string(),
                 played: item.played,
                 last_played_at: item.last_played_at,
@@ -1739,6 +1957,7 @@ impl MediaServerSignalReader for PlexReader {
                             .filter_map(|play| play.last_played_at)
                             .max();
                         recheck.participants.push(ProviderItemPlay {
+                            is_favorite: false,
                             external_user_id: external_user_id.to_string(),
                             played: last_played_at.is_some(),
                             last_played_at,
@@ -1873,6 +2092,77 @@ pub fn normalize_jellyfin_item(entry: &Value) -> Option<ProviderPlayedItem> {
     })
 }
 
+/// One page of a Jellyfin or Emby favourites listing.
+///
+/// Returns `(items, skipped)` like [`normalize_jellyfin_items`]. A row whose
+/// user data says it is not a favourite means the filter was ignored, and the
+/// whole read fails as `WATCH_SYNC_FILTER_NOT_HONOURED`.
+pub fn normalize_jellyfin_favorites(
+    page: &[Value],
+) -> ReadResult<(Vec<ProviderPlayedItem>, usize)> {
+    let mut items = Vec::with_capacity(page.len());
+    let mut skipped = 0;
+    for entry in page {
+        let flagged = field(entry, "UserData")
+            .and_then(|data| field(data, "IsFavorite"))
+            .and_then(Value::as_bool);
+        if flagged == Some(false) {
+            return Err(SignalReadFailure::new(
+                reasons::FILTER_NOT_HONOURED,
+                "the favourites listing returned an item that is not a favourite",
+            ));
+        }
+        match normalize_jellyfin_favorite(entry) {
+            Some(item) => items.push(item),
+            None => skipped += 1,
+        }
+    }
+    Ok((items, skipped))
+}
+
+/// One favourite: a movie, series, season or episode, or `None` when it
+/// cannot be read as one.
+///
+/// A series carries its own provider ids. A season is placed by its series
+/// (`SeriesId`, resolved by the batched series lookup) and its number
+/// (`IndexNumber`). Play state comes from the played read, not from here.
+pub fn normalize_jellyfin_favorite(entry: &Value) -> Option<ProviderPlayedItem> {
+    let kind = match string_field(entry, "Type")?.to_ascii_lowercase().as_str() {
+        "series" => MediaServerSignalKind::Series,
+        "season" => MediaServerSignalKind::Season,
+        _ => {
+            let mut item = normalize_jellyfin_item(entry)?;
+            item.played = false;
+            item.is_favorite = true;
+            return Some(item);
+        }
+    };
+    let provider_item_id = string_field(entry, "Id")?;
+    let (external_ids, series_provider_item_id, season_number) = match kind {
+        MediaServerSignalKind::Series => (external_ids(entry), None, None),
+        _ => (
+            BTreeMap::new(),
+            Some(string_field(entry, "SeriesId")?),
+            Some(field(entry, "IndexNumber").and_then(integer_field)?),
+        ),
+    };
+    Some(ProviderPlayedItem {
+        file_paths: Vec::new(),
+        provider_item_id,
+        kind,
+        name: string_field(entry, "Name"),
+        external_ids,
+        series_external_ids: BTreeMap::new(),
+        series_provider_item_id,
+        season_number,
+        episode_number: None,
+        played: false,
+        play_count: 0,
+        last_played_at: None,
+        is_favorite: true,
+    })
+}
+
 /// One Plex movie or episode, or `None` when it cannot be read as one.
 ///
 /// Used for the owner's watched set as read, and for history items before
@@ -1919,7 +2209,7 @@ pub fn normalize_plex_item(entry: &Value) -> Option<ProviderPlayedItem> {
 }
 
 /// Every `Media[].Part[].file` of a Plex item: one per file of each version.
-fn plex_file_paths(entry: &Value) -> Vec<String> {
+pub(crate) fn plex_file_paths(entry: &Value) -> Vec<String> {
     entry
         .get("Media")
         .and_then(Value::as_array)
@@ -2052,7 +2342,7 @@ fn plex_external_ids(entry: &Value) -> BTreeMap<String, String> {
 fn distinct_series_ids(items: &[ProviderPlayedItem]) -> Vec<String> {
     items
         .iter()
-        .filter(|item| item.kind == MediaServerSignalKind::Episode)
+        .filter(|item| item.kind.is_within_series())
         .filter_map(|item| item.series_provider_item_id.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -2152,20 +2442,50 @@ fn invalid_base_url() -> SignalReadFailure {
     )
 }
 
+/// Which of a user's item listings a read pages through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UserItemListing {
+    /// `Filters=IsPlayed` over movies and episodes.
+    Played,
+    /// `Filters=IsFavorite` over movies, series, seasons and episodes.
+    Favorites,
+}
+
+#[cfg(test)]
 fn played_items_url(
     base: &Url,
     external_user_id: &str,
     start_index: usize,
     fields: &str,
 ) -> ReadResult<Url> {
+    user_items_url(
+        base,
+        external_user_id,
+        start_index,
+        fields,
+        UserItemListing::Played,
+    )
+}
+
+fn user_items_url(
+    base: &Url,
+    external_user_id: &str,
+    start_index: usize,
+    fields: &str,
+    listing: UserItemListing,
+) -> ReadResult<Url> {
+    let (filter, item_types) = match listing {
+        UserItemListing::Played => ("IsPlayed", "Movie,Episode"),
+        UserItemListing::Favorites => ("IsFavorite", "Movie,Series,Season,Episode"),
+    };
     let mut url = base
         .join(&format!("Users/{external_user_id}/Items"))
         .map_err(|_| invalid_base_url())?;
     url.query_pairs_mut()
         .append_pair("Recursive", "true")
         .append_pair("IsMissing", "false")
-        .append_pair("Filters", "IsPlayed")
-        .append_pair("IncludeItemTypes", "Movie,Episode")
+        .append_pair("Filters", filter)
+        .append_pair("IncludeItemTypes", item_types)
         .append_pair("Fields", fields)
         .append_pair("EnableUserData", "true")
         .append_pair("StartIndex", &start_index.to_string())
@@ -2772,6 +3092,164 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_favourites_url_asks_for_every_favourite_kind() {
+        let base = Url::parse("http://jellyfin.example/").expect("base");
+        let url = user_items_url(
+            &base,
+            "user-123",
+            0,
+            JELLYFIN_ITEM_FIELDS,
+            UserItemListing::Favorites,
+        )
+        .expect("url");
+        let query = url.query().expect("query");
+        assert_eq!(url.path(), "/Users/user-123/Items");
+        for pair in [
+            "Recursive=true",
+            "Filters=IsFavorite",
+            "IncludeItemTypes=Movie%2CSeries%2CSeason%2CEpisode",
+            "EnableUserData=true",
+            "StartIndex=0",
+            "Limit=500",
+        ] {
+            assert!(query.contains(pair), "{pair} in {query}");
+        }
+        assert!(!query.contains("IsPlayed"));
+    }
+
+    #[test]
+    fn favourites_normalize_series_seasons_and_unplayed_items() {
+        let page = vec![
+            json!({
+                "Id": "jf-series-fav",
+                "Type": "Series",
+                "ProviderIds": { "Tvdb": "81189" },
+                "UserData": { "IsFavorite": true, "Played": false }
+            }),
+            json!({
+                "Id": "jf-season-fav",
+                "Type": "Season",
+                "SeriesId": "jf-series-fav",
+                "IndexNumber": 2,
+                "UserData": { "IsFavorite": true }
+            }),
+            json!({
+                "Id": "jf-movie-fav",
+                "Type": "Movie",
+                "ProviderIds": { "Tmdb": "604" },
+                "UserData": { "IsFavorite": true, "Played": true, "PlayCount": 4 }
+            }),
+        ];
+        let (items, skipped) = normalize_jellyfin_favorites(&page).expect("readable");
+        assert_eq!(skipped, 0);
+        let series = &items[0];
+        assert_eq!(series.kind, MediaServerSignalKind::Series);
+        assert_eq!(
+            series.external_ids.get("tvdb").map(String::as_str),
+            Some("81189")
+        );
+        assert!(series.is_favorite && !series.played);
+        let season = &items[1];
+        assert_eq!(season.kind, MediaServerSignalKind::Season);
+        assert_eq!(season.season_number, Some(2));
+        assert_eq!(
+            season.series_provider_item_id.as_deref(),
+            Some("jf-series-fav")
+        );
+        // Play state is the played read's; the favourites listing never
+        // supplies it.
+        let movie = &items[2];
+        assert!(movie.is_favorite && !movie.played);
+
+        // A season with no number cannot be placed: unreadable, not guessed.
+        let (_, skipped) = normalize_jellyfin_favorites(&[json!({
+            "Id": "jf-season-x",
+            "Type": "Season",
+            "SeriesId": "jf-series-fav"
+        })])
+        .expect("readable");
+        assert_eq!(skipped, 1);
+
+        // A row that says it is not a favourite means the filter was ignored.
+        let failure = normalize_jellyfin_favorites(&[json!({
+            "Id": "jf-movie-2",
+            "Type": "Movie",
+            "UserData": { "IsFavorite": false }
+        })])
+        .expect_err("filter not honoured");
+        assert_eq!(failure.reason, reasons::FILTER_NOT_HONOURED);
+    }
+
+    /// The favourites read pages its own listing and resolves the series of
+    /// favourite seasons; a series the lookup does not resolve fails the read
+    /// instead of leaving the season unmapped.
+    #[tokio::test]
+    async fn the_favourites_read_resolves_season_series_or_fails() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .and(query_param("StartIndex", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{
+                    "Id": "jf-season-fav",
+                    "Type": "Season",
+                    "SeriesId": "jf-series-1",
+                    "IndexNumber": 1,
+                    "UserData": { "IsFavorite": true }
+                }],
+                "TotalRecordCount": 1
+            })))
+            .mount(&server)
+            .await;
+        let lookup = Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Ids", "jf-series-1"))
+            .and(query_param("Recursive", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{ "Id": "jf-series-1", "Type": "Series", "ProviderIds": { "Tvdb": "999" } }]
+            })))
+            .mount_as_scoped(&server)
+            .await;
+
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+        let source = HttpMediaServerSignalSource::new();
+        let items = source
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_favorite_items("user-123")
+            .await
+            .expect("favourites read")
+            .expect("Jellyfin has favourites");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].series_external_ids.get("tvdb").map(String::as_str),
+            Some("999")
+        );
+        drop(lookup);
+
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Ids", "jf-series-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "Items": [] })))
+            .mount(&server)
+            .await;
+        let failure = source
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_favorite_items("user-123")
+            .await
+            .expect_err("an unresolved series fails the favourites read");
+        assert_eq!(failure.reason, reasons::RESPONSE_UNREADABLE);
+    }
+
     /// A page the server refuses fails the participant rather than reporting a
     /// short history, and the reason never carries the URL or the credential.
     #[tokio::test]
@@ -2797,6 +3275,64 @@ mod tests {
         let message = format!("{error}");
         assert!(!message.contains("api-key"), "{message}");
         assert!(!message.contains("user-123"), "{message}");
+    }
+
+    /// An answer past the byte limit is an unreadable response, the same
+    /// failure as one that is not JSON; the same answer within the limit
+    /// reads as before.
+    #[tokio::test]
+    async fn an_answer_past_the_byte_limit_is_an_unreadable_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [],
+                "TotalRecordCount": 0,
+                "StartIndex": 0,
+                "Padding": "x".repeat(4096),
+            })))
+            .mount(&server)
+            .await;
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        HttpMediaServerSignalSource::new()
+            .read_played(&connection, "user-123")
+            .await
+            .expect("the answer fits the standard limit");
+        let error = HttpMediaServerSignalSource::new()
+            .with_response_byte_limit(1024)
+            .read_played(&connection, "user-123")
+            .await
+            .expect_err("an answer past the limit fails the read");
+        assert_eq!(error.reason, reasons::RESPONSE_UNREADABLE);
+    }
+
+    /// The plex.tv share list is read within the same limit.
+    #[tokio::test]
+    async fn a_plex_share_list_past_the_byte_limit_is_unreadable() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/servers/machine-1/shared_servers"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "<MediaContainer><!-- {} --></MediaContainer>",
+                "x".repeat(4096)
+            )))
+            .mount(&server)
+            .await;
+
+        let source = plex_source(&server).with_response_byte_limit(1024);
+        let failure = source
+            .plex_shared_server_tokens("machine-1", "owner-token")
+            .await
+            .expect_err("an answer past the limit is unreadable");
+        assert!(matches!(failure, FetchFailure::Unreadable), "{failure:?}");
     }
 
     #[tokio::test]
@@ -3878,6 +4414,61 @@ mod tests {
         assert_eq!(plays[0].item.play_count, 3);
     }
 
+    /// Every listed user's favourites are read with the same admin key and
+    /// user list as the audience plays: one `GET /Users`, then one favourites
+    /// listing per user. A user whose listing fails carries that failure;
+    /// the others' reads stand.
+    #[tokio::test]
+    async fn jellyfin_audience_favourites_read_every_listed_user_and_fail_per_user() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "Id": "jf-user-a", "Name": "Example Viewer A" },
+                { "Id": "jf-user-b", "Name": "Example Viewer B" }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Users/jf-user-a/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "Items": [movie_item()], "TotalRecordCount": 1 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Users/jf-user-b/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        let accounts = HttpMediaServerSignalSource::new()
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_audience_favorites()
+            .await
+            .expect("the account list reads");
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].external_account_id, "jf-user-a");
+        let favourites = accounts[0].favorites.as_ref().expect("user a reads");
+        assert_eq!(favourites.len(), 1);
+        assert_eq!(favourites[0].provider_item_id, "jf-movie-1");
+        assert_eq!(accounts[1].external_account_id, "jf-user-b");
+        assert!(accounts[1].favorites.is_err(), "user b's failure is theirs");
+    }
+
     /// Emby may wrap the user list in `Items`; the admin key travels in
     /// Emby's own header. A listed user with no id fails the read rather
     /// than going missing from it.
@@ -4829,17 +5420,20 @@ mod tests {
             recheck.participants,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_OWNER_ID.into(),
                     played: true,
                     last_played_at: at(1_756_100_000),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_SHARED_ID.into(),
                     played: false,
                     last_played_at: None,
                 },
                 // Read from history: their state is their newest row there.
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "3003".into(),
                     played: true,
                     last_played_at: at(1_756_300_000),
@@ -4938,6 +5532,7 @@ mod tests {
             assert_eq!(
                 recheck.participants,
                 vec![ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_SHARED_ID.into(),
                     played: false,
                     last_played_at: None,
@@ -5135,11 +5730,13 @@ mod tests {
             recheck.participants,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-1".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-2".into(),
                     played: false,
                     last_played_at: None,
@@ -5150,16 +5747,131 @@ mod tests {
             recheck.history,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-1".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-3".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-31T21:00:00Z"),
                 },
             ]
+        );
+    }
+
+    /// The favourite flag comes from the same user data the play state does,
+    /// with no extra request; an answer that leaves it out is not a favourite.
+    #[tokio::test]
+    async fn a_jellyfin_recheck_reads_each_participants_favourite_flag() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2"]).await;
+        mount_user_items(
+            &server,
+            "",
+            "jf-user-1",
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": [{
+                "Id": "jf-item-4",
+                "Type": "Episode",
+                "UserData": { "Played": false, "PlayCount": 0, "IsFavorite": true }
+            }]})),
+        )
+        .await;
+        mount_user_items(
+            &server,
+            "",
+            "jf-user-2",
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": [{
+                "Id": "jf-item-4",
+                "Type": "Episode",
+                "UserData": { "Played": false, "PlayCount": 0 }
+            }]})),
+        )
+        .await;
+
+        let recheck = jellyfin_recheck(&server, &["jf-item-4"], &["jf-user-1", "jf-user-2"])
+            .await
+            .expect("the item re-checks")
+            .remove("jf-item-4")
+            .expect("the item is answered");
+
+        let favourites: Vec<(&str, bool)> = recheck
+            .participants
+            .iter()
+            .map(|state| (state.external_user_id.as_str(), state.is_favorite))
+            .collect();
+        assert_eq!(favourites, vec![("jf-user-1", true), ("jf-user-2", false)]);
+        assert!(recheck.history.is_empty(), "a favourite is not a play");
+    }
+
+    /// An episode answer names its series and season. Their favourite flags
+    /// are read per participant only, through the same batched `Ids` read,
+    /// and a participant the server refuses has no favourites.
+    #[tokio::test]
+    async fn a_jellyfin_favourite_recheck_reads_the_series_and_season_per_participant() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2", "jf-unlinked"]).await;
+        let answer = |favourite: &'static str| {
+            move |request: &Request| {
+                let items = query_value(request, "Ids")
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|id| !id.is_empty())
+                    .map(|id| {
+                        json!({
+                            "Id": id,
+                            "Type": if id == "jf-ep-1" { "Episode" } else { "Series" },
+                            "SeriesId": "jf-series-1",
+                            "SeasonId": "jf-season-1",
+                            "UserData": { "Played": false, "IsFavorite": id == favourite }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                ResponseTemplate::new(200).set_body_json(json!({ "Items": items }))
+            }
+        };
+        mount_user_items(&server, "", "jf-user-1", answer("jf-series-1")).await;
+        mount_user_items(&server, "", "jf-user-2", ResponseTemplate::new(404)).await;
+        mount_user_items(&server, "", "jf-unlinked", answer("jf-season-1")).await;
+
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+        let reader = HttpMediaServerSignalSource::new()
+            .open(&connection)
+            .await
+            .expect("opens");
+        let participants = vec!["jf-user-1".to_string(), "jf-user-2".to_string()];
+        let recheck = reader
+            .recheck_items(&["jf-ep-1".to_string()], &participants)
+            .await
+            .expect("the episode re-checks")
+            .remove("jf-ep-1")
+            .expect("the episode is answered");
+        assert_eq!(recheck.parent_item_ids, vec!["jf-series-1", "jf-season-1"]);
+        let before = server.received_requests().await.expect("recorded").len();
+
+        let favourites = reader
+            .recheck_favorites(&recheck.parent_item_ids, &participants)
+            .await
+            .expect("the parents re-check");
+        assert_eq!(
+            favourites,
+            BTreeMap::from([("jf-series-1".to_string(), vec!["jf-user-1".to_string()])]),
+            "only participants are read; the unlinked user's season favourite is not theirs"
+        );
+        let requests = server.received_requests().await.expect("recorded");
+        // Reads run concurrently, so their order is not the point.
+        let mut parent_reads: Vec<&str> = requests[before..]
+            .iter()
+            .map(|request| request.url.path())
+            .collect();
+        parent_reads.sort_unstable();
+        assert_eq!(
+            parent_reads,
+            vec!["/Users/jf-user-1/Items", "/Users/jf-user-2/Items"],
+            "one batched read per participant"
         );
     }
 

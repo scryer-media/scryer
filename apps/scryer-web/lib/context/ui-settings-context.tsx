@@ -33,6 +33,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   tableColumns: [],
   catalogViews: [],
   dashboardLayouts: [],
+  tours: [],
 };
 
 type AppearanceChange = Partial<
@@ -76,6 +77,7 @@ function normalizeUiSettings(
     tableColumns: settings?.tableColumns ?? [],
     catalogViews: settings?.catalogViews ?? [],
     dashboardLayouts: settings?.dashboardLayouts ?? [],
+    tours: settings?.tours ?? [],
   };
 }
 

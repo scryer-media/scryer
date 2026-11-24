@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   intervalToSeconds,
+  scheduleDescriptionKey,
   scheduleForKind,
   splitIntervalSeconds,
   toggleWeekday,
@@ -88,4 +89,46 @@ test("switching kind keeps the shared time of day", () => {
     days: null,
     expression: null,
   });
+});
+
+test("a schedule is worded in the largest whole interval unit, singular for one", () => {
+  const interval = (everySeconds: number) =>
+    scheduleDescriptionKey({
+      ...scheduleForKind("INTERVAL", null),
+      everySeconds,
+    });
+  assert.deepEqual(interval(8 * 3600), {
+    key: "script.schedule.describe.everyHours",
+    values: { count: 8 },
+  });
+  assert.deepEqual(interval(3600), {
+    key: "script.schedule.describe.everyHour",
+    values: {},
+  });
+  assert.deepEqual(interval(5_400), {
+    key: "script.schedule.describe.everyMinutes",
+    values: { count: 90 },
+  });
+  assert.deepEqual(interval(172_800), {
+    key: "script.schedule.describe.everyDays",
+    values: { count: 2 },
+  });
+});
+
+test("weekly wording carries its days in week order and cron is left to the expression", () => {
+  assert.deepEqual(
+    scheduleDescriptionKey({
+      kind: "WEEKLY",
+      everySeconds: null,
+      timeLocal: "06:15",
+      days: ["SUNDAY", "MONDAY"],
+      expression: null,
+    }),
+    {
+      key: "script.schedule.describe.weekly",
+      values: { time: "06:15" },
+      days: ["MONDAY", "SUNDAY"],
+    },
+  );
+  assert.equal(scheduleDescriptionKey(scheduleForKind("CRON", null)), null);
 });

@@ -14,6 +14,7 @@ import {
   automaticSearchOutcomeKey,
   shouldRestoreAutomaticSearch,
 } from "@/lib/utils/automatic-search";
+import { ruleImportRunFailureText } from "@/lib/utils/external-rule-import";
 import {
   activeJobRunsQuery,
   jobRunsQuery,
@@ -24,6 +25,12 @@ import { useSessionUser } from "@/lib/hooks/use-auth";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { normalizeApplicationUpgradeProgress } from "@/lib/utils/application-upgrade-progress";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
+import { useBackoffPoller } from "@/lib/hooks/use-backoff-poller";
+import {
+  judgeTrackedJobRuns,
+  trackedJobRun,
+  type TrackedJobRun,
+} from "@/lib/utils/tracked-job-runs";
 import {
   isTerminalJobRunStatus,
   libraryDeletionProgress,
@@ -33,8 +40,10 @@ import {
 import type { JobKey, JobRun } from "@/lib/types";
 
 const TERMINAL_TOAST_DURATION_MS = 6_000;
-const INTERACTIVE_JOB_RECONCILE_DELAYS_MS = [1_000, 5_000, 15_000] as const;
-const INTERACTIVE_JOB_RECONCILE_INTERVAL_MS = 30_000;
+// Waits between polls for runs this page waits on; the last one repeats.
+const INTERACTIVE_JOB_RECONCILE_DELAYS_MS = [
+  1_000, 5_000, 15_000, 30_000,
+] as const;
 const INTERACTIVE_JOB_RECONCILE_LIMIT = 25;
 const APPLICATION_UPGRADE_RUN_STORAGE_KEY = "scryer:application-upgrade-run";
 
@@ -52,8 +61,12 @@ const JobRunToastContext = React.createContext<JobRunToastContextValue | null>(
   null,
 );
 
-function usesDedicatedLibraryScanToast(jobKey: JobKey): boolean {
+// Jobs whose progress and outcome are shown where they were started, so the
+// shared job toast stays out of the way: library scans have their own toast,
+// and a grab reports on the button or dialog that asked for it.
+function reportsOutsideJobToast(jobKey: JobKey): boolean {
   return (
+    jobKey === "RELEASE_GRAB" ||
     jobKey === "LIBRARY_SCAN_MOVIES" ||
     jobKey === "LIBRARY_SCAN_SERIES" ||
     jobKey === "LIBRARY_SCAN_ANIME" ||
@@ -61,6 +74,13 @@ function usesDedicatedLibraryScanToast(jobKey: JobKey): boolean {
     jobKey === "BACKGROUND_LIBRARY_REFRESH_SERIES" ||
     jobKey === "BACKGROUND_LIBRARY_REFRESH_ANIME"
   );
+}
+
+// Runs pages show as busy while they are active (a search button spins while
+// its title is searched), so they are followed until they end even when this
+// page did not start them: a missed end must not leave a button spinning.
+function followsUntilEnded(run: JobRun): boolean {
+  return run.jobKey === "ACQUISITION_SEARCH";
 }
 
 function readRememberedApplicationUpgradeRunId(): string | null {
@@ -177,12 +197,10 @@ export function JobRunProvider({
   const dismissTimersRef = React.useRef<
     Record<string, ReturnType<typeof setTimeout>>
   >({});
-  const reconcileTimersRef = React.useRef<
-    Record<string, ReturnType<typeof setTimeout>[]>
-  >({});
-  const reconcileIntervalsRef = React.useRef<
-    Record<string, ReturnType<typeof setInterval>>
-  >({});
+  // Runs this page started and is waiting on. The job stream normally ends
+  // them; the poll below corrects a missed end and lets go of runs it can no
+  // longer see, so nothing waits on them for ever.
+  const trackedRunsRef = React.useRef(new Map<string, TrackedJobRun>());
   const interactiveRunIdsRef = React.useRef(new Set<string>());
   const terminalCallbacksRef = React.useRef<
     Record<string, Set<(run: JobRun) => void>>
@@ -200,84 +218,97 @@ export function JobRunProvider({
         if (oldest) terminalSnapshotsRef.current.delete(oldest);
       }
     }
+    const tracked = trackedRunsRef.current.get(run.id);
+    if (tracked) {
+      tracked.run = preferJobRunSnapshot(tracked.run, accepted);
+    }
     setRunsById((current) => ({
       ...current,
       [run.id]: preferJobRunSnapshot(current[run.id], accepted),
     }));
   }, []);
 
-  const clearReconcileTimers = React.useCallback((runId: string) => {
-    const timers = reconcileTimersRef.current[runId];
-    if (timers) {
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
-      delete reconcileTimersRef.current[runId];
-    }
-    const interval = reconcileIntervalsRef.current[runId];
-    if (interval) {
-      clearInterval(interval);
-      delete reconcileIntervalsRef.current[runId];
-    }
+  const untrackRun = React.useCallback((runId: string) => {
+    trackedRunsRef.current.delete(runId);
   }, []);
 
-  const reconcileInteractiveRun = React.useCallback(
-    async (run: JobRun) => {
-      if (!interactiveRunIdsRef.current.has(run.id)) {
-        clearReconcileTimers(run.id);
-        return;
-      }
-
-      try {
-        const { data, error } = await client
-          .query<{ jobRuns?: unknown[] }>(
-            jobRunsQuery,
-            { jobKey: run.jobKey, limit: INTERACTIVE_JOB_RECONCILE_LIMIT },
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) {
-          throw error;
-        }
-
-        const authoritativeRun = (
-          Array.isArray(data?.jobRuns) ? data.jobRuns : []
-        )
-          .map(normalizeJobRun)
-          .find((candidate): candidate is JobRun => candidate?.id === run.id);
-        if (!authoritativeRun) {
-          return;
-        }
-
-        upsertRun(authoritativeRun);
-        if (isTerminalJobRunStatus(authoritativeRun.status)) {
-          clearReconcileTimers(authoritativeRun.id);
-        }
-      } catch (error) {
-        console.error("[job-runs] failed to reconcile interactive job:", error);
-      }
+  // Stop waiting on a run that cannot be followed any more. Whoever waits on
+  // it is handed the last state seen, which has not ended.
+  const releaseTrackedRun = React.useCallback(
+    (run: JobRun) => {
+      untrackRun(run.id);
+      interactiveRunIdsRef.current.delete(run.id);
+      toast.dismiss(run.id);
+      setRunsById((current) => {
+        if (!(run.id in current)) return current;
+        const next = { ...current };
+        delete next[run.id];
+        return next;
+      });
+      const callbacks = terminalCallbacksRef.current[run.id];
+      delete terminalCallbacksRef.current[run.id];
+      callbacks?.forEach((callback) => callback(run));
     },
-    [clearReconcileTimers, client, upsertRun],
+    [untrackRun],
   );
 
-  const scheduleInteractiveRunReconciliation = React.useCallback(
-    (run: JobRun) => {
-      clearReconcileTimers(run.id);
-      if (isTerminalJobRunStatus(run.status)) {
-        return;
-      }
+  const reconcileTrackedRuns = React.useCallback(async (): Promise<boolean> => {
+    const tracked = trackedRunsRef.current;
+    if (tracked.size === 0) return false;
 
-      reconcileTimersRef.current[run.id] =
-        INTERACTIVE_JOB_RECONCILE_DELAYS_MS.map((delayMs) =>
-          setTimeout(() => {
-            void reconcileInteractiveRun(run);
-          }, delayMs),
-        );
-      reconcileIntervalsRef.current[run.id] = setInterval(() => {
-        void reconcileInteractiveRun(run);
-      }, INTERACTIVE_JOB_RECONCILE_INTERVAL_MS);
+    const jobKeys = [
+      ...new Set([...tracked.values()].map((entry) => entry.run.jobKey)),
+    ];
+    const listedByJobKey = new Map<JobKey, JobRun[]>();
+    await Promise.all(
+      jobKeys.map(async (jobKey) => {
+        try {
+          const { data, error } = await client
+            .query<{ jobRuns?: unknown[] }>(
+              jobRunsQuery,
+              { jobKey, limit: INTERACTIVE_JOB_RECONCILE_LIMIT },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          if (error) throw error;
+          listedByJobKey.set(
+            jobKey,
+            (Array.isArray(data?.jobRuns) ? data.jobRuns : [])
+              .map(normalizeJobRun)
+              .filter((run): run is JobRun => run !== null),
+          );
+        } catch (error) {
+          console.error(
+            "[job-runs] failed to reconcile interactive job:",
+            error,
+          );
+        }
+      }),
+    );
+
+    const { found, released } = judgeTrackedJobRuns(tracked, listedByJobKey);
+    for (const run of found) upsertRun(run);
+    for (const run of released) releaseTrackedRun(run);
+    return tracked.size > 0;
+  }, [client, releaseTrackedRun, upsertRun]);
+
+  // Stops by itself once a poll finds nothing left to follow, pauses while
+  // the tab is hidden, and stops when the provider unmounts.
+  const reconcilePoller = useBackoffPoller(
+    INTERACTIVE_JOB_RECONCILE_DELAYS_MS,
+    reconcileTrackedRuns,
+  );
+
+  // Follow a run until it ends. A run already followed keeps its place in
+  // the waits, so progress events do not bring the next poll forward.
+  const trackRun = React.useCallback(
+    (run: JobRun) => {
+      if (isTerminalJobRunStatus(run.status)) return;
+      if (trackedRunsRef.current.has(run.id)) return;
+      trackedRunsRef.current.set(run.id, trackedJobRun(run));
+      reconcilePoller.restart();
     },
-    [clearReconcileTimers, reconcileInteractiveRun],
+    [reconcilePoller],
   );
 
   const registerInteractiveJobRun = React.useCallback(
@@ -289,7 +320,7 @@ export function JobRunProvider({
       interactiveRunIdsRef.current.add(run.id);
       rememberApplicationUpgradeRun(run);
       upsertRun(run);
-      scheduleInteractiveRunReconciliation(run);
+      trackRun(run);
 
       if (!onTerminal) {
         return () => {};
@@ -309,7 +340,7 @@ export function JobRunProvider({
         }
       };
     },
-    [scheduleInteractiveRunReconciliation, upsertRun],
+    [trackRun, upsertRun],
   );
 
   React.useEffect(() => {
@@ -341,6 +372,7 @@ export function JobRunProvider({
           registerInteractiveJobRun(run);
         } else {
           upsertRun(run);
+          if (followsUntilEnded(run)) trackRun(run);
         }
       }
     })();
@@ -348,7 +380,7 @@ export function JobRunProvider({
     return () => {
       cancelled = true;
     };
-  }, [client, enabled, registerInteractiveJobRun, upsertRun]);
+  }, [client, enabled, registerInteractiveJobRun, trackRun, upsertRun]);
 
   React.useEffect(() => {
     if (!enabled) {
@@ -385,7 +417,7 @@ export function JobRunProvider({
 
         interactiveRunIdsRef.current.add(run.id);
         upsertRun(run);
-        scheduleInteractiveRunReconciliation(run);
+        trackRun(run);
       } catch (error) {
         console.error(
           "[job-runs] failed to reconcile application upgrade:",
@@ -397,7 +429,7 @@ export function JobRunProvider({
     return () => {
       cancelled = true;
     };
-  }, [client, enabled, scheduleInteractiveRunReconciliation, upsertRun]);
+  }, [client, enabled, trackRun, upsertRun]);
 
   useDeferredWsSubscription<{ data?: { jobRunEvents?: unknown } }>({
     enabled,
@@ -407,6 +439,7 @@ export function JobRunProvider({
       const normalized = normalizeJobRun(result.data?.jobRunEvents);
       if (normalized) {
         upsertRun(normalized);
+        if (followsUntilEnded(normalized)) trackRun(normalized);
       }
     },
     onError(error) {
@@ -419,7 +452,7 @@ export function JobRunProvider({
 
     for (const run of Object.values(runsById)) {
       if (isTerminalJobRunStatus(run.status)) {
-        clearReconcileTimers(run.id);
+        untrackRun(run.id);
         forgetApplicationUpgradeRun(run);
         const callbacks = terminalCallbacksRef.current[run.id];
         delete terminalCallbacksRef.current[run.id];
@@ -428,7 +461,7 @@ export function JobRunProvider({
 
       const isInteractiveRun = interactiveRunIdsRef.current.has(run.id);
       const shouldRender =
-        isInteractiveRun && !usesDedicatedLibraryScanToast(run.jobKey);
+        isInteractiveRun && !reportsOutsideJobToast(run.jobKey);
 
       if (!shouldRender) {
         if (isTerminalJobRunStatus(run.status)) {
@@ -483,6 +516,7 @@ export function JobRunProvider({
       const searchProgress = acquisitionProgress(run);
       const description =
         progressDescription ??
+        ruleImportRunFailureText(run, t) ??
         run.errorText ??
         (outcomeKey
           ? t(outcomeKey, {
@@ -559,12 +593,17 @@ export function JobRunProvider({
         return next;
       });
     }
+    // Nothing left to follow: no poll waits for the next tick.
+    if (trackedRunsRef.current.size === 0) {
+      reconcilePoller.stop();
+    }
   }, [
     canCancelAcquisitionSearch,
     cancelAcquisitionSearch,
-    clearReconcileTimers,
+    reconcilePoller,
     runsById,
     t,
+    untrackRun,
   ]);
 
   React.useEffect(
@@ -572,17 +611,16 @@ export function JobRunProvider({
       for (const timer of Object.values(dismissTimersRef.current)) {
         clearTimeout(timer);
       }
-      for (const timers of Object.values(reconcileTimersRef.current)) {
-        for (const timer of timers) {
-          clearTimeout(timer);
-        }
-      }
-      reconcileTimersRef.current = {};
-      for (const interval of Object.values(reconcileIntervalsRef.current)) {
-        clearInterval(interval);
-      }
-      reconcileIntervalsRef.current = {};
+      dismissTimersRef.current = {};
+      // Whoever still waits is handed the last state seen, so their wait
+      // ends with the provider instead of never.
+      const callbacksByRun = terminalCallbacksRef.current;
       terminalCallbacksRef.current = {};
+      for (const [runId, callbacks] of Object.entries(callbacksByRun)) {
+        const run = trackedRunsRef.current.get(runId)?.run;
+        if (run) callbacks.forEach((callback) => callback(run));
+      }
+      trackedRunsRef.current.clear();
     },
     [],
   );

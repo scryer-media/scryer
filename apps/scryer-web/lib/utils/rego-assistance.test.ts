@@ -12,6 +12,7 @@ import {
   regoFields,
   regoFieldCompletions,
   regoCompletionContext,
+  regoHelpers,
   normalizeRegoPath,
   REGO_INDEX_SOURCE,
   type RegoFamily,
@@ -36,7 +37,7 @@ function repoRoot(): string {
   return dir;
 }
 
-for (const family of ["release", "request", "maintenance"] as RegoFamily[]) {
+for (const family of ["release", "request", "lifecycle"] as RegoFamily[]) {
   test(`${family} completions use the exact backend contract`, () => {
     const file = family === "release" ? "rule" : family;
     const backend = JSON.parse(
@@ -98,7 +99,7 @@ test("scoring fields, nullable group, arrays and family isolation", () => {
     );
   }
   assert.deepEqual(regoFieldCompletions("request", "input.release"), []);
-  assert.deepEqual(regoFieldCompletions("maintenance", "input.requester"), []);
+  assert.deepEqual(regoFieldCompletions("lifecycle", "input.requester"), []);
   assert.deepEqual(regoFieldCompletions("release", "input.release.extra"), []);
   assert.ok(
     regoFields("release").find((f) => f.path === "input.file")?.availabilityKey,
@@ -178,11 +179,15 @@ test("every field and catalog item has a localized description", () => {
     new URL("../i18n/locales/en.ts", import.meta.url),
     "utf8",
   );
-  for (const family of ["release", "request", "maintenance"] as RegoFamily[]) {
+  for (const family of ["release", "request", "lifecycle"] as RegoFamily[]) {
     for (const field of regoFields(family))
       assert.ok(english.includes(`"${field.descKey}"`), field.descKey);
   }
-  for (const item of [...regoCatalog.helpers, ...regoCatalog.snippets])
+  for (const family of ["release", "request", "lifecycle"] as RegoFamily[]) {
+    for (const helper of regoHelpers(family))
+      assert.ok(english.includes(`"${helper.descKey}"`), helper.descKey);
+  }
+  for (const item of regoCatalog.snippets)
     assert.ok(english.includes(`"${item.descKey}"`), item.descKey);
 });
 

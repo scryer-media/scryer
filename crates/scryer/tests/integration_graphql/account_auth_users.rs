@@ -1022,6 +1022,18 @@ async fn graphql_settings_mutations_require_config_step_up() {
             }),
         ),
         (
+            "startExternalRuleImport",
+            "startExternalRuleImport",
+            r#"mutation($requestKey: String!, $input: ExternalRuleImportInput!) { startExternalRuleImport(requestKey: $requestKey, input: $input) { id } }"#,
+            json!({
+                "requestKey": "step-up-rule-import",
+                "input": {
+                    "source": "MAINTAINERR",
+                    "baseUrl": "http://127.0.0.1:9"
+                }
+            }),
+        ),
+        (
             "clearExternalImportSetupSecretDraft",
             "clearExternalImportSetupSecretDraft",
             r#"mutation { clearExternalImportSetupSecretDraft { cleared } }"#,
@@ -1893,6 +1905,97 @@ async fn graphql_set_user_login_enabled_updates_status_and_auth_epoch() {
     assert_eq!(ctx.auth_runtime.snapshot().epoch, previous_epoch + 1);
 }
 
+/// Runs `query` the way an operation on an open WebSocket does: with the
+/// user, epoch and revocation watch the connection captured when it opened.
+async fn ws_connection_exec(
+    ctx: &TestContext,
+    query: &str,
+    user: &User,
+    revocation: &scryer_interface::context::UserRevocationWatch,
+) -> Value {
+    let request = async_graphql::Request::new(query)
+        .data(user.clone())
+        .data(scryer_interface::context::ConnectionAuthEpoch(
+            ctx.auth_runtime.snapshot().epoch,
+        ))
+        .data(scryer_interface::context::ConnectionUserRevocation(
+            revocation.clone(),
+        ));
+    serde_json::to_value(ctx.schema.execute(request).await).expect("serialize gql response")
+}
+
+#[tokio::test]
+async fn permission_edits_and_deletion_revoke_only_the_edited_users_connections() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let library_id = scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Movie);
+    let mut users = Vec::new();
+    for username in [
+        "revoke-app-user",
+        "revoke-library-user",
+        "revoke-deleted-user",
+    ] {
+        let user = ctx
+            .app
+            .create_user(
+                &admin,
+                username.to_string(),
+                "s3cr3t!!".to_string(),
+                AppPermissionMask::NONE,
+                vec![],
+            )
+            .await
+            .expect("create user");
+        users.push(ctx.app.attach_user_authorization(user).await.unwrap());
+    }
+    let epoch = ctx.auth_runtime.snapshot().epoch;
+    let mark = ctx.auth_runtime.user_revocation_mark();
+    let watches = users
+        .iter()
+        .map(|user| ctx.auth_runtime.watch_user_revocation(&user.id, mark))
+        .collect::<Vec<_>>();
+    let admin_watch = ctx.auth_runtime.watch_user_revocation(&admin.id, mark);
+    for (user, watch) in users.iter().zip(&watches) {
+        let body = ws_connection_exec(&ctx, "{ me { id } }", user, watch).await;
+        assert_eq!(body["data"]["me"]["id"], user.id.as_str(), "{body}");
+    }
+
+    let edits = [
+        format!(
+            r#"mutation {{ setUserAppPermissions(input: {{ userId: "{}", permissions: [] }}) {{ id }} }}"#,
+            users[0].id
+        ),
+        format!(
+            r#"mutation {{ setUserLibraryPermissions(input: {{ userId: "{}", grants: [{{ libraryId: "{library_id}", permissions: [VIEW] }}] }}) {{ id }} }}"#,
+            users[1].id
+        ),
+        format!(
+            r#"mutation {{ deleteUser(id: "{}") {{ id }} }}"#,
+            users[2].id
+        ),
+    ];
+    for (index, edit) in edits.iter().enumerate() {
+        assert!(!watches[index].is_revoked());
+        let body = schema_exec(&ctx, edit, Some(admin.clone())).await;
+        assert_no_errors(&body);
+        assert!(watches[index].is_revoked(), "edit {index} revokes its user");
+        for later in &watches[index + 1..] {
+            assert!(!later.is_revoked(), "edit {index} leaves other users alone");
+        }
+        let stale = ws_connection_exec(&ctx, "{ me { id } }", &users[index], &watches[index]).await;
+        assert!(
+            stale["data"]["me"].is_null(),
+            "the old connection cannot run an operation as the edited user: {stale}"
+        );
+    }
+    assert!(!admin_watch.is_revoked());
+    assert_eq!(
+        ctx.auth_runtime.snapshot().epoch,
+        epoch,
+        "permission edits close no other user's connection"
+    );
+}
+
 #[tokio::test]
 async fn graphql_reset_user_mfa_clears_all_authentication_factors() {
     let ctx = TestContext::new().await;
@@ -2415,6 +2518,134 @@ async fn login_with_wrong_password_returns_error() {
         error_msg,
         "Sign-in failed. Check your sign-in details and try again."
     );
+}
+
+async fn last_sign_in(ctx: &TestContext, user_id: &str) -> Option<chrono::DateTime<Utc>> {
+    scryer_application::UserRepository::account_timestamps(&ctx.users, user_id)
+        .await
+        .expect("read account timestamps")
+        .expect("account exists")
+        .last_login_at
+}
+
+/// A password sign-in stamps the account's last sign-in time once the full
+/// session is established; the restricted token for a required password
+/// change, the requests that follow and a re-issued session do not.
+#[tokio::test]
+async fn a_password_sign_in_records_the_last_sign_in_time() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let user = ctx
+        .app
+        .create_user(
+            &admin,
+            "stamptest".to_string(),
+            "s3cr3t!!".to_string(),
+            scryer_domain::AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(last_sign_in(&ctx, &user.id).await, None);
+
+    let before = Utc::now();
+    let login_body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "stamptest", password: "s3cr3t!!" }) { token passwordChangeRequired } }"#,
+        None,
+    )
+    .await;
+    assert!(login_body["errors"].is_null(), "login: {login_body}");
+    assert_eq!(login_body["data"]["login"]["passwordChangeRequired"], true);
+    assert_eq!(
+        last_sign_in(&ctx, &user.id).await,
+        None,
+        "the restricted password-change token does not finish the sign-in"
+    );
+    let restricted = login_body["data"]["login"]["token"]
+        .as_str()
+        .expect("login token");
+
+    let changed = gql_with_token(
+        &ctx,
+        r#"mutation { completeRequiredPasswordChange(input: { password: "stamp-owned-password1" }) { token passwordChangeRequired } }"#,
+        json!({}),
+        restricted,
+    )
+    .await;
+    assert_no_errors(&changed);
+    let stamped = last_sign_in(&ctx, &user.id)
+        .await
+        .expect("finishing the sign-in records its time");
+    assert!(
+        stamped >= before - chrono::Duration::seconds(1),
+        "{stamped} is older than the sign-in at {before}"
+    );
+
+    let token = changed["data"]["completeRequiredPasswordChange"]["token"]
+        .as_str()
+        .expect("full token");
+    let me_body = gql_with_token(&ctx, "{ me { username } }", json!({}), token).await;
+    assert_no_errors(&me_body);
+    let (token_user, _) = ctx
+        .app
+        .authenticate_token_with_claims(token)
+        .await
+        .expect("token authenticates");
+    ctx.app
+        .issue_access_token(&token_user)
+        .await
+        .expect("re-issue a session");
+    assert_eq!(
+        last_sign_in(&ctx, &user.id).await,
+        Some(stamped),
+        "an authenticated request or re-issued session is not a sign-in"
+    );
+
+    let second = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "stamptest", password: "stamp-owned-password1" }) { token passwordChangeRequired } }"#,
+        None,
+    )
+    .await;
+    assert!(second["errors"].is_null(), "second login: {second}");
+    assert_eq!(second["data"]["login"]["passwordChangeRequired"], false);
+    let restamped = last_sign_in(&ctx, &user.id)
+        .await
+        .expect("the second sign-in keeps a time");
+    assert!(
+        restamped >= stamped,
+        "{restamped} went backwards from {stamped}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_sign_in_records_no_sign_in_time() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let user = ctx
+        .app
+        .create_user(
+            &admin,
+            "nostamptest".to_string(),
+            "correct_horse".to_string(),
+            scryer_domain::AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "nostamptest", password: "wrong_password" }) { token } }"#,
+        None,
+    )
+    .await;
+    assert!(
+        !body["errors"].is_null(),
+        "wrong password must fail: {body}"
+    );
+    assert_eq!(last_sign_in(&ctx, &user.id).await, None);
 }
 
 #[tokio::test]

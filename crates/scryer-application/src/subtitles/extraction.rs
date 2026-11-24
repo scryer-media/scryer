@@ -1,5 +1,4 @@
 use std::cmp::Reverse;
-use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -11,6 +10,7 @@ use scryer_plugin_sdk::{
 };
 
 use super::provider::SubtitleFile;
+use crate::disk::{Access, Disk, EntryKind, Open, Parents, Remove, Replace};
 use crate::{AppError, AppResult, ArchiveExtractorClient, ArchiveExtractorPluginProvider};
 
 const MAX_RECURSION_DEPTH: usize = 3;
@@ -248,18 +248,21 @@ async fn normalize_with_archive_plugin(
     passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
     budget: &mut SubtitleArchiveBudget,
 ) -> AppResult<Vec<ArchiveCandidate>> {
-    let temp_dir = tempfile::tempdir().map_err(|error| {
+    let disk = Disk::process();
+    let temp_dir = disk.scratch_dir("scry-sa-").await.map_err(|error| {
         AppError::Repository(format!(
             "failed to create subtitle archive scratch dir: {error}"
         ))
     })?;
     let input_name = safe_archive_filename(&file, archive_type);
     let input_path = temp_dir.path().join(input_name);
-    fs::write(&input_path, &file.content).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to write subtitle archive scratch file: {error}"
-        ))
-    })?;
+    disk.write(&input_path, file.content, Replace::Never, Access::Default)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to write subtitle archive scratch file: {error}"
+            ))
+        })?;
     let mut candidates = passwords.iter();
     let mut password = None;
     let mut attempt = 0usize;
@@ -272,9 +275,11 @@ async fn normalize_with_archive_plugin(
             ));
         }
         let output_dir = temp_dir.path().join(format!("output-{attempt}"));
-        fs::create_dir(&output_dir).map_err(|_| {
-            AppError::Repository("failed to create subtitle archive output directory".into())
-        })?;
+        disk.create_dir(&output_dir, Parents::MustExist)
+            .await
+            .map_err(|_| {
+                AppError::Repository("failed to create subtitle archive output directory".into())
+            })?;
         let (response, elapsed) = client
             .process_with_budget(
                 ArchivePluginProcessRequest {
@@ -305,7 +310,7 @@ async fn normalize_with_archive_plugin(
         {
             // This directory belongs exclusively to this rejected attempt.
             // Retaining partial plaintext members would multiply scratch use.
-            fs::remove_dir_all(&output_dir).map_err(|_| {
+            disk.remove(&output_dir, Remove::Tree).await.map_err(|_| {
                 AppError::Repository("failed to clear rejected subtitle extraction output".into())
             })?;
             password = Some(candidate.value().to_string());
@@ -520,33 +525,28 @@ fn collect_plugin_output_candidates(output_dir: &Path) -> AppResult<Vec<ArchiveC
     let mut expanded_bytes = 0usize;
     let mut entry_count = 0usize;
     let mut stack = vec![output_dir.to_path_buf()];
+    let disk = Disk::process();
 
     while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).map_err(|error| {
+        for entry in disk.list_blocking(&dir).map_err(|error| {
             AppError::Repository(format!(
                 "failed to read archive plugin output directory '{}': {error}",
                 dir.display()
             ))
         })? {
-            let entry = entry.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to read archive plugin output entry: {error}"
-                ))
-            })?;
-            let file_type = entry.file_type().map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to read archive plugin output file type: {error}"
-                ))
-            })?;
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() {
-                stack.push(entry.path());
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
+            match entry.reading.kind() {
+                Some(EntryKind::File) => {}
+                Some(EntryKind::Directory) => {
+                    stack.push(entry.path);
+                    continue;
+                }
+                // Links and special files are skipped.
+                Some(EntryKind::Symlink | EntryKind::Other) => continue,
+                None => {
+                    return Err(AppError::Repository(
+                        "failed to read archive plugin output file type".to_string(),
+                    ));
+                }
             }
 
             entry_count += 1;
@@ -557,7 +557,7 @@ fn collect_plugin_output_candidates(output_dir: &Path) -> AppResult<Vec<ArchiveC
                 ));
             }
 
-            let path = entry.path();
+            let path = entry.path;
             let relative = path.strip_prefix(output_dir).map_err(|_| {
                 AppError::validation_refused(
                     crate::error_reasons::subtitles::ARCHIVE_PLUGIN_OUTPUT_ESCAPED_OUTPUT_ROOT,
@@ -572,7 +572,7 @@ fn collect_plugin_output_candidates(output_dir: &Path) -> AppResult<Vec<ArchiveC
                 continue;
             }
 
-            let mut file = File::open(&path).map_err(|error| {
+            let mut file = disk.open_blocking(&path, Open::read()).map_err(|error| {
                 AppError::Repository(format!(
                     "failed to open archive plugin subtitle output '{}': {error}",
                     path.display()
@@ -899,6 +899,7 @@ fn checked_expanded_size(current: usize, next: usize) -> AppResult<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 

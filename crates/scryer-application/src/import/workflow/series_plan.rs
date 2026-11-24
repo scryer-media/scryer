@@ -1573,6 +1573,7 @@ fn member_names_different_title(
     if parsed_stem.episode.is_some()
         && has_usable_release_title_signal(parsed_stem)
         && !parsed_title_matches_catalog_title(parsed_stem, title)
+        && !parsed_title_romanizes_catalog_name(parsed_stem, title)
     {
         return true;
     }
@@ -1595,6 +1596,7 @@ fn member_names_different_title(
             if word_count >= 2
                 && has_usable_release_title_signal(&parsed_parent)
                 && !parsed_title_matches_catalog_title(&parsed_parent, title)
+                && !parsed_title_romanizes_catalog_name(&parsed_parent, title)
             {
                 return true;
             }
@@ -1603,6 +1605,48 @@ fn member_names_different_title(
         current = parent.parent();
     }
     false
+}
+
+/// Whether the name the member carries is one of the title's own names read
+/// through a registered romanization rule set: a variant romaji spelling of a
+/// name tagged as Japanese romaji, or the Latin transliteration of a Russian
+/// name. Each name is read in its own language: a tagged alias under its tag,
+/// the canonical name and plain aliases under the title's metadata language,
+/// and a name without one under the language its script alone settles.
+///
+/// The member's name is its whole observed title as written, the form every
+/// other spelling comparison reads, because the numbers guard reads letter
+/// case. The submission already identified the series, so no competitor check
+/// runs here: this only stops the member being called a different title.
+fn parsed_title_romanizes_catalog_name(
+    parsed: &crate::ParsedReleaseMetadata,
+    title: &scryer_domain::Title,
+) -> bool {
+    use scryer_domain::title_spelling::{
+        SpellingEquivalence, compare_title_spelling, title_numbers, untagged_name_language,
+    };
+    let (observed_names, _) =
+        crate::title_matching::relaxed::neutral_spelling_forms(&parsed.raw_title);
+    if observed_names.is_empty() {
+        return false;
+    }
+    let identity = crate::title_matching::relaxed::SpellingIdentity::new(title);
+    observed_names.iter().any(|(observed, observed_raw)| {
+        identity.names.iter().any(|name| {
+            let language = name
+                .language
+                .as_deref()
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty() && !tag.eq_ignore_ascii_case("und"))
+                .or_else(|| untagged_name_language(&name.raw, None));
+            title_numbers(observed_raw) == title_numbers(&name.raw)
+                && matches!(
+                    compare_title_spelling(observed, &name.text, language),
+                    Some(SpellingEquivalence::Locale(tag))
+                        if scryer_domain::title_normalization::is_romanization_tag(tag)
+                )
+        })
+    })
 }
 
 fn has_disc_layout_ancestor(source_root: &Path, source_path: &Path) -> bool {
@@ -1646,6 +1690,68 @@ fn is_disc_layout_directory(name: &str) -> bool {
 mod series_plan_tests {
     use super::*;
     use chrono::Utc;
+
+    #[test]
+    fn dotted_season_episode_set_members_resolve_one_to_one() {
+        let mut title = scene_pack_title();
+        title.name = "Зарвик".into();
+        title.year = Some(2026);
+        let catalog: Vec<_> = (1..=16)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let evidence = ReleaseEvidence::ScryerSubmission {
+            title_id: title.id.clone(),
+            facet: "series".into(),
+            source_title: Some("Зарвик".into()),
+            observed_release_name: None,
+            release_size_bytes: None,
+            release_listing_json: None,
+            purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+            scope: SubmissionScope::EpisodeSet {
+                episode_ids: catalog.iter().map(|ep| ep.id.clone()).collect(),
+            },
+        };
+        // An unnumbered release is not a verified pack. Its durable episode
+        // set bounds membership but cannot identify any individual file.
+        assert!(matches!(
+            verified_episode_pack(&evidence, &title, &catalog, None, None, None),
+            EpisodePackVerification::NotPack
+        ));
+        for n in 1..=16 {
+            let member = format!("Zarvik.S01.E{n:02}.2026.WEB-DL.1080p.GRP.mkv");
+            let parsed = build_augmented_episode_import_metadata_for_title(
+                Path::new(&member),
+                &evidence,
+                &title,
+                true,
+            );
+            let episode = parsed.episode.expect("file episode identity");
+            let resolved = catalog_episodes_for_season_numbers(
+                &catalog,
+                episode.season.expect("season"),
+                &episode.episode_numbers,
+            )
+            .expect("catalog members");
+            assert_eq!(
+                resolved.iter().map(|ep| ep.id.as_str()).collect::<Vec<_>>(),
+                vec![format!("ep-{n}")],
+                "{member}: {episode:?}"
+            );
+        }
+        let parsed = build_augmented_episode_import_metadata_for_title(
+            Path::new("Zarvik.S01.E01E02.2026.WEB-DL.1080p.GRP.mkv"),
+            &evidence,
+            &title,
+            true,
+        );
+        assert_eq!(
+            parsed
+                .episode
+                .expect("real multi-episode file")
+                .episode_numbers,
+            vec![1, 2]
+        );
+    }
 
     fn episode_scoped_pack_evidence(release_name: &str) -> ReleaseEvidence {
         ReleaseEvidence::ScryerSubmission {
@@ -1743,6 +1849,171 @@ mod series_plan_tests {
                 "{filename}: {draft:?}"
             );
         }
+    }
+
+    fn cyrillic_title(name: &str, language: Option<&str>) -> scryer_domain::Title {
+        let mut title = scene_pack_title();
+        title.name = name.into();
+        title.year = Some(2026);
+        title.metadata_language = language.map(str::to_string);
+        title
+    }
+
+    fn member_draft(title: &scryer_domain::Title, file_name: &str) -> PlannedMemberDraft {
+        let catalog: Vec<_> = (1..=12)
+            .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
+            .collect();
+        let path = Path::new("/downloads/pack").join(file_name);
+        plan_episode_pack_member(
+            title,
+            Path::new("/downloads/pack"),
+            &path,
+            &catalog,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn resolved_ids(draft: &PlannedMemberDraft) -> Option<Vec<String>> {
+        match draft {
+            PlannedMemberDraft::Resolved(episodes) => {
+                Some(episodes.iter().map(|episode| episode.id.clone()).collect())
+            }
+            _ => None,
+        }
+    }
+
+    fn is_title_mismatch(draft: &PlannedMemberDraft) -> bool {
+        matches!(
+            draft,
+            PlannedMemberDraft::Hold {
+                reason_code: "member_title_mismatch",
+                ..
+            }
+        )
+    }
+
+    #[test]
+    fn latin_members_of_a_russian_title_resolve_to_their_own_episodes() {
+        for (name, written) in [
+            ("ИИскра", "IIskra"),
+            ("Жухарь в Ночи", "Zhukhar.v.Nochi"),
+            ("Тихий Чащук", "Tikhiy.Chashchuk"),
+        ] {
+            for language in ["ru", "rus", "ru-RU"] {
+                let title = cyrillic_title(name, Some(language));
+                for n in [1, 9, 12] {
+                    let file = format!("{written}.S01E{n:02}.2026.WEB-DL.1080p-GRP.mkv");
+                    let draft = member_draft(&title, &file);
+                    assert_eq!(
+                        resolved_ids(&draft),
+                        Some(vec![format!("ep-{n}")]),
+                        "{file} under {language}: {draft:?}"
+                    );
+                }
+            }
+        }
+        // A Russian tagged alias of a title named in another language.
+        let mut title = scene_pack_title();
+        title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+            name: "ИИскра".into(),
+            language: "ru".into(),
+            country: None,
+        }];
+        let draft = member_draft(&title, "IIskra.S01E03.2026.WEB-DL.1080p-GRP.mkv");
+        assert_eq!(
+            resolved_ids(&draft),
+            Some(vec!["ep-3".to_string()]),
+            "{draft:?}"
+        );
+        // And a pack folder named the same way is not a different title.
+        let title = cyrillic_title("Жухарь в Ночи", Some("ru"));
+        let draft = member_draft(
+            &title,
+            "Zhukhar.v.Nochi.S01.2026.WEB-DL.1080p-GRP/Zhukhar.v.Nochi.S01E04.2026.WEB-DL.1080p-GRP.mkv",
+        );
+        assert_eq!(
+            resolved_ids(&draft),
+            Some(vec!["ep-4".to_string()]),
+            "{draft:?}"
+        );
+    }
+
+    #[test]
+    fn a_member_that_is_not_the_russian_name_is_still_a_different_title() {
+        let title = cyrillic_title("ИИскра", Some("ru"));
+        for file in [
+            // An extra title word, before or after.
+            "IIskra.Nochi.S01E09.WEB-DL.1080p-GRP.mkv",
+            "Novaya.IIskra.S01E09.WEB-DL.1080p-GRP.mkv",
+            // A different name, and a name one letter away.
+            "Zhukhar.S01E09.2026.WEB-DL.1080p-GRP.mkv",
+            "Iskra.S01E09.2026.WEB-DL.1080p-GRP.mkv",
+            // A sequel number the catalog name does not carry.
+            "IIskra.2.S01E09.WEB-DL.1080p-GRP.mkv",
+        ] {
+            let draft = member_draft(&title, file);
+            assert!(is_title_mismatch(&draft), "{file}: {draft:?}");
+        }
+        // Another transliteration of the same letters is not folded.
+        let title = cyrillic_title("Жухарь", Some("ru"));
+        for file in [
+            "Zhuhar.S01E09.2026.WEB-DL.1080p-GRP.mkv",
+            "Zhuxar.S01E09.2026.WEB-DL.1080p-GRP.mkv",
+        ] {
+            let draft = member_draft(&title, file);
+            assert!(is_title_mismatch(&draft), "{file}: {draft:?}");
+        }
+        assert_eq!(
+            resolved_ids(&member_draft(
+                &title,
+                "Zhukhar.S01E09.2026.WEB-DL.1080p-GRP.mkv"
+            )),
+            Some(vec!["ep-9".to_string()])
+        );
+        // A catalog name mixing scripts, or holding a letter outside the
+        // Russian alphabet, has no transliteration to agree with.
+        for (name, file) in [
+            ("ИИскра Show", "IIskra.Show.S01E09.WEB-DL.1080p-GRP.mkv"),
+            ("Їскра", "Iskra.S01E09.2026.WEB-DL.1080p-GRP.mkv"),
+            ("Іскра", "Iskra.S01E09.2026.WEB-DL.1080p-GRP.mkv"),
+        ] {
+            let draft = member_draft(&cyrillic_title(name, Some("ru")), file);
+            assert!(is_title_mismatch(&draft), "{name} / {file}: {draft:?}");
+        }
+        // Only a name the catalog marks as Russian is read this way.
+        for language in [None, Some("uk"), Some("bg"), Some("en")] {
+            let draft = member_draft(
+                &cyrillic_title("ИИскра", language),
+                "IIskra.S01E09.2026.WEB-DL.1080p-GRP.mkv",
+            );
+            assert!(is_title_mismatch(&draft), "{language:?}: {draft:?}");
+        }
+    }
+
+    #[test]
+    fn a_variant_romaji_member_of_a_japanese_romaji_name_is_not_a_different_title() {
+        let mut title = scene_pack_title();
+        title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+            name: "Yusha no Shinbun".into(),
+            language: "x-jat".into(),
+            country: None,
+        }];
+        let draft = member_draft(&title, "Yuusha.no.Shimbun.S01E05.1080p.WEB-DL-GRP.mkv");
+        assert_eq!(
+            resolved_ids(&draft),
+            Some(vec!["ep-5".to_string()]),
+            "{draft:?}"
+        );
+        // The same spelling under a tag no rule set reads, and a different
+        // romaji name, are still held.
+        title.tagged_aliases[0].language = "en".into();
+        let draft = member_draft(&title, "Yuusha.no.Shimbun.S01E05.1080p.WEB-DL-GRP.mkv");
+        assert!(is_title_mismatch(&draft), "{draft:?}");
+        title.tagged_aliases[0].language = "x-jat".into();
+        let draft = member_draft(&title, "Kage.no.Shimbun.S01E05.1080p.WEB-DL-GRP.mkv");
+        assert!(is_title_mismatch(&draft), "{draft:?}");
     }
 
     /// A name the catalog itself carries keeps matching beside a second name
@@ -1853,8 +2124,7 @@ mod series_plan_tests {
         let catalog: Vec<_> = (1..=13)
             .map(|n| catalog_episode(&format!("ep-{n}"), n, n))
             .collect();
-        let release =
-            "Пример шоу  - S1E1-13 - 2026  Sub 4K, HEVC, SDR WEBDL 2160p";
+        let release = "Пример шоу  - S1E1-13 - 2026  Sub 4K, HEVC, SDR WEBDL 2160p";
         let parsed = parse_import_release_for_title(release, &title);
         let evidence = episode_scoped_pack_evidence(release);
         let verification = verified_episode_pack(

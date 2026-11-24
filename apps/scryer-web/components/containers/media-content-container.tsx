@@ -24,8 +24,6 @@ import {
   updateTitleMutation,
   createLibraryMutation,
   deleteLibraryMutation,
-  queueExistingMutation,
-  queueReplacementMutation,
   scanLibraryMutation,
   deleteTitlesMutation,
   setPrimaryMovieFileMutation,
@@ -83,6 +81,7 @@ import {
 } from "@/lib/graphql/release-search";
 import type { InteractiveSearchProgress } from "@/lib/graphql/release-search";
 import { useClient } from "urql";
+import { useGrab } from "@/lib/hooks/use-grab";
 import type {
   ContentSettingsSection,
   OverviewTitleTarget,
@@ -633,6 +632,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const t = useTranslate();
   const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
+  const grab = useGrab();
   const auth = useAuth();
   const canManageLists = hasAppPermission(
     auth.user,
@@ -3708,19 +3708,15 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           sizeBytes: release.sizeBytes ?? null,
         };
         const replacesPrimary = hasPrimaryMediaFile(title.mediaFiles);
-        const mutation = replacesPrimary
-          ? queueReplacementMutation
-          : queueExistingMutation;
         const payload = await retryWithReplaceOnConflict(
           input,
           async (nextInput) => {
-            const { data, error } = await client
-              .mutation(mutation, { input: nextInput })
-              .toPromise();
-            if (error) throw error;
-            return replacesPrimary
-              ? data?.queueReplacementRelease
-              : data?.queueExistingTitleDownload;
+            const outcome = await grab(
+              replacesPrimary
+                ? { replacement: nextInput }
+                : { existing: nextInput },
+            );
+            return outcome.queued;
           },
           "A download is already in progress for this title.",
           confirmReplaceConflict,
@@ -3738,7 +3734,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         throw error;
       }
     },
-    [client, confirmReplaceConflict, setGlobalStatus, t],
+    [grab, confirmReplaceConflict, setGlobalStatus, t],
   );
 
   const queueAdditionalFromRelease = React.useCallback(
@@ -3750,20 +3746,17 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
 
       try {
-        const { data, error } = await client
-          .mutation(queueExistingMutation, {
-            input: {
-              titleId: title.id,
-              scope: releaseQueueScopeInput(release, { title: true }),
-              candidateToken: release.candidateToken,
-              sizeBytes: release.sizeBytes ?? null,
-              purpose: "ADDITIONAL_FILE",
-            },
-          })
-          .toPromise();
-        if (error) throw error;
+        const outcome = await grab({
+          existing: {
+            titleId: title.id,
+            scope: releaseQueueScopeInput(release, { title: true }),
+            candidateToken: release.candidateToken,
+            sizeBytes: release.sizeBytes ?? null,
+            purpose: "ADDITIONAL_FILE",
+          },
+        });
         assertNoReplaceConflict(
-          data?.queueExistingTitleDownload,
+          outcome.queued,
           "A download is already in progress for this title.",
         );
         setGlobalStatus(t("status.queuedLatest", { name: title.name }), {
@@ -3776,7 +3769,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         throw error;
       }
     },
-    [client, setGlobalStatus, t],
+    [grab, setGlobalStatus, t],
   );
 
   const toggleTitleMonitored = React.useCallback(

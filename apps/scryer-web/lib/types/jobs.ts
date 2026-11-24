@@ -48,10 +48,12 @@ export type JobKey =
   | "RECYCLE_BIN_RESTORE"
   | "RECYCLE_BIN_PURGE"
   | "ACQUISITION_SEARCH"
+  | "RELEASE_GRAB"
   | "AUTO_BACKUP"
   | "APPLICATION_UPGRADE"
   | "LOCATION_OPERATION"
   | "SOURCE_IMPORT"
+  | "EXTERNAL_RULE_IMPORT"
   | "CUSTOM_JOB";
 
 export type JobScheduleInfo = {
