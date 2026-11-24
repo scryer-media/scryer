@@ -1265,6 +1265,8 @@ async fn graphql_typed_general_settings_defaults() {
           generalSettings {
             experimentalFeaturesEnabled
             personalizedDiscoveryEnabled
+            unmonitorDeletedMovies
+            unmonitorDeletedEpisodes
             srrdbFilenameRecoveryEnabled
             keepHistoryForever
             historyRetentionDays
@@ -1291,6 +1293,14 @@ async fn graphql_typed_general_settings_defaults() {
     assert_eq!(
         read["data"]["generalSettings"]["personalizedDiscoveryEnabled"],
         true
+    );
+    assert_eq!(
+        read["data"]["generalSettings"]["unmonitorDeletedMovies"],
+        false
+    );
+    assert_eq!(
+        read["data"]["generalSettings"]["unmonitorDeletedEpisodes"],
+        false
     );
     assert_eq!(
         read["data"]["generalSettings"]["srrdbFilenameRecoveryEnabled"],
@@ -1438,6 +1448,8 @@ async fn graphql_typed_general_settings_instance_feature_switches_round_trip() {
           updateGeneralSettings(input: $input) {
             experimentalFeaturesEnabled
             personalizedDiscoveryEnabled
+            unmonitorDeletedMovies
+            unmonitorDeletedEpisodes
             keepHistoryForever
             historyRetentionDays
           }

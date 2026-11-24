@@ -2528,6 +2528,9 @@ async fn replace_title_image_and_append_event_commits_image_and_event_atomically
                 poster_url: title.poster_url.clone(),
                 year: title.year,
             },
+            change_reason_code: None,
+            unmonitored_episode_ids: Vec::new(),
+            unmonitored_collection_ids: Vec::new(),
         }),
     };
 

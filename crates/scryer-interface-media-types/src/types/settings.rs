@@ -179,6 +179,10 @@ pub struct GeneralSettingsPayload {
     pub experimental_features_enabled: bool,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
     pub personalized_discovery_enabled: bool,
+    /// Whether confirmed external movie-file removal unmonitors the fileless movie.
+    pub unmonitor_deleted_movies: bool,
+    /// Whether confirmed external episode-file removal unmonitors affected episodes.
+    pub unmonitor_deleted_episodes: bool,
     /// Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames.
     pub srrdb_filename_recovery_enabled: bool,
     /// Whether import history is retained indefinitely.
@@ -1524,6 +1528,10 @@ pub struct UpdateGeneralSettingsInput {
     pub experimental_features_enabled: Option<bool>,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
     pub personalized_discovery_enabled: Option<bool>,
+    /// Whether confirmed external movie-file removal unmonitors the fileless movie.
+    pub unmonitor_deleted_movies: Option<bool>,
+    /// Whether confirmed external episode-file removal unmonitors affected episodes.
+    pub unmonitor_deleted_episodes: Option<bool>,
     /// Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames. Omission preserves the saved setting.
     pub srrdb_filename_recovery_enabled: Option<bool>,
     /// Whether history is retained without expiry.

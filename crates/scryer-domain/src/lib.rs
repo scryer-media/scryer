@@ -4666,6 +4666,36 @@ pub struct TitleAddedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleUpdatedEventData {
     pub title: TitleContextSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_reason_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmonitored_episode_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmonitored_collection_ids: Vec<String>,
+}
+
+pub mod monitoring_change_reason {
+    /// A confirmed external library-file deletion removed the last movie file.
+    pub const MOVIE_FILE_DELETED: &str = "LIBRARY_MOVIE_FILE_DELETED";
+    /// A confirmed external library-file deletion removed the last episode file
+    /// for one or more episodes.
+    pub const EPISODE_FILE_DELETED: &str = "LIBRARY_EPISODE_FILE_DELETED";
+
+    pub const ALL: &[&str] = &[MOVIE_FILE_DELETED, EPISODE_FILE_DELETED];
+
+    #[test]
+    fn reasons_are_distinct_and_prefixed() {
+        let unique: std::collections::HashSet<_> = ALL.iter().copied().collect();
+        assert_eq!(unique.len(), ALL.len());
+        for reason in ALL {
+            assert!(reason.starts_with("LIBRARY_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+        }
+    }
 }
 
 /// A lifecycle rule applied its actions to a subject and its `notify`

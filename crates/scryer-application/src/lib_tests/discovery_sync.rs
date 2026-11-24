@@ -5717,6 +5717,9 @@ async fn discovery_sync_catches_up_title_events_before_incremental_reload() {
         &title,
         DomainEventPayload::TitleUpdated(TitleUpdatedEventData {
             title: test_title_context_snapshot(&title),
+            change_reason_code: None,
+            unmonitored_episode_ids: Vec::new(),
+            unmonitored_collection_ids: Vec::new(),
         }),
     );
     event.occurred_at = due_at;

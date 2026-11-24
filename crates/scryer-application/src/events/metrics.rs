@@ -1177,6 +1177,9 @@ mod tests {
             }),
             DomainEventPayload::TitleUpdated(TitleUpdatedEventData {
                 title: title.clone(),
+                change_reason_code: None,
+                unmonitored_episode_ids: Vec::new(),
+                unmonitored_collection_ids: Vec::new(),
             }),
             DomainEventPayload::TitleRematched(TitleRematchedEventData {
                 title: title.clone(),

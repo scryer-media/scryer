@@ -6206,6 +6206,14 @@ const en: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Personalized discovery",
   "settings.personalizedDiscoveryHelp":
     "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
+  "settings.unmonitorDeletedMoviesLabel":
+    "Unmonitor movies after their files are deleted",
+  "settings.unmonitorDeletedMoviesHelp":
+    "After a library scan confirms that a previously downloaded movie file was deleted, unmonitor the movie if no valid local file remains.",
+  "settings.unmonitorDeletedEpisodesLabel":
+    "Unmonitor episodes after their files are deleted",
+  "settings.unmonitorDeletedEpisodesHelp":
+    "After a library scan confirms that episode files were deleted, unmonitor only the affected episodes and preserve unrelated and future episodes.",
   "settings.srrdbFilenameRecoveryLabel":
     "Recover obfuscated filenames from srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":

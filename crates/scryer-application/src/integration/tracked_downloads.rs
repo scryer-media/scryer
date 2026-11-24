@@ -7129,6 +7129,9 @@ mod tests {
             &title,
             scryer_domain::DomainEventPayload::TitleUpdated(scryer_domain::TitleUpdatedEventData {
                 title: crate::domain_events::title_context_snapshot(&title),
+                change_reason_code: None,
+                unmonitored_episode_ids: Vec::new(),
+                unmonitored_collection_ids: Vec::new(),
             }),
         ))
         .await

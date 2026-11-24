@@ -54,6 +54,8 @@ export type GeneralSettings = {
   apiExplorerEnabled: boolean;
   experimentalFeaturesEnabled: boolean;
   personalizedDiscoveryEnabled: boolean;
+  unmonitorDeletedMovies: boolean;
+  unmonitorDeletedEpisodes: boolean;
   srrdbFilenameRecoveryEnabled: boolean;
   keepHistoryForever: boolean;
   historyRetentionDays: number;
@@ -71,6 +73,8 @@ export type GeneralSettingsUpdate = Partial<
     | "apiExplorerEnabled"
     | "experimentalFeaturesEnabled"
     | "personalizedDiscoveryEnabled"
+    | "unmonitorDeletedMovies"
+    | "unmonitorDeletedEpisodes"
     | "srrdbFilenameRecoveryEnabled"
     | "keepHistoryForever"
     | "historyRetentionDays"

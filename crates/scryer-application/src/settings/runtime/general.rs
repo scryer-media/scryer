@@ -164,6 +164,8 @@ pub struct GeneralSettings {
     pub api_explorer_enabled: bool,
     pub experimental_features_enabled: bool,
     pub personalized_discovery_enabled: bool,
+    pub unmonitor_deleted_movies: bool,
+    pub unmonitor_deleted_episodes: bool,
     pub srrdb_filename_recovery_enabled: bool,
     pub keep_history_forever: bool,
     pub history_retention_days: i32,
@@ -198,6 +200,8 @@ pub struct UpdateGeneralSettings {
     pub api_explorer_enabled: Option<bool>,
     pub experimental_features_enabled: Option<bool>,
     pub personalized_discovery_enabled: Option<bool>,
+    pub unmonitor_deleted_movies: Option<bool>,
+    pub unmonitor_deleted_episodes: Option<bool>,
     pub srrdb_filename_recovery_enabled: Option<bool>,
     pub keep_history_forever: Option<bool>,
     pub history_retention_days: Option<i32>,
@@ -298,6 +302,22 @@ impl AppUseCase {
             .unwrap_or(true))
     }
 
+    /// Whether confirmed external movie-file removal unmonitors a fileless movie.
+    pub async fn unmonitor_deleted_movies_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(UNMONITOR_MOVIES_AFTER_FILE_DELETION_KEY, None)
+            .await?
+            .unwrap_or(false))
+    }
+
+    /// Whether confirmed external episode-file removal unmonitors affected episodes.
+    pub async fn unmonitor_deleted_episodes_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(UNMONITOR_EPISODES_AFTER_FILE_DELETION_KEY, None)
+            .await?
+            .unwrap_or(false))
+    }
+
     /// Instance-wide opt in for asking srrdb.com to recover obfuscated
     /// filenames during automatic SABnzbd/NZBGet imports. This is the single
     /// place the default lives.
@@ -328,6 +348,10 @@ impl AppUseCase {
         let api_explorer_enabled = self.api_explorer_enabled().await?;
         let experimental_features_enabled = self.experimental_features_enabled().await?;
         let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
+        let unmonitor_deleted_movies = self.unmonitor_deleted_movies_enabled().await?;
+        let unmonitor_deleted_episodes = self
+            .unmonitor_deleted_episodes_enabled()
+            .await?;
         let srrdb_filename_recovery_enabled = self.srrdb_filename_recovery_enabled().await?;
         let keep_history_forever = self
             .read_setting_bool_value(HISTORY_KEEP_FOREVER_KEY, None)
@@ -373,6 +397,8 @@ impl AppUseCase {
             api_explorer_enabled,
             experimental_features_enabled,
             personalized_discovery_enabled,
+            unmonitor_deleted_movies,
+            unmonitor_deleted_episodes,
             srrdb_filename_recovery_enabled,
             keep_history_forever,
             history_retention_days,
@@ -518,6 +544,12 @@ impl AppUseCase {
         let srrdb_filename_recovery_enabled = input
             .srrdb_filename_recovery_enabled
             .unwrap_or(current.srrdb_filename_recovery_enabled);
+        let unmonitor_deleted_movies = input
+            .unmonitor_deleted_movies
+            .unwrap_or(current.unmonitor_deleted_movies);
+        let unmonitor_deleted_episodes = input
+            .unmonitor_deleted_episodes
+            .unwrap_or(current.unmonitor_deleted_episodes);
         let keep_history_forever = input
             .keep_history_forever
             .unwrap_or(current.keep_history_forever);
@@ -578,6 +610,24 @@ impl AppUseCase {
             )
             .await?;
             changed_keys.push(DISCOVERY_PERSONALIZED_ENABLED_KEY.to_string());
+        }
+        if input.unmonitor_deleted_movies.is_some() {
+            self.upsert_system_setting_json(
+                UNMONITOR_MOVIES_AFTER_FILE_DELETION_KEY,
+                &unmonitor_deleted_movies,
+                Some(actor.id.clone()),
+            )
+            .await?;
+            changed_keys.push(UNMONITOR_MOVIES_AFTER_FILE_DELETION_KEY.to_string());
+        }
+        if input.unmonitor_deleted_episodes.is_some() {
+            self.upsert_system_setting_json(
+                UNMONITOR_EPISODES_AFTER_FILE_DELETION_KEY,
+                &unmonitor_deleted_episodes,
+                Some(actor.id.clone()),
+            )
+            .await?;
+            changed_keys.push(UNMONITOR_EPISODES_AFTER_FILE_DELETION_KEY.to_string());
         }
         if input.srrdb_filename_recovery_enabled.is_some() {
             self.upsert_system_setting_json(
@@ -647,6 +697,8 @@ impl AppUseCase {
             api_explorer_enabled,
             experimental_features_enabled,
             personalized_discovery_enabled,
+            unmonitor_deleted_movies,
+            unmonitor_deleted_episodes,
             srrdb_filename_recovery_enabled,
             keep_history_forever,
             history_retention_days,
