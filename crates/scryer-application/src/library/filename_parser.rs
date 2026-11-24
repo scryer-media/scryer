@@ -1098,9 +1098,34 @@ fn normalized_key_contains_phrase(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
-    let haystack = format!(" {haystack} ");
-    let needle = format!(" {needle} ");
-    haystack.contains(&needle)
+    // Both arguments are normalized keys: words joined by single spaces with
+    // no leading/trailing whitespace. The former padded-string check
+    // (`format!(" {haystack} ").contains(&format!(" {needle} "))`) therefore
+    // only ever asked whether the needle occurs at a word boundary. Do that
+    // directly so each comparison no longer allocates two temporary Strings.
+    let bytes = haystack.as_bytes();
+    let needle_len = needle.len();
+    let advance = needle
+        .chars()
+        .next()
+        .map(char::len_utf8)
+        .expect("non-empty needle");
+    let mut from = 0;
+    while let Some(relative) = haystack[from..].find(needle) {
+        let start = from + relative;
+        let end = start + needle_len;
+        // Keys are ASCII-space delimited; any other neighbouring byte belongs
+        // to a word character (possibly a multi-byte one), so it is not a
+        // boundary. Advancing by the first character's width keeps `from` on
+        // a UTF-8 boundary for the next search.
+        let left_boundary = start == 0 || bytes[start - 1] == b' ';
+        let right_boundary = end == bytes.len() || bytes[end] == b' ';
+        if left_boundary && right_boundary {
+            return true;
+        }
+        from = start + advance;
+    }
+    false
 }
 
 fn raw_name_has_explicit_episode_marker(raw_name: &str) -> bool {
@@ -1648,6 +1673,63 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use scryer_domain::{EpisodeType, ExternalId};
+
+    /// The allocation-free check replaces this padded-string expression. Keep
+    /// it in the test as the reference oracle so any semantic drift is caught.
+    fn padded_key_contains(haystack: &str, needle: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+        format!(" {haystack} ").contains(&format!(" {needle} "))
+    }
+
+    #[test]
+    fn normalized_key_contains_phrase_matches_the_padded_reference() {
+        let cases = [
+            ("", ""),
+            ("foo", ""),
+            ("", "foo"),
+            ("foo", "foo"),
+            ("foo bar", "foo"),
+            ("foo bar", "bar"),
+            ("foo bar", "foo bar"),
+            ("foo bar baz", "bar"),
+            ("foo bar baz", "bar baz"),
+            ("foo bar baz", "foo bar"),
+            ("afoo bar", "foo"),
+            ("foo barking", "foo bar"),
+            ("foo baron", "bar"),
+            ("foo  bar", "foo bar"),
+            ("foo bar ", "bar"),
+            (" foo bar", "foo"),
+            ("one two three one two", "one two"),
+            ("foo bar baz", "qux"),
+            ("foo", "foobar"),
+            ("foobar", "foo"),
+            ("élan vital", "élan"),
+            ("élan vital", "lan"),
+            ("vital élan", "élan"),
+            ("s中国人民解放军", "中国人民解放军"),
+        ];
+        for (haystack, needle) in cases {
+            assert_eq!(
+                normalized_key_contains_phrase(haystack, needle),
+                padded_key_contains(haystack, needle),
+                "haystack={haystack:?}, needle={needle:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_key_contains_phrase_uses_normalized_keys() {
+        // Regular callers pass the output of `library_name_match_key`.
+        let haystack = library_name_match_key("The.Movie.Collection.Part.Two.2024");
+        let needle = library_name_match_key("Movie Collection");
+        let wrong = library_name_match_key("Movie Two");
+        assert_eq!(haystack, "the movie collection part two 2024");
+        assert!(normalized_key_contains_phrase(&haystack, &needle));
+        assert!(!normalized_key_contains_phrase(&haystack, &wrong));
+    }
 
     #[test]
     fn title_candidates_keep_brackets_that_belong_to_the_title() {
