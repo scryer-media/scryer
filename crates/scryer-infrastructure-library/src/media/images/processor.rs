@@ -17,6 +17,12 @@ use scryer_outbound_http::{
 };
 
 const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
+/// A small compressed image can expand to a huge RGBA buffer. Bound both the
+/// declared dimensions and the decoder's allocation budget so an untrusted
+/// artwork source cannot turn a <=20 MiB download into a multi-gigabyte
+/// allocation (and then an OOM kill of the whole process).
+const MAX_DECODED_IMAGE_DIMENSION: u32 = 16_384;
+const MAX_DECODED_IMAGE_ALLOC_BYTES: u64 = 128 * 1024 * 1024;
 const AVIF_SPEED: u8 = 4;
 const AVIF_QUALITY: u8 = 85;
 const PROXY_AVIF_SPEED: u8 = 10;
@@ -55,6 +61,22 @@ fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     }
     tracing::info!(workers, "dedicated artwork pool ready");
     Ok(pool)
+}
+
+fn source_image_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODED_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_DECODED_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODED_IMAGE_ALLOC_BYTES);
+    limits
+}
+
+/// Single decode entry point for both untrusted source artwork and cached
+/// proxy JPEGs, so neither path can bypass the allocation limits.
+fn decode_source_image(bytes: &[u8], format: ImageFormat) -> image::ImageResult<DynamicImage> {
+    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(source_image_limits());
+    reader.decode()
 }
 
 #[derive(Clone)]
@@ -230,13 +252,12 @@ impl HttpTitleImageProcessor {
                     "unsupported image format".to_string(),
                 )
             })?;
-        let decoded =
-            image::load_from_memory_with_format(bytes, guessed_format).map_err(|err| {
-                AppError::validation_refused(
-                    crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
-                    format!("failed to decode image: {err}"),
-                )
-            })?;
+        let decoded = decode_source_image(bytes, guessed_format).map_err(|err| {
+            AppError::validation_refused(
+                crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
+                format!("failed to decode image: {err}"),
+            )
+        })?;
         let oriented = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1));
         let rgba = oriented.to_rgba8();
         let (source_width, source_height) = rgba.dimensions();
@@ -370,13 +391,7 @@ fn encode_proxy_jpeg(bytes: &[u8], width: u32) -> AppResult<Vec<u8>> {
             "cached image is not a JPEG",
         ));
     }
-    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16_384);
-    limits.max_image_height = Some(16_384);
-    limits.max_alloc = Some(128 * 1024 * 1024);
-    reader.limits(limits);
-    let decoded = reader.decode().map_err(|error| {
+    let decoded = decode_source_image(bytes, ImageFormat::Jpeg).map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::MEDIA_CACHED_JPEG_DECODE_FAILED,
             format!("failed to decode cached JPEG: {error}"),
@@ -691,6 +706,46 @@ mod tests {
             .write_to(&mut Cursor::new(&mut bytes), format)
             .expect("test image should encode");
         bytes
+    }
+
+    fn png_crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in bytes {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    #[test]
+    fn source_decode_rejects_images_above_the_allocation_limits() {
+        // A tiny PNG whose header claims 20_000 x 20_000 pixels. The guarded
+        // decode must reject it from the header alone, without ever allocating
+        // the ~1.6 GiB RGBA buffer those dimensions would require.
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255])))
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .expect("1x1 PNG should encode");
+        png[16..20].copy_from_slice(&20_000u32.to_be_bytes());
+        png[20..24].copy_from_slice(&20_000u32.to_be_bytes());
+        let ihdr_crc = png_crc32(&png[12..29]);
+        png[29..33].copy_from_slice(&ihdr_crc.to_be_bytes());
+
+        assert!(
+            decode_source_image(&png, ImageFormat::Png).is_err(),
+            "an oversized header must be rejected before any large allocation"
+        );
+        let ordinary = encode_test_image(ImageFormat::Png);
+        assert!(
+            decode_source_image(&ordinary, ImageFormat::Png).is_ok(),
+            "normal artwork must still decode through the guarded path"
+        );
     }
 
     #[test]
