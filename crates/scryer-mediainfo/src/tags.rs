@@ -15,34 +15,80 @@ pub(crate) const MAX_VALUE_BYTES: usize = 4096;
 /// Most key and value bytes kept for a whole file, across every scope.
 pub(crate) const MAX_FILE_BYTES: usize = 256 * 1024;
 
-/// Adds one tag to `scope`. A tag that is empty, binary, not UTF-8 or a
-/// repeat of a key already present is skipped silently. A tag past a limit
-/// is dropped whole, never shortened, and the report gains one
-/// `tags_truncated` warning.
+/// Adds one tag to `scope` and returns the key and value bytes it now
+/// holds for it, or zero when the tag was not kept. A tag that is empty,
+/// binary, not UTF-8 or a repeat of a key already present is skipped
+/// silently. A tag past a limit is dropped whole, never shortened, and the
+/// report gains one `tags_truncated` warning.
+///
+/// The size and count checks come before any scan of the value, so a tag
+/// that cannot be kept costs no more than its key.
 pub(crate) fn insert(
     scope: &mut BTreeMap<String, String>,
     key: &[u8],
     value: &[u8],
     report: &mut ProbeReport,
-) {
-    let (Ok(key), Ok(value)) = (std::str::from_utf8(key), std::str::from_utf8(value)) else {
-        return;
-    };
-    let value = value.trim_end_matches('\0');
-    if key.is_empty() || value.is_empty() || !is_text(key) || !is_text(value) {
-        return;
+) -> usize {
+    if key.is_empty() {
+        return 0;
     }
-    if scope.contains_key(key) {
-        return;
-    }
-    if key.len() > MAX_KEY_BYTES
-        || value.len() > MAX_VALUE_BYTES
-        || scope.len() >= MAX_TAGS_PER_SCOPE
-    {
+    if key.len() > MAX_KEY_BYTES {
         note_truncated(report);
-        return;
+        return 0;
+    }
+    let Ok(key) = std::str::from_utf8(key) else {
+        return 0;
+    };
+    if !is_text(key) || scope.contains_key(key) {
+        return 0;
+    }
+    let value = value
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(&value[..0], |last| &value[..=last]);
+    if value.is_empty() {
+        return 0;
+    }
+    if value.len() > MAX_VALUE_BYTES || scope.len() >= MAX_TAGS_PER_SCOPE {
+        note_truncated(report);
+        return 0;
+    }
+    let Ok(value) = std::str::from_utf8(value) else {
+        return 0;
+    };
+    if !is_text(value) {
+        return 0;
     }
     scope.insert(key.to_owned(), value.to_owned());
+    key.len() + value.len()
+}
+
+/// A byte allowance for the tags collected from one source before
+/// [`limit_file`] makes its final cut. It stops a container that repeats
+/// tags across many scopes from holding far more than the file may keep.
+pub(crate) struct Allowance(usize);
+
+impl Allowance {
+    pub(crate) fn new() -> Self {
+        Self(MAX_FILE_BYTES)
+    }
+
+    /// Adds one tag to `scope` if the allowance still covers it.
+    pub(crate) fn insert(
+        &mut self,
+        scope: &mut BTreeMap<String, String>,
+        key: &[u8],
+        value: &[u8],
+        report: &mut ProbeReport,
+    ) {
+        if key.len().saturating_add(value.len()) > self.0 {
+            if !key.is_empty() && !value.is_empty() {
+                note_truncated(report);
+            }
+            return;
+        }
+        self.0 -= insert(scope, key, value, report);
+    }
 }
 
 /// Text, as opposed to binary data that happens to decode as UTF-8: no
@@ -167,6 +213,28 @@ mod tests {
         assert_eq!(scope.len(), MAX_TAGS_PER_SCOPE);
         assert!(scope.contains_key("KEY0000"));
         assert!(!scope.contains_key(&keys[MAX_TAGS_PER_SCOPE]));
+        assert_eq!(truncated(&report), 1);
+    }
+
+    #[test]
+    fn an_allowance_stops_collection_at_the_file_limit() {
+        let value = vec![b'v'; MAX_VALUE_BYTES];
+        let mut allowance = Allowance::new();
+        let mut report = ProbeReport::default();
+        let mut scopes = vec![BTreeMap::new(); 64];
+        for scope in &mut scopes {
+            for index in 0..MAX_TAGS_PER_SCOPE {
+                let key = format!("KEY{index:04}");
+                allowance.insert(scope, key.as_bytes(), &value, &mut report);
+            }
+        }
+        let held: usize = scopes
+            .iter()
+            .flatten()
+            .map(|(key, value)| key.len() + value.len())
+            .sum();
+        assert!(held <= MAX_FILE_BYTES, "{held}");
+        assert!(held > MAX_FILE_BYTES - MAX_VALUE_BYTES - MAX_KEY_BYTES);
         assert_eq!(truncated(&report), 1);
     }
 

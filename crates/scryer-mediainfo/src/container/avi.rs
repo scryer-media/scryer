@@ -759,7 +759,7 @@ fn map_audio_format_tag(tag: u16) -> Codec {
         0x2000 => Codec::Ac3,
         0x2001 => Codec::Dts,
         // Reached when the extensible header is too short to name its subformat.
-        0xFFFE => Codec::Other("extensible".into()),
+        0xFFFE => Codec::from("extensible"),
         _ => Codec::Unknown,
     }
 }
