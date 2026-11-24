@@ -574,9 +574,9 @@ pub use helpers::{
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,
-    await_cancellable_app_result, normalize_release_attempt_hint,
-    normalize_release_selection_signature, normalize_show_text_opt, normalize_tags,
-    parsed_episode_lookup_season, sanitize_ids, to_hex,
+    await_cancellable_app_result, library_scan_analysis_concurrency,
+    normalize_release_attempt_hint, normalize_release_selection_signature, normalize_show_text_opt,
+    normalize_tags, parsed_episode_lookup_season, sanitize_ids, to_hex,
 };
 pub(crate) use helpers::{filesystem_space, filesystem_space_raw};
 pub use image_proxy::{image_proxy_source_token, image_upstream_variant_url};

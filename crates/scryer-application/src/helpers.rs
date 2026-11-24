@@ -4,6 +4,49 @@ use std::future::Future;
 pub(crate) const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
 pub(crate) const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "weaver", "http"];
 
+/// Override for the global media-analysis semaphore used by library scans.
+/// The shipped 24 is tuned for a beefy machine; on a small NAS or a CPU-limited
+/// container it can saturate the disk and the CPU for the whole scan.
+const LIBRARY_SCAN_ANALYSIS_CONCURRENCY_ENV: &str = "SCRYER_LIBRARY_SCAN_ANALYSIS_CONCURRENCY";
+const MIN_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 1;
+const MAX_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 64;
+
+static LIBRARY_SCAN_ANALYSIS_CONCURRENCY_IN_FORCE: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| {
+        parse_library_scan_analysis_concurrency(
+            std::env::var(LIBRARY_SCAN_ANALYSIS_CONCURRENCY_ENV)
+                .ok()
+                .as_deref(),
+        )
+        .unwrap_or(super::GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY)
+    });
+
+/// The analysis concurrency actually in force. All semaphore construction and
+/// scan diagnostics must use this instead of the compile-time default so the
+/// override takes effect everywhere.
+pub(crate) fn library_scan_analysis_concurrency() -> usize {
+    *LIBRARY_SCAN_ANALYSIS_CONCURRENCY_IN_FORCE
+}
+
+fn parse_library_scan_analysis_concurrency(raw: Option<&str>) -> Option<usize> {
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    match raw.parse::<usize>() {
+        Ok(value) => Some(value.clamp(
+            MIN_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
+            MAX_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
+        )),
+        Err(error) => {
+            tracing::warn!(
+                env = LIBRARY_SCAN_ANALYSIS_CONCURRENCY_ENV,
+                value = raw,
+                %error,
+                "invalid library scan analysis concurrency; using the shipped default"
+            );
+            None
+        }
+    }
+}
+
 pub(crate) fn parsed_episode_lookup_season(
     ep_meta: &ParsedEpisodeMetadata,
     default_season: &str,
@@ -769,6 +812,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_scan_analysis_concurrency_override_is_bounded_and_falls_back() {
+        assert_eq!(parse_library_scan_analysis_concurrency(None), None);
+        assert_eq!(parse_library_scan_analysis_concurrency(Some("")), None);
+        assert_eq!(parse_library_scan_analysis_concurrency(Some("  ")), None);
+        assert_eq!(parse_library_scan_analysis_concurrency(Some("abc")), None);
+        assert_eq!(parse_library_scan_analysis_concurrency(Some("4")), Some(4));
+        assert_eq!(
+            parse_library_scan_analysis_concurrency(Some(" 8 ")),
+            Some(8)
+        );
+        // 0 would deadlock the semaphore, and a huge value would defeat the
+        // point of bounding RAM/CPU on a small host.
+        assert_eq!(
+            parse_library_scan_analysis_concurrency(Some("0")),
+            Some(MIN_LIBRARY_SCAN_ANALYSIS_CONCURRENCY)
+        );
+        assert_eq!(
+            parse_library_scan_analysis_concurrency(Some("9999")),
+            Some(MAX_LIBRARY_SCAN_ANALYSIS_CONCURRENCY)
+        );
+    }
 
     #[test]
     fn release_attempt_hint_drops_indexer_and_tracker_credentials() {

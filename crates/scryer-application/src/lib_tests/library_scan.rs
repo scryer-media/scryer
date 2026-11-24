@@ -6368,11 +6368,11 @@ async fn movie_full_scan_marks_exact_media_total_before_blocked_analysis_finishe
     });
 
     blocking_analyzer
-        .wait_for_active_analysis(crate::GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY)
+        .wait_for_active_analysis(crate::library_scan_analysis_concurrency())
         .await;
     assert_eq!(
         blocking_analyzer.max_active_calls(),
-        crate::GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY
+        crate::library_scan_analysis_concurrency()
     );
     let projected = wait_for_projected_library_scan_session_matching(&app, session_id, |session| {
         session.file_total_known && session.file_progress.total == ITEM_COUNT
@@ -7813,7 +7813,7 @@ async fn cancel_full_library_scan_with_in_flight_title_walk_drains_executor_perm
             .library
             .library_scan_analysis_limit
             .available_permits(),
-        GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY
+        crate::library_scan_analysis_concurrency()
     );
 }
 

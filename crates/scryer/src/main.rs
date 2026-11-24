@@ -708,10 +708,49 @@ fn main() {
     }
     #[cfg(all(feature = "jemalloc-prof", not(target_os = "windows")))]
     jemalloc_prof::spawn_dump_thread();
-    run_application();
+    let worker_threads = tokio_worker_threads();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()
+        .unwrap_or_else(|error| {
+            eprintln!("failed to start async runtime: {error}");
+            std::process::exit(1);
+        });
+    runtime.block_on(run_application());
 }
 
-#[tokio::main]
+const TOKIO_WORKER_THREADS_ENV: &str = "SCRYER_TOKIO_WORKER_THREADS";
+const MAX_TOKIO_WORKER_THREADS: usize = 64;
+
+/// Tokio's default is one worker thread per logical CPU. That is a poor fit for
+/// large hosts and CPU-limited containers alike, so let the operator pick a
+/// count while keeping the default identical to Tokio's.
+fn tokio_worker_threads() -> usize {
+    static IN_FORCE: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        parse_tokio_worker_threads(std::env::var(TOKIO_WORKER_THREADS_ENV).ok().as_deref())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|parallelism| parallelism.get())
+                    .unwrap_or(4)
+            })
+    });
+    *IN_FORCE
+}
+
+fn parse_tokio_worker_threads(raw: Option<&str>) -> Option<usize> {
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    match raw.parse::<usize>() {
+        Ok(threads) if threads > 0 => Some(threads.min(MAX_TOKIO_WORKER_THREADS)),
+        _ => {
+            eprintln!(
+                "invalid {TOKIO_WORKER_THREADS_ENV} value {raw:?}; using the CPU-count default"
+            );
+            None
+        }
+    }
+}
+
 async fn run_application() {
     // Phase 1: Extract startup path flags before subcommand dispatch.
     let mut args: Vec<String> = std::env::args().collect();
@@ -4087,6 +4126,19 @@ async fn seed_builtin_plugin_installations(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tokio_worker_threads_override_is_bounded_and_falls_back() {
+        let parse = super::parse_tokio_worker_threads;
+        assert_eq!(parse(None), None);
+        assert_eq!(parse(Some("")), None);
+        assert_eq!(parse(Some("  ")), None);
+        assert_eq!(parse(Some("many")), None);
+        assert_eq!(parse(Some("0")), None);
+        assert_eq!(parse(Some("2")), Some(2));
+        assert_eq!(parse(Some(" 8 ")), Some(8));
+        assert_eq!(parse(Some("9999")), Some(super::MAX_TOKIO_WORKER_THREADS));
+    }
+
     #[test]
     fn tray_control_pipe_waits_for_eof_and_propagates_errors() {
         struct InterruptedOnce(bool);

@@ -2741,7 +2741,7 @@ impl AppRuntimeState {
                     LIBRARY_SCAN_GLOBAL_TITLE_WALK_CONCURRENCY,
                 )),
                 library_scan_analysis_limit: Arc::new(Semaphore::new(
-                    GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
+                    library_scan_analysis_concurrency(),
                 )),
                 media_analysis_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
                 location_ownership:

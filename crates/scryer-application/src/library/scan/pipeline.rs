@@ -339,7 +339,7 @@ async fn run_library_scan_pipeline_with_discovery(
         facet = facet.as_str(),
         title_group_concurrency = analysis_profile.title_group_concurrency,
         file_analysis_concurrency_per_title = analysis_profile.file_analysis_concurrency_per_title,
-        global_analysis_concurrency = crate::GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
+        global_analysis_concurrency = crate::library_scan_analysis_concurrency(),
         "library scan media analysis profile selected"
     );
 
