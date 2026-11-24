@@ -92,7 +92,7 @@ impl Default for AnalyzeOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Public types (unchanged from ffprobe era)
+// Public types
 // ---------------------------------------------------------------------------
 
 /// A single audio stream extracted from media analysis.
