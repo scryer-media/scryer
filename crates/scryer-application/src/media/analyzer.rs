@@ -126,7 +126,7 @@ impl<T: Clone> AnalysisFlight<T> {
 
 #[cfg(feature = "runtime-media-analysis")]
 static NATIVE_PROBE_FLIGHTS: std::sync::LazyLock<
-    AnalysisFlights<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::MediaInfoError>>,
+    AnalysisFlights<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::ProbeError>>,
 > = std::sync::LazyLock::new(AnalysisFlights::default);
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -158,7 +158,7 @@ pub(crate) async fn probe_native_catalog(
     path: PathBuf,
     selection: scryer_media_types::DiscSelection,
     operation: crate::media::metrics::ProbeOperation,
-) -> AppResult<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::MediaInfoError>> {
+) -> AppResult<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::ProbeError>> {
     let source_path = path.clone();
     // A metadata read that fails is an I/O failure for this file, not
     // evidence about the file's identity. Folding it into `None` and
@@ -181,18 +181,22 @@ pub(crate) async fn probe_native_catalog(
                 }) {
                     match crate::media_references::playlist_is_relocatable(&path) {
                         Ok(true) => Ok(unavailable_analysis(&path)),
-                        Ok(false) => Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(
+                        Ok(false) => Err(scryer_mediainfo::ProbeError::Unsupported(
                             "playlist references require review".into(),
                         )),
                         Err(error) => Err(error.into()),
                     }
                 } else if scryer_domain::is_disc_image(&path) {
-                    scryer_mediainfo::analyze_disc_file(&path, selection)
+                    scryer_mediainfo::probe_disc(
+                        &path,
+                        selection,
+                        &scryer_mediainfo::ProbeOptions::new(),
+                    )
                 } else {
-                    scryer_mediainfo::analyze_catalog_file(&path)
+                    scryer_mediainfo::probe(&path)
                 };
             let result = match result {
-                Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_))
+                Err(scryer_mediainfo::ProbeError::Unsupported(_))
                     if permits_unavailable_probe(&path) =>
                 {
                     Ok(unavailable_analysis(&path))
@@ -233,7 +237,7 @@ pub(crate) async fn hold_native_probe_for_test(
         // first drops the sender, which ends the wait too.
         held.recv()
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        Ok(scryer_mediainfo::analyze_catalog_file(&path))
+        Ok(scryer_mediainfo::probe(&path))
     });
     (release, move || std::sync::Arc::strong_count(&flight))
 }
@@ -304,12 +308,12 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
         #[cfg(feature = "runtime-media-analysis")]
         match result {
             Ok(details)
-                if crate::media::analysis_summary::is_valid_video(&details)
+                if details.is_playable_video()
                     && (details.container_format.as_deref() != Some("iso")
                         || details.report.status == scryer_media_types::ProbeStatus::Complete) =>
             {
                 Ok(MediaAnalysisOutcome::Valid(Box::new(
-                    crate::media::analysis_summary::summarize(&details),
+                    crate::media::analysis_summary::summarize(details),
                 )))
             }
             Ok(details)
@@ -323,7 +327,7 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
                     ) =>
             {
                 Ok(MediaAnalysisOutcome::Inconclusive(Box::new(
-                    crate::media::analysis_summary::summarize(&details),
+                    crate::media::analysis_summary::summarize(details),
                 )))
             }
             Ok(_) => Ok(MediaAnalysisOutcome::NoVideo),

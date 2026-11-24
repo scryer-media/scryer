@@ -1,6 +1,6 @@
 //! Bounded Annex B AVC and MPEG sequence-header readers.
 use crate::{
-    MediaInfoError,
+    ProbeError,
     raw::{RawContainer, RawTrack},
     source::MediaSource,
 };
@@ -48,31 +48,31 @@ pub(crate) fn sniff_h264(data: &[u8]) -> bool {
     false
 }
 
-pub(crate) fn parse_h264(source: &mut dyn MediaSource) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse_h264(source: &mut dyn MediaSource) -> Result<RawContainer, ProbeError> {
     parse(source, true)
 }
 
-pub(crate) fn parse_mpeg(source: &mut dyn MediaSource) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse_mpeg(source: &mut dyn MediaSource) -> Result<RawContainer, ProbeError> {
     parse(source, false)
 }
 
-fn parse(source: &mut dyn MediaSource, avc: bool) -> Result<RawContainer, MediaInfoError> {
+fn parse(source: &mut dyn MediaSource, avc: bool) -> Result<RawContainer, ProbeError> {
     source.seek(SeekFrom::Start(0))?;
     let mut data = vec![0; source.len().min(LIMIT) as usize];
     source.read_exact(&mut data)?;
     let codec = if avc {
         if !sniff_h264(&data) {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "AVC sequence parameter set not found".into(),
             ));
         }
         "h264"
     } else {
         let start = crate::scan::find_mpeg_start_code(&data, 0xb3)
-            .ok_or_else(|| MediaInfoError::Parse("MPEG sequence header not found".into()))?
+            .ok_or_else(|| ProbeError::Malformed("MPEG sequence header not found".into()))?
             + 4;
         let end = crate::codec::mpeg_video::mpeg_sequence_header_end(&data, start)
-            .ok_or_else(|| MediaInfoError::Parse("invalid MPEG sequence header".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("invalid MPEG sequence header".into()))?;
         let suffix = &data[end..];
         let next = crate::scan::find_start_code_prefix(suffix, 0);
         if next.and_then(|at| suffix.get(at + 3)) == Some(&0xb5) {
@@ -88,7 +88,7 @@ fn parse(source: &mut dyn MediaSource, avc: bool) -> Result<RawContainer, MediaI
     };
     crate::codec::stream_probe::probe_elementary_stream(&data, &mut track);
     if !avc && track.metadata.bit_depth != Some(8) {
-        return Err(MediaInfoError::Parse(
+        return Err(ProbeError::Malformed(
             "invalid MPEG sequence signaling".into(),
         ));
     }

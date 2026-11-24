@@ -475,15 +475,30 @@ mod tests {
     #[test]
     fn detects_aac_profiles_from_codec_private_and_codec_id() {
         assert_eq!(
-            detect_header_audio_profile("mp4a", Some("aac"), Some(&[0x12, 0x10])).as_deref(),
+            detect_header_audio_profile(
+                "mp4a",
+                Some(&scryer_media_model::Codec::Aac),
+                Some(&[0x12, 0x10])
+            )
+            .as_deref(),
             Some("LC")
         );
         assert_eq!(
-            detect_header_audio_profile("A_AAC/MPEG4/LC/SBR", Some("aac"), None).as_deref(),
+            detect_header_audio_profile(
+                "A_AAC/MPEG4/LC/SBR",
+                Some(&scryer_media_model::Codec::Aac),
+                None
+            )
+            .as_deref(),
             Some("HE-AAC")
         );
         assert_eq!(
-            detect_header_audio_profile("A_AAC/MPEG4/LC/SBR/PS", Some("aac"), None).as_deref(),
+            detect_header_audio_profile(
+                "A_AAC/MPEG4/LC/SBR/PS",
+                Some(&scryer_media_model::Codec::Aac),
+                None
+            )
+            .as_deref(),
             Some("HE-AACv2")
         );
     }
@@ -500,7 +515,12 @@ mod tests {
         bits.write_bits(4, 4); // extension sample rate 44100
 
         assert_eq!(
-            detect_header_audio_profile("mp4a", Some("aac"), Some(&bits.finish())).as_deref(),
+            detect_header_audio_profile(
+                "mp4a",
+                Some(&scryer_media_model::Codec::Aac),
+                Some(&bits.finish())
+            )
+            .as_deref(),
             Some("HE-AAC")
         );
     }

@@ -896,7 +896,10 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
         // An uncoded failure (a metadata read through a mount symlink, a probe
         // worker that died) is an I/O failure of the probe, handled below.
-        Err(error) => Err(scryer_mediainfo::MediaInfoError::Io(error.to_string())),
+        Err(error) => Err(scryer_mediainfo::ProbeError::Io {
+            kind: std::io::ErrorKind::Other,
+            message: error.to_string(),
+        }),
     };
     let mut details = match probe {
         Ok(details) => details,
@@ -908,20 +911,17 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 )));
             }
             if handling == Some(MediaHandling::Playlist)
-                && matches!(
-                    error,
-                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)
-                )
+                && matches!(error, scryer_mediainfo::ProbeError::Unsupported(_))
             {
                 return media_review_hold(reasons::REFERENCES_REQUIRE_REVIEW, error.to_string());
             }
             if runtime_sample_validation.mode == RuntimeSampleValidationMode::EnforceAutomatic {
                 let code = match &error {
-                    scryer_mediainfo::MediaInfoError::Io(_) => reasons::PROBE_IO_FAILED,
-                    scryer_mediainfo::MediaInfoError::Parse(_) => reasons::PROBE_MALFORMED,
-                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_) => {
-                        MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
-                    }
+                    scryer_mediainfo::ProbeError::Io { .. }
+                    | scryer_mediainfo::ProbeError::SourceChanged => reasons::PROBE_IO_FAILED,
+                    scryer_mediainfo::ProbeError::Malformed(_) => reasons::PROBE_MALFORMED,
+                    // Unsupported, and any kind this version does not know.
+                    _ => MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
                 };
                 return media_review_hold(code, error.to_string());
             }
@@ -978,7 +978,7 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
 
     if details.container_format.as_deref() == Some("iso") {
         if details.report.status != scryer_media_types::ProbeStatus::Complete
-            || !summary::is_valid_video(&details)
+            || !details.is_playable_video()
         {
             return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
                 "disc inspection requires review ({:?}); the source image has been preserved",
@@ -1028,12 +1028,13 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         });
     }
 
-    let accepted_analysis = summary::summarize(&details);
-    let (parsed_from_probe, _) = rescore_parsed_from_analysis(parsed, Some(&accepted_analysis));
-    if details
+    let without_episode_mappings = details
         .disc
         .as_ref()
-        .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
+        .is_none_or(|disc| disc.selection.episode_mappings.is_empty());
+    let accepted_analysis = summary::summarize(details);
+    let (parsed_from_probe, _) = rescore_parsed_from_analysis(parsed, Some(&accepted_analysis));
+    if without_episode_mappings
         && let Some(rejection) = sample_rejection(
             runtime_sample_validation,
             &title.facet,
@@ -2699,7 +2700,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let candidate = directory.path().join("Coverage.Limit.2024.mkv");
         coverage_limited_mkv(&candidate);
-        let probed = scryer_mediainfo::analyze_catalog_file(&candidate).unwrap();
+        let probed = scryer_mediainfo::probe(&candidate).unwrap();
         assert!(probed.report.budget_exhausted, "{:?}", probed.report);
         assert!(
             probed

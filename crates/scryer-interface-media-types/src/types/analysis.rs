@@ -673,7 +673,7 @@ impl From<scryer_media_types::StreamDetail> for MediaStreamDetailPayload {
             .flatten();
         Self {
             kind: value.kind.into(),
-            codec: value.codec,
+            codec: value.codec.map(String::from),
             width: value.width,
             height: value.height,
             channels: value.channels,

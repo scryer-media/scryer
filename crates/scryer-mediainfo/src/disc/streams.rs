@@ -1,3 +1,4 @@
+use scryer_media_model::warning;
 use scryer_media_model::{AnalysisDetails, StreamDetail};
 
 /// Merge the languages, roles and stream facts disc navigation declares into
@@ -80,7 +81,7 @@ pub(super) fn apply_navigation(details: &mut AnalysisDetails, declared: &[Stream
                 && contradicts_pq
             {
                 details.report.warnings.push(scryer_media_model::ProbeWarning {
-                    code: "disc_hdr_signaling_conflict".into(), message: "Disc HDR signaling conflicts with the elementary video; bitstream signaling takes precedence".into(),
+                    code: warning::DISC_HDR_SIGNALING_CONFLICT.into(), message: "Disc HDR signaling conflicts with the elementary video; bitstream signaling takes precedence".into(),
                     stream_id: actual.metadata.id.clone(), ..Default::default()
                 });
             } else {

@@ -1,50 +1,50 @@
 //! Scryer's stored media summary, built from the parser's analysis details.
 //!
-//! The parser reports facts per stream. Which stream counts as the primary
-//! audio, how a frame rate is written, which languages are worth keeping and
-//! when a file counts as playable video are Scryer's decisions, made here.
+//! The parser reports facts per stream and picks the primary audio, the HDR
+//! format, the frame rate text and whether a file is playable video. Which
+//! languages are worth keeping, how bitrates and durations are rounded and
+//! how codecs map to release names are Scryer's decisions, made here.
 
 use scryer_media_types::{AnalysisDetails, StreamDetail, StreamKind};
 
 use crate::{AudioStreamDetail, MediaFileAnalysis, SubtitleStreamDetail};
 
-/// Whether the details describe playable video: a selected video stream with a
-/// codec and a duration that rounds to at least one second. Executables,
-/// audio-only files and corrupt containers do not qualify.
-pub(crate) fn is_valid_video(details: &AnalysisDetails) -> bool {
-    details
-        .selected_video()
-        .is_some_and(|video| video.codec.is_some())
-        && rounded_seconds(details.duration_seconds).is_some_and(|seconds| seconds > 0)
+/// Build the stored summary, keeping the details alongside it unchanged.
+pub(crate) fn summarize(details: AnalysisDetails) -> MediaFileAnalysis {
+    let mut summary = summarize_facts(&details);
+    summary.details = details;
+    summary
 }
 
-/// Build the stored summary. The details are kept alongside it unchanged.
-pub(crate) fn summarize(details: &AnalysisDetails) -> MediaFileAnalysis {
+/// Every summary field except the details themselves.
+fn summarize_facts(details: &AnalysisDetails) -> MediaFileAnalysis {
     let video = details.selected_video();
     let audio: Vec<&StreamDetail> = details.program_streams(StreamKind::Audio).collect();
     let subtitles: Vec<&StreamDetail> = details.program_streams(StreamKind::Subtitle).collect();
-    let primary_audio = primary_audio_of(&audio);
-    let (video_width, video_height) = video.map(video_dimensions).unwrap_or_default();
+    let primary_audio = details.primary_audio();
+    let (video_width, video_height) = video.map(StreamDetail::picture_size).unwrap_or_default();
 
     MediaFileAnalysis {
-        details: details.clone(),
+        details: AnalysisDetails::default(),
         video_codec: video
-            .and_then(|video| video.codec.as_deref())
-            .and_then(crate::release_parser::VideoCodec::parse),
+            .and_then(|video| video.codec.as_ref())
+            .and_then(|codec| crate::release_parser::VideoCodec::parse(codec.as_str())),
         video_width,
         video_height,
         video_bitrate_kbps: video.and_then(|video| kbps(video.metadata.bitrate_bps)),
         video_bit_depth: video.and_then(|video| video.metadata.bit_depth),
-        video_hdr_format: video.and_then(hdr_label).map(str::to_owned),
+        video_hdr_format: video
+            .and_then(StreamDetail::hdr_format)
+            .map(|format| format.as_str().to_owned()),
         dovi_profile: video
             .and_then(|video| video.metadata.hdr.dovi.as_ref())
             .and_then(|dovi| dovi.profile),
         dovi_bl_compat_id: video
             .and_then(|video| video.metadata.hdr.dovi.as_ref())
             .and_then(|dovi| dovi.base_layer_compatibility_id),
-        video_frame_rate: video.and_then(|video| frame_rate_text(details, video)),
+        video_frame_rate: details.frame_rate_text(),
         video_profile: video.and_then(|video| video.metadata.profile.clone()),
-        audio_codec: primary_audio.and_then(|stream| stream.codec.clone()),
+        audio_codec: primary_audio.and_then(codec_name),
         audio_profile: primary_audio.and_then(|stream| stream.metadata.profile.clone()),
         audio_channels: primary_audio.and_then(|stream| stream.channels),
         audio_bitrate_kbps: primary_audio.and_then(|stream| kbps(stream.metadata.bitrate_bps)),
@@ -57,7 +57,7 @@ pub(crate) fn summarize(details: &AnalysisDetails) -> MediaFileAnalysis {
         audio_streams: audio
             .iter()
             .map(|stream| AudioStreamDetail {
-                codec: stream.codec.clone(),
+                codec: codec_name(stream),
                 profile: stream.metadata.profile.clone(),
                 channels: stream.channels,
                 language: known_language(stream)
@@ -71,12 +71,12 @@ pub(crate) fn summarize(details: &AnalysisDetails) -> MediaFileAnalysis {
         ),
         subtitle_codecs: subtitles
             .iter()
-            .filter_map(|stream| stream.codec.clone())
+            .filter_map(|stream| codec_name(stream))
             .collect(),
         subtitle_streams: subtitles
             .iter()
             .map(|stream| SubtitleStreamDetail {
-                codec: stream.codec.clone(),
+                codec: codec_name(stream),
                 language: known_language(stream)
                     .and_then(crate::normalize_detected_subtitle_language_code),
                 name: stream.name.clone(),
@@ -93,74 +93,16 @@ pub(crate) fn summarize(details: &AnalysisDetails) -> MediaFileAnalysis {
     }
 }
 
-/// The primary audio stream of the selected program.
-pub(crate) fn primary_audio(details: &AnalysisDetails) -> Option<&StreamDetail> {
-    let audio: Vec<&StreamDetail> = details.program_streams(StreamKind::Audio).collect();
-    primary_audio_of(&audio)
-}
-
-/// Picture size: the container's dimensions, else the codec configuration's.
-pub(crate) fn video_dimensions(video: &StreamDetail) -> (Option<i32>, Option<i32>) {
-    (
-        video.width.or(video.metadata.configured_width),
-        video.height.or(video.metadata.configured_height),
-    )
-}
-
 /// Duration rounded to whole seconds.
 pub(crate) fn duration_seconds(details: &AnalysisDetails) -> Option<i32> {
-    rounded_seconds(details.duration_seconds)
+    details
+        .duration_seconds
+        .map(|seconds| seconds.round() as i32)
 }
 
-/// The authored default audio, skipping commentary, per Scryer's audio policy.
-fn primary_audio_of<'a>(audio: &[&'a StreamDetail]) -> Option<&'a StreamDetail> {
-    scryer_media_types::primary_audio_stream_index(audio.iter().map(|stream| {
-        let disposition = &stream.metadata.disposition;
-        (
-            disposition.default.unwrap_or(false),
-            disposition.commentary == Some(true),
-            stream.name.as_deref(),
-        )
-    }))
-    .map(|index| audio[index])
-}
-
-/// The strongest HDR format the video signals: Dolby Vision, then HDR10+,
-/// HDR10 and HLG.
-fn hdr_label(video: &StreamDetail) -> Option<&'static str> {
-    let hdr = &video.metadata.hdr;
-    if hdr.dolby_vision == Some(true) {
-        Some("Dolby Vision")
-    } else if hdr.hdr10plus == Some(true) {
-        Some("HDR10+")
-    } else if hdr.hdr10 == Some(true) {
-        Some("HDR10")
-    } else if hdr.hlg == Some(true) {
-        Some("HLG")
-    } else {
-        None
-    }
-}
-
-/// The parser's nominal rate with three decimals and trailing zeros removed,
-/// for example "23.976" or "24". A disc title whose clip states no rate falls
-/// back to its declared rate, written with all three decimals.
-fn frame_rate_text(details: &AnalysisDetails, video: &StreamDetail) -> Option<String> {
-    let nominal = video.metadata.nominal_frame_rate_fps.and_then(|fps| {
-        if fps <= 0.0 {
-            return None;
-        }
-        let text = format!("{fps:.3}");
-        Some(text.trim_end_matches('0').trim_end_matches('.').to_owned())
-    });
-    nominal.or_else(|| {
-        details.disc.as_ref()?;
-        video
-            .metadata
-            .declared_frame_rate
-            .and_then(|rate| rate.as_f64())
-            .map(|rate| format!("{rate:.3}"))
-    })
+/// The codec name Scryer stores.
+fn codec_name(stream: &StreamDetail) -> Option<String> {
+    stream.codec.as_ref().map(|codec| codec.as_str().to_owned())
 }
 
 /// A language tag that says something: neither empty nor `und`.
@@ -175,14 +117,11 @@ fn kbps(bits_per_second: Option<u64>) -> Option<i32> {
     bits_per_second.map(|bps| (bps / 1000) as i32)
 }
 
-fn rounded_seconds(seconds: Option<f64>) -> Option<i32> {
-    seconds.map(|seconds| seconds.round() as i32)
-}
-
 #[cfg(test)]
 mod tests {
     use scryer_media_types::{
-        DiscMetadata, DolbyVision, HdrCapabilities, Rational, StreamDisposition, StreamMetadata,
+        Codec, DiscMetadata, DolbyVision, HdrCapabilities, Rational, StreamDisposition,
+        StreamMetadata,
     };
 
     use super::*;
@@ -190,7 +129,7 @@ mod tests {
     fn video(codec: Option<&str>) -> StreamDetail {
         StreamDetail {
             kind: StreamKind::Video,
-            codec: codec.map(str::to_owned),
+            codec: codec.map(Codec::from),
             metadata: StreamMetadata {
                 id: Some("v".to_owned()),
                 ..Default::default()
@@ -202,7 +141,7 @@ mod tests {
     fn audio(codec: &str, channels: i32, language: Option<&str>) -> StreamDetail {
         StreamDetail {
             kind: StreamKind::Audio,
-            codec: Some(codec.to_owned()),
+            codec: Some(Codec::from(codec)),
             channels: Some(channels),
             language: language.map(str::to_owned),
             ..Default::default()
@@ -212,7 +151,7 @@ mod tests {
     fn subtitle(codec: &str, language: Option<&str>) -> StreamDetail {
         StreamDetail {
             kind: StreamKind::Subtitle,
-            codec: Some(codec.to_owned()),
+            codec: Some(Codec::from(codec)),
             language: language.map(str::to_owned),
             ..Default::default()
         }
@@ -251,7 +190,7 @@ mod tests {
         main.name = Some("Main".to_owned());
         let mut director = with_default(commentary(audio("aac", 6, Some("eng"))), Some(true));
         director.name = Some("Director".to_owned());
-        let summary = summarize(&details(vec![video(Some("h264")), main, director]));
+        let summary = summarize(details(vec![video(Some("h264")), main, director]));
 
         assert_eq!(summary.audio_codec.as_deref(), Some("ac3"));
         assert_eq!(summary.audio_channels, Some(1));
@@ -267,7 +206,9 @@ mod tests {
             with_default(audio("eac3", 6, None), Some(true)),
         ]);
         assert_eq!(
-            primary_audio(&default_second).and_then(|s| s.codec.as_deref()),
+            default_second
+                .primary_audio()
+                .and_then(|s| s.codec.as_ref().map(Codec::as_str)),
             Some("eac3")
         );
 
@@ -280,7 +221,9 @@ mod tests {
             audio("ac3", 6, None),
         ]);
         assert_eq!(
-            primary_audio(&first_titled_commentary).and_then(|s| s.codec.as_deref()),
+            first_titled_commentary
+                .primary_audio()
+                .and_then(|s| s.codec.as_ref().map(Codec::as_str)),
             Some("dts")
         );
 
@@ -290,13 +233,15 @@ mod tests {
             audio("opus", 2, None),
         ]);
         assert_eq!(
-            primary_audio(&undeclared_default).and_then(|s| s.codec.as_deref()),
+            undeclared_default
+                .primary_audio()
+                .and_then(|s| s.codec.as_ref().map(Codec::as_str)),
             Some("flac")
         );
 
         let only_commentary = details(vec![video(Some("h264")), commentary(audio("aac", 2, None))]);
-        assert!(primary_audio(&only_commentary).is_none());
-        let summary = summarize(&only_commentary);
+        assert!(only_commentary.primary_audio().is_none());
+        let summary = summarize(only_commentary);
         assert_eq!(summary.audio_codec, None);
         assert_eq!(summary.audio_streams.len(), 1);
     }
@@ -308,7 +253,7 @@ mod tests {
         first.metadata.bitrate_bps = Some(192_000);
         let mut default = with_default(audio("eac3", 6, Some("eng")), Some(true));
         default.metadata.bitrate_bps = Some(640_999);
-        let summary = summarize(&details(vec![video(Some("hevc")), first, default]));
+        let summary = summarize(details(vec![video(Some("hevc")), first, default]));
 
         assert_eq!(summary.audio_codec.as_deref(), Some("eac3"));
         assert_eq!(summary.audio_profile, None);
@@ -330,7 +275,7 @@ mod tests {
             in_program(subtitle("dvb_subtitle", Some("nld")), 2),
         ]);
         analysis.selected_program_id = Some(1);
-        let summary = summarize(&analysis);
+        let summary = summarize(analysis.clone());
 
         assert_eq!(summary.audio_codec.as_deref(), Some("aac"));
         assert_eq!(summary.audio_channels, Some(2));
@@ -356,7 +301,7 @@ mod tests {
             default: Some(false),
             ..Default::default()
         };
-        let summary = summarize(&details(vec![
+        let summary = summarize(details(vec![
             video(Some("h264")),
             audio("aac", 2, Some("und")),
             audio("aac", 2, Some("")),
@@ -405,7 +350,7 @@ mod tests {
         ] {
             let mut picture = video(Some("hevc"));
             picture.metadata.hdr = hdr.clone();
-            let summary = summarize(&details(vec![picture]));
+            let summary = summarize(details(vec![picture]));
             assert_eq!(summary.video_hdr_format.as_deref(), label, "{hdr:?}");
         }
     }
@@ -422,7 +367,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let summary = summarize(&details(vec![picture]));
+        let summary = summarize(details(vec![picture]));
         assert_eq!(summary.dovi_profile, Some(8));
         assert_eq!(summary.dovi_bl_compat_id, Some(1));
     }
@@ -433,7 +378,7 @@ mod tests {
             let mut picture = video(Some("h264"));
             picture.metadata.nominal_frame_rate_fps = fps;
             picture.metadata.declared_frame_rate = Rational::new(30, 1);
-            summarize(&details(vec![picture])).video_frame_rate
+            summarize(details(vec![picture])).video_frame_rate
         };
         assert_eq!(text(Some(24_000.0 / 1_001.0)).as_deref(), Some("23.976"));
         assert_eq!(text(Some(24.0)).as_deref(), Some("24"));
@@ -453,7 +398,7 @@ mod tests {
             picture.metadata.declared_frame_rate = Rational::new(24, 1);
             let mut analysis = details(vec![picture]);
             analysis.disc = Some(DiscMetadata::default());
-            summarize(&analysis).video_frame_rate
+            summarize(analysis.clone()).video_frame_rate
         };
         assert_eq!(disc(None).as_deref(), Some("24.000"));
         assert_eq!(disc(Some(0.0)).as_deref(), Some("24.000"));
@@ -465,7 +410,7 @@ mod tests {
         let with_duration = |streams: Vec<StreamDetail>, seconds: Option<f64>| {
             let mut analysis = details(streams);
             analysis.duration_seconds = seconds;
-            is_valid_video(&analysis)
+            analysis.is_playable_video()
         };
         assert!(with_duration(vec![video(Some("h264"))], Some(0.5)));
         assert!(!with_duration(vec![video(Some("h264"))], Some(0.49)));
@@ -475,8 +420,8 @@ mod tests {
 
         let mut unselected = details(vec![video(Some("h264"))]);
         unselected.selected_video_id = None;
-        assert!(!is_valid_video(&unselected));
-        assert_eq!(summarize(&unselected).video_codec, None);
+        assert!(!unselected.is_playable_video());
+        assert_eq!(summarize(unselected).video_codec, None);
     }
 
     #[test]
@@ -484,7 +429,7 @@ mod tests {
         let mut configured = video(Some("h264"));
         configured.metadata.configured_width = Some(1920);
         configured.metadata.configured_height = Some(1080);
-        let summary = summarize(&details(vec![configured.clone()]));
+        let summary = summarize(details(vec![configured.clone()]));
         assert_eq!(
             (summary.video_width, summary.video_height),
             (Some(1920), Some(1080))
@@ -492,7 +437,7 @@ mod tests {
 
         configured.width = Some(1440);
         configured.height = Some(1080);
-        let summary = summarize(&details(vec![configured]));
+        let summary = summarize(details(vec![configured]));
         assert_eq!(
             (summary.video_width, summary.video_height),
             (Some(1440), Some(1080))
@@ -509,7 +454,7 @@ mod tests {
         analysis.container_format = Some("matroska".to_owned());
         analysis.duration_seconds = Some(7_019.5);
         analysis.chapter_count = Some(12);
-        let summary = summarize(&analysis);
+        let summary = summarize(analysis.clone());
 
         assert_eq!(summary.container_format.as_deref(), Some("matroska"));
         assert_eq!(summary.duration_seconds, Some(7_020));
@@ -521,8 +466,8 @@ mod tests {
         assert_eq!(summary.details, analysis);
 
         analysis.chapter_count = Some(u32::MAX);
-        assert_eq!(summarize(&analysis).num_chapters, None);
+        assert_eq!(summarize(analysis.clone()).num_chapters, None);
         analysis.chapter_count = None;
-        assert_eq!(summarize(&analysis).num_chapters, None);
+        assert_eq!(summarize(analysis.clone()).num_chapters, None);
     }
 }

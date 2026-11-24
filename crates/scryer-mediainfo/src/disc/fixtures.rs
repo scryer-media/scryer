@@ -16,7 +16,7 @@ fn audio_facts(details: &AnalysisDetails) -> Vec<AudioFacts<'_>> {
         .program_streams(scryer_media_model::StreamKind::Audio)
         .map(|stream| {
             (
-                stream.codec.as_deref(),
+                stream.codec.as_ref().map(scryer_media_model::Codec::as_str),
                 stream.language.as_deref(),
                 stream.metadata.disposition.default,
                 stream.metadata.disposition.commentary,
@@ -54,12 +54,7 @@ fn udf_bluray_titles_reuse_native_stream_probing_across_metadata_extents() {
         let inventory = image::open(&mut source).unwrap();
         assert_eq!(inventory.filesystem, "UDF");
         assert!(inventory.bytes_read < 64 * 2048);
-        let analysis = inspect(
-            &mut source,
-            Default::default(),
-            AnalysisProfile::DefaultRich,
-        )
-        .unwrap();
+        let analysis = inspect(&mut source, Default::default(), ProbeDepth::Full).unwrap();
         assert_eq!(
             analysis.report.status,
             ProbeStatus::Complete,
@@ -79,7 +74,7 @@ fn udf_bluray_titles_reuse_native_stream_probing_across_metadata_extents() {
                 title_id: Some("00002".into()),
                 ..Default::default()
             },
-            AnalysisProfile::DefaultRich,
+            ProbeDepth::Full,
         )
         .unwrap();
         assert_eq!(selected.duration_seconds.map(f64::round), Some(1.0));
@@ -169,7 +164,7 @@ fn clpi_stream_inventory_validates_authored_ranges_and_packet_bounds() {
     let analysis = inspect(
         &mut Cursor::new(make(90_000, info.clone())),
         Default::default(),
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(
@@ -187,7 +182,7 @@ fn clpi_stream_inventory_validates_authored_ranges_and_packet_bounds() {
     let bad_trim = inspect(
         &mut Cursor::new(make(180_000, info)),
         Default::default(),
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(
@@ -200,7 +195,7 @@ fn clpi_stream_inventory_validates_authored_ranges_and_packet_bounds() {
             clip_information((clip.len() / 192 + 1) as u32),
         )),
         Default::default(),
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(
@@ -320,7 +315,7 @@ fn missing_clip_information_retains_inventory_without_claiming_a_valid_title() {
     let analysis = inspect(
         &mut Cursor::new(bytes),
         Default::default(),
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(analysis.report.status, ProbeStatus::Incomplete);
@@ -362,12 +357,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
         ("BDMV/STREAM/00001.M2TS", clip),
     ]);
     let mut source = BoundedSource::new(Cursor::new(bytes.clone()), 8 * 1024 * 1024);
-    let automatic = inspect(
-        &mut source,
-        DiscSelection::default(),
-        AnalysisProfile::DefaultRich,
-    )
-    .unwrap();
+    let automatic = inspect(&mut source, DiscSelection::default(), ProbeDepth::Full).unwrap();
     assert_eq!(
         automatic.report.status,
         ProbeStatus::Complete,
@@ -399,7 +389,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
             }],
             ..Default::default()
         },
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(
@@ -416,7 +406,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
             title_id: Some("00002".into()),
             ..Default::default()
         },
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(selected.duration_seconds.map(f64::round), Some(1.0));
@@ -427,7 +417,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
             title_id: Some("99999".into()),
             ..Default::default()
         },
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert!(crate::test_facts::video_codec(&missing).is_none());
@@ -461,7 +451,7 @@ fn encrypted_longest_title_falls_back_only_for_automatic_selection() {
     let automatic = inspect(
         &mut Cursor::new(bytes.clone()),
         DiscSelection::default(),
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(
@@ -483,7 +473,7 @@ fn encrypted_longest_title_falls_back_only_for_automatic_selection() {
             title_id: Some("00001".into()),
             ..Default::default()
         },
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert!(crate::test_facts::video_codec(&selected).is_none());
@@ -519,12 +509,7 @@ fn bluray_cuts_in_one_clip_probe_only_their_own_packet_ranges() {
     ];
     for image in [iso(&files), authored_image::udf_image::udf(&files, true)] {
         let mut source = BoundedSource::new(Cursor::new(image), 8 * 1024 * 1024);
-        let analysis = inspect(
-            &mut source,
-            Default::default(),
-            AnalysisProfile::DefaultRich,
-        )
-        .unwrap();
+        let analysis = inspect(&mut source, Default::default(), ProbeDepth::Full).unwrap();
         assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
         assert_eq!(analysis.duration_seconds, Some(65_536.0 / 45_000.0));
         assert_eq!(
@@ -631,7 +616,7 @@ fn intact_dvd_uses_title_program_range_chapters_and_ifo_roles() {
     let analysis = inspect(
         &mut Cursor::new(bytes),
         Default::default(),
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
     )
     .unwrap();
     assert_eq!(analysis.report.status, ProbeStatus::Complete);
@@ -689,7 +674,7 @@ fn dvd_post_title_exits_preserve_the_authored_timeline() {
         let analysis = inspect(
             &mut Cursor::new(bytes),
             Default::default(),
-            AnalysisProfile::DefaultRich,
+            ProbeDepth::Full,
         )
         .unwrap();
         assert_eq!(analysis.report.status, ProbeStatus::Complete, "{command:?}");

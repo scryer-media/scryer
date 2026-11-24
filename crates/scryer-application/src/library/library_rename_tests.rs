@@ -1562,7 +1562,7 @@ fn probed_series_analysis(channels: i32, layout: &str) -> crate::MediaFileAnalys
             revision: scryer_media_types::ANALYSIS_REVISION,
             streams: vec![scryer_media_types::StreamDetail {
                 kind: scryer_media_types::StreamKind::Audio,
-                codec: Some("aac".to_string()),
+                codec: Some(scryer_media_types::Codec::Aac),
                 channels: Some(channels),
                 metadata: scryer_media_types::StreamMetadata {
                     channel_layout: Some(layout.to_string()),

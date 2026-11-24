@@ -41,16 +41,19 @@ fn stream_inventory_preserves_container_order_and_missing_language() {
 }
 
 #[test]
-fn wave_mp3_mono_layout_reaches_the_catalog_contract() {
+fn wave_mp3_mono_layout_reaches_the_stream_details() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/wmv_wmv1_mp3_mono.wmv");
-    let analysis = crate::analyze_catalog_file(&path).unwrap();
+    let analysis = crate::probe(&path).unwrap();
     let audio = analysis
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
         .unwrap();
-    assert_eq!(audio.codec.as_deref(), Some("mp3"));
+    assert_eq!(
+        audio.codec.as_ref().map(scryer_media_model::Codec::as_str),
+        Some("mp3")
+    );
     assert_eq!(audio.channels, Some(1));
     assert_eq!(audio.metadata.channel_layout.as_deref(), Some("mono"));
     assert_eq!(audio.metadata.original_language.as_deref(), Some("en"));
@@ -62,13 +65,16 @@ fn wave_mp3_mono_layout_reaches_the_catalog_contract() {
 fn extensible_aac_uses_the_codec_configuration_after_the_wave_header() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/media/wmv_wmv1_aac_surround.wmv");
-    let analysis = crate::analyze_catalog_file(&path).unwrap();
+    let analysis = crate::probe(&path).unwrap();
     let audio = analysis
         .streams
         .iter()
         .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
         .unwrap();
-    assert_eq!(audio.codec.as_deref(), Some("aac"));
+    assert_eq!(
+        audio.codec.as_ref().map(scryer_media_model::Codec::as_str),
+        Some("aac")
+    );
     assert_eq!(audio.channels, Some(6));
     assert_eq!(audio.metadata.channel_layout.as_deref(), Some("5.1"));
     assert_eq!(audio.metadata.sample_rate, Some(48_000));
@@ -76,12 +82,12 @@ fn extensible_aac_uses_the_codec_configuration_after_the_wave_header() {
 }
 
 #[test]
-fn legacy_windows_media_video_properties_reach_the_catalog_contract() {
+fn legacy_windows_media_video_properties_reach_the_stream_details() {
     for fixture in ["wmv_wmv1_wmav1.wmv", "wmv_wmv2_video_only.wmv"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/media")
             .join(fixture);
-        let analysis = crate::analyze_catalog_file(&path).unwrap();
+        let analysis = crate::probe(&path).unwrap();
         let video = analysis
             .streams
             .iter()
@@ -156,12 +162,10 @@ fn asf_chapter_fixture(markers_first: bool) -> Vec<u8> {
 
 #[test]
 fn markers_preserve_unicode_titles_and_precise_preroll_adjusted_times() {
-    let analysis = crate::analyze_source(
+    let analysis = crate::probe_bounded(
         &mut std::io::Cursor::new(asf_chapter_fixture(true)),
         "wmv",
-        crate::AnalyzeOptions {
-            profile: crate::AnalysisProfile::DefaultRich,
-        },
+        &crate::ProbeOptions::new(),
     )
     .unwrap();
     assert_eq!(analysis.chapter_count, Some(2));
@@ -235,12 +239,10 @@ fn asf_marker_chapter_reference_matches_ffprobe() {
         String::from_utf8_lossy(&output.stderr)
     );
     let reference: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let parsed = crate::analyze_source(
+    let parsed = crate::probe_bounded(
         &mut std::io::Cursor::new(bytes),
         "wmv",
-        crate::AnalyzeOptions {
-            profile: crate::AnalysisProfile::DefaultRich,
-        },
+        &crate::ProbeOptions::new(),
     )
     .unwrap();
     let chapters = reference["chapters"].as_array().unwrap();
@@ -363,13 +365,34 @@ fn invalid_or_missing_pixel_aspect_does_not_become_square_pixels() {
 
 #[test]
 fn maps_windows_media_codecs() {
-    assert_eq!(map_video_fourcc(*b"WMV3"), Some("wmv3"));
-    assert_eq!(map_video_fourcc(*b"WVC1"), Some("vc1"));
-    assert_eq!(map_audio_format_tag(0x0162, 0), Some("wmapro"));
-    assert_eq!(map_audio_format_tag(0x0163, 0), Some("wmalossless"));
-    assert_eq!(map_audio_format_tag(0x0001, 8), Some("pcm_u8"));
-    assert_eq!(map_audio_format_tag(0x0001, 24), Some("pcm_s24le"));
-    assert_eq!(map_audio_format_tag(0x0003, 32), Some("pcm_f32le"));
+    assert_eq!(
+        map_video_fourcc(*b"WMV3"),
+        Some(scryer_media_model::Codec::Wmv3)
+    );
+    assert_eq!(
+        map_video_fourcc(*b"WVC1"),
+        Some(scryer_media_model::Codec::Vc1)
+    );
+    assert_eq!(
+        map_audio_format_tag(0x0162, 0),
+        Some(scryer_media_model::Codec::WmaPro)
+    );
+    assert_eq!(
+        map_audio_format_tag(0x0163, 0),
+        Some(scryer_media_model::Codec::WmaLossless)
+    );
+    assert_eq!(
+        map_audio_format_tag(0x0001, 8),
+        Some(scryer_media_model::Codec::PcmU8)
+    );
+    assert_eq!(
+        map_audio_format_tag(0x0001, 24),
+        Some(scryer_media_model::Codec::PcmS24Le)
+    );
+    assert_eq!(
+        map_audio_format_tag(0x0003, 32),
+        Some(scryer_media_model::Codec::PcmF32Le)
+    );
 }
 
 #[test]
@@ -388,7 +411,7 @@ fn resolves_wave_format_extensible_subtype_and_valid_bits() {
     assert_eq!(
         resolve_audio_format(0xfffe, 32, Some(&extra))
             .and_then(|(tag, bits)| map_audio_format_tag(tag, bits)),
-        Some("pcm_f32le")
+        Some(scryer_media_model::Codec::PcmF32Le)
     );
     extra[0..2].copy_from_slice(&20_u16.to_le_bytes());
     extra[6..10].copy_from_slice(&1_u32.to_le_bytes());
@@ -404,7 +427,13 @@ fn resolves_wave_format_extensible_subtype_and_valid_bits() {
     wave[16..18].copy_from_slice(&22_u16.to_le_bytes());
     wave.extend(extra);
     let track = parse_audio_type_data(&wave).unwrap();
-    assert_eq!(track.codec_name.as_deref(), Some("pcm_s24le"));
+    assert_eq!(
+        track
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("pcm_s24le")
+    );
     assert_eq!(track.metadata.sample_bit_depth, Some(20));
     assert_eq!(track.metadata.sample_rate, Some(48_000));
 }

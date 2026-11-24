@@ -1,5 +1,6 @@
 //! Supplemental container inventory. Attachment payloads and media blocks are skipped.
 use super::*;
+use scryer_media_model::warning;
 use scryer_media_model::{
     AnalysisDetails, Attachment, Chapter, ProbeStatus, ProbeWarning, Provenance,
 };
@@ -39,7 +40,7 @@ pub(super) fn read<R: Read + Seek>(
         details.report.status = ProbeStatus::Incomplete;
         details.report.budget_exhausted |= remaining == 0 || bytes_left == 0;
         details.report.warnings.push(ProbeWarning {
-            code: "mkv_inventory_incomplete".into(),
+            code: warning::MKV_INVENTORY_INCOMPLETE.into(),
             message: error.to_string(),
             ..Default::default()
         });
@@ -47,13 +48,13 @@ pub(super) fn read<R: Read + Seek>(
     details
 }
 
-fn bounded_end(header: EbmlElementHeader, end: u64) -> Result<u64, MediaInfoError> {
+fn bounded_end(header: EbmlElementHeader, end: u64) -> Result<u64, ProbeError> {
     header
         .size
         .and_then(|size| header.data_offset.checked_add(size))
         .filter(|child_end| *child_end <= end)
         .ok_or_else(|| {
-            MediaInfoError::Parse("unknown or invalid supplemental MKV element length".into())
+            ProbeError::Malformed("unknown or invalid supplemental MKV element length".into())
         })
 }
 
@@ -70,7 +71,7 @@ fn inventory<R: Read + Seek>(
     details: &mut AnalysisDetails,
     remaining: &mut usize,
     bytes_left: &mut u64,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     scanner.seek_to(0)?;
     let segment = scanner.read_next_segment_header()?;
     let end = segment
@@ -78,7 +79,7 @@ fn inventory<R: Read + Seek>(
         .and_then(|size| segment.data_offset.checked_add(size))
         .unwrap_or(scanner.file_len);
     if end > scanner.file_len {
-        return Err(MediaInfoError::Parse("truncated MKV segment".into()));
+        return Err(ProbeError::Malformed("truncated MKV segment".into()));
     }
     let mut last_cluster = None;
     let mut queue = MetadataQueue::default();
@@ -92,7 +93,7 @@ fn inventory<R: Read + Seek>(
         scanner.seek_to(position)?;
         let header = scanner
             .read_element_header()?
-            .ok_or_else(|| MediaInfoError::Parse("truncated MKV inventory".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("truncated MKV inventory".into()))?;
         // An unknown-size cluster cannot be skipped safely. Indexed metadata
         // is still usable, but this prefix cannot establish a final cluster.
         if header.id == EBML_ID_CLUSTER && header.size.is_none() {
@@ -110,19 +111,21 @@ fn inventory<R: Read + Seek>(
         incomplete_inventory(details);
     }
     let mut bitrates = std::collections::BTreeMap::new();
+    let mut track_tags =
+        std::collections::BTreeMap::<u64, std::collections::BTreeMap<String, String>>::new();
     while let Some((offset, expected_id)) = queue.pending.pop_front() {
         spend_io(remaining, &mut io_headers)?;
         if offset < segment.data_offset || offset >= end {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "MKV seek target outside segment".into(),
             ));
         }
         scanner.seek_to(offset)?;
         let header = scanner
             .read_element_header()?
-            .ok_or_else(|| MediaInfoError::Parse("missing MKV seek target".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("missing MKV seek target".into()))?;
         if header.id != expected_id {
-            return Err(MediaInfoError::Parse("MKV seek target ID mismatch".into()));
+            return Err(ProbeError::Malformed("MKV seek target ID mismatch".into()));
         }
         let child_end = bounded_end(header, end)?;
         match header.id {
@@ -130,7 +133,7 @@ fn inventory<R: Read + Seek>(
                 let size = child_end - header.data_offset;
                 if size > *bytes_left {
                     *bytes_left = 0;
-                    return Err(MediaInfoError::Parse(
+                    return Err(ProbeError::Malformed(
                         "MKV seek inventory budget exhausted".into(),
                     ));
                 }
@@ -141,7 +144,7 @@ fn inventory<R: Read + Seek>(
                 let size = child_end - header.data_offset;
                 if size > *bytes_left {
                     *bytes_left = 0;
-                    return Err(MediaInfoError::Parse(
+                    return Err(ProbeError::Malformed(
                         "MKV chapter inventory budget exhausted".into(),
                     ));
                 }
@@ -161,12 +164,21 @@ fn inventory<R: Read + Seek>(
                 let size = child_end - header.data_offset;
                 if size > *bytes_left {
                     *bytes_left = 0;
-                    return Err(MediaInfoError::Parse(
+                    return Err(ProbeError::Malformed(
                         "MKV statistics inventory budget exhausted".into(),
                     ));
                 }
                 *bytes_left -= size;
-                statistics(&scanner.read_bytes(size)?, remaining, &mut bitrates)?;
+                statistics(
+                    &scanner.read_bytes(size)?,
+                    remaining,
+                    &mut bitrates,
+                    &mut TagScopes {
+                        file: &mut details.tags,
+                        tracks: &mut track_tags,
+                        report: &mut details.report,
+                    },
+                )?;
             }
             _ => {}
         }
@@ -178,13 +190,27 @@ fn inventory<R: Read + Seek>(
             .and_modify(|index| *index = None)
             .or_insert(Some(index));
     }
+    for (uid, scope) in track_tags {
+        // A UID two tracks share cannot say whose tags these are.
+        if let Some(Some(index)) = uid_index.get(&uid)
+            && let Some(track) = tracks.get_mut(*index)
+        {
+            if track.metadata.tags.is_empty() {
+                track.metadata.tags = scope;
+            } else {
+                for (key, value) in scope {
+                    track.metadata.tags.entry(key).or_insert(value);
+                }
+            }
+        }
+    }
     for (uid, bitrate) in bitrates {
         let Some(index) = uid_index.get(&uid) else {
             continue;
         };
         if index.is_none() || bitrate.is_none() {
             details.report.warnings.push(ProbeWarning {
-                code: "mkv_statistics_conflict".into(),
+                code: warning::MKV_STATISTICS_CONFLICT.into(),
                 message: format!("Ambiguous bitrate statistics for track UID {uid}"),
                 ..Default::default()
             });
@@ -225,7 +251,7 @@ fn incomplete_inventory(details: &mut AnalysisDetails) {
     details.report.status = ProbeStatus::Incomplete;
     details.report.budget_exhausted = true;
     details.report.warnings.push(ProbeWarning {
-        code: "mkv_inventory_coverage_limit".into(),
+        code: warning::MKV_INVENTORY_COVERAGE_LIMIT.into(),
         message: "Supplemental MKV inventory uses an 8 MiB prefix, at most 128 sequential headers and 32 indexed elements; unindexed metadata and final duration may remain unknown".into(),
         ..Default::default()
     });
@@ -238,7 +264,7 @@ struct MetadataQueue {
 }
 
 impl MetadataQueue {
-    fn push(&mut self, offset: u64, id: u32, remaining: &mut usize) -> Result<(), MediaInfoError> {
+    fn push(&mut self, offset: u64, id: u32, remaining: &mut usize) -> Result<(), ProbeError> {
         if !matches!(
             id,
             EBML_ID_SEEK_HEAD | EBML_ID_CHAPTERS | EBML_ID_ATTACHMENTS | EBML_ID_TAGS
@@ -249,14 +275,14 @@ impl MetadataQueue {
             return if *previous == id {
                 Ok(())
             } else {
-                Err(MediaInfoError::Parse(
+                Err(ProbeError::Malformed(
                     "conflicting MKV seek target IDs".into(),
                 ))
             };
         }
         if self.seen.len() == MAX_INDEXED_ELEMENTS {
             *remaining = 0;
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "MKV indexed element budget exhausted".into(),
             ));
         }
@@ -270,11 +296,11 @@ impl MetadataQueue {
         mut bytes: &[u8],
         start: u64,
         remaining: &mut usize,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         while !bytes.is_empty() {
             spend(remaining)?;
             let (id, entry, consumed) = next_ebml_element(bytes)
-                .ok_or_else(|| MediaInfoError::Parse("truncated MKV seek entry".into()))?;
+                .ok_or_else(|| ProbeError::Malformed("truncated MKV seek entry".into()))?;
             if id == EBML_ID_SEEK {
                 let mut fields = entry;
                 let mut target_id = None;
@@ -282,7 +308,7 @@ impl MetadataQueue {
                 while !fields.is_empty() {
                     spend(remaining)?;
                     let (id, data, length) = next_ebml_element(fields)
-                        .ok_or_else(|| MediaInfoError::Parse("truncated MKV seek field".into()))?;
+                        .ok_or_else(|| ProbeError::Malformed("truncated MKV seek field".into()))?;
                     match id {
                         EBML_ID_SEEK_ID => {
                             target_id = parse_ebml_uint(data).and_then(|id| u32::try_from(id).ok())
@@ -305,10 +331,10 @@ impl MetadataQueue {
     }
 }
 
-fn spend_io(remaining: &mut usize, io_headers: &mut usize) -> Result<(), MediaInfoError> {
+fn spend_io(remaining: &mut usize, io_headers: &mut usize) -> Result<(), ProbeError> {
     if *io_headers == 0 {
         *remaining = 0;
-        return Err(MediaInfoError::Parse(
+        return Err(ProbeError::Malformed(
             "MKV inventory I/O budget exhausted".into(),
         ));
     }
@@ -316,43 +342,62 @@ fn spend_io(remaining: &mut usize, io_headers: &mut usize) -> Result<(), MediaIn
     spend(remaining)
 }
 
-fn spend(remaining: &mut usize) -> Result<(), MediaInfoError> {
+fn spend(remaining: &mut usize) -> Result<(), ProbeError> {
     *remaining = remaining
         .checked_sub(1)
-        .ok_or_else(|| MediaInfoError::Parse("MKV metadata header budget exhausted".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("MKV metadata header budget exhausted".into()))?;
     Ok(())
 }
 
+/// Where the text of a Tags element goes: the file's tags, each targeted
+/// track's by UID, and the report for tags past a limit.
+struct TagScopes<'a> {
+    file: &'a mut std::collections::BTreeMap<String, String>,
+    tracks: &'a mut std::collections::BTreeMap<u64, std::collections::BTreeMap<String, String>>,
+    report: &'a mut scryer_media_model::ProbeReport,
+}
+
+/// Reads per-track bitrate statistics and the text of every top-level
+/// SimpleTag. A Tag with no Targets UID describes the file; one naming
+/// tracks describes those tracks; one naming an edition, chapter or
+/// attachment is not kept. Nested SimpleTags and binary values are skipped.
 fn statistics(
     bytes: &[u8],
     remaining: &mut usize,
     output: &mut std::collections::BTreeMap<u64, Option<i64>>,
-) -> Result<(), MediaInfoError> {
+    scopes: &mut TagScopes<'_>,
+) -> Result<(), ProbeError> {
     let mut bytes = bytes;
     while !bytes.is_empty() {
         spend(remaining)?;
         let (id, tag, consumed) = next_ebml_element(bytes)
-            .ok_or_else(|| MediaInfoError::Parse("truncated MKV statistics tag".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("truncated MKV statistics tag".into()))?;
         if id == 0x7373 {
             let mut targets = Vec::new();
+            let mut targets_other = false;
+            let mut texts = Vec::new();
             let mut fields = tag;
             let mut bitrate_value = None;
             while !fields.is_empty() {
                 spend(remaining)?;
                 let (id, data, length) = next_ebml_element(fields).ok_or_else(|| {
-                    MediaInfoError::Parse("truncated MKV statistics field".into())
+                    ProbeError::Malformed("truncated MKV statistics field".into())
                 })?;
                 if id == 0x63c0 {
                     let mut data = data;
                     while !data.is_empty() {
                         spend(remaining)?;
                         let (id, value, length) = next_ebml_element(data).ok_or_else(|| {
-                            MediaInfoError::Parse("truncated MKV statistics target".into())
+                            ProbeError::Malformed("truncated MKV statistics target".into())
                         })?;
                         if id == 0x63c5
                             && let Some(uid) = parse_ebml_uint(value).filter(|uid| *uid != 0)
                         {
                             targets.push(uid);
+                        } else if matches!(id, 0x63c4 | 0x63c6 | 0x63c9)
+                            && parse_ebml_uint(value).is_some_and(|uid| uid != 0)
+                        {
+                            targets_other = true;
                         }
                         data = &data[length..];
                     }
@@ -365,7 +410,7 @@ fn statistics(
                     while !children.is_empty() {
                         spend(remaining)?;
                         let (id, data, length) = next_ebml_element(children).ok_or_else(|| {
-                            MediaInfoError::Parse("truncated MKV simple statistic".into())
+                            ProbeError::Malformed("truncated MKV simple statistic".into())
                         })?;
                         match id {
                             0x45a3 => name = Some(data),
@@ -373,6 +418,9 @@ fn statistics(
                             _ => {}
                         }
                         children = &children[length..];
+                    }
+                    if let (Some(name), Some(value)) = (name, value) {
+                        texts.push((name, value));
                     }
                     if name == Some(b"BPS".as_slice()) {
                         let bitrate = value
@@ -387,6 +435,17 @@ fn statistics(
                     }
                 }
                 fields = &fields[length..];
+            }
+            if !targets_other {
+                for (name, value) in texts {
+                    if targets.is_empty() {
+                        crate::tags::insert(scopes.file, name, value, scopes.report);
+                    }
+                    for uid in &targets {
+                        let scope = scopes.tracks.entry(*uid).or_default();
+                        crate::tags::insert(scope, name, value, scopes.report);
+                    }
+                }
             }
             if let Some(bitrate) = bitrate_value {
                 for uid in targets {
@@ -411,10 +470,10 @@ fn chapters(
     depth: usize,
     remaining: &mut usize,
     output: &mut Vec<Chapter>,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     if depth > 10 {
         *remaining = 0;
-        return Err(MediaInfoError::Parse(
+        return Err(ProbeError::Malformed(
             "MKV chapter nesting exceeds budget".into(),
         ));
     }
@@ -422,7 +481,7 @@ fn chapters(
     while !bytes.is_empty() {
         spend(remaining)?;
         let (id, data, consumed) = next_ebml_element(bytes)
-            .ok_or_else(|| MediaInfoError::Parse("truncated chapter metadata".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("truncated chapter metadata".into()))?;
         if id == EBML_ID_CHAPTER_ATOM {
             let get = |id| find_first_direct_ebml_child(data, id);
             let uid = get(0x73c4).and_then(parse_ebml_uint);
@@ -440,7 +499,7 @@ fn chapters(
                     .unwrap_or_else(|| output.len().to_string()),
                 title,
                 start_seconds: seconds(0x91).ok_or_else(|| {
-                    MediaInfoError::Parse("chapter start timestamp missing".into())
+                    ProbeError::Malformed("chapter start timestamp missing".into())
                 })?,
                 end_seconds: seconds(0x92),
             });
@@ -460,12 +519,12 @@ fn attachments<R: Read + Seek>(
     bytes_left: &mut u64,
     output: &mut Vec<Attachment>,
     io_headers: &mut usize,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     while scanner.position()? < end {
         spend_io(remaining, io_headers)?;
         let header = scanner
             .read_element_header()?
-            .ok_or_else(|| MediaInfoError::Parse("truncated attachment".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("truncated attachment".into()))?;
         let child_end = bounded_end(header, end)?;
         if header.id == 0x61a7 {
             let mut attachment = Attachment::default();
@@ -473,7 +532,7 @@ fn attachments<R: Read + Seek>(
                 spend_io(remaining, io_headers)?;
                 let field = scanner
                     .read_element_header()?
-                    .ok_or_else(|| MediaInfoError::Parse("truncated attachment field".into()))?;
+                    .ok_or_else(|| ProbeError::Malformed("truncated attachment field".into()))?;
                 let field_end = bounded_end(field, child_end)?;
                 let size = field_end - field.data_offset;
                 match field.id {
@@ -481,7 +540,7 @@ fn attachments<R: Read + Seek>(
                     0x46ae | 0x466e | 0x4660 => {
                         if size > 64 * 1024 || size > *bytes_left {
                             *bytes_left = 0;
-                            return Err(MediaInfoError::Parse(
+                            return Err(ProbeError::Malformed(
                                 "MKV attachment metadata budget exhausted".into(),
                             ));
                         }
@@ -515,7 +574,7 @@ fn last_cluster_duration<R: Read + Seek>(
     scale: f64,
     remaining: &mut usize,
     io_headers: &mut usize,
-) -> Result<Option<f64>, MediaInfoError> {
+) -> Result<Option<f64>, ProbeError> {
     if !scale.is_finite() || scale <= 0.0 {
         return Ok(None);
     }
@@ -536,7 +595,7 @@ fn last_cluster_duration<R: Read + Seek>(
         spend_io(remaining, io_headers)?;
         let header = scanner
             .read_element_header()?
-            .ok_or_else(|| MediaInfoError::Parse("truncated final cluster".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("truncated final cluster".into()))?;
         let child_end = bounded_end(header, end)?;
         match header.id {
             EBML_ID_TIMESTAMP => {
@@ -554,7 +613,7 @@ fn last_cluster_duration<R: Read + Seek>(
                     while scanner.position()? < child_end {
                         spend_io(remaining, io_headers)?;
                         let part = scanner.read_element_header()?.ok_or_else(|| {
-                            MediaInfoError::Parse("truncated final block group".into())
+                            ProbeError::Malformed("truncated final block group".into())
                         })?;
                         let part_end = bounded_end(part, child_end)?;
                         if part.id == EBML_ID_BLOCK {
@@ -787,6 +846,21 @@ mod tests {
             tracks[3].bit_rate_bps.is_none(),
             "a global tag cannot become a stream bitrate"
         );
+        // The same SimpleTags are kept as text: a Tag without a track UID
+        // describes the file, and the first of two repeated keys stands.
+        assert_eq!(
+            details.tags.get("BPS").map(String::as_str),
+            Some("999999999")
+        );
+        assert_eq!(
+            tracks[0].metadata.tags.get("BPS").map(String::as_str),
+            Some("8000000")
+        );
+        assert_eq!(
+            tracks[2].metadata.tags.get("BPS").map(String::as_str),
+            Some("1234")
+        );
+        assert!(tracks[3].metadata.tags.is_empty());
         assert!(
             details
                 .report
@@ -797,10 +871,32 @@ mod tests {
         assert!(source.bytes_read < 512);
         for value in [b"-1".as_slice(), b"0", b"9223372036854775808", b"NaN"] {
             let mut output = std::collections::BTreeMap::new();
-            statistics(&tag(42, value), &mut MAX_HEADERS.clone(), &mut output).unwrap();
+            statistics(
+                &tag(42, value),
+                &mut MAX_HEADERS.clone(),
+                &mut output,
+                &mut TagScopes {
+                    file: &mut Default::default(),
+                    tracks: &mut Default::default(),
+                    report: &mut Default::default(),
+                },
+            )
+            .unwrap();
             assert_eq!(output.get(&42), Some(&None));
         }
-        assert!(statistics(&tags, &mut 2, &mut Default::default()).is_err());
+        assert!(
+            statistics(
+                &tags,
+                &mut 2,
+                &mut Default::default(),
+                &mut TagScopes {
+                    file: &mut Default::default(),
+                    tracks: &mut Default::default(),
+                    report: &mut Default::default(),
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -890,5 +986,68 @@ mod tests {
         .unwrap();
         assert_eq!(chapters_out[0].title.as_deref(), Some("Opening"));
         assert_eq!(chapters_out[0].start_seconds, 1.5);
+    }
+
+    #[test]
+    fn tags_go_to_the_file_or_their_tracks_and_skip_other_targets() {
+        let simple = |name: &[u8], value: &[u8]| {
+            element(
+                &[0x67, 0xc8],
+                &[element(&[0x45, 0xa3], name), element(&[0x44, 0x87], value)].concat(),
+            )
+        };
+        let tag = |targets: Vec<u8>, simples: Vec<u8>| {
+            element(
+                &[0x73, 0x73],
+                &[element(&[0x63, 0xc0], &targets), simples].concat(),
+            )
+        };
+        let nested = element(
+            &[0x67, 0xc8],
+            &[
+                element(&[0x45, 0xa3], b"PARENT"),
+                element(&[0x44, 0x85], &[0, 1, 2]),
+                simple(b"CHILD", b"nested"),
+            ]
+            .concat(),
+        );
+        let bytes = [
+            tag(
+                element(&[0x68, 0xca], &[50]),
+                [simple(b"TITLE", b"Synthetic Feature"), nested].concat(),
+            ),
+            tag(
+                element(&[0x63, 0xc5], &[7]),
+                simple(b"ENCODER", b"synthetic-enc"),
+            ),
+            tag(
+                element(&[0x63, 0xc9], &[3]),
+                simple(b"EDITION", b"Synthetic Cut"),
+            ),
+        ]
+        .concat();
+        let mut file = std::collections::BTreeMap::new();
+        let mut tracks = std::collections::BTreeMap::new();
+        let mut report = Default::default();
+        statistics(
+            &bytes,
+            &mut MAX_HEADERS.clone(),
+            &mut Default::default(),
+            &mut TagScopes {
+                file: &mut file,
+                tracks: &mut tracks,
+                report: &mut report,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            file.into_iter().collect::<Vec<_>>(),
+            [("TITLE".to_owned(), "Synthetic Feature".to_owned())]
+        );
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(
+            tracks[&7].get("ENCODER").map(String::as_str),
+            Some("synthetic-enc")
+        );
     }
 }

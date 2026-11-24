@@ -1,8 +1,10 @@
 //! ASF (Windows Media) header objects and stream properties.
 
-use crate::MediaInfoError;
+use crate::ProbeError;
 use crate::raw::{RawContainer, RawTrack, TrackKind};
 use isolang::Language;
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::SeekFrom;
 
@@ -92,7 +94,7 @@ struct AsfFrameTiming {
 
 pub(crate) fn parse_asf_source(
     mut file: &mut dyn crate::source::MediaSource,
-) -> Result<RawContainer, MediaInfoError> {
+) -> Result<RawContainer, ProbeError> {
     let file_len = file.len();
     let mut prefix = [0_u8; 24];
     file.read_exact(&mut prefix)
@@ -154,7 +156,7 @@ pub(crate) fn parse_asf_source(
         details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.budget_exhausted = true;
         details.report.warnings.push(scryer_media_model::ProbeWarning {
-            code: "asf_header_nesting_limit".into(),
+            code: warning::ASF_HEADER_NESTING_LIMIT.into(),
             message: "Header extension nesting exceeded the inspection limit; nested metadata was not inspected".into(),
             ..Default::default()
         });
@@ -205,7 +207,7 @@ pub(crate) fn parse_asf_source(
                         .report
                         .warnings
                         .push(scryer_media_model::ProbeWarning {
-                        code: "asf_aspect_incomplete".into(),
+                        code: warning::ASF_ASPECT_INCOMPLETE.into(),
                         message:
                             "Stream pixel aspect attributes are incomplete, invalid, or conflicting"
                                 .into(),
@@ -259,7 +261,7 @@ pub(crate) fn parse_asf_source(
         details.report.budget_exhausted |=
             state.chapters.unwrap_or_default() as usize > state.markers.len();
         details.report.warnings.push(scryer_media_model::ProbeWarning {
-            code: "asf_chapters_incomplete".into(),
+            code: warning::ASF_CHAPTERS_INCOMPLETE.into(),
             message: "Marker inventory reached its limit, contains undecodable text, or lacks presentation timing metadata".into(),
             ..Default::default()
         });
@@ -277,7 +279,7 @@ fn parse_objects(
     reader: &mut SliceReader<'_>,
     expected: Option<usize>,
     state: &mut AsfState,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     let mut parsed = 0_usize;
     while reader.remaining() >= 24 && expected.is_none_or(|count| parsed < count) {
         state.object_count += 1;
@@ -303,11 +305,7 @@ fn parse_objects(
     Ok(())
 }
 
-fn parse_object(
-    guid: [u8; 16],
-    payload: &[u8],
-    state: &mut AsfState,
-) -> Result<(), MediaInfoError> {
+fn parse_object(guid: [u8; 16], payload: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     match guid {
         FILE_PROPERTIES_GUID => parse_file_properties(payload, state),
         STREAM_PROPERTIES_GUID => parse_stream_properties(payload, state),
@@ -321,7 +319,7 @@ fn parse_object(
     }
 }
 
-fn parse_file_properties(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_file_properties(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     r.skip(16 + 8 + 8 + 8)?;
     let play_time = r.u64_le()?;
@@ -342,7 +340,7 @@ fn parse_file_properties(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
     Ok(())
 }
 
-fn parse_stream_properties(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_stream_properties(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     let stream_type = r.array_16()?;
     r.skip(16 + 8)?;
@@ -368,7 +366,7 @@ fn parse_stream_properties(data: &[u8], state: &mut AsfState) -> Result<(), Medi
     Ok(())
 }
 
-fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
+fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, ProbeError> {
     let mut r = SliceReader::new(data);
     let format_tag = r.u16_le()?;
     let channels = r.u16_le()?;
@@ -383,8 +381,7 @@ fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
         None
     };
     let codec_name = resolve_audio_format(format_tag, bits_per_sample, codec_private.as_deref())
-        .and_then(|(tag, bits)| map_audio_format_tag(tag, bits))
-        .map(str::to_owned);
+        .and_then(|(tag, bits)| map_audio_format_tag(tag, bits));
     let mut track = RawTrack::new(TrackKind::Audio, format!("0x{format_tag:04x}"), codec_name);
     track.metadata = crate::codec::audio_config::wave_format(data);
     track.codec_private = if format_tag == 0xfffe && track.codec_name.is_some() {
@@ -397,7 +394,7 @@ fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
     };
     track.audio_profile = crate::codec::audio_profile::detect_header_audio_profile(
         &track.codec_id,
-        track.codec_name.as_deref(),
+        track.codec_name.as_ref(),
         track.codec_private.as_deref(),
     );
     track.channels = (channels > 0).then_some(i32::from(channels));
@@ -407,7 +404,7 @@ fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
     Ok(track)
 }
 
-fn parse_video_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
+fn parse_video_type_data(data: &[u8]) -> Result<RawTrack, ProbeError> {
     let mut r = SliceReader::new(data);
     let encoded_width = r.u32_le()?;
     let encoded_height = r.u32_le()?;
@@ -439,19 +436,19 @@ fn parse_video_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
     let width = i32::try_from(width).map_err(|_| parse_error("ASF video width is too large"))?;
     let height = i32::try_from(height).map_err(|_| parse_error("ASF video height is too large"))?;
     let codec_id = String::from_utf8_lossy(&fourcc).into_owned();
-    let codec_name = map_video_fourcc(fourcc).map(str::to_owned);
+    let codec_name = map_video_fourcc(fourcc);
     let mut track = RawTrack::new(TrackKind::Video, codec_id, codec_name);
     track.codec_private = codec_private;
     track.width = Some(width);
     track.height = Some(height);
-    if matches!(track.codec_name.as_deref(), Some("wmv1" | "wmv2")) {
+    if matches!(track.codec_name, Some(Codec::Wmv1 | Codec::Wmv2)) {
         track.metadata.bit_depth = Some(8);
         track.metadata.pixel_format = Some("yuv420p".into());
     }
     Ok(track)
 }
 
-fn parse_stream_metadata(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_stream_metadata(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut reader = SliceReader::new(data);
     let count = reader.u16_le()?;
     for _ in 0..count {
@@ -495,7 +492,7 @@ fn parse_stream_metadata(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
     Ok(())
 }
 
-fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     r.skip(16 + 2)?;
     let extension_size = r.u32_le()? as usize;
@@ -510,10 +507,7 @@ fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), Media
     result
 }
 
-fn parse_extended_stream_properties(
-    data: &[u8],
-    state: &mut AsfState,
-) -> Result<(), MediaInfoError> {
+fn parse_extended_stream_properties(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     r.skip(16)?;
     let bitrate = r.u32_le()?;
@@ -548,7 +542,7 @@ fn parse_extended_stream_properties(
     Ok(())
 }
 
-fn parse_stream_bitrates(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_stream_bitrates(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     let count = r.u16_le()? as usize;
     if count > 128 {
@@ -565,7 +559,7 @@ fn parse_stream_bitrates(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
     Ok(())
 }
 
-fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     let count = r.u16_le()? as usize;
     if count > MAX_LANGUAGES {
@@ -605,7 +599,7 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
     Ok(())
 }
 
-fn parse_markers(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+fn parse_markers(data: &[u8], state: &mut AsfState) -> Result<(), ProbeError> {
     let mut r = SliceReader::new(data);
     r.skip(16)?;
     let count = r.u32_le()? as usize;
@@ -860,14 +854,14 @@ fn derive_frame_rate(timestamps: &[u32]) -> Option<AsfFrameTiming> {
     })
 }
 
-fn map_video_fourcc(fourcc: [u8; 4]) -> Option<&'static str> {
+fn map_video_fourcc(fourcc: [u8; 4]) -> Option<Codec> {
     let upper = fourcc.map(|byte| byte.to_ascii_uppercase());
     match &upper {
-        b"WMV1" => Some("wmv1"),
-        b"WMV2" | b"GXVE" => Some("wmv2"),
-        b"WMV3" => Some("wmv3"),
-        b"WVC1" | b"WMVA" => Some("vc1"),
-        b"H264" | b"AVC1" => Some("h264"),
+        b"WMV1" => Some(Codec::Wmv1),
+        b"WMV2" | b"GXVE" => Some(Codec::Wmv2),
+        b"WMV3" => Some(Codec::Wmv3),
+        b"WVC1" | b"WMVA" => Some(Codec::Vc1),
+        b"H264" | b"AVC1" => Some(Codec::H264),
         _ => None,
     }
 }
@@ -898,30 +892,30 @@ fn resolve_audio_format(
     Some((subformat, bits_per_sample))
 }
 
-pub(crate) fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> {
+pub(crate) fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<Codec> {
     match tag {
         0x0001 => match bits_per_sample {
-            8 => Some("pcm_u8"),
-            16 => Some("pcm_s16le"),
-            24 => Some("pcm_s24le"),
-            32 => Some("pcm_s32le"),
-            64 => Some("pcm_s64le"),
+            8 => Some(Codec::PcmU8),
+            16 => Some(Codec::PcmS16Le),
+            24 => Some(Codec::PcmS24Le),
+            32 => Some(Codec::PcmS32Le),
+            64 => Some(Codec::PcmS64Le),
             _ => None,
         },
         0x0003 => match bits_per_sample {
-            32 => Some("pcm_f32le"),
-            64 => Some("pcm_f64le"),
+            32 => Some(Codec::PcmF32Le),
+            64 => Some(Codec::PcmF64Le),
             _ => None,
         },
-        0x0050 | 0x0055 => Some("mp3"),
-        0x00ff => Some("aac"),
-        0x0160 => Some("wmav1"),
-        0x0161 => Some("wmav2"),
-        0x0162 => Some("wmapro"),
-        0x0163 => Some("wmalossless"),
-        0x000a => Some("wmavoice"),
-        0x2000 => Some("ac3"),
-        0x2001 => Some("dts"),
+        0x0050 | 0x0055 => Some(Codec::Mp3),
+        0x00ff => Some(Codec::Aac),
+        0x0160 => Some(Codec::WmaV1),
+        0x0161 => Some(Codec::WmaV2),
+        0x0162 => Some(Codec::WmaPro),
+        0x0163 => Some(Codec::WmaLossless),
+        0x000a => Some(Codec::WmaVoice),
+        0x2000 => Some(Codec::Ac3),
+        0x2001 => Some(Codec::Dts),
         _ => None,
     }
 }
@@ -940,7 +934,7 @@ impl<'a> SliceReader<'a> {
         self.data.len().saturating_sub(self.pos)
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], MediaInfoError> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8], ProbeError> {
         let end = self
             .pos
             .checked_add(len)
@@ -953,41 +947,41 @@ impl<'a> SliceReader<'a> {
         Ok(bytes)
     }
 
-    fn skip(&mut self, len: usize) -> Result<(), MediaInfoError> {
+    fn skip(&mut self, len: usize) -> Result<(), ProbeError> {
         self.take(len).map(|_| ())
     }
 
-    fn u8(&mut self) -> Result<u8, MediaInfoError> {
+    fn u8(&mut self) -> Result<u8, ProbeError> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16_le(&mut self) -> Result<u16, MediaInfoError> {
+    fn u16_le(&mut self) -> Result<u16, ProbeError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
 
-    fn u32_le(&mut self) -> Result<u32, MediaInfoError> {
+    fn u32_le(&mut self) -> Result<u32, ProbeError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    fn i32_le(&mut self) -> Result<i32, MediaInfoError> {
+    fn i32_le(&mut self) -> Result<i32, ProbeError> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    fn u64_le(&mut self) -> Result<u64, MediaInfoError> {
+    fn u64_le(&mut self) -> Result<u64, ProbeError> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
-    fn array_4(&mut self) -> Result<[u8; 4], MediaInfoError> {
+    fn array_4(&mut self) -> Result<[u8; 4], ProbeError> {
         Ok(self.take(4)?.try_into().unwrap())
     }
 
-    fn array_16(&mut self) -> Result<[u8; 16], MediaInfoError> {
+    fn array_16(&mut self) -> Result<[u8; 16], ProbeError> {
         Ok(self.take(16)?.try_into().unwrap())
     }
 }
 
-fn parse_error(message: impl Into<String>) -> MediaInfoError {
-    MediaInfoError::Parse(message.into())
+fn parse_error(message: impl Into<String>) -> ProbeError {
+    ProbeError::Malformed(message.into())
 }
 
 #[cfg(test)]

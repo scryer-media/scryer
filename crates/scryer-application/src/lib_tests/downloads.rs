@@ -12690,9 +12690,9 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let probed = scryer_mediainfo::analyze_catalog_file(&source).unwrap();
-    assert!(crate::media::analysis_summary::is_valid_video(&probed));
-    let native = crate::media::analysis_summary::summarize(&probed);
+    let probed = scryer_mediainfo::probe(&source).unwrap();
+    assert!(probed.is_playable_video());
+    let native = crate::media::analysis_summary::summarize(probed);
     let policy = scryer_rules::UserPolicy {
         id: "reject_probed_files".into(),
         name: "Reject probed files".into(),
@@ -12906,7 +12906,7 @@ async fn additional_movie_preparation_persists_native_analysis_and_manual_probe_
                 .set_len(PACK_VIDEO_SIZE_BYTES)
                 .unwrap();
             Some(crate::media::analysis_summary::summarize(
-                &scryer_mediainfo::analyze_catalog_file(&source).unwrap(),
+                scryer_mediainfo::probe(&source).unwrap(),
             ))
         } else {
             // Harmless non-video bytes under a video extension exercise the

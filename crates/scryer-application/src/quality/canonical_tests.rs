@@ -1275,7 +1275,7 @@ fn whatever_grab_admits_import_admits() {
 /// it, because both of its documents came from `file_doc_from_analysis`.
 ///
 /// One constructor now: import builds
-/// `file_doc_from_analysis(&analysis_summary::summarize(&details))`.
+/// `file_doc_from_analysis(&analysis_summary::summarize(details))`.
 #[test]
 fn a_file_doc_survives_mediainfo_to_row_to_re_derivation() {
     use scryer_media_types::{
@@ -1285,7 +1285,7 @@ fn a_file_doc_survives_mediainfo_to_row_to_re_derivation() {
     // real probe would only exercise whatever the fixture file happens to hold.
     let stream = |kind, id: &str, codec: &str, metadata: StreamMetadata| StreamDetail {
         kind,
-        codec: Some(codec.to_string()),
+        codec: Some(codec.into()),
         metadata: StreamMetadata {
             id: Some(id.to_string()),
             ..metadata
@@ -1366,7 +1366,7 @@ fn a_file_doc_survives_mediainfo_to_row_to_re_derivation() {
     };
 
     // What import computes and persists.
-    let stored_analysis = crate::media::analysis_summary::summarize(&details);
+    let stored_analysis = crate::media::analysis_summary::summarize(details);
     assert!(stored_analysis.has_multiaudio);
     assert_eq!(stored_analysis.audio_codec.as_deref(), Some("eac3"));
     let at_import = crate::user_rule_input::file_doc_from_analysis(&stored_analysis);

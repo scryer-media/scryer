@@ -96,11 +96,12 @@ pub(crate) fn vp9(track: &mut RawTrack, data: &[u8]) -> Option<()> {
 mod tests {
     use super::*;
     use crate::codec::picture_headers::enrich;
+    use scryer_media_model::Codec;
 
     #[test]
     fn vp9_color_space_preserves_explicit_container_transfer() {
         let mut track = RawTrack {
-            codec_name: Some("vp9".into()),
+            codec_name: Some(Codec::Vp9),
             ..Default::default()
         };
         track.metadata.color.transfer = Some(16);
@@ -110,7 +111,7 @@ mod tests {
         assert_eq!(track.metadata.color.transfer, Some(16));
         assert_eq!(track.metadata.color.matrix, Some(10));
         let mut unspecified = RawTrack {
-            codec_name: Some("vp9".into()),
+            codec_name: Some(Codec::Vp9),
             ..Default::default()
         };
         enrich(&mut unspecified, &[0x92, 0x49, 0x83, 0x42, 0x50, 0, 0]);
@@ -121,7 +122,7 @@ mod tests {
     #[test]
     fn vp9_10bit_keyframe_and_truncation() {
         let mut track = RawTrack {
-            codec_name: Some("vp9".into()),
+            codec_name: Some(Codec::Vp9),
             ..Default::default()
         };
         // marker=2, profile=2, show-existing=0, keyframe=0, show=1, resilient=0.
@@ -130,7 +131,7 @@ mod tests {
         assert_eq!(track.metadata.profile.as_deref(), Some("Profile 2"));
         assert_eq!(track.metadata.pixel_format.as_deref(), Some("yuv420p10le"));
         let mut short = RawTrack {
-            codec_name: Some("vp9".into()),
+            codec_name: Some(Codec::Vp9),
             ..Default::default()
         };
         enrich(&mut short, &[0x92, 0x49]);

@@ -1,8 +1,10 @@
 //! Ogg pages and the stream headers carried in them, including OGM.
 
-use crate::MediaInfoError;
+use crate::ProbeError;
 use crate::raw::{RawContainer, RawTrack, TrackKind};
 use ogg::reading::PacketReader;
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -43,7 +45,7 @@ struct OggStream {
 
 pub(crate) fn parse_ogg_source(
     file: &mut dyn crate::source::MediaSource,
-) -> Result<RawContainer, MediaInfoError> {
+) -> Result<RawContainer, ProbeError> {
     let file_len = file.len();
     let header_limit = file_len.min(MAX_HEADER_READ_BYTES);
     let mut reader = PacketReader::new(HeaderReader::new(&mut *file, header_limit));
@@ -51,6 +53,7 @@ pub(crate) fn parse_ogg_source(
     let mut stream_order = Vec::<u32>::new();
     let mut packet_count = 0_usize;
     let mut header_bytes = 0_usize;
+    let mut tag_report = scryer_media_model::ProbeReport::default();
 
     while packet_count < MAX_HEADER_PACKETS && header_bytes <= MAX_HEADER_BYTES {
         let Some(packet) = reader.read_packet().map_err(ogg_error)? else {
@@ -75,7 +78,7 @@ pub(crate) fn parse_ogg_source(
         }
 
         if let Some(stream) = streams.get_mut(&serial) {
-            consume_header(stream, &packet.data)?;
+            consume_header(stream, &packet.data, &mut tag_report)?;
         }
         // All BOS pages precede secondary headers in a physical Ogg section.
         // Stop before buffering media packets once every codec header is known.
@@ -168,11 +171,12 @@ pub(crate) fn parse_ogg_source(
         duration_seconds = None;
     }
     let mut details = scryer_media_model::AnalysisDetails::default();
+    details.report.warnings = tag_report.warnings;
     if earlier_end_outside_tail && duration_seconds.is_some() {
         details.duration_provenance = scryer_media_model::Provenance::Estimated;
         details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.warnings.push(scryer_media_model::ProbeWarning {
-            code: "ogg_earlier_stream_end_outside_tail".into(),
+            code: warning::OGG_EARLIER_STREAM_END_OUTSIDE_TAIL.into(),
             message: "Duration uses terminal stream timing; earlier stream ends are outside the bounded tail probe".into(),
             ..Default::default()
         });
@@ -250,7 +254,7 @@ impl<R: Seek> Seek for HeaderReader<R> {
     }
 }
 
-fn identify_stream(data: &[u8]) -> Result<Option<OggStream>, MediaInfoError> {
+fn identify_stream(data: &[u8]) -> Result<Option<OggStream>, ProbeError> {
     if data.starts_with(b"\x01video")
         || data.starts_with(b"\x01audio")
         || data.starts_with(b"\x01text")
@@ -294,28 +298,32 @@ fn identify_stream(data: &[u8]) -> Result<Option<OggStream>, MediaInfoError> {
     Ok(None)
 }
 
-fn consume_header(stream: &mut OggStream, data: &[u8]) -> Result<(), MediaInfoError> {
+fn consume_header(
+    stream: &mut OggStream,
+    data: &[u8],
+    report: &mut scryer_media_model::ProbeReport,
+) -> Result<(), ProbeError> {
     if stream.headers_seen >= stream.headers_needed {
         return Ok(());
     }
     match stream.codec {
         OggCodec::Theora { .. } => match stream.headers_seen {
             1 if data.starts_with(b"\x81theora") => {
-                apply_comments(&mut stream.track, &data[7..])?;
+                apply_comments(&mut stream.track, &data[7..], report)?;
             }
             2 if data.starts_with(b"\x82theora") => {}
             _ => return Err(parse_error("invalid Theora header sequence")),
         },
         OggCodec::Vorbis { .. } => match stream.headers_seen {
             1 if data.starts_with(b"\x03vorbis") => {
-                apply_comments(&mut stream.track, &data[7..])?;
+                apply_comments(&mut stream.track, &data[7..], report)?;
             }
             2 if data.starts_with(b"\x05vorbis") => {}
             _ => return Err(parse_error("invalid Vorbis header sequence")),
         },
         OggCodec::Opus => {
             if data.starts_with(b"OpusTags") {
-                apply_comments(&mut stream.track, &data[8..])?;
+                apply_comments(&mut stream.track, &data[8..], report)?;
             }
             // A missing OpusTags packet is tolerated: the first audio packet
             // completes header discovery without being interpreted as comments.
@@ -324,7 +332,7 @@ fn consume_header(stream: &mut OggStream, data: &[u8]) -> Result<(), MediaInfoEr
             if !data.starts_with(b"\x03vorbis") {
                 return Err(parse_error("invalid OGM comment header"));
             }
-            apply_comments(&mut stream.track, &data[7..])?;
+            apply_comments(&mut stream.track, &data[7..], report)?;
         }
     }
     stream.headers_seen += 1;
@@ -333,7 +341,7 @@ fn consume_header(stream: &mut OggStream, data: &[u8]) -> Result<(), MediaInfoEr
 
 // OGM wraps bitmap/WAVE tags and timing declarations in Ogg packets. These
 // layouts are documented by the OGM demuxer at ffmpeg.org/doxygen/9.0/oggparseogm_8c_source.html.
-fn parse_ogm_identification(data: &[u8]) -> Result<OggStream, MediaInfoError> {
+fn parse_ogm_identification(data: &[u8]) -> Result<OggStream, ProbeError> {
     let mut r = LeSliceReader::new(data);
     r.skip(1)?;
     let kind = match r.take(8)? {
@@ -380,8 +388,7 @@ fn parse_ogm_identification(data: &[u8]) -> Result<OggStream, MediaInfoError> {
                 .ok()
                 .and_then(|tag| u16::from_str_radix(tag, 16).ok());
             track.codec_name = tag
-                .and_then(|tag| crate::container::asf::map_audio_format_tag(tag, bits_per_sample))
-                .map(str::to_owned);
+                .and_then(|tag| crate::container::asf::map_audio_format_tag(tag, bits_per_sample));
             track.channels = Some(positive_channels(r.u16()?)?);
             r.skip(2)?; // Block alignment.
             set_ogm_audio_rate(&mut track, timing_denominator / time_unit, r.u32()?)?;
@@ -398,7 +405,7 @@ fn parse_ogm_identification(data: &[u8]) -> Result<OggStream, MediaInfoError> {
             }
         }
         TrackKind::Subtitle => {
-            track.codec_name = Some("text".into());
+            track.codec_name = Some(Codec::Text);
         }
     }
     Ok(OggStream {
@@ -413,7 +420,7 @@ fn parse_ogm_identification(data: &[u8]) -> Result<OggStream, MediaInfoError> {
     })
 }
 
-fn parse_ogm_legacy_identification(data: &[u8]) -> Result<OggStream, MediaInfoError> {
+fn parse_ogm_legacy_identification(data: &[u8]) -> Result<OggStream, ProbeError> {
     let mut r = LeSliceReader::new(data);
     r.skip(96)?;
     let stream_type = r.u32()?;
@@ -446,7 +453,7 @@ fn parse_ogm_legacy_identification(data: &[u8]) -> Result<OggStream, MediaInfoEr
                 kind: TrackKind::Audio,
                 codec_id: format!("{tag:04x}"),
                 // Legacy headers do not declare a PCM sample representation.
-                codec_name: crate::container::asf::map_audio_format_tag(tag, 0).map(str::to_owned),
+                codec_name: crate::container::asf::map_audio_format_tag(tag, 0),
                 channels: Some(positive_channels(r.u16()?)?),
                 ..Default::default()
             };
@@ -468,19 +475,19 @@ fn parse_ogm_legacy_identification(data: &[u8]) -> Result<OggStream, MediaInfoEr
     })
 }
 
-fn ogm_video_codec(tag: &str) -> Option<String> {
-    let name = crate::container::avi::map_video_fourcc(tag);
-    (name != "unknown").then(|| name.to_owned())
+fn ogm_video_codec(tag: &str) -> Option<Codec> {
+    let codec = crate::container::avi::map_video_fourcc(tag);
+    (codec != Codec::Unknown).then_some(codec)
 }
 
-fn positive_dimension(value: u32) -> Result<i32, MediaInfoError> {
+fn positive_dimension(value: u32) -> Result<i32, ProbeError> {
     i32::try_from(value)
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| parse_error("invalid OGM video dimensions"))
 }
 
-fn positive_channels(value: u16) -> Result<i32, MediaInfoError> {
+fn positive_channels(value: u16) -> Result<i32, ProbeError> {
     (value > 0)
         .then_some(i32::from(value))
         .ok_or_else(|| parse_error("invalid OGM channel count"))
@@ -490,7 +497,7 @@ fn set_ogm_frame_rate(
     track: &mut RawTrack,
     numerator: u64,
     denominator: u64,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     let numerator =
         i64::try_from(numerator).map_err(|_| parse_error("OGM frame rate is too large"))?;
     let rate = scryer_media_model::Rational::new(numerator, denominator)
@@ -504,7 +511,7 @@ fn set_ogm_audio_rate(
     track: &mut RawTrack,
     rate: u64,
     average_bytes: u32,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     track.metadata.sample_rate = Some(
         u32::try_from(rate)
             .ok()
@@ -515,7 +522,7 @@ fn set_ogm_audio_rate(
     Ok(())
 }
 
-fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), MediaInfoError> {
+fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), ProbeError> {
     let mut bits = MsbBitReader::new(data);
     bits.skip(7 * 8)?;
     let version = bits.read(24)? as u32;
@@ -582,7 +589,7 @@ fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), 
     };
     let width = i32::try_from(width).map_err(|_| parse_error("Theora width is too large"))?;
     let height = i32::try_from(height).map_err(|_| parse_error("Theora height is too large"))?;
-    let mut track = RawTrack::for_codec(TrackKind::Video, "theora", None);
+    let mut track = RawTrack::for_codec(TrackKind::Video, Codec::Theora, None);
     track.width = Some(width);
     track.height = Some(height);
     track.frame_rate_fps = Some(fps);
@@ -614,7 +621,7 @@ fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), 
     Ok((track, version, granule_shift, fps))
 }
 
-fn parse_vorbis_identification(data: &[u8]) -> Result<(RawTrack, u32), MediaInfoError> {
+fn parse_vorbis_identification(data: &[u8]) -> Result<(RawTrack, u32), ProbeError> {
     if data.len() != 30 || !data.starts_with(b"\x01vorbis") {
         return Err(parse_error("invalid Vorbis identification header size"));
     }
@@ -635,37 +642,53 @@ fn parse_vorbis_identification(data: &[u8]) -> Result<(RawTrack, u32), MediaInfo
     {
         return Err(parse_error("invalid Vorbis identification header"));
     }
-    let mut track = RawTrack::for_codec(TrackKind::Audio, "vorbis", Some(i32::from(channels)));
+    let mut track = RawTrack::for_codec(TrackKind::Audio, Codec::Vorbis, Some(i32::from(channels)));
     track.bit_rate_bps = (nominal_bitrate > 0).then_some(i64::from(nominal_bitrate));
     track.metadata.sample_rate = Some(sample_rate);
     track.codec_private = Some(data.to_vec());
     Ok((track, sample_rate))
 }
 
-fn parse_opus_identification(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
+fn parse_opus_identification(data: &[u8]) -> Result<RawTrack, ProbeError> {
     if data.len() < 19 || !data.starts_with(b"OpusHead") || data[8] & 0xf0 != 0 || data[9] == 0 {
         return Err(parse_error("invalid Opus identification header"));
     }
-    let mut track = RawTrack::for_codec(TrackKind::Audio, "opus", Some(i32::from(data[9])));
+    let mut track = RawTrack::for_codec(TrackKind::Audio, Codec::Opus, Some(i32::from(data[9])));
     track.metadata.sample_rate = Some(48_000);
     track.codec_private = Some(data.to_vec());
     Ok(track)
 }
 
 #[derive(Default)]
-struct OggComments {
+struct OggComments<'a> {
     language: Option<String>,
     name: Option<String>,
+    /// Every `KEY=value` comment, borrowed from the header packet.
+    entries: Vec<(&'a [u8], &'a [u8])>,
 }
 
-fn apply_comments(track: &mut RawTrack, data: &[u8]) -> Result<(), MediaInfoError> {
+/// Comments that carry binary data encoded as text rather than a tag.
+fn is_encoded_picture(key: &[u8]) -> bool {
+    key.eq_ignore_ascii_case(b"METADATA_BLOCK_PICTURE") || key.eq_ignore_ascii_case(b"COVERART")
+}
+
+fn apply_comments(
+    track: &mut RawTrack,
+    data: &[u8],
+    report: &mut scryer_media_model::ProbeReport,
+) -> Result<(), ProbeError> {
     let comments = parse_comments(data)?;
     track.language = comments.language;
     track.name = comments.name;
+    for (key, value) in comments.entries {
+        if !is_encoded_picture(key) {
+            crate::tags::insert(&mut track.metadata.tags, key, value, report);
+        }
+    }
     Ok(())
 }
 
-fn parse_comments(data: &[u8]) -> Result<OggComments, MediaInfoError> {
+fn parse_comments(data: &[u8]) -> Result<OggComments<'_>, ProbeError> {
     let mut r = LeSliceReader::new(data);
     let vendor_len = r.u32()? as usize;
     if vendor_len > MAX_COMMENT_BYTES {
@@ -685,6 +708,7 @@ fn parse_comments(data: &[u8]) -> Result<OggComments, MediaInfoError> {
         let value = r.take(length)?;
         if let Some(separator) = value.iter().position(|byte| *byte == b'=') {
             let (key, value) = (&value[..separator], &value[separator + 1..]);
+            comments.entries.push((key, value));
             if key.eq_ignore_ascii_case(b"language") {
                 comments.language = std::str::from_utf8(value)
                     .ok()
@@ -719,7 +743,7 @@ struct OggTail {
 fn read_stream_ends(
     file: &mut dyn crate::source::MediaSource,
     file_len: u64,
-) -> Result<OggTail, MediaInfoError> {
+) -> Result<OggTail, ProbeError> {
     let start = file_len.saturating_sub(MAX_TAIL_BYTES);
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = vec![0; (file_len - start) as usize];
@@ -785,7 +809,7 @@ fn read_stream_ends(
     Ok(tail)
 }
 
-fn first_valid_tail_page(bytes: &[u8], clipped: bool) -> Result<usize, MediaInfoError> {
+fn first_valid_tail_page(bytes: &[u8], clipped: bool) -> Result<usize, ProbeError> {
     if !clipped {
         validate_tail_page(bytes, 0)?;
         return Ok(0);
@@ -807,10 +831,7 @@ fn first_valid_tail_page(bytes: &[u8], clipped: bool) -> Result<usize, MediaInfo
     Err(parse_error("Ogg tail recapture exceeds probe limit"))
 }
 
-fn validate_tail_page(
-    bytes: &[u8],
-    offset: usize,
-) -> Result<([u8; 27], &[u8], usize), MediaInfoError> {
+fn validate_tail_page(bytes: &[u8], offset: usize) -> Result<([u8; 27], &[u8], usize), ProbeError> {
     let header_end = offset
         .checked_add(27)
         .ok_or_else(|| parse_error("Ogg tail offset overflow"))?;
@@ -874,7 +895,7 @@ impl<'a> LeSliceReader<'a> {
         Self { data, pos: 0 }
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], MediaInfoError> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8], ProbeError> {
         let end = self
             .pos
             .checked_add(len)
@@ -887,19 +908,19 @@ impl<'a> LeSliceReader<'a> {
         Ok(value)
     }
 
-    fn skip(&mut self, len: usize) -> Result<(), MediaInfoError> {
+    fn skip(&mut self, len: usize) -> Result<(), ProbeError> {
         self.take(len).map(|_| ())
     }
 
-    fn u32(&mut self) -> Result<u32, MediaInfoError> {
+    fn u32(&mut self) -> Result<u32, ProbeError> {
         Ok(le_u32(self.take(4)?))
     }
 
-    fn u16(&mut self) -> Result<u16, MediaInfoError> {
+    fn u16(&mut self) -> Result<u16, ProbeError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
 
-    fn u64(&mut self) -> Result<u64, MediaInfoError> {
+    fn u64(&mut self) -> Result<u64, ProbeError> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 }
@@ -914,7 +935,7 @@ impl<'a> MsbBitReader<'a> {
         Self { data, bit: 0 }
     }
 
-    fn skip(&mut self, count: usize) -> Result<(), MediaInfoError> {
+    fn skip(&mut self, count: usize) -> Result<(), ProbeError> {
         self.bit = self
             .bit
             .checked_add(count)
@@ -923,7 +944,7 @@ impl<'a> MsbBitReader<'a> {
         Ok(())
     }
 
-    fn read(&mut self, count: usize) -> Result<u64, MediaInfoError> {
+    fn read(&mut self, count: usize) -> Result<u64, ProbeError> {
         if count > 64 {
             return Err(parse_error("invalid Theora bit-field width"));
         }
@@ -940,12 +961,12 @@ impl<'a> MsbBitReader<'a> {
     }
 }
 
-fn ogg_error(error: impl std::fmt::Display) -> MediaInfoError {
+fn ogg_error(error: impl std::fmt::Display) -> ProbeError {
     parse_error(format!("invalid Ogg stream: {error}"))
 }
 
-fn parse_error(message: impl Into<String>) -> MediaInfoError {
-    MediaInfoError::Parse(message.into())
+fn parse_error(message: impl Into<String>) -> ProbeError {
+    ProbeError::Malformed(message.into())
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ mod streams;
 #[cfg(test)]
 mod udf_fixtures;
 
+use scryer_media_model::warning;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -21,21 +22,26 @@ use scryer_media_model::{
 };
 
 use crate::source::{BoundedSource, Extent, ExtentSource, FileSource, MediaSource};
-use crate::{AnalysisProfile, MediaInfoError};
+use crate::{ProbeDepth, ProbeError, ProbeOptions};
 use image::{Image, ImageError, ImageFile};
 use navigation::warning;
 
-const READ_BUDGET: u64 = 128 * 1024 * 1024;
 const NAVIGATION_BUDGET: u64 = 32 * 1024 * 1024;
 
 pub(crate) fn analyze(
     path: &Path,
     selection: DiscSelection,
-    profile: AnalysisProfile,
-) -> Result<AnalysisDetails, MediaInfoError> {
+    options: &ProbeOptions,
+) -> Result<AnalysisDetails, ProbeError> {
     let started = Instant::now();
-    let mut source = BoundedSource::new(FileSource::open(path)?, READ_BUDGET).with_io_limit(4096);
-    let result = inspect(&mut source, selection, profile);
+    let mut source = BoundedSource::new(
+        FileSource::open(path)?,
+        options
+            .read_budget_bytes()
+            .unwrap_or(ProbeOptions::DISC_READ_BUDGET_BYTES),
+    )
+    .with_io_limit(options.io_limit().unwrap_or(ProbeOptions::DISC_IO_LIMIT));
+    let result = inspect(&mut source, selection, options.depth());
     let mut details = match result {
         Ok(details) => details,
         Err(error) => AnalysisDetails {
@@ -53,9 +59,7 @@ pub(crate) fn analyze(
         details.report.status = ProbeStatus::Incomplete;
     }
     if !source.get_ref().unchanged(path)? {
-        return Err(MediaInfoError::Io(
-            "disc image changed during analysis".into(),
-        ));
+        return Err(ProbeError::SourceChanged);
     }
     Ok(details)
 }
@@ -64,7 +68,7 @@ pub(crate) fn diagnose_source(
     source: &mut dyn MediaSource,
     selection: DiscSelection,
 ) -> ProbeReport {
-    match inspect(source, selection, AnalysisProfile::DefaultRich) {
+    match inspect(source, selection, ProbeDepth::Full) {
         Ok(details) => details.report,
         Err(error) => error_report(&error),
     }
@@ -80,7 +84,7 @@ fn error_report(error: &ImageError) -> ProbeReport {
         budget_exhausted: matches!(error, ImageError::Budget),
         ..Default::default()
     };
-    warning(&mut report, "disc_inspection", &error.to_string());
+    warning(&mut report, warning::DISC_INSPECTION, &error.to_string());
     report
 }
 fn read_navigation(
@@ -99,7 +103,7 @@ fn read_navigation(
 fn inspect(
     source: &mut dyn MediaSource,
     selection: DiscSelection,
-    profile: AnalysisProfile,
+    profile: ProbeDepth,
 ) -> Result<AnalysisDetails, ImageError> {
     let image = image::open(source)?;
     let bluray = image
@@ -219,7 +223,7 @@ fn inspect(
                                         title.report.status = ProbeStatus::Unsupported;
                                         warning(
                                             &mut title.report,
-                                            "clip_declaration_change",
+                                            warning::CLIP_DECLARATION_CHANGE,
                                             "CLPI declarations differ across referenced playback segments",
                                         );
                                     }
@@ -241,7 +245,7 @@ fn inspect(
                                 }
                                 warning(
                                     &mut title.report,
-                                    "missing_clip_information",
+                                    warning::MISSING_CLIP_INFORMATION,
                                     "CLPI is missing; the selected clock sequence and trim coverage could not be verified",
                                 );
                             }
@@ -250,7 +254,7 @@ fn inspect(
                             title.report.status = ProbeStatus::Malformed;
                             warning(
                                 &mut title.report,
-                                "missing_clip",
+                                warning::MISSING_CLIP,
                                 &format!("Referenced clip {} is missing", segment.path),
                             );
                         }
@@ -327,7 +331,7 @@ fn inspect(
     if disc.selected_title_id.is_none() {
         warning(
             &mut report,
-            "disc_selection_review",
+            warning::DISC_SELECTION_REVIEW,
             "No valid title is selected; a missing saved selection requires review",
         );
     }
@@ -378,7 +382,7 @@ fn inspect(
             title.report.status = ProbeStatus::Incomplete;
             warning(
                 &mut title.report,
-                "disc_title_not_sampled",
+                warning::DISC_TITLE_NOT_SAMPLED,
                 "Navigation inventoried; media inspection is deferred until this title is selected or mapped",
             );
             continue;
@@ -386,7 +390,7 @@ fn inspect(
         for (key, file) in title_files.get(&title.id).into_iter().flatten() {
             if let Some((status, message)) = failed_clips.get(key) {
                 title.report.status = *status;
-                warning(&mut title.report, "clip_probe_failed", message);
+                warning(&mut title.report, warning::CLIP_PROBE_FAILED, message);
                 continue;
             }
             if !cache.contains_key(key) {
@@ -394,7 +398,7 @@ fn inspect(
                     title.report.budget_exhausted = true;
                     warning(
                         &mut title.report,
-                        "clip_budget",
+                        warning::CLIP_BUDGET,
                         "Clip inspection budget exhausted",
                     );
                     break;
@@ -405,10 +409,11 @@ fn inspect(
                         return Ok(ClipProbe::Encrypted);
                     }
                     clip.seek(SeekFrom::Start(0))?;
-                    crate::analyze_source(
+                    // Clips keep the file budgets, whatever the disc's are.
+                    crate::probe_bounded(
                         &mut clip,
                         if bluray { "m2ts" } else { "vob" },
-                        crate::AnalyzeOptions { profile },
+                        &ProbeOptions::new().with_depth(profile),
                     )
                     .map(ClipProbe::Analyzed)
                 })();
@@ -419,14 +424,18 @@ fn inspect(
                     }
                     Ok(ClipProbe::Encrypted) => Some((
                         ProbeStatus::Encrypted,
-                        MediaInfoError::UnsupportedFormat("encrypted disc payload".into()),
+                        ProbeError::Unsupported("encrypted disc payload".into()),
                     )),
                     Err(error) => Some((ProbeStatus::Incomplete, error)),
                 };
                 if let Some((status, error)) = failure {
                     title.report.status = status;
                     failed_clips.insert(key.clone(), (status, error.to_string()));
-                    warning(&mut title.report, "clip_probe_failed", &error.to_string());
+                    warning(
+                        &mut title.report,
+                        warning::CLIP_PROBE_FAILED,
+                        &error.to_string(),
+                    );
                     continue;
                 }
             }
@@ -435,7 +444,7 @@ fn inspect(
                 title.report.budget_exhausted = true;
                 warning(
                     &mut title.report,
-                    "clip_enrichment_budget",
+                    warning::CLIP_ENRICHMENT_BUDGET,
                     &format!("Referenced clip {key} exhausted its analysis budget"),
                 );
             }
@@ -446,7 +455,7 @@ fn inspect(
                 title.report.status = analysis.report.status;
                 warning(
                     &mut title.report,
-                    "clip_analysis_incomplete",
+                    warning::CLIP_ANALYSIS_INCOMPLETE,
                     &format!(
                         "Referenced clip {key} reported {:?}",
                         analysis.report.status
@@ -458,7 +467,7 @@ fn inspect(
                     title.report.status = ProbeStatus::Unsupported;
                     warning(
                         &mut title.report,
-                        "segment_format_change",
+                        warning::SEGMENT_FORMAT_CHANGE,
                         "Referenced segments have materially different stream formats",
                     );
                 }
@@ -468,7 +477,6 @@ fn inspect(
         }
         if let Some(mut analysis) = first {
             streams::apply_navigation(&mut analysis, &title.streams);
-            title.streams = analysis.streams.clone();
             if title.report.warnings.is_empty()
                 && analysis
                     .selected_video()
@@ -506,8 +514,12 @@ fn inspect(
                 // Whole-image storage rate is unrelated to this title's video bitrate.
                 analysis.overall_bitrate_bps = None;
                 analysis.report = title.report.clone();
+                // Only the chosen title needs its streams twice.
+                title.streams = analysis.streams.clone();
                 selected_analysis = Some(analysis);
                 resolved_title_id = Some(title.id.clone());
+            } else {
+                title.streams = analysis.streams;
             }
         }
         if disc.selected_title_id.as_ref() == Some(&title.id) {
@@ -534,7 +546,7 @@ fn inspect(
             }
             warning(
                 &mut report,
-                "disc_episode_mapping_review",
+                warning::DISC_EPISODE_MAPPING_REVIEW,
                 &format!(
                     "Mapped playback title {} is missing or could not be inspected; review the saved episode mapping",
                     mapping.disc_title_id
@@ -573,7 +585,7 @@ fn dvd_vob_extents(image: &Image, set: u8) -> Result<Vec<Extent>, ImageError> {
     }
     Ok(extents)
 }
-fn encrypted(source: &mut dyn MediaSource, bluray: bool) -> Result<bool, MediaInfoError> {
+fn encrypted(source: &mut dyn MediaSource, bluray: bool) -> Result<bool, ProbeError> {
     let length = source.len().min(64 * 1024) as usize;
     let mut bytes = vec![0; length];
     source.read_exact(&mut bytes)?;

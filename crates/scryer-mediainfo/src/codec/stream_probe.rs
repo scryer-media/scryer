@@ -12,6 +12,7 @@ use super::mpeg_audio::find_mpeg_audio_header;
 use super::mpeg_video::find_mpeg_video_sequence_header;
 use crate::raw::RawTrack;
 use crate::scan;
+use scryer_media_model::Codec;
 
 pub(crate) fn probe_h264_track(data: &[u8], track: &mut RawTrack) {
     let Some(sps_nal) = find_annexb_nal(data, |nal| (nal[0] & 0x1F) == 7) else {
@@ -100,7 +101,7 @@ pub(crate) fn probe_aac_track(data: &[u8], track: &mut RawTrack) {
     }
     merge_audio_profile(
         &mut track.audio_profile,
-        detect_audio_profile_from_payload(track.codec_name.as_deref(), data),
+        detect_audio_profile_from_payload(track.codec_name.as_ref(), data),
     );
 }
 
@@ -111,23 +112,23 @@ pub(crate) fn probe_latm_track(data: &[u8], track: &mut RawTrack) {
     track.channels = Some(header.channels as i32);
     merge_audio_profile(
         &mut track.audio_profile,
-        detect_audio_profile_from_payload(track.codec_name.as_deref(), data),
+        detect_audio_profile_from_payload(track.codec_name.as_ref(), data),
     );
 }
 
 pub(crate) fn probe_elementary_stream(data: &[u8], track: &mut RawTrack) {
     crate::codec::picture_headers::enrich(track, data);
-    match track.codec_name.as_deref() {
-        Some("mpeg1video" | "mpeg2video") => probe_mpeg_video_track(data, track),
-        Some("h264") => probe_h264_track(data, track),
-        Some("hevc") => probe_hevc_track(data, track),
-        Some("vc1") => probe_vc1_track(data, track),
-        Some("mp1" | "mp2" | "mp3") => probe_mpeg_audio_track(data, track),
-        Some("ac3") => probe_ac3_track(data, track),
-        Some("eac3") => probe_eac3_track(data, track),
-        Some("dts") => probe_dts_track(data, track),
-        Some("truehd") => probe_truehd_track(data, track),
-        Some("aac") => probe_aac_track(data, track),
+    match track.codec_name {
+        Some(Codec::Mpeg1Video | Codec::Mpeg2Video) => probe_mpeg_video_track(data, track),
+        Some(Codec::H264) => probe_h264_track(data, track),
+        Some(Codec::Hevc) => probe_hevc_track(data, track),
+        Some(Codec::Vc1) => probe_vc1_track(data, track),
+        Some(Codec::Mp1 | Codec::Mp2 | Codec::Mp3) => probe_mpeg_audio_track(data, track),
+        Some(Codec::Ac3) => probe_ac3_track(data, track),
+        Some(Codec::Eac3) => probe_eac3_track(data, track),
+        Some(Codec::Dts) => probe_dts_track(data, track),
+        Some(Codec::TrueHd) => probe_truehd_track(data, track),
+        Some(Codec::Aac) => probe_aac_track(data, track),
         _ => {}
     }
 }
@@ -154,12 +155,12 @@ pub(crate) fn probe_mpeg_audio_track(data: &[u8], track: &mut RawTrack) {
 
 pub(crate) fn probe_unknown_audio_track(data: &[u8], track: &mut RawTrack) {
     if find_adts_header(data).is_some() {
-        track.codec_name = Some("aac".to_owned());
+        track.codec_name = Some(Codec::Aac);
         probe_aac_track(data, track);
         return;
     }
     if find_latm_header(data).is_some() {
-        track.codec_name = Some("aac_latm".to_owned());
+        track.codec_name = Some(Codec::AacLatm);
         probe_latm_track(data, track);
         return;
     }
@@ -168,12 +169,12 @@ pub(crate) fn probe_unknown_audio_track(data: &[u8], track: &mut RawTrack) {
         return;
     }
     if find_ac3_header(data).is_some() {
-        track.codec_name = Some("ac3".to_owned());
+        track.codec_name = Some(Codec::Ac3);
         probe_ac3_track(data, track);
         return;
     }
     if find_eac3_header(data).is_some() {
-        track.codec_name = Some("eac3".to_owned());
+        track.codec_name = Some(Codec::Eac3);
         probe_eac3_track(data, track);
     }
 }
@@ -192,14 +193,14 @@ pub(crate) fn probe_eac3_track(data: &[u8], track: &mut RawTrack) {
     header.apply(track);
     merge_audio_profile(
         &mut track.audio_profile,
-        detect_audio_profile_from_payload(track.codec_name.as_deref(), data),
+        detect_audio_profile_from_payload(track.codec_name.as_ref(), data),
     );
 }
 
 pub(crate) fn probe_truehd_track(data: &[u8], track: &mut RawTrack) {
     merge_audio_profile(
         &mut track.audio_profile,
-        detect_audio_profile_from_payload(track.codec_name.as_deref(), data),
+        detect_audio_profile_from_payload(track.codec_name.as_ref(), data),
     );
 }
 
@@ -219,7 +220,7 @@ pub(crate) fn probe_dts_track(data: &[u8], track: &mut RawTrack) {
     }
     merge_audio_profile(
         &mut track.audio_profile,
-        detect_audio_profile_from_payload(track.codec_name.as_deref(), data),
+        detect_audio_profile_from_payload(track.codec_name.as_ref(), data),
     );
     if track.audio_profile.as_deref() == Some("DTS-ES") && track.channels == Some(6) {
         track.channels = Some(7);
@@ -268,7 +269,7 @@ mod tests {
             0x7F, 0xFE, 0x80, 0x01, 0x7C, 0x7C, 0x05, 0xF2, 0x77, 0x00, 0x02,
         ];
         let mut core = RawTrack {
-            codec_name: Some("dts".into()),
+            codec_name: Some(Codec::Dts),
             ..Default::default()
         };
         probe_dts_track(&data, &mut core);
@@ -282,7 +283,7 @@ mod tests {
         );
 
         let mut extension = RawTrack {
-            codec_name: Some("dts".into()),
+            codec_name: Some(Codec::Dts),
             audio_profile: Some("DTS-HD MA".into()),
             channels: Some(8),
             ..Default::default()

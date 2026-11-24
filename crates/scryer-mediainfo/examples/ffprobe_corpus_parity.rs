@@ -11,9 +11,7 @@ use std::process::Command;
 #[path = "../tests/support/details_facts.rs"]
 mod facts;
 
-use scryer_mediainfo::{
-    AnalysisDetails, AnalysisProfile, AnalyzeOptions, analyze_file_with_options,
-};
+use scryer_mediainfo::{AnalysisDetails, ProbeDepth, ProbeOptions, probe_path};
 use serde_json::{Value, json};
 
 const MAX_DEPTH: usize = 16;
@@ -293,12 +291,7 @@ struct Mismatch {
 }
 
 fn compare_file(ffprobe: &Path, path: &Path, sonarr_channel_layout_retry: bool) -> FileOutcome {
-    let fast = match analyze_file_with_options(
-        path,
-        AnalyzeOptions {
-            profile: AnalysisProfile::Fast,
-        },
-    ) {
+    let fast = match probe_path(path, &ProbeOptions::new().with_depth(ProbeDepth::Quick)) {
         Ok(analysis) => analysis,
         Err(fast_error) => {
             let stage = StageStatus {
@@ -306,11 +299,9 @@ fn compare_file(ffprobe: &Path, path: &Path, sonarr_channel_layout_retry: bool) 
                 rich_needed: true,
                 rich_ok: false,
             };
-            return match analyze_file_with_options(
+            return match probe_path(
                 path,
-                AnalyzeOptions {
-                    profile: AnalysisProfile::FfprobeParity,
-                },
+                &ProbeOptions::new().with_depth(ProbeDepth::FfprobeParity),
             ) {
                 Ok(analysis) => compare_file_with_analysis(
                     ffprobe,
@@ -338,11 +329,9 @@ fn compare_file(ffprobe: &Path, path: &Path, sonarr_channel_layout_retry: bool) 
         rich_ok: !rich_needed,
     };
     let analysis = if rich_needed {
-        match analyze_file_with_options(
+        match probe_path(
             path,
-            AnalyzeOptions {
-                profile: AnalysisProfile::FfprobeParity,
-            },
+            &ProbeOptions::new().with_depth(ProbeDepth::FfprobeParity),
         ) {
             Ok(analysis) => {
                 stage.rich_ok = true;
@@ -398,7 +387,7 @@ fn compare_analysis_to_ffprobe(
     compare_option(
         &mut mismatches,
         "audio_codec",
-        &primary_audio.and_then(|stream| stream.codec.clone()),
+        &primary_audio.and_then(|stream| stream.codec.as_ref().map(ToString::to_string)),
         audio
             .and_then(|stream| stream.get("codec_name"))
             .and_then(Value::as_str)
@@ -504,7 +493,7 @@ fn compare_analysis_to_ffprobe(
         compare_option(
             &mut mismatches,
             &format!("audio_stream[{index}].codec"),
-            &native.codec,
+            &native.codec.as_ref().map(ToString::to_string),
             probe
                 .get("codec_name")
                 .and_then(Value::as_str)
@@ -567,7 +556,7 @@ fn compare_analysis_to_ffprobe(
         compare_option(
             &mut mismatches,
             &format!("subtitle_stream[{index}].codec"),
-            &native.codec,
+            &native.codec.as_ref().map(ToString::to_string),
             probe
                 .get("codec_name")
                 .and_then(Value::as_str)
@@ -615,7 +604,7 @@ fn fast_analysis_has_adequate_facts(analysis: &AnalysisDetails) -> bool {
     let audio = facts::audio(analysis);
     if !audio.is_empty()
         && facts::primary_audio(analysis)
-            .and_then(|stream| stream.codec.as_deref())
+            .and_then(|stream| stream.codec.as_ref().map(scryer_media_model::Codec::as_str))
             .is_none()
     {
         return false;
@@ -623,8 +612,9 @@ fn fast_analysis_has_adequate_facts(analysis: &AnalysisDetails) -> bool {
     if audio.iter().any(|stream| {
         stream.codec.is_none()
             || stream.channels.is_none()
-            || audio_codec_needs_profile(stream.codec.as_deref())
-                && stream.metadata.profile.is_none()
+            || audio_codec_needs_profile(
+                stream.codec.as_ref().map(scryer_media_model::Codec::as_str),
+            ) && stream.metadata.profile.is_none()
     }) {
         return false;
     }

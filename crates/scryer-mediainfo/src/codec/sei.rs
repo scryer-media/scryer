@@ -1,5 +1,7 @@
 //! Bounded SEI and MPEG user-data inventory; no picture or caption decoding.
 use crate::raw::RawTrack;
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use scryer_media_model::{
     CaptionService, ContentLight, MasteringDisplay, ProbeReport, ProbeStatus, ProbeWarning,
 };
@@ -8,9 +10,9 @@ fn incomplete(track: &RawTrack, report: &mut ProbeReport, budget: bool) {
     report.status = ProbeStatus::Incomplete;
     report.budget_exhausted |= budget;
     if !report.warnings.iter().any(|warning| {
-        warning.code == "video_metadata_incomplete" && warning.stream_id == track.metadata.id
+        warning.code == warning::VIDEO_METADATA_INCOMPLETE && warning.stream_id == track.metadata.id
     }) {
-        report.warnings.push(ProbeWarning { code: "video_metadata_incomplete".into(), message: "Video metadata sampling encountered an incomplete header or exhausted its bounded inventory".into(), stream_id: track.metadata.id.clone(), ..Default::default() });
+        report.warnings.push(ProbeWarning { code: warning::VIDEO_METADATA_INCOMPLETE.into(), message: "Video metadata sampling encountered an incomplete header or exhausted its bounded inventory".into(), stream_id: track.metadata.id.clone(), ..Default::default() });
     }
 }
 
@@ -242,11 +244,11 @@ fn nal(
     report: &mut ProbeReport,
     services: &mut Vec<CaptionService>,
 ) {
-    match track.codec_name.as_deref() {
-        Some("h264") if data.first().is_some_and(|byte| byte & 0x9f == 6) => {
+    match track.codec_name {
+        Some(Codec::H264) if data.first().is_some_and(|byte| byte & 0x9f == 6) => {
             sei(data, 1, track, report, services)
         }
-        Some("hevc")
+        Some(Codec::Hevc)
             if data.len() >= 2
                 && data[0] & 128 == 0
                 && data[1] & 7 != 0
@@ -254,7 +256,9 @@ fn nal(
         {
             sei(data, 2, track, report, services)
         }
-        Some("mpeg1video" | "mpeg2video") if data.starts_with(&[0xb2, b'G', b'A', b'9', b'4']) => {
+        Some(Codec::Mpeg1Video | Codec::Mpeg2Video)
+            if data.starts_with(&[0xb2, b'G', b'A', b'9', b'4']) =>
+        {
             captions(&data[5..], track, report, services)
         }
         _ => {}
@@ -476,7 +480,7 @@ mod tests {
         let mut data = (nal.len() as u32).to_be_bytes().to_vec();
         data.extend(nal);
         let mut track = RawTrack {
-            codec_name: Some("hevc".into()),
+            codec_name: Some(Codec::Hevc),
             ..Default::default()
         };
         let mut report = ProbeReport::default();
@@ -518,7 +522,7 @@ mod tests {
     #[test]
     fn malformed_caption_lengths_and_nal_lengths_remain_incomplete() {
         let mut track = RawTrack {
-            codec_name: Some("h264".into()),
+            codec_name: Some(Codec::H264),
             ..Default::default()
         };
         let mut report = ProbeReport::default();

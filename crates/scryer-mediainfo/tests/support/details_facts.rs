@@ -13,7 +13,7 @@ pub fn video(details: &AnalysisDetails) -> Option<&StreamDetail> {
 }
 
 pub fn video_codec(details: &AnalysisDetails) -> Option<&str> {
-    video(details).and_then(|video| video.codec.as_deref())
+    video(details).and_then(|video| video.codec.as_ref().map(scryer_media_model::Codec::as_str))
 }
 
 /// Picture size: the container's dimensions, else the codec configuration's.
@@ -127,41 +127,12 @@ pub fn subtitle_languages(details: &AnalysisDetails) -> Vec<String> {
 pub fn subtitle_codecs(details: &AnalysisDetails) -> Vec<String> {
     subtitles(details)
         .into_iter()
-        .filter_map(|stream| stream.codec.clone())
+        .filter_map(|stream| stream.codec.as_ref().map(ToString::to_string))
         .collect()
 }
 
-/// The authored default stream that is not commentary, else the first that is
-/// not. A stream counts as commentary when flagged so or titled so.
-pub fn primary_audio_index<'a>(
-    streams: impl IntoIterator<Item = (bool, bool, Option<&'a str>)>,
-) -> Option<usize> {
-    streams
-        .into_iter()
-        .enumerate()
-        .filter(|(_, (_, commentary, title))| {
-            !commentary
-                && !title.is_some_and(|title| {
-                    title
-                        .split(|ch: char| !ch.is_alphanumeric())
-                        .any(|word| word.eq_ignore_ascii_case("commentary"))
-                })
-        })
-        .min_by_key(|(index, (default, _, _))| (!default, *index))
-        .map(|(index, _)| index)
-}
-
 pub fn primary_audio(details: &AnalysisDetails) -> Option<&StreamDetail> {
-    let audio = audio(details);
-    primary_audio_index(audio.iter().map(|stream| {
-        let disposition = &stream.metadata.disposition;
-        (
-            disposition.default.unwrap_or(false),
-            disposition.commentary == Some(true),
-            stream.name.as_deref(),
-        )
-    }))
-    .map(|index| audio[index])
+    details.primary_audio()
 }
 
 pub fn kbps(bits_per_second: Option<u64>) -> Option<i32> {

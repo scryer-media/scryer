@@ -11,9 +11,7 @@ use std::time::{Duration, Instant};
 #[path = "../tests/support/details_facts.rs"]
 mod facts;
 
-use scryer_mediainfo::{
-    AnalysisDetails, AnalysisProfile, AnalyzeOptions, analyze_file_with_options,
-};
+use scryer_mediainfo::{AnalysisDetails, ProbeDepth, ProbeOptions, probe_path};
 use serde_json::Value;
 
 const MAX_DEPTH: usize = 16;
@@ -165,13 +163,8 @@ struct NativeTiming {
 fn time_native_fast_then_rich(path: &Path) -> Result<NativeTiming, String> {
     if media_type(path) == Some("mkv") {
         let rich_start = Instant::now();
-        analyze_file_with_options(
-            path,
-            AnalyzeOptions {
-                profile: AnalysisProfile::DefaultRich,
-            },
-        )
-        .map_err(|error| error.to_string())?;
+        probe_path(path, &ProbeOptions::new().with_depth(ProbeDepth::Full))
+            .map_err(|error| error.to_string())?;
         let rich_duration = rich_start.elapsed();
         return Ok(NativeTiming {
             fast_duration: rich_duration,
@@ -181,13 +174,8 @@ fn time_native_fast_then_rich(path: &Path) -> Result<NativeTiming, String> {
     }
 
     let fast_start = Instant::now();
-    let fast = analyze_file_with_options(
-        path,
-        AnalyzeOptions {
-            profile: AnalysisProfile::Fast,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    let fast = probe_path(path, &ProbeOptions::new().with_depth(ProbeDepth::Quick))
+        .map_err(|error| error.to_string())?;
     let fast_duration = fast_start.elapsed();
     if fast_analysis_has_adequate_facts(&fast) {
         return Ok(NativeTiming {
@@ -198,13 +186,8 @@ fn time_native_fast_then_rich(path: &Path) -> Result<NativeTiming, String> {
     }
 
     let rich_start = Instant::now();
-    analyze_file_with_options(
-        path,
-        AnalyzeOptions {
-            profile: AnalysisProfile::DefaultRich,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    probe_path(path, &ProbeOptions::new().with_depth(ProbeDepth::Full))
+        .map_err(|error| error.to_string())?;
     let rich_duration = rich_start.elapsed();
 
     Ok(NativeTiming {
@@ -229,7 +212,7 @@ fn fast_analysis_has_adequate_facts(analysis: &AnalysisDetails) -> bool {
     let audio = facts::audio(analysis);
     if !audio.is_empty()
         && facts::primary_audio(analysis)
-            .and_then(|stream| stream.codec.as_deref())
+            .and_then(|stream| stream.codec.as_ref().map(scryer_media_model::Codec::as_str))
             .is_none()
     {
         return false;
@@ -237,8 +220,9 @@ fn fast_analysis_has_adequate_facts(analysis: &AnalysisDetails) -> bool {
     if audio.iter().any(|stream| {
         stream.codec.is_none()
             || stream.channels.is_none()
-            || audio_codec_needs_profile(stream.codec.as_deref())
-                && stream.metadata.profile.is_none()
+            || audio_codec_needs_profile(
+                stream.codec.as_ref().map(scryer_media_model::Codec::as_str),
+            ) && stream.metadata.profile.is_none()
     }) {
         return false;
     }

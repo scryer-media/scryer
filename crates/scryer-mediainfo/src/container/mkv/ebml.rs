@@ -3,7 +3,7 @@
 
 use std::io::Read;
 
-use crate::MediaInfoError;
+use crate::ProbeError;
 
 pub(super) const EBML_ID_EBML: u32 = 0x1A45_DFA3;
 pub(super) const EBML_ID_DOC_TYPE: u32 = 0x4282;
@@ -134,9 +134,9 @@ pub(super) fn parse_ebml_float(data: &[u8]) -> Option<f64> {
     }
 }
 
-pub(super) fn parse_ebml_string(data: &[u8]) -> Result<String, MediaInfoError> {
+pub(super) fn parse_ebml_string(data: &[u8]) -> Result<String, ProbeError> {
     let value = std::str::from_utf8(data)
-        .map_err(|e| MediaInfoError::Parse(format!("invalid utf-8 string: {e}")))?;
+        .map_err(|e| ProbeError::Malformed(format!("invalid utf-8 string: {e}")))?;
     Ok(value.trim_end_matches('\0').to_owned())
 }
 
@@ -185,25 +185,23 @@ pub(super) fn parse_ebml_sint_value(data: &[u8]) -> Option<(i64, usize)> {
     Some((unsigned - bias, len))
 }
 
-pub(super) fn read_u8_from_reader<R: Read>(reader: &mut R) -> Result<u8, MediaInfoError> {
+pub(super) fn read_u8_from_reader<R: Read>(reader: &mut R) -> Result<u8, ProbeError> {
     let mut buf = [0_u8; 1];
-    reader
-        .read_exact(&mut buf)
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    reader.read_exact(&mut buf).map_err(ProbeError::from)?;
     Ok(buf[0])
 }
 
 pub(super) fn read_ebml_vint_value_from_reader<R: Read>(
     reader: &mut R,
-) -> Result<(u64, usize), MediaInfoError> {
+) -> Result<(u64, usize), ProbeError> {
     let first = read_u8_from_reader(reader)?;
     if first == 0 {
-        return Err(MediaInfoError::Parse("invalid ebml vint".into()));
+        return Err(ProbeError::Malformed("invalid ebml vint".into()));
     }
 
     let len = first.leading_zeros() as usize + 1;
     if len == 0 || len > 8 {
-        return Err(MediaInfoError::Parse("invalid ebml vint".into()));
+        return Err(ProbeError::Malformed("invalid ebml vint".into()));
     }
 
     let mut buf = [0_u8; 8];
@@ -211,24 +209,24 @@ pub(super) fn read_ebml_vint_value_from_reader<R: Read>(
     if len > 1 {
         reader
             .read_exact(&mut buf[1..len])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
     }
 
     parse_ebml_vint_value(&buf[..len])
-        .ok_or_else(|| MediaInfoError::Parse("invalid ebml vint".into()))
+        .ok_or_else(|| ProbeError::Malformed("invalid ebml vint".into()))
 }
 
 pub(super) fn read_ebml_sint_value_from_reader<R: Read>(
     reader: &mut R,
-) -> Result<(i64, usize), MediaInfoError> {
+) -> Result<(i64, usize), ProbeError> {
     let first = read_u8_from_reader(reader)?;
     if first == 0 {
-        return Err(MediaInfoError::Parse("invalid ebml signed vint".into()));
+        return Err(ProbeError::Malformed("invalid ebml signed vint".into()));
     }
 
     let len = first.leading_zeros() as usize + 1;
     if len == 0 || len > 8 {
-        return Err(MediaInfoError::Parse("invalid ebml signed vint".into()));
+        return Err(ProbeError::Malformed("invalid ebml signed vint".into()));
     }
 
     let mut buf = [0_u8; 8];
@@ -236,27 +234,25 @@ pub(super) fn read_ebml_sint_value_from_reader<R: Read>(
     if len > 1 {
         reader
             .read_exact(&mut buf[1..len])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
     }
 
     parse_ebml_sint_value(&buf[..len])
-        .ok_or_else(|| MediaInfoError::Parse("invalid ebml signed vint".into()))
+        .ok_or_else(|| ProbeError::Malformed("invalid ebml signed vint".into()))
 }
 
 pub(super) fn read_ebml_id_from_reader<R: Read>(
     reader: &mut R,
-) -> Result<Option<(u32, usize)>, MediaInfoError> {
+) -> Result<Option<(u32, usize)>, ProbeError> {
     let mut first = [0_u8; 1];
-    let bytes_read = reader
-        .read(&mut first)
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let bytes_read = reader.read(&mut first).map_err(ProbeError::from)?;
     if bytes_read == 0 {
         return Ok(None);
     }
 
     let len = first[0].leading_zeros() as usize + 1;
     if len == 0 || len > 4 {
-        return Err(MediaInfoError::Parse("invalid ebml id".into()));
+        return Err(ProbeError::Malformed("invalid ebml id".into()));
     }
 
     let mut value = u32::from(first[0]);
@@ -264,7 +260,7 @@ pub(super) fn read_ebml_id_from_reader<R: Read>(
     if len > 1 {
         reader
             .read_exact(&mut rest[..len - 1])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
         for &byte in &rest[..len - 1] {
             value = (value << 8) | u32::from(byte);
         }
@@ -275,19 +271,17 @@ pub(super) fn read_ebml_id_from_reader<R: Read>(
 
 pub(super) fn read_ebml_size_from_reader<R: Read>(
     reader: &mut R,
-) -> Result<(Option<u64>, usize), MediaInfoError> {
+) -> Result<(Option<u64>, usize), ProbeError> {
     let mut first = [0_u8; 1];
-    reader
-        .read_exact(&mut first)
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    reader.read_exact(&mut first).map_err(ProbeError::from)?;
 
     if first[0] == 0 {
-        return Err(MediaInfoError::Parse("invalid ebml size".into()));
+        return Err(ProbeError::Malformed("invalid ebml size".into()));
     }
 
     let len = first[0].leading_zeros() as usize + 1;
     if len > 8 {
-        return Err(MediaInfoError::Parse("invalid ebml size".into()));
+        return Err(ProbeError::Malformed("invalid ebml size".into()));
     }
 
     let mask = if len == 8 { 0 } else { 0xFF >> len };
@@ -298,7 +292,7 @@ pub(super) fn read_ebml_size_from_reader<R: Read>(
     if len > 1 {
         reader
             .read_exact(&mut rest[..len - 1])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
         for &byte in &rest[..len - 1] {
             value = (value << 8) | u64::from(byte);
             unknown &= byte == 0xFF;

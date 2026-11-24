@@ -858,13 +858,16 @@ fn probe_video_content(
     {
         let started = std::time::Instant::now();
         let result = if disc_image {
-            scryer_mediainfo::analyze_disc_file(path, Default::default())
-        } else {
-            scryer_mediainfo::analyze_file_with_options(
+            scryer_mediainfo::probe_disc(
                 path,
-                scryer_mediainfo::AnalyzeOptions {
-                    profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
-                },
+                Default::default(),
+                &scryer_mediainfo::ProbeOptions::new(),
+            )
+        } else {
+            scryer_mediainfo::probe_path(
+                path,
+                &scryer_mediainfo::ProbeOptions::new()
+                    .with_depth(scryer_mediainfo::ProbeDepth::Identify),
             )
         };
         crate::media::metrics::record_probe(
@@ -874,16 +877,21 @@ fn probe_video_content(
         );
         match result {
             Ok(details)
-                if disc_image || crate::media::analysis_summary::is_valid_video(&details) =>
+                if disc_image || details.is_playable_video() =>
             {
                 use crate::media::analysis_summary as summary;
                 let video = details.selected_video();
-                let (video_width, video_height) =
-                    video.map(summary::video_dimensions).unwrap_or_default();
+                let (video_width, video_height) = video
+                    .map(scryer_media_types::StreamDetail::picture_size)
+                    .unwrap_or_default();
                 Ok(Some(ManualImportVideoFacts {
-                    video_codec: video.and_then(|video| video.codec.clone()),
-                    audio_codec: summary::primary_audio(&details)
-                        .and_then(|audio| audio.codec.clone()),
+                    video_codec: video
+                        .and_then(|video| video.codec.as_ref())
+                        .map(|codec| codec.as_str().to_owned()),
+                    audio_codec: details
+                        .primary_audio()
+                        .and_then(|audio| audio.codec.as_ref())
+                        .map(|codec| codec.as_str().to_owned()),
                     video_width,
                     video_height,
                     duration_seconds: summary::duration_seconds(&details),
@@ -893,9 +901,9 @@ fn probe_video_content(
                 }))
             }
             Ok(_)
-            | Err(scryer_mediainfo::MediaInfoError::Parse(_))
-            | Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)) => Ok(None),
-            Err(scryer_mediainfo::MediaInfoError::Io(error)) => Err(error),
+            | Err(scryer_mediainfo::ProbeError::Malformed(_))
+            | Err(scryer_mediainfo::ProbeError::Unsupported(_)) => Ok(None),
+            Err(error) => Err(error.message().to_owned()),
         }
     }
     #[cfg(not(feature = "runtime-media-analysis"))]

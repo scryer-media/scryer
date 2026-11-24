@@ -1,9 +1,10 @@
 //! Bounded RealMedia object and MDPR metadata reader.
 use crate::{
-    MediaInfoError,
+    ProbeError,
     raw::{RawContainer, RawTrack, TrackKind},
     source::MediaSource,
 };
+use scryer_media_model::Codec;
 use scryer_media_model::{AnalysisDetails, ProbeStatus, Provenance};
 use std::io::SeekFrom;
 const LIMIT: u64 = 1024 * 1024;
@@ -19,12 +20,12 @@ fn u32be(data: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?))
 }
 
-pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, ProbeError> {
     source.seek(SeekFrom::Start(0))?;
     let mut data = vec![0; source.len().min(LIMIT) as usize];
     source.read_exact(&mut data)?;
     if !data.starts_with(b".RMF") {
-        return Err(MediaInfoError::Parse("invalid RealMedia signature".into()));
+        return Err(ProbeError::Malformed("invalid RealMedia signature".into()));
     }
     let mut at = 0usize;
     let mut tracks = Vec::new();
@@ -34,7 +35,7 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
     for object_index in 0..1024 {
         let Some(header) = data.get(at..at.saturating_add(10)) else {
             if at < data.len() && source.len() <= LIMIT {
-                return Err(MediaInfoError::Parse(
+                return Err(ProbeError::Malformed(
                     "truncated RealMedia object header".into(),
                 ));
             }
@@ -43,27 +44,25 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
         };
         let size = u32be(header, 4).unwrap() as usize;
         if size < 10 {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "invalid RealMedia object size".into(),
             ));
         }
         let Some(end) = at.checked_add(size) else {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "RealMedia object offset overflow".into(),
             ));
         };
         if end as u64 > source.len() {
-            return Err(MediaInfoError::Parse("truncated RealMedia object".into()));
+            return Err(ProbeError::Malformed("truncated RealMedia object".into()));
         }
         if &header[..4] == b"DATA" && size < 18 {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "truncated RealMedia data header".into(),
             ));
         }
         if u16be(header, 8) != Some(0) {
-            return Err(MediaInfoError::UnsupportedFormat(
-                "RealMedia object version".into(),
-            ));
+            return Err(ProbeError::Unsupported("RealMedia object version".into()));
         }
         if &header[..4] == b"DATA" {
             break;
@@ -74,13 +73,13 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
         };
         match &header[..4] {
             b".RMF" if body.len() < 8 => {
-                return Err(MediaInfoError::Parse(
+                return Err(ProbeError::Malformed(
                     "truncated RealMedia file header".into(),
                 ));
             }
             b"PROP" => {
                 if body.len() < 40 {
-                    return Err(MediaInfoError::Parse(
+                    return Err(ProbeError::Malformed(
                         "truncated RealMedia properties header".into(),
                     ));
                 }
@@ -108,12 +107,12 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
         }
     }
     if unsupported && !tracks.iter().any(|track| track.kind == TrackKind::Video) {
-        return Err(MediaInfoError::UnsupportedFormat(
+        return Err(ProbeError::Unsupported(
             "unresolved RealMedia stream kind".into(),
         ));
     }
     if tracks.is_empty() {
-        return Err(MediaInfoError::Parse(
+        return Err(ProbeError::Malformed(
             "no supported RealMedia stream headers".into(),
         ));
     }
@@ -137,7 +136,7 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
     })
 }
 
-fn mdpr(data: &[u8]) -> Result<Descriptor, MediaInfoError> {
+fn mdpr(data: &[u8]) -> Result<Descriptor, ProbeError> {
     // Validate the common descriptor before classifying an unsupported codec.
     let fields = || -> Option<(&[u8], &[u8])> {
         data.get(..30)?;
@@ -154,21 +153,21 @@ fn mdpr(data: &[u8]) -> Result<Descriptor, MediaInfoError> {
         ))
     };
     let (mime, codec) = fields()
-        .ok_or_else(|| MediaInfoError::Parse("malformed RealMedia stream descriptor".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("malformed RealMedia stream descriptor".into()))?;
     if codec.get(4..8) == Some(b"VIDO") {
         let known = matches!(
             codec.get(8..12),
             Some(b"RV10" | b"RV20" | b"RV30" | b"RV40")
         );
         if codec.len() < 12 || (known && codec.len() < 26) {
-            return Err(MediaInfoError::Parse("truncated RealVideo header".into()));
+            return Err(ProbeError::Malformed("truncated RealVideo header".into()));
         }
     } else if mime == b"audio/x-pn-realaudio" && codec.starts_with(b".ra\xfd") {
         match u16be(codec, 4) {
             Some(3) if codec.len() >= 24 => {}
             Some(4 | 5) => {}
             Some(3) | None => {
-                return Err(MediaInfoError::Parse("truncated RealAudio header".into()));
+                return Err(ProbeError::Malformed("truncated RealAudio header".into()));
             }
             Some(_) => return Ok(Descriptor::Unresolved),
         }
@@ -178,7 +177,7 @@ fn mdpr(data: &[u8]) -> Result<Descriptor, MediaInfoError> {
         return Ok(Descriptor::Unresolved);
     }
     let track = decode_mdpr(data)
-        .ok_or_else(|| MediaInfoError::Parse("malformed RealMedia codec header".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("malformed RealMedia codec header".into()))?;
     Ok(Descriptor::Track(Box::new(track)))
 }
 
@@ -202,13 +201,12 @@ fn decode_mdpr(data: &[u8]) -> Option<RawTrack> {
     if codec.get(4..8) == Some(b"VIDO") {
         let tag = codec.get(8..12)?;
         track.codec_name = match tag {
-            b"RV10" => Some("rv10"),
-            b"RV20" => Some("rv20"),
-            b"RV30" => Some("rv30"),
-            b"RV40" => Some("rv40"),
+            b"RV10" => Some(Codec::Rv10),
+            b"RV20" => Some(Codec::Rv20),
+            b"RV30" => Some(Codec::Rv30),
+            b"RV40" => Some(Codec::Rv40),
             _ => None,
-        }
-        .map(str::to_owned);
+        };
         track.codec_id = String::from_utf8_lossy(tag).into_owned();
         if track.codec_name.is_some() {
             track.width = u16be(codec, 12).filter(|v| *v > 0).map(i32::from);
@@ -221,7 +219,7 @@ fn decode_mdpr(data: &[u8]) -> Option<RawTrack> {
         track.kind = TrackKind::Audio;
         let version = u16be(codec, 4)?;
         if version == 3 {
-            track.codec_name = Some("ra_144".into());
+            track.codec_name = Some(Codec::Ra144);
             track.channels = Some(1);
             track.metadata.sample_rate = Some(8000);
         } else if version == 4 || version == 5 {
@@ -239,15 +237,14 @@ fn decode_mdpr(data: &[u8]) -> Option<RawTrack> {
             };
             track.codec_id = String::from_utf8_lossy(tag).into_owned();
             track.codec_name = match tag {
-                b"cook" => Some("cook"),
-                b"sipr" => Some("sipr"),
-                b"atrc" => Some("atrac3"),
-                b"dnet" => Some("ac3"),
-                b"28_8" => Some("ra_288"),
-                b"raac" | b"racp" => Some("aac"),
+                b"cook" => Some(Codec::Cook),
+                b"sipr" => Some(Codec::Sipr),
+                b"atrc" => Some(Codec::Atrac3),
+                b"dnet" => Some(Codec::Ac3),
+                b"28_8" => Some(Codec::Ra288),
+                b"raac" | b"racp" => Some(Codec::Aac),
                 _ => None,
-            }
-            .map(str::to_owned);
+            };
         }
     } else {
         return None;
@@ -284,7 +281,13 @@ mod tests {
     #[test]
     fn video_metadata_and_unknown_timing() {
         let r = parse(&mut Cursor::new(fixture())).unwrap();
-        assert_eq!(r.tracks[0].codec_name.as_deref(), Some("rv40"));
+        assert_eq!(
+            r.tracks[0]
+                .codec_name
+                .as_ref()
+                .map(scryer_media_model::Codec::as_str),
+            Some("rv40")
+        );
         assert_eq!(r.tracks[0].width, Some(640));
         assert_eq!(r.duration_seconds, None);
         assert_eq!(r.tracks[0].frame_rate_fps, None);
@@ -304,7 +307,7 @@ mod tests {
         bytes[8..10].copy_from_slice(&2u16.to_be_bytes());
         assert!(matches!(
             parse(&mut Cursor::new(bytes)),
-            Err(MediaInfoError::UnsupportedFormat(_))
+            Err(ProbeError::Unsupported(_))
         ));
     }
     #[test]
@@ -313,7 +316,7 @@ mod tests {
         bytes.extend(object(b"MDPR", &[0; 32]));
         assert!(matches!(
             parse(&mut Cursor::new(bytes)),
-            Err(MediaInfoError::Parse(_))
+            Err(ProbeError::Malformed(_))
         ));
     }
     #[test]
@@ -330,7 +333,13 @@ mod tests {
         assert_eq!(parsed.tracks[0].width, None);
         assert_eq!(parsed.tracks[0].height, None);
         assert_eq!(parsed.tracks[1].kind, TrackKind::Audio);
-        assert_eq!(parsed.tracks[1].codec_name.as_deref(), Some("ra_144"));
+        assert_eq!(
+            parsed.tracks[1]
+                .codec_name
+                .as_ref()
+                .map(scryer_media_model::Codec::as_str),
+            Some("ra_144")
+        );
     }
     fn descriptor(codec: &[u8], mime: &[u8]) -> Vec<u8> {
         let mut body = vec![0; 30];
@@ -357,7 +366,7 @@ mod tests {
         .concat();
         assert!(matches!(
             parse(&mut Cursor::new(bytes)),
-            Err(MediaInfoError::UnsupportedFormat(_))
+            Err(ProbeError::Unsupported(_))
         ));
         let bytes = [
             fixture(),
@@ -366,7 +375,13 @@ mod tests {
         .concat();
         let partial = parse(&mut Cursor::new(bytes)).unwrap();
         assert_eq!(partial.details.report.status, ProbeStatus::Unsupported);
-        assert_eq!(partial.tracks[0].codec_name.as_deref(), Some("rv40"));
+        assert_eq!(
+            partial.tracks[0]
+                .codec_name
+                .as_ref()
+                .map(scryer_media_model::Codec::as_str),
+            Some("rv40")
+        );
     }
     #[test]
     fn metadata_caps_report_exhaustion_only_when_more_metadata_remains() {
@@ -411,14 +426,14 @@ mod tests {
             let bytes = [object(b".RMF", &vec![0; length]), fixture()[18..].to_vec()].concat();
             assert!(matches!(
                 parse(&mut Cursor::new(bytes)),
-                Err(MediaInfoError::Parse(_))
+                Err(ProbeError::Malformed(_))
             ));
         }
         for length in 0..40 {
             let bytes = [fixture(), object(b"PROP", &vec![0; length])].concat();
             assert!(matches!(
                 parse(&mut Cursor::new(bytes)),
-                Err(MediaInfoError::Parse(_))
+                Err(ProbeError::Malformed(_))
             ));
         }
     }
@@ -443,14 +458,14 @@ mod tests {
             let bytes = [fixture(), tail].concat();
             assert!(matches!(
                 parse(&mut Cursor::new(bytes)),
-                Err(MediaInfoError::Parse(_))
+                Err(ProbeError::Malformed(_))
             ));
         }
         for length in 0..8 {
             let bytes = [fixture(), object(b"DATA", &vec![0; length])].concat();
             assert!(matches!(
                 parse(&mut Cursor::new(bytes)),
-                Err(MediaInfoError::Parse(_))
+                Err(ProbeError::Malformed(_))
             ));
         }
     }
@@ -461,6 +476,12 @@ mod tests {
         bytes.extend(object(b"DATA", &vec![0; LIMIT as usize]));
         let parsed = parse(&mut Cursor::new(bytes)).unwrap();
         assert!(!parsed.details.report.budget_exhausted);
-        assert_eq!(parsed.tracks[0].codec_name.as_deref(), Some("rv40"));
+        assert_eq!(
+            parsed.tracks[0]
+                .codec_name
+                .as_ref()
+                .map(scryer_media_model::Codec::as_str),
+            Some("rv40")
+        );
     }
 }

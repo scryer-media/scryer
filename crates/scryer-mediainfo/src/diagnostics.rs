@@ -1,4 +1,9 @@
-//! Opt-in bounded structural inspection. No picture or audio decoding is performed.
+//! Opt-in structural inspection of a file's packets and headers, for telling
+//! a damaged file from an intact one. Nothing is decoded.
+//!
+//! [`diagnose_file`] runs the container probe, then samples transport and
+//! program stream packet headers and presentation timestamps across the
+//! file, within [`DiagnosticsOptions::read_budget_bytes`].
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -6,21 +11,28 @@ use std::path::Path;
 use std::time::Instant;
 
 use scryer_media_model::{
-    DiagnosticCoverage, DiscSelection, ProbeReport, ProbeStatus, ProbeWarning,
-    StructuralDiagnostics,
+    Codec, DiagnosticCoverage, DiscSelection, ProbeReport, ProbeStatus, ProbeWarning,
+    StructuralDiagnostics, warning,
 };
 
 use crate::source::{BoundedSource, FileSource, MediaSource};
-use crate::{AnalysisProfile, AnalyzeOptions, MediaInfoError};
+use crate::{ProbeDepth, ProbeError, ProbeOptions};
 
 const MAX_RANGES: usize = 4096;
 const MAX_WARNINGS: usize = 256;
 const MAX_BUDGET: u64 = 32 * 1024 * 1024;
 
+/// Settings for [`diagnose_file`].
 #[derive(Debug, Clone)]
 pub struct DiagnosticsOptions {
+    /// Bytes the inspection may read, capped at 32 MiB. Half is reserved for
+    /// the container probe and half for packet sampling. Defaults to 8 MiB.
     pub read_budget_bytes: u64,
+    /// How many evenly spaced windows of packets to sample, from 1 to 8.
+    /// Defaults to 4.
     pub sample_windows: usize,
+    /// For a disc image, which title to inspect. The default lets the probe
+    /// choose the main title.
     pub disc_selection: DiscSelection,
 }
 
@@ -34,10 +46,20 @@ impl Default for DiagnosticsOptions {
     }
 }
 
+/// Inspects the structure of the file at `path`.
+///
+/// Problems found in the file are reported in the result, not as errors.
+///
+/// # Errors
+///
+/// - [`ProbeError::Io`] when the file cannot be opened.
+/// - [`ProbeError::SourceChanged`] when the file was replaced or modified
+///   during the inspection.
 pub fn diagnose_file(
-    path: &Path,
+    path: impl AsRef<Path>,
     options: DiagnosticsOptions,
-) -> Result<StructuralDiagnostics, MediaInfoError> {
+) -> Result<StructuralDiagnostics, ProbeError> {
+    let path = path.as_ref();
     let mut source = FileSource::open(path)?;
     let extension = path
         .extension()
@@ -45,14 +67,12 @@ pub fn diagnose_file(
         .unwrap_or_default();
     let report = diagnose_source(&mut source, extension, options);
     if !source.unchanged(path)? {
-        return Err(MediaInfoError::Io(
-            "source changed during diagnostics".into(),
-        ));
+        return Err(ProbeError::SourceChanged);
     }
     Ok(report)
 }
 
-pub fn diagnose_source(
+pub(crate) fn diagnose_source(
     source: &mut dyn MediaSource,
     extension: &str,
     options: DiagnosticsOptions,
@@ -79,35 +99,33 @@ pub fn diagnose_source(
             .push("disc_filesystem_and_navigation_references".into());
         crate::disc::diagnose_source(&mut headers, options.disc_selection)
     } else {
-        match crate::analyze_source(
+        match crate::probe_bounded(
             &mut headers,
             extension,
-            AnalyzeOptions {
-                profile: AnalysisProfile::DefaultRich,
-            },
+            &ProbeOptions::new().with_depth(ProbeDepth::Full),
         ) {
             Ok(details) => {
-                for stream in &details.streams {
+                for stream in details.streams {
                     if let Some(pid) = stream
                         .metadata
                         .id
                         .as_deref()
                         .and_then(|id| id.parse::<u16>().ok())
-                        && let Some(codec) = &stream.codec
+                        && let Some(codec) = stream.codec
                     {
-                        codecs.insert(pid, codec.clone());
+                        codecs.insert(pid, codec);
                     }
                 }
                 details.report
             }
             Err(error) => ProbeReport {
                 status: match error {
-                    MediaInfoError::UnsupportedFormat(_) => ProbeStatus::Unsupported,
-                    MediaInfoError::Parse(_) => ProbeStatus::Malformed,
-                    MediaInfoError::Io(_) => ProbeStatus::Incomplete,
+                    ProbeError::Unsupported(_) => ProbeStatus::Unsupported,
+                    ProbeError::Malformed(_) => ProbeStatus::Malformed,
+                    ProbeError::Io { .. } | ProbeError::SourceChanged => ProbeStatus::Incomplete,
                 },
                 warnings: vec![ProbeWarning {
-                    code: "container_inspection".into(),
+                    code: warning::CONTAINER_INSPECTION.into(),
                     message: error.to_string(),
                     ..Default::default()
                 }],
@@ -140,7 +158,7 @@ pub fn diagnose_source(
     {
         warn(
             &mut result,
-            "sampling_incomplete",
+            warning::SAMPLING_INCOMPLETE,
             &error.to_string(),
             None,
             None,
@@ -154,7 +172,7 @@ pub fn diagnose_source(
     result.coverage_truncated = trace.truncated;
     warn(
         &mut result,
-        "sampled_headers_only",
+        warning::SAMPLED_HEADERS_ONLY,
         "Only bounded container and payload headers were inspected; unsampled media and decoded content were not validated",
         None,
         None,
@@ -254,7 +272,7 @@ fn sample_transport<R: MediaSource>(
     source: &mut TraceSource<BoundedSource<R>>,
     budget: u64,
     windows: usize,
-    codecs: &BTreeMap<u16, String>,
+    codecs: &BTreeMap<u16, Codec>,
     result: &mut StructuralDiagnostics,
 ) -> io::Result<()> {
     source.seek(SeekFrom::Start(0))?;
@@ -323,7 +341,7 @@ fn sample_transport<R: MediaSource>(
     if !source.len().is_multiple_of(size as u64) {
         warn(
             result,
-            "transport_truncation",
+            warning::TRANSPORT_TRUNCATION,
             "Source ends with an incomplete transport packet",
             None,
             Some(total_packets * size as u64),
@@ -419,7 +437,7 @@ fn inspect_program_packets(
                 Some(_) => {
                     program_warning(
                         result,
-                        "program_pack_header",
+                        warning::PROGRAM_PACK_HEADER,
                         "Unrecognized pack header version",
                         u16::from(stream),
                         at,
@@ -438,7 +456,7 @@ fn inspect_program_packets(
             if offset + bytes.len() as u64 == source_length {
                 program_warning(
                     result,
-                    "program_truncation",
+                    warning::PROGRAM_TRUNCATION,
                     "Source ends inside a packet header",
                     u16::from(stream),
                     at,
@@ -449,7 +467,7 @@ fn inspect_program_packets(
         if length as u64 > source_length.saturating_sub(at) {
             program_warning(
                 result,
-                "program_truncation",
+                warning::PROGRAM_TRUNCATION,
                 "Declared packet extends beyond the source",
                 u16::from(stream),
                 at,
@@ -469,7 +487,7 @@ fn inspect_program_packets(
         if length == 6 {
             program_warning(
                 result,
-                "program_unbounded_packet",
+                warning::PROGRAM_UNBOUNDED_PACKET,
                 "A zero-length PES packet cannot be fully delimited in this sample",
                 u16::from(stream),
                 at,
@@ -482,7 +500,7 @@ fn inspect_program_packets(
             result.report.status = ProbeStatus::Encrypted;
             program_warning(
                 result,
-                "program_scrambled",
+                warning::PROGRAM_SCRAMBLED,
                 "PES packet declares scrambled payload",
                 u16::from(stream),
                 at,
@@ -497,7 +515,7 @@ fn inspect_program_packets(
         else {
             program_warning(
                 result,
-                "program_pes_header",
+                warning::PROGRAM_PES_HEADER,
                 "PES header does not fit its declared packet",
                 u16::from(stream),
                 at,
@@ -509,7 +527,7 @@ fn inspect_program_packets(
             let Some(substream) = payload.first().copied() else {
                 program_warning(
                     result,
-                    "program_private_header",
+                    warning::PROGRAM_PRIVATE_HEADER,
                     "Private packet has no substream identifier",
                     id,
                     at,
@@ -521,7 +539,7 @@ fn inspect_program_packets(
             let Some(rest) = payload.get(skip..) else {
                 program_warning(
                     result,
-                    "program_private_header",
+                    warning::PROGRAM_PRIVATE_HEADER,
                     "Private stream header is truncated",
                     id,
                     at,
@@ -533,7 +551,7 @@ fn inspect_program_packets(
         if !timestamps_valid {
             program_warning(
                 result,
-                "presentation_timestamp_markers",
+                warning::PRESENTATION_TIMESTAMP_MARKERS,
                 "PES timestamp flags, length, or marker bits are invalid",
                 id,
                 at,
@@ -545,7 +563,7 @@ fn inspect_program_packets(
             if backward > 90_000 && backward < (1_u64 << 32) {
                 program_warning(
                     result,
-                    "presentation_timestamp_regression",
+                    warning::PRESENTATION_TIMESTAMP_REGRESSION,
                     "Presentation timestamp moves backward by over one second within a sampled window",
                     id,
                     at,
@@ -572,7 +590,7 @@ fn inspect_packets(
     size: usize,
     sync: usize,
     offset: u64,
-    codecs: &BTreeMap<u16, String>,
+    codecs: &BTreeMap<u16, Codec>,
     result: &mut StructuralDiagnostics,
 ) {
     let mut continuity: BTreeMap<u16, (u8, [u8; 188])> = BTreeMap::new();
@@ -586,7 +604,7 @@ fn inspect_packets(
         if packet[0] != 0x47 {
             warn(
                 result,
-                "transport_sync",
+                warning::TRANSPORT_SYNC,
                 "Transport sync byte is missing",
                 None,
                 Some(at),
@@ -597,7 +615,7 @@ fn inspect_packets(
         if packet[1] & 0x80 != 0 {
             warn(
                 result,
-                "transport_error_indicator",
+                warning::TRANSPORT_ERROR_INDICATOR,
                 "Packet declares a transport error",
                 Some(pid),
                 Some(at),
@@ -607,7 +625,7 @@ fn inspect_packets(
             result.report.status = ProbeStatus::Encrypted;
             warn(
                 result,
-                "transport_scrambled",
+                warning::TRANSPORT_SCRAMBLED,
                 "Packet declares scrambled payload",
                 Some(pid),
                 Some(at),
@@ -618,7 +636,7 @@ fn inspect_packets(
         if mode == 0 {
             warn(
                 result,
-                "transport_adaptation_control",
+                warning::TRANSPORT_ADAPTATION_CONTROL,
                 "Reserved adaptation-field control",
                 Some(pid),
                 Some(at),
@@ -636,7 +654,7 @@ fn inspect_packets(
         {
             warn(
                 result,
-                "transport_adaptation_length",
+                warning::TRANSPORT_ADAPTATION_LENGTH,
                 "Adaptation field lies outside its packet or leaves no declared payload",
                 Some(pid),
                 Some(at),
@@ -658,7 +676,7 @@ fn inspect_packets(
             if counter != expected && !(has_payload && counter == *old && packet == previous) {
                 warn(
                     result,
-                    "transport_continuity_gap",
+                    warning::TRANSPORT_CONTINUITY_GAP,
                     "Unexpected continuity counter within a sampled window",
                     Some(pid),
                     Some(at),
@@ -682,7 +700,7 @@ fn inspect_packets(
                             if backward > 90_000 && backward < (1_u64 << 32) {
                                 warn(
                                     result,
-                                    "presentation_timestamp_regression",
+                                    warning::PRESENTATION_TIMESTAMP_REGRESSION,
                                     "Presentation timestamp moves backward by over one second within a sampled window",
                                     Some(pid),
                                     Some(at),
@@ -692,7 +710,7 @@ fn inspect_packets(
                     } else {
                         warn(
                             result,
-                            "presentation_timestamp_markers",
+                            warning::PRESENTATION_TIMESTAMP_MARKERS,
                             "Invalid presentation timestamp marker bits",
                             Some(pid),
                             Some(at),
@@ -708,12 +726,12 @@ fn inspect_packets(
                     break;
                 };
                 cursor = at + 3;
-                let valid = match codec.as_str() {
-                    "h264" => start[3] & 0x80 == 0 && (1..=5).contains(&(start[3] & 31)),
-                    "hevc" => {
+                let valid = match codec {
+                    Codec::H264 => start[3] & 0x80 == 0 && (1..=5).contains(&(start[3] & 31)),
+                    Codec::Hevc => {
                         start[3] & 0x80 == 0 && (start[3] >> 1) & 63 <= 31 && start[4] & 7 != 0
                     }
-                    "mpeg1video" | "mpeg2video" => start[3] == 0,
+                    Codec::Mpeg1Video | Codec::Mpeg2Video => start[3] == 0,
                     _ => false,
                 };
                 result.frame_headers_sampled += u64::from(valid);

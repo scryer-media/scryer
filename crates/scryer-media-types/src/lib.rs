@@ -5,26 +5,5 @@
 
 pub use scryer_media_model::*;
 mod audio;
-pub use audio::{
-    audio_codec_rank_for_release_label, normalize_audio_codec_for_release,
-    primary_audio_stream_index,
-};
+pub use audio::{audio_codec_rank_for_release_label, normalize_audio_codec_for_release};
 pub mod formats;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The first revision whose primary audio summary follows the authored
-    /// default track rather than the highest channel count or codec rank.
-    const AUTHORED_PRIMARY_AUDIO_REVISION: u32 = 2;
-
-    #[test]
-    fn analyses_from_before_authored_primary_audio_are_refreshed() {
-        const { assert!(ANALYSIS_REVISION >= AUTHORED_PRIMARY_AUDIO_REVISION) };
-        assert_eq!(
-            primary_audio_stream_index([(false, false, None), (true, false, None)]),
-            Some(1)
-        );
-    }
-}

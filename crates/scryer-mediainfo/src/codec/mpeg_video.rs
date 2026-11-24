@@ -3,6 +3,7 @@
 
 use super::find_start_code_payload;
 use crate::raw::RawTrack;
+use scryer_media_model::Codec;
 use scryer_media_model::Provenance;
 
 const MPEG_VIDEO_FRAME_RATES: [Option<f64>; 16] = [
@@ -95,7 +96,7 @@ pub(crate) fn mpeg12(track: &mut RawTrack, data: &[u8]) -> Option<()> {
         8 => (60, 1),
         _ => return None,
     };
-    let mpeg2 = track.codec_name.as_deref() == Some("mpeg2video");
+    let mpeg2 = track.codec_name == Some(Codec::Mpeg2Video);
     let mut progressive = !mpeg2;
     let mut format = "yuv420p";
     let mut profile_level = None;
@@ -471,7 +472,7 @@ mod tests {
             (2, 5),
         ]));
         let mut track = RawTrack {
-            codec_name: Some("mpeg2video".into()),
+            codec_name: Some(Codec::Mpeg2Video),
             ..Default::default()
         };
         assert!(mpeg12(&mut track, &bytes).is_some());
@@ -492,7 +493,7 @@ mod tests {
             scryer_media_model::Rational::new(20_000, 1001)
         );
         let mut short = RawTrack {
-            codec_name: Some("mpeg2video".into()),
+            codec_name: Some(Codec::Mpeg2Video),
             ..Default::default()
         };
         assert!(mpeg12(&mut short, &bytes[..bytes.len() - 1]).is_none());
@@ -531,7 +532,7 @@ mod tests {
             (0, 3),
         ]));
         let mut track = RawTrack {
-            codec_name: Some("mpeg1video".into()),
+            codec_name: Some(Codec::Mpeg1Video),
             ..Default::default()
         };
         assert!(mpeg12(&mut track, &bytes).is_some());
@@ -545,7 +546,7 @@ mod tests {
         );
         assert_eq!(track.metadata.profile, None);
         let mut missing = RawTrack {
-            codec_name: Some("mpeg1video".into()),
+            codec_name: Some(Codec::Mpeg1Video),
             ..Default::default()
         };
         enrich(&mut missing, &[0, 0, 1, 0xb3]);
@@ -561,7 +562,7 @@ mod tests {
             .unwrap()
             + 4;
         let mut track = RawTrack {
-            codec_name: Some("mpeg4".into()),
+            codec_name: Some(Codec::Mpeg4),
             ..Default::default()
         };
         enrich(&mut track, bytes);

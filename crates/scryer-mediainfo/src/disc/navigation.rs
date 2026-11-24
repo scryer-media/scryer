@@ -1,6 +1,7 @@
 use scryer_media_model::{Chapter, DiscSegment, DiscTitle, ProbeReport, ProbeStatus, ProbeWarning};
 
 use super::image::ImageError;
+use scryer_media_model::warning;
 
 type Result<T> = std::result::Result<T, ImageError>;
 fn bounded(data: &[u8], at: usize, length: usize) -> Result<&[u8]> {
@@ -74,7 +75,7 @@ pub(super) fn playlist(data: &[u8], id: String) -> Result<DiscTitle> {
     if u16be(list, 4)? != 0 {
         warning(
             &mut title.report,
-            "bluray_subpaths",
+            warning::BLURAY_SUBPATHS,
             "Supplementary Blu-ray subpaths are inventoried only through primary playback streams",
         );
     }
@@ -102,7 +103,7 @@ pub(super) fn playlist(data: &[u8], id: String) -> Result<DiscTitle> {
             title.report.status = ProbeStatus::Unsupported;
             warning(
                 &mut title.report,
-                "bluray_still",
+                warning::BLURAY_STILL,
                 "Playlist contains a still or interactive hold",
             );
         }
@@ -238,7 +239,7 @@ pub(super) fn dvd_title(
         title.report.status = ProbeStatus::Unsupported;
         warning(
             &mut title.report,
-            "dvd_dynamic_navigation",
+            warning::DVD_DYNAMIC_NAVIGATION,
             "Title requires DVD navigation execution",
         );
         return Ok((title, vec![]));
@@ -269,7 +270,7 @@ pub(super) fn dvd_title(
         title.report.status = ProbeStatus::Unsupported;
         warning(
             &mut title.report,
-            "dvd_multiple_pgcs",
+            warning::DVD_MULTIPLE_PGCS,
             "Title spans program chains requiring navigation inspection",
         );
         return Ok((title, vec![]));
@@ -299,7 +300,7 @@ pub(super) fn dvd_title(
         title.report.status = ProbeStatus::Unsupported;
         warning(
             &mut title.report,
-            "dvd_interactive_pgc",
+            warning::DVD_INTERACTIVE_PGC,
             "PGC uses a still or non-sequential playback mode",
         );
         return Ok((title, vec![]));
@@ -368,7 +369,7 @@ pub(super) fn dvd_title(
             title.report.status = ProbeStatus::Unsupported;
             warning(
                 &mut title.report,
-                "dvd_pgc_commands",
+                warning::DVD_PGC_COMMANDS,
                 "Playback commands require DVD navigation interpretation",
             );
         }
@@ -410,7 +411,7 @@ pub(super) fn dvd_title(
             title.report.status = ProbeStatus::Unsupported;
             warning(
                 &mut title.report,
-                "dvd_interleaved_angle",
+                warning::DVD_INTERLEAVED_ANGLE,
                 "Interleaved angle units require NAV packet mapping",
             );
         }
@@ -418,7 +419,7 @@ pub(super) fn dvd_title(
             title.report.status = ProbeStatus::Unsupported;
             warning(
                 &mut title.report,
-                "dvd_cell_navigation",
+                warning::DVD_CELL_NAVIGATION,
                 "Cell requires a command or interactive still",
             );
         }

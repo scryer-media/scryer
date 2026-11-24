@@ -61,18 +61,16 @@ pub(super) fn walk_mp4_boxes<'a, FDescend, FVisit>(
 
 pub(super) fn read_top_level_box_header<R: Read>(
     reader: &mut R,
-) -> Result<Option<(Mp4BoxHeader, Vec<u8>)>, MediaInfoError> {
+) -> Result<Option<(Mp4BoxHeader, Vec<u8>)>, ProbeError> {
     let mut header = [0_u8; 8];
     let mut read = 0;
     while read < header.len() {
-        let bytes_read = reader
-            .read(&mut header[read..])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+        let bytes_read = reader.read(&mut header[read..]).map_err(ProbeError::from)?;
         if bytes_read == 0 {
             if read == 0 {
                 return Ok(None);
             }
-            return Err(MediaInfoError::Parse("truncated MP4 box header".into()));
+            return Err(ProbeError::Malformed("truncated MP4 box header".into()));
         }
         read += bytes_read;
     }
@@ -85,16 +83,14 @@ pub(super) fn read_top_level_box_header<R: Read>(
 
     if size32 == 1 {
         let mut extended = [0_u8; 8];
-        reader
-            .read_exact(&mut extended)
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+        reader.read_exact(&mut extended).map_err(ProbeError::from)?;
         size = u64::from_be_bytes(extended);
         header_size = 16;
         raw.extend_from_slice(&extended);
     }
 
     if size != 0 && size < header_size as u64 {
-        return Err(MediaInfoError::Parse(format!(
+        return Err(ProbeError::Malformed(format!(
             "invalid MP4 box size {} for {}",
             size,
             fourcc_to_string(name)
@@ -115,17 +111,15 @@ pub(super) fn read_zero_sized_top_level_box<R: Read>(
     reader: &mut R,
     output: &mut Vec<u8>,
     pos: &mut u64,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     let mut buf = [0_u8; 64 * 1024];
     loop {
-        let read = reader
-            .read(&mut buf)
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+        let read = reader.read(&mut buf).map_err(ProbeError::from)?;
         if read == 0 {
             return Ok(());
         }
         if output.len().saturating_add(read) > MP4_METADATA_OUTPUT_MAX_BYTES {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "MP4 metadata output exceeds parser budget".into(),
             ));
         }

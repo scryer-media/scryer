@@ -1,9 +1,10 @@
 //! AV1 sequence and metadata OBUs. Picture tiles are skipped without decoding.
 use super::CodecInfo;
 use crate::raw::RawTrack;
+use scryer_media_model::warning;
 use scryer_media_model::{
-    ColorMetadata, ContentLight, MasteringDisplay, ProbeReport, ProbeStatus, ProbeWarning,
-    Provenance, Rational, StreamMetadata,
+    ChromaLocation, ColorMetadata, ContentLight, MasteringDisplay, ProbeReport, ProbeStatus,
+    ProbeWarning, Provenance, Rational, StreamMetadata,
 };
 
 struct Bits<'a> {
@@ -174,9 +175,10 @@ fn sequence(data: &[u8]) -> Option<StreamMetadata> {
     } else {
         (true, false)
     };
+    let mut chroma_position = 0;
     if !mono {
         if sub_x && sub_y {
-            bits.read(2)?;
+            chroma_position = bits.read(2)?;
         }
         bits.flag()?;
     }
@@ -199,6 +201,13 @@ fn sequence(data: &[u8]) -> Option<StreamMetadata> {
         format!("{family}{depth}le")
     });
     metadata.bit_depth = Some(depth);
+    // AV1 chroma_sample_position: 1 is vertically between rows and co-sited
+    // with the left column, 2 is co-sited with the top-left sample.
+    metadata.chroma_location = match chroma_position {
+        1 => Some(ChromaLocation::Left),
+        2 => Some(ChromaLocation::TopLeft),
+        _ => None,
+    };
     metadata.field_order = Some("progressive".into());
     metadata.color = ColorMetadata {
         primaries: (primaries != 2).then_some(primaries),
@@ -222,7 +231,7 @@ fn apply_sequence(track: &mut RawTrack, incoming: StreamMetadata, report: &mut P
     .any(|(old, new)| old.zip(*new).is_some_and(|(old, new)| old != new));
     if conflict {
         report.warnings.push(ProbeWarning {
-            code: "color_signaling_conflict".into(),
+            code: warning::COLOR_SIGNALING_CONFLICT.into(),
             message: "AV1 sequence color signaling overrides conflicting metadata".into(),
             stream_id: current.id.clone(),
             ..Default::default()
@@ -232,6 +241,7 @@ fn apply_sequence(track: &mut RawTrack, incoming: StreamMetadata, report: &mut P
     current.level = incoming.level;
     current.bit_depth = incoming.bit_depth;
     current.pixel_format = incoming.pixel_format;
+    current.chroma_location = incoming.chroma_location.or(current.chroma_location);
     current.field_order = incoming.field_order;
     current.declared_frame_rate = current.declared_frame_rate.or(incoming.declared_frame_rate);
     track.frame_rate_fps = track
@@ -343,10 +353,11 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8], report: &mut ProbeReport
     if result.is_none() {
         report.status = ProbeStatus::Incomplete;
         if !report.warnings.iter().any(|warning| {
-            warning.code == "av1_enrichment_incomplete" && warning.stream_id == track.metadata.id
+            warning.code == warning::AV1_ENRICHMENT_INCOMPLETE
+                && warning.stream_id == track.metadata.id
         }) {
             report.warnings.push(ProbeWarning {
-                code: "av1_enrichment_incomplete".into(),
+                code: warning::AV1_ENRICHMENT_INCOMPLETE.into(),
                 message:
                     "AV1 header enrichment reached incomplete, malformed, or bounded sample data"
                         .into(),
@@ -413,6 +424,9 @@ mod tests {
         bytes
     }
     fn still_sequence(transfer: u32) -> Vec<u8> {
+        still_sequence_sited(transfer, 0)
+    }
+    fn still_sequence_sited(transfer: u32, chroma_position: u32) -> Vec<u8> {
         let mut bits = Vec::new();
         for (value, width) in [
             (0, 3),
@@ -432,7 +446,7 @@ mod tests {
             (transfer, 8),
             (9, 8),
             (0, 1),
-            (0, 2),
+            (chroma_position, 2),
             (0, 1),
             (0, 1),
             (1, 1),
@@ -463,6 +477,25 @@ mod tests {
         assert_eq!(track.metadata.hdr.hdr10plus, None);
         assert_eq!(report.warnings.len(), 1);
         assert_eq!(report.warnings[0].code, "color_signaling_conflict");
+    }
+
+    #[test]
+    fn av1_chroma_sample_position_names_the_chroma_location() {
+        for (position, expected) in [
+            (0, None),
+            (1, Some(ChromaLocation::Left)),
+            (2, Some(ChromaLocation::TopLeft)),
+            (3, None),
+        ] {
+            let mut track = RawTrack::default();
+            enrich(
+                &mut track,
+                &still_sequence_sited(1, position),
+                &mut ProbeReport::default(),
+            );
+            assert_eq!(track.metadata.pixel_format.as_deref(), Some("yuv420p10le"));
+            assert_eq!(track.metadata.chroma_location, expected, "{position}");
+        }
     }
 
     #[test]

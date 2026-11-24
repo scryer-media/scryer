@@ -15,7 +15,13 @@ fn ogm_modern_multiplexed_tracks_preserve_metadata_and_end_time() {
     let video = &raw.tracks[0];
     assert_eq!(video.kind, TrackKind::Video);
     assert_eq!(video.codec_id, "XVID");
-    assert_eq!(video.codec_name.as_deref(), Some("mpeg4"));
+    assert_eq!(
+        video
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("mpeg4")
+    );
     assert_eq!((video.width, video.height), (Some(1280), Some(720)));
     assert_eq!(video.frame_rate_fps, Some(25.0));
     assert_eq!(
@@ -23,17 +29,34 @@ fn ogm_modern_multiplexed_tracks_preserve_metadata_and_end_time() {
         scryer_media_model::Rational::new(25, 1)
     );
     assert_eq!(video.name.as_deref(), Some("Main video"));
-    assert_eq!(raw.tracks[1].codec_name.as_deref(), Some("vorbis"));
+    assert_eq!(
+        raw.tracks[1]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("vorbis")
+    );
     assert_eq!(raw.tracks[1].language.as_deref(), Some("eng"));
     assert_eq!(raw.tracks[1].name.as_deref(), Some("Stereo"));
     assert_eq!(raw.tracks[2].kind, TrackKind::Subtitle);
-    assert_eq!(raw.tracks[2].codec_name.as_deref(), Some("text"));
+    assert_eq!(
+        raw.tracks[2]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("text")
+    );
     assert_eq!(raw.tracks[2].language.as_deref(), Some("jpn"));
     assert_eq!(raw.tracks[2].name.as_deref(), Some("Captions"));
     let details = crate::build::build_details(raw);
     let subtitles: Vec<_> = details
         .program_streams(scryer_media_model::StreamKind::Subtitle)
-        .map(|stream| (stream.codec.as_deref(), stream.language.as_deref()))
+        .map(|stream| {
+            (
+                stream.codec.as_ref().map(scryer_media_model::Codec::as_str),
+                stream.language.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(subtitles, [(Some("text"), Some("jpn"))]);
 }
@@ -45,7 +68,13 @@ fn ogm_audio_only_reports_wave_metadata_without_becoming_video() {
     let audio = &raw.tracks[0];
     assert_eq!(audio.kind, TrackKind::Audio);
     assert_eq!(audio.codec_id, "2000");
-    assert_eq!(audio.codec_name.as_deref(), Some("ac3"));
+    assert_eq!(
+        audio
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("ac3")
+    );
     assert_eq!(audio.channels, Some(6));
     assert_eq!(audio.metadata.sample_rate, Some(48_000));
     assert_eq!(audio.metadata.sample_bit_depth, None);
@@ -83,7 +112,8 @@ fn ogm_modern_rational_video_and_unknown_tags_remain_distinct() {
             .unwrap()
             .track
             .codec_name
-            .as_deref(),
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
         Some("h264")
     );
     let audio = fixture::modern_header(b"audio\0\0\0", b"dead", 10_000_000, 48_000);
@@ -104,7 +134,13 @@ fn ogm_legacy_video_and_audio_use_their_own_layouts() {
     ));
     assert_eq!(raw.format_name, "ogm");
     assert_eq!(raw.duration_seconds, Some(3.0));
-    assert_eq!(raw.tracks[0].codec_name.as_deref(), Some("mpeg4"));
+    assert_eq!(
+        raw.tracks[0]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("mpeg4")
+    );
     assert_eq!(
         (raw.tracks[0].width, raw.tracks[0].height),
         (Some(1280), Some(720))
@@ -121,7 +157,13 @@ fn ogm_legacy_video_and_audio_use_their_own_layouts() {
         true,
     ));
     assert_eq!(raw.duration_seconds, Some(3.0));
-    assert_eq!(raw.tracks[0].codec_name.as_deref(), Some("ac3"));
+    assert_eq!(
+        raw.tracks[0]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("ac3")
+    );
     assert_eq!(raw.tracks[0].metadata.sample_rate, Some(48_000));
     assert_eq!(raw.tracks[0].channels, Some(6));
     assert_eq!(raw.tracks[0].bit_rate_bps, Some(384_000));
@@ -181,7 +223,8 @@ fn ogm_audio_private_config_excludes_aac_prefix_and_checks_declared_size() {
             .unwrap()
             .track
             .codec_name
-            .as_deref(),
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
         Some("pcm_s24le")
     );
     header[45..47].fill(0);
@@ -393,25 +436,25 @@ fn ogm_tail_is_bounded_and_earlier_subtitle_end_keeps_terminal_runtime() {
 #[test]
 fn ogm_sniffing_wins_over_extensions_and_audio_only_is_not_video() {
     for extension in ["ogm", "OGM", "", "mkv", "dat"] {
-        let analysis = crate::analyze_source(
+        let analysis = crate::probe_bounded(
             &mut Cursor::new(fixture::video_audio_text()),
             extension,
-            crate::AnalyzeOptions::default(),
+            &crate::ProbeOptions::new().with_depth(crate::ProbeDepth::Quick),
         )
         .unwrap();
         assert_eq!(analysis.container_format.as_deref(), Some("ogm"));
         assert_eq!(crate::test_facts::video_codec(&analysis), Some("mpeg4"));
         let subtitle_codecs: Vec<_> = analysis
             .program_streams(scryer_media_model::StreamKind::Subtitle)
-            .map(|stream| stream.codec.as_deref())
+            .map(|stream| stream.codec.as_ref().map(scryer_media_model::Codec::as_str))
             .collect();
         assert_eq!(subtitle_codecs, [Some("text")]);
         assert!(crate::test_facts::has_video_with_duration(&analysis));
     }
-    let analysis = crate::analyze_source(
+    let analysis = crate::probe_bounded(
         &mut Cursor::new(fixture::audio_only()),
         "ogm",
-        crate::AnalyzeOptions::default(),
+        &crate::ProbeOptions::new().with_depth(crate::ProbeDepth::Quick),
     )
     .unwrap();
     assert!(!crate::test_facts::has_video_with_duration(&analysis));
@@ -473,8 +516,20 @@ fn ordinary_ogg_theora_and_opus_keep_their_granule_meaning() {
         Cursor::new(include_bytes!("../../../tests/media/ogv_theora_vorbis.ogv").as_slice());
     let raw = parse_ogg_source(&mut source).unwrap();
     assert_eq!(raw.format_name, "ogg");
-    assert_eq!(raw.tracks[0].codec_name.as_deref(), Some("theora"));
-    assert_eq!(raw.tracks[1].codec_name.as_deref(), Some("vorbis"));
+    assert_eq!(
+        raw.tracks[0]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("theora")
+    );
+    assert_eq!(
+        raw.tracks[1]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("vorbis")
+    );
     assert!(
         raw.duration_seconds
             .is_some_and(|duration| (duration - 1.4).abs() < 0.001)
@@ -507,7 +562,13 @@ fn ordinary_ogg_theora_and_opus_keep_their_granule_meaning() {
     let raw = parse(output.into_inner());
     assert_eq!(raw.format_name, "ogg");
     assert_eq!(raw.duration_seconds, Some(3.0));
-    assert_eq!(raw.tracks[0].codec_name.as_deref(), Some("opus"));
+    assert_eq!(
+        raw.tracks[0]
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("opus")
+    );
     assert_eq!(raw.tracks[0].channels, Some(2));
 }
 
@@ -568,7 +629,13 @@ fn parses_opus_identification() {
     let mut header = b"OpusHead\x01\x02\x38\x01\x80\xbb\0\0\0\0\0".to_vec();
     header.truncate(19);
     let track = parse_opus_identification(&header).unwrap();
-    assert_eq!(track.codec_name.as_deref(), Some("opus"));
+    assert_eq!(
+        track
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("opus")
+    );
     assert_eq!(track.channels, Some(2));
 }
 
@@ -600,4 +667,34 @@ fn bounds_continued_packets_before_completion() {
 
     let mut reader = PacketReader::new(HeaderReader::new(cursor, MAX_HEADER_READ_BYTES));
     assert!(!matches!(reader.read_packet(), Ok(Some(_))));
+}
+
+#[test]
+fn comments_become_stream_tags_without_encoded_pictures() {
+    let entries: [&[u8]; 4] = [
+        b"TITLE=Synthetic Theme",
+        b"Encoder=synthetic-enc 2",
+        b"METADATA_BLOCK_PICTURE=AAAAAwAAAAlpbWFnZS9wbmc=",
+        b"NOSEPARATOR",
+    ];
+    let mut comments = Vec::new();
+    comments.extend_from_slice(&3_u32.to_le_bytes());
+    comments.extend_from_slice(b"lib");
+    comments.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for entry in entries {
+        comments.extend_from_slice(&(entry.len() as u32).to_le_bytes());
+        comments.extend_from_slice(entry);
+    }
+    let mut track = RawTrack::default();
+    let mut report = scryer_media_model::ProbeReport::default();
+    apply_comments(&mut track, &comments, &mut report).unwrap();
+    assert_eq!(
+        track.metadata.tags.into_iter().collect::<Vec<_>>(),
+        [
+            ("Encoder".to_owned(), "synthetic-enc 2".to_owned()),
+            ("TITLE".to_owned(), "Synthetic Theme".to_owned()),
+        ]
+    );
+    assert_eq!(track.name.as_deref(), Some("Synthetic Theme"));
+    assert!(report.warnings.is_empty());
 }

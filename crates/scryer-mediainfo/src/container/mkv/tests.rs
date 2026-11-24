@@ -1,5 +1,6 @@
 use super::*;
-use crate::MediaInfoError;
+use crate::ProbeError;
+use scryer_media_model::Codec;
 use std::io::Cursor;
 
 fn make_ebml_size(size: u64) -> Vec<u8> {
@@ -170,7 +171,7 @@ fn audio_test_track(codec_name: &str, channels: Option<i32>) -> RawTrack {
         metadata: Default::default(),
         kind: TrackKind::Audio,
         codec_id: format!("A_{}", codec_name.to_ascii_uppercase()),
-        codec_name: Some(codec_name.to_owned()),
+        codec_name: Some(codec_name.into()),
         audio_profile: None,
         codec_private: None,
         width: None,
@@ -610,7 +611,7 @@ fn hdr10plus_confirmation_gate_short_circuits_dovi_hlg_and_non_hevc() {
         metadata: Default::default(),
         kind: TrackKind::Video,
         codec_id: "V_MPEGH/ISO/HEVC".into(),
-        codec_name: Some("hevc".into()),
+        codec_name: Some(Codec::Hevc),
         audio_profile: None,
         codec_private: None,
         width: None,
@@ -655,7 +656,7 @@ fn hdr10plus_confirmation_gate_short_circuits_dovi_hlg_and_non_hevc() {
     ));
 
     let mut h264_track = hevc_track.clone();
-    h264_track.codec_name = Some("h264".into());
+    h264_track.codec_name = Some(Codec::H264);
     assert!(!should_confirm_mkv_hdr10plus(
         &h264_track,
         &MkvTrackSignals::default()
@@ -695,7 +696,7 @@ fn observed_frame_timing_reaches_mkv_metadata_without_replacing_declarations() {
             make_ebml_element(&[0x18, 0x53, 0x80, 0x67], &[tracks, cluster].concat()),
         ]
         .concat();
-        for profile in [AnalysisProfile::DefaultRich, AnalysisProfile::FfprobeParity] {
+        for profile in [ProbeDepth::Full, ProbeDepth::FfprobeParity] {
             let parsed = parse_mkv_source(&mut Cursor::new(bytes.clone()), profile).unwrap();
             let video = &parsed.tracks[0];
             assert_eq!(video.frame_rate_fps, Some(25.0));
@@ -845,7 +846,7 @@ fn sized_payload_rejects_declared_end_beyond_file_len_before_read() {
         .expect_err("oversized declared payload should fail before read");
     assert!(matches!(
         error,
-        MediaInfoError::Parse(message) if message.contains("beyond remaining input")
+        ProbeError::Malformed(message) if message.contains("beyond remaining input")
     ));
 }
 
@@ -856,12 +857,12 @@ fn parse_mkv_uses_real_file_length_for_declared_payload_limit() {
     assert!(data.len() < 1024, "test file should stay tiny");
     std::fs::write(&path, data).expect("write tiny mkv");
 
-    let error = parse_mkv(&path, AnalysisProfile::DefaultRich)
+    let error = parse_mkv(&path, ProbeDepth::Full)
         .expect_err("declared payload beyond file length should fail");
     let _ = std::fs::remove_file(&path);
     assert!(matches!(
         error,
-        MediaInfoError::Parse(message) if message.contains("beyond remaining input")
+        ProbeError::Malformed(message) if message.contains("beyond remaining input")
     ));
 }
 
@@ -871,10 +872,9 @@ fn parse_mkv_rejects_missing_ebml_header_immediately() {
     let file = std::fs::File::create(&path).expect("create invalid mkv");
     file.set_len(60 * 1024 * 1024).expect("set sparse size");
 
-    let error =
-        parse_mkv(&path, AnalysisProfile::DefaultRich).expect_err("invalid mkv should fail fast");
+    let error = parse_mkv(&path, ProbeDepth::Full).expect_err("invalid mkv should fail fast");
     let _ = std::fs::remove_file(&path);
-    assert!(matches!(error, MediaInfoError::Parse(message) if message.contains("ebml header")));
+    assert!(matches!(error, ProbeError::Malformed(message) if message.contains("ebml header")));
 }
 
 // A virtual sparse file serves real EBML headers without allocating or
@@ -1087,8 +1087,12 @@ fn mkv_inventory_io_is_independent_of_remux_size() {
     for cluster_count in [256, 7680] {
         // 1 GiB and 30 GiB of clusters.
         let mut source = sparse_mkv(cluster_count, true, true);
-        let analysis =
-            crate::analyze_source(&mut source, "mkv", crate::AnalyzeOptions::default()).unwrap();
+        let analysis = crate::probe_bounded(
+            &mut source,
+            "mkv",
+            &crate::ProbeOptions::new().with_depth(crate::ProbeDepth::Quick),
+        )
+        .unwrap();
         assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
         assert_eq!(analysis.duration_seconds.map(f64::round), Some(600.0));
         assert_eq!(
@@ -1128,12 +1132,12 @@ fn budget_exhausted_during_enrichment_keeps_the_track_table() {
     let analysis = (16_u64..128)
         .filter_map(|limit| {
             let mut source = sparse_mkv(7680, true, true);
-            let analysis = crate::analyze_source_with_limits(
+            let analysis = crate::probe_bounded(
                 &mut source,
                 "mkv",
-                crate::AnalyzeOptions::default(),
-                64 * 1024 * 1024,
-                limit,
+                &crate::ProbeOptions::new()
+                    .with_depth(crate::ProbeDepth::Quick)
+                    .with_io_limit(limit),
             )
             .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
             analysis
@@ -1173,11 +1177,61 @@ fn budget_exhausted_during_enrichment_keeps_the_track_table() {
 #[test]
 fn unindexed_large_mkv_does_not_invent_final_duration_or_chapter_absence() {
     let mut source = sparse_mkv(7680, false, false);
-    let analysis =
-        crate::analyze_source(&mut source, "mkv", crate::AnalyzeOptions::default()).unwrap();
+    let analysis = crate::probe_bounded(
+        &mut source,
+        "mkv",
+        &crate::ProbeOptions::new().with_depth(crate::ProbeDepth::Quick),
+    )
+    .unwrap();
     assert_eq!(crate::test_facts::video_codec(&analysis), Some("h264"));
     assert!(analysis.duration_seconds.is_none());
     assert!(analysis.chapter_count.is_none());
     assert!(analysis.report.budget_exhausted);
     assert!(source.reads < 256, "{} reads", source.reads);
+}
+
+#[test]
+fn colour_element_states_chroma_subsampling_and_siting() {
+    let colour = |entries: &[([u8; 2], u64)]| {
+        let mut colour = Vec::new();
+        for (id, value) in entries {
+            colour.extend(make_uint_element(id, *value));
+        }
+        let mut video = make_uint_element(&[0xb0], 720);
+        video.extend(make_uint_element(&[0xba], 480));
+        video.extend(make_ebml_element(&[0x55, 0xb0], &colour));
+        mkv_stream_metadata(&make_ebml_element(&[0xe0], &video), 1)
+    };
+    let stated = colour(&[
+        ([0x55, 0xb3], 1),
+        ([0x55, 0xb4], 1),
+        ([0x55, 0xb7], 1),
+        ([0x55, 0xb8], 2),
+    ]);
+    assert_eq!(
+        stated.chroma_subsampling,
+        Some(scryer_media_model::ChromaSubsampling::Yuv420)
+    );
+    assert_eq!(
+        stated.chroma_location,
+        Some(scryer_media_model::ChromaLocation::Left)
+    );
+    let four_two_two = colour(&[
+        ([0x55, 0xb3], 1),
+        ([0x55, 0xb4], 0),
+        ([0x55, 0xb7], 2),
+        ([0x55, 0xb8], 2),
+    ]);
+    assert_eq!(
+        four_two_two.chroma_subsampling,
+        Some(scryer_media_model::ChromaSubsampling::Yuv422)
+    );
+    assert_eq!(
+        four_two_two.chroma_location,
+        Some(scryer_media_model::ChromaLocation::Center)
+    );
+    // One axis alone, or an unspecified siting, states nothing.
+    let partial = colour(&[([0x55, 0xb3], 1), ([0x55, 0xb7], 0), ([0x55, 0xb8], 1)]);
+    assert_eq!(partial.chroma_subsampling, None);
+    assert_eq!(partial.chroma_location, None);
 }

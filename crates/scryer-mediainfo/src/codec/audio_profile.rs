@@ -1,6 +1,8 @@
 //! Audio profile labels (AAC object type, DTS extensions, E-AC-3 and TrueHD
 //! Atmos) from codec identifiers, decoder configuration and payload samples.
 
+use scryer_media_model::Codec;
+
 use super::aac::{
     detect_aac_profile_from_codec_id, detect_aac_profile_from_codec_private,
     detect_aac_profile_from_payload,
@@ -17,21 +19,21 @@ pub(crate) struct AudioProfileProbeSpec {
     pub suffix_bytes: usize,
 }
 
-pub(crate) fn audio_profile_probe_spec(codec_name: Option<&str>) -> AudioProfileProbeSpec {
+pub(crate) fn audio_profile_probe_spec(codec_name: Option<&Codec>) -> AudioProfileProbeSpec {
     match codec_name {
-        Some("aac") | Some("aac_latm") => AudioProfileProbeSpec {
+        Some(Codec::Aac) | Some(Codec::AacLatm) => AudioProfileProbeSpec {
             prefix_bytes: 512,
             suffix_bytes: 0,
         },
-        Some("ac3" | "eac3") => AudioProfileProbeSpec {
+        Some(Codec::Ac3 | Codec::Eac3) => AudioProfileProbeSpec {
             prefix_bytes: 64,
             suffix_bytes: 0,
         },
-        Some("truehd") => AudioProfileProbeSpec {
+        Some(Codec::TrueHd) => AudioProfileProbeSpec {
             prefix_bytes: 64,
             suffix_bytes: 0,
         },
-        Some("dts") => AudioProfileProbeSpec {
+        Some(Codec::Dts) => AudioProfileProbeSpec {
             prefix_bytes: 4096,
             suffix_bytes: 64,
         },
@@ -44,25 +46,25 @@ pub(crate) fn audio_profile_probe_spec(codec_name: Option<&str>) -> AudioProfile
 
 pub(crate) fn detect_header_audio_profile(
     codec_id: &str,
-    codec_name: Option<&str>,
+    codec_name: Option<&Codec>,
     codec_private: Option<&[u8]>,
 ) -> Option<String> {
     let normalized_codec = normalize_codec_name(codec_id);
-    let codec_name = codec_name.or(normalized_codec.as_deref());
+    let codec_name = codec_name.or(normalized_codec.as_ref());
 
     match codec_name {
-        Some("aac") => detect_aac_profile_from_codec_private(codec_private)
+        Some(Codec::Aac) => detect_aac_profile_from_codec_private(codec_private)
             .or_else(|| detect_aac_profile_from_codec_id(codec_id)),
-        Some("dts") => detect_dts_profile_from_codec_id(codec_id),
+        Some(Codec::Dts) => detect_dts_profile_from_codec_id(codec_id),
         _ => None,
     }
 }
 
 pub(crate) fn detect_audio_profile_from_payload(
-    codec_name: Option<&str>,
+    codec_name: Option<&Codec>,
     payload: &[u8],
 ) -> Option<String> {
-    if matches!(codec_name, Some("eac3" | "truehd")) {
+    if matches!(codec_name, Some(Codec::Eac3 | Codec::TrueHd)) {
         return detect_audio_profile_from_probe_bytes(
             codec_name,
             &payload[..payload.len().min(64 * 1024)],
@@ -87,15 +89,15 @@ pub(crate) fn detect_audio_profile_from_payload(
 }
 
 pub(crate) fn detect_audio_profile_from_probe_bytes(
-    codec_name: Option<&str>,
+    codec_name: Option<&Codec>,
     prefix: &[u8],
     suffix: Option<&[u8]>,
 ) -> Option<String> {
     match codec_name {
-        Some("aac") | Some("aac_latm") => detect_aac_profile_from_payload(prefix),
-        Some("eac3") => detect_eac3_profile_samples(prefix),
-        Some("truehd") => detect_truehd_profile_samples(prefix),
-        Some("dts") => detect_dts_profile_from_probe_bytes(prefix, suffix),
+        Some(Codec::Aac) | Some(Codec::AacLatm) => detect_aac_profile_from_payload(prefix),
+        Some(Codec::Eac3) => detect_eac3_profile_samples(prefix),
+        Some(Codec::TrueHd) => detect_truehd_profile_samples(prefix),
+        Some(Codec::Dts) => detect_dts_profile_from_probe_bytes(prefix, suffix),
         _ => None,
     }
 }
@@ -419,25 +421,25 @@ mod tests {
         payload.resize(28, 0);
 
         assert_eq!(
-            detect_audio_profile_from_payload(Some("truehd"), &payload).as_deref(),
+            detect_audio_profile_from_payload(Some(&Codec::TrueHd), &payload).as_deref(),
             Some("Dolby TrueHD + Dolby Atmos")
         );
         let mut plain = payload.clone();
         plain[17] = 0;
-        assert!(detect_audio_profile_from_payload(Some("truehd"), &plain).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::TrueHd), &plain).is_none());
         let mut later = plain.clone();
         later.resize(256, 0);
         later.extend(&payload);
         assert_eq!(
-            detect_audio_profile_from_payload(Some("truehd"), &later).as_deref(),
+            detect_audio_profile_from_payload(Some(&Codec::TrueHd), &later).as_deref(),
             Some("Dolby TrueHD + Dolby Atmos")
         );
         let mut too_many = plain.repeat(32);
         too_many.extend(&payload);
-        assert!(detect_audio_profile_from_payload(Some("truehd"), &too_many).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::TrueHd), &too_many).is_none());
         let mut beyond_budget = vec![0; 64 * 1024];
         beyond_budget.extend(payload);
-        assert!(detect_audio_profile_from_payload(Some("truehd"), &beyond_budget).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::TrueHd), &beyond_budget).is_none());
     }
 
     #[test]
@@ -463,28 +465,28 @@ mod tests {
         payload.extend_from_slice(&bits.finish());
 
         assert_eq!(
-            detect_audio_profile_from_payload(Some("eac3"), &payload).as_deref(),
+            detect_audio_profile_from_payload(Some(&Codec::Eac3), &payload).as_deref(),
             Some("Dolby Digital Plus + Dolby Atmos")
         );
         let mut plain = payload.clone();
         *plain.last_mut().unwrap() = 0;
         plain.resize(258, 0);
-        assert!(detect_audio_profile_from_payload(Some("eac3"), &plain).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::Eac3), &plain).is_none());
         let mut later = plain.clone();
         later.extend(&payload);
         assert_eq!(
-            detect_audio_profile_from_payload(Some("eac3"), &later).as_deref(),
+            detect_audio_profile_from_payload(Some(&Codec::Eac3), &later).as_deref(),
             Some("Dolby Digital Plus + Dolby Atmos")
         );
         let mut too_many = plain.repeat(32);
         too_many.extend(&payload);
-        assert!(detect_audio_profile_from_payload(Some("eac3"), &too_many).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::Eac3), &too_many).is_none());
         let mut alternate = payload.clone();
         alternate[2] |= 1 << 3;
-        assert!(detect_audio_profile_from_payload(Some("eac3"), &alternate).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::Eac3), &alternate).is_none());
         let mut beyond_budget = vec![0; 64 * 1024];
         beyond_budget.extend(payload);
-        assert!(detect_audio_profile_from_payload(Some("eac3"), &beyond_budget).is_none());
+        assert!(detect_audio_profile_from_payload(Some(&Codec::Eac3), &beyond_budget).is_none());
     }
 
     #[test]
@@ -512,7 +514,7 @@ mod tests {
         payload.extend_from_slice(&bits.finish());
 
         assert_eq!(
-            detect_audio_profile_from_payload(Some("eac3"), &payload),
+            detect_audio_profile_from_payload(Some(&Codec::Eac3), &payload),
             None
         );
     }

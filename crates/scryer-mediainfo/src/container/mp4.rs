@@ -1,6 +1,8 @@
 //! ISO base media files (MP4, MOV and relatives): the box walk, tracks, timing
 //! and chapters.
 
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 mod boxes;
 mod chapters;
@@ -19,8 +21,8 @@ use mp4parse::{
     TrackType, VideoCodecSpecific,
 };
 
-use crate::AnalysisProfile;
-use crate::MediaInfoError;
+use crate::ProbeDepth;
+use crate::ProbeError;
 use crate::codec::{
     audio_profile::{
         audio_profile_probe_spec, detect_audio_profile_from_probe_bytes,
@@ -90,8 +92,8 @@ struct Mp4BoxHeader {
 pub(crate) fn parse_mp4_source(
     source: &mut dyn crate::source::MediaSource,
     extension: &str,
-    profile: AnalysisProfile,
-) -> Result<RawContainer, MediaInfoError> {
+    profile: ProbeDepth,
+) -> Result<RawContainer, ProbeError> {
     let mut prepared = prepare_mp4_metadata(source)?;
     sanitize_prepared_mp4_metadata(&mut prepared.metadata);
     let parsed_metadata = parse_mp4_metadata(&prepared.metadata);
@@ -111,7 +113,7 @@ pub(crate) fn parse_mp4_source(
                 details,
             });
         }
-        Err(error) => return Err(MediaInfoError::Parse(format!("mp4 parse: {error:?}"))),
+        Err(error) => return Err(ProbeError::Malformed(format!("mp4 parse: {error:?}"))),
     };
     let num_chapters = match count_mp4_chapters(&parsed_metadata.chapters, &ctx) {
         0 => None,
@@ -200,7 +202,7 @@ pub(crate) fn parse_mp4_source(
             sample_probe_warning(
                 &mut report,
                 &parsed.raw,
-                "presentation_timing_sample_limit",
+                warning::PRESENTATION_TIMING_SAMPLE_LIMIT,
                 true,
             );
         }
@@ -243,7 +245,7 @@ pub(crate) fn parse_mp4_source(
                     report.status = scryer_media_model::ProbeStatus::Incomplete;
                     report.budget_exhausted |= budget;
                     report.warnings.push(scryer_media_model::ProbeWarning {
-                        code: "mp4_chapter_track_incomplete".into(),
+                        code: warning::MP4_CHAPTER_TRACK_INCOMPLETE.into(),
                         message: message.into(),
                         stream_id: Some(id.to_string()),
                         ..Default::default()
@@ -258,7 +260,7 @@ pub(crate) fn parse_mp4_source(
     {
         report.status = scryer_media_model::ProbeStatus::Incomplete;
         report.warnings.push(scryer_media_model::ProbeWarning {
-            code: "mp4_chapters_incomplete".into(),
+            code: warning::MP4_CHAPTERS_INCOMPLETE.into(),
             message: "Chapter metadata could not be fully inventoried".into(),
             ..Default::default()
         });
@@ -305,7 +307,7 @@ fn report_fragment_budget(report: &mut scryer_media_model::ProbeReport, exhauste
     report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted = true;
     report.warnings.push(scryer_media_model::ProbeWarning {
-        code: "mp4_fragment_inventory_budget".into(),
+        code: warning::MP4_FRAGMENT_INVENTORY_BUDGET.into(),
         message: "Fragment timing metadata exceeds the bounded header, track, or sample inventory"
             .into(),
         ..Default::default()
@@ -368,8 +370,8 @@ fn primary_mp4_video_duration_seconds(
         let mut selected = None;
         for (track, metadata) in &video_tracks {
             if !matches!(
-                mp4_video_codec_name(track, *metadata).as_deref(),
-                Some("mjpeg" | "png")
+                mp4_video_codec_name(track, *metadata),
+                Some(Codec::Mjpeg | Codec::Png)
             ) {
                 selected = Some((*track, *metadata));
                 break;
@@ -386,7 +388,7 @@ fn primary_mp4_video_duration_seconds(
 fn mp4_video_codec_name(
     track: &mp4parse::Track,
     metadata: Option<&Mp4TrackMetadata>,
-) -> Option<String> {
+) -> Option<Codec> {
     let codec_id = metadata
         .and_then(|m| m.sample_entry_fourcc.clone())
         .or_else(|| {
@@ -418,7 +420,7 @@ fn report_container_budget(report: &mut scryer_media_model::ProbeReport) {
     report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted = true;
     report.warnings.push(scryer_media_model::ProbeWarning {
-        code: "mp4_container_scan_budget".into(),
+        code: warning::MP4_CONTAINER_SCAN_BUDGET.into(),
         message: "MP4 catalog inspection stops after 128 top-level boxes or 16 MiB of metadata; incomplete fragment timing and bitrate remain unknown".into(),
         ..Default::default()
     });
@@ -426,7 +428,7 @@ fn report_container_budget(report: &mut scryer_media_model::ProbeReport) {
 
 fn prepare_mp4_metadata(
     file: &mut dyn crate::source::MediaSource,
-) -> Result<PreparedMp4, MediaInfoError> {
+) -> Result<PreparedMp4, ProbeError> {
     let mut reader = file;
     let (metadata, file_len_hint, budget_exhausted) =
         prepare_mp4_metadata_from_reader(&mut reader)?;
@@ -439,17 +441,13 @@ fn prepare_mp4_metadata(
 
 fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
     reader: &mut R,
-) -> Result<(Vec<u8>, u64, bool), MediaInfoError> {
+) -> Result<(Vec<u8>, u64, bool), ProbeError> {
     let mut output = Vec::new();
     let mut pos = 0_u64;
     let mut boxes_left = 128_usize;
     let mut budget_exhausted = false;
-    let input_len = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let input_len = reader.seek(SeekFrom::End(0)).map_err(ProbeError::from)?;
+    reader.seek(SeekFrom::Start(0)).map_err(ProbeError::from)?;
 
     loop {
         if pos == input_len {
@@ -469,13 +467,13 @@ fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
 
         if header.size != 0 {
             let box_end = start.checked_add(header.size).ok_or_else(|| {
-                MediaInfoError::Parse(format!(
+                ProbeError::Malformed(format!(
                     "MP4 box {} size overflow",
                     fourcc_to_string(header.name)
                 ))
             })?;
             if box_end > input_len {
-                return Err(MediaInfoError::Parse(format!(
+                return Err(ProbeError::Malformed(format!(
                     "MP4 box {} extends past end of input",
                     fourcc_to_string(header.name)
                 )));
@@ -498,42 +496,40 @@ fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
                 break;
             }
             if header.size > MP4_KEEP_BOX_MAX_BYTES {
-                return Err(MediaInfoError::Parse(format!(
+                return Err(ProbeError::Malformed(format!(
                     "MP4 metadata box {} exceeds parser budget",
                     fourcc_to_string(header.name)
                 )));
             }
             let box_size = usize::try_from(header.size).map_err(|_| {
-                MediaInfoError::Parse(format!(
+                ProbeError::Malformed(format!(
                     "MP4 metadata box {} is too large for this platform",
                     fourcc_to_string(header.name)
                 ))
             })?;
             if output.len().saturating_add(box_size) > MP4_METADATA_OUTPUT_MAX_BYTES {
-                return Err(MediaInfoError::Parse(
+                return Err(ProbeError::Malformed(
                     "MP4 metadata output exceeds parser budget".into(),
                 ));
             }
             output.extend_from_slice(&header_bytes);
             let payload_size = box_size.saturating_sub(header.header_size);
             let mut buf = vec![0_u8; payload_size];
-            reader
-                .read_exact(&mut buf)
-                .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            reader.read_exact(&mut buf).map_err(ProbeError::from)?;
             output.extend_from_slice(&buf);
             pos = start.saturating_add(header.size);
         } else if header.size == 0 {
             break;
         } else {
             let box_end = start.checked_add(header.size).ok_or_else(|| {
-                MediaInfoError::Parse(format!(
+                ProbeError::Malformed(format!(
                     "MP4 box {} size overflow",
                     fourcc_to_string(header.name)
                 ))
             })?;
             reader
                 .seek(SeekFrom::Start(box_end))
-                .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+                .map_err(ProbeError::from)?;
             pos = box_end;
         }
 
@@ -795,7 +791,7 @@ fn build_mp4_tracks(
         }
         raw.audio_profile = detect_header_audio_profile(
             &raw.codec_id,
-            raw.codec_name.as_deref(),
+            raw.codec_name.as_ref(),
             raw.codec_private.as_deref(),
         );
 

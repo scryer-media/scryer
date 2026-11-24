@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The container family a suffix belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(missing_docs)] // Each variant is the format it names.
 pub enum MediaFormat {
     Matroska,
     Mp4,
@@ -16,46 +18,75 @@ pub enum MediaFormat {
     Ogm,
     RealMedia,
     Dv,
+    /// A raw H.264 elementary stream.
     H264,
+    /// A raw MPEG-1 or MPEG-2 video elementary stream.
     MpegVideo,
     Svq3,
+    /// An MPEG program stream, including DVD VOB files.
     MpegProgram,
+    /// A text file holding a link to a stream.
     StreamLink,
+    /// An optical disc image.
     DiscImage,
+    /// A playlist of other files.
     Playlist,
+    /// A file that accompanies media rather than holding it, such as a DVD
+    /// `.ifo`.
     Companion,
+    /// A recognized suffix whose format is not supported.
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How a file with a given suffix is treated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MediaHandling {
+    /// A media file the parser reads directly.
     Native,
+    /// A text file holding a link to a stream.
     StreamLink,
+    /// A disc image, read through its navigation structures.
     DiscImage,
+    /// A playlist; not media itself.
     Playlist,
+    /// A file that accompanies media; not media itself.
     Companion,
+    /// Recognized but not supported.
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a probe can do with a file of a given suffix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MediaProbeCapability {
+    /// The suffix names a format the parser reads.
     Native,
+    /// The suffix says nothing reliable; the format is recognized from the
+    /// file's content.
     ContentOnly,
+    /// The format cannot be probed.
     Unsupported,
+    /// Probing does not apply (playlists, links, disc images, companions).
     NotApplicable,
 }
 
+/// One recognized suffix and what it means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaFormatRegistration {
+    /// The suffix, lowercase and without the dot.
     pub extension: &'static str,
+    /// The container family.
     pub format: MediaFormat,
+    /// Container names for which this suffix is the preferred one.
     pub container_aliases: &'static [&'static str],
+    /// How a file with this suffix is treated.
     pub handling: MediaHandling,
+    /// What a probe can do with it.
     pub probe: MediaProbeCapability,
 }
 
 macro_rules! media_formats {
     ($(($extension:literal, $format:ident, $handling:ident, $probe:ident, [$($alias:literal),*])),* $(,)?) => {
+        /// Every recognized suffix.
         pub const MEDIA_FORMATS: &[MediaFormatRegistration] = &[$(
             MediaFormatRegistration {
                 extension: $extension,
@@ -65,6 +96,7 @@ macro_rules! media_formats {
                 probe: MediaProbeCapability::$probe,
             },
         )*];
+        /// Every recognized suffix, in the order of [`MEDIA_FORMATS`].
         pub const VIDEO_EXTENSIONS: &[&str] = &[$($extension),*];
     };
 }
@@ -124,17 +156,23 @@ media_formats! {
     ("xvid", Avi, Native, ContentOnly, []),
 }
 
+/// The registration for a suffix, ignoring ASCII case; `None` when the
+/// suffix is not recognized.
+#[must_use]
 pub fn media_format_for_extension(extension: &str) -> Option<&'static MediaFormatRegistration> {
     MEDIA_FORMATS
         .iter()
         .find(|entry| entry.extension.eq_ignore_ascii_case(extension))
 }
 
+/// The recognized suffix of a file name, lowercase; `None` when it has none.
+///
 /// Normalizes only the established trailing filename junk, never an inner suffix.
 ///
 /// Every registered extension is ASCII, so a stem that is not valid UTF-8 is
 /// still recognized: invalid sequences become replacement characters, which
 /// keeps the stem non-empty and leaves the extension bytes untouched.
+#[must_use]
 pub fn canonical_video_extension(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_string_lossy();
     let name = name.trim().trim_end_matches(|ch: char| {
@@ -147,10 +185,16 @@ pub fn canonical_video_extension(path: &Path) -> Option<&'static str> {
     media_format_for_extension(extension).map(|entry| entry.extension)
 }
 
+/// The registration for a path's suffix, after
+/// [`canonical_video_extension`]; `None` when it is not recognized.
+#[must_use]
 pub fn media_format_for_path(path: &Path) -> Option<&'static MediaFormatRegistration> {
     media_format_for_extension(canonical_video_extension(path)?)
 }
 
+/// The preferred suffix for a container name such as `matroska`, ignoring
+/// ASCII case; `None` when the name is not recognized.
+#[must_use]
 pub fn preferred_video_extension_for_container(container: &str) -> Option<&'static str> {
     MEDIA_FORMATS.iter().find_map(|entry| {
         entry

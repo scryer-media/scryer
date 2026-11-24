@@ -1,10 +1,12 @@
 //! MPEG program-stream probing with bounded PES discovery and timestamp sampling.
 
 use crate::{
-    MediaInfoError,
+    ProbeError,
     raw::{RawContainer, RawTrack, TrackKind},
     source::MediaSource,
 };
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use scryer_media_model::{AnalysisDetails, ProbeReport, ProbeStatus, Provenance};
 use std::collections::BTreeMap;
 use std::io::SeekFrom;
@@ -22,7 +24,7 @@ struct PesStream {
     payload: Vec<u8>,
 }
 
-pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, ProbeError> {
     let length = source.len();
     let mut prefix = vec![0; length.min(PREFIX_BYTES) as usize];
     source.seek(SeekFrom::Start(0))?;
@@ -52,7 +54,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
         let mut track = RawTrack {
             kind,
             codec_id: format!("0x{id:04x}"),
-            codec_name: Some(codec.into()),
+            codec_name: Some(codec.clone()),
             ..Default::default()
         };
         track.metadata.id = Some(format!("{id:04x}"));
@@ -66,7 +68,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
             });
         if pes.invalid_timestamps {
             report.warnings.push(scryer_media_model::ProbeWarning {
-                code: "program_invalid_timestamps".into(),
+                code: warning::PROGRAM_INVALID_TIMESTAMPS.into(),
                 message: "Sampled PES timestamps are invalid; stream duration remains unknown"
                     .into(),
                 stream_id: track.metadata.id.clone(),
@@ -74,7 +76,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
             });
         }
         if kind == TrackKind::Video {
-            track.codec_name = identify_mpeg_video(&pes.payload).map(str::to_owned);
+            track.codec_name = identify_mpeg_video(&pes.payload);
         }
         crate::codec::stream_probe::probe_elementary_stream(&pes.payload, &mut track);
         if (0xc0..=0xdf).contains(&id) && track.metadata.sample_rate.is_none() {
@@ -82,7 +84,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
         }
         if track.codec_name.is_none() {
             report.warnings.push(scryer_media_model::ProbeWarning {
-                code: "program_codec_unknown".into(),
+                code: warning::PROGRAM_CODEC_UNKNOWN.into(),
                 message: "Bounded PES sampling did not identify the elementary codec".into(),
                 stream_id: track.metadata.id.clone(),
                 offset: None,
@@ -105,7 +107,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
                 .duration_seconds
                 .map(|duration| duration + 1.0 / fps);
         }
-        if codec == "pcm_dvd" && pes.payload.len() >= 3 {
+        if codec == Codec::PcmDvd && pes.payload.len() >= 3 {
             let flags = pes.payload[1];
             track.channels = Some(i32::from((flags & 7) + 1));
             track.metadata.sample_rate = Some(if flags & 0x10 != 0 { 96_000 } else { 48_000 });
@@ -115,7 +117,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
         tracks.push(track);
     }
     if tracks.is_empty() {
-        return Err(MediaInfoError::Parse(
+        return Err(ProbeError::Malformed(
             "no supported PES streams in bounded program-stream probe".into(),
         ));
     }
@@ -146,33 +148,33 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
     })
 }
 
-fn identify_mpeg_video(data: &[u8]) -> Option<&'static str> {
+fn identify_mpeg_video(data: &[u8]) -> Option<Codec> {
     let start = crate::scan::find_mpeg_start_code(data, 0xb3)? + 4;
     let header_end = crate::codec::mpeg_video::mpeg_sequence_header_end(data, start)?;
     let suffix = data.get(header_end..)?;
     let next = crate::scan::find_start_code_prefix(suffix, 0)?;
     let codec = match *suffix.get(next + 3)? {
-        0xb5 => "mpeg2video",
-        0 | 0xb2 | 0xb8 => "mpeg1video",
+        0xb5 => Codec::Mpeg2Video,
+        0 | 0xb2 | 0xb8 => Codec::Mpeg1Video,
         _ => return None,
     };
     let mut candidate = RawTrack {
         kind: TrackKind::Video,
-        codec_name: Some(codec.into()),
+        codec_name: Some(codec.clone()),
         ..Default::default()
     };
     crate::codec::picture_headers::enrich(&mut candidate, data);
     (candidate.metadata.bit_depth == Some(8)).then_some(codec)
 }
 
-fn classify(id: u16) -> Option<(TrackKind, &'static str)> {
+fn classify(id: u16) -> Option<(TrackKind, Codec)> {
     match id {
-        0xe0..=0xef => Some((TrackKind::Video, "unknown")),
-        0xc0..=0xdf => Some((TrackKind::Audio, "mp2")),
-        0xbd80..=0xbd87 => Some((TrackKind::Audio, "ac3")),
-        0xbd88..=0xbd8f => Some((TrackKind::Audio, "dts")),
-        0xbda0..=0xbdaf => Some((TrackKind::Audio, "pcm_dvd")),
-        0xbd20..=0xbd3f => Some((TrackKind::Subtitle, "dvd_subtitle")),
+        0xe0..=0xef => Some((TrackKind::Video, Codec::Unknown)),
+        0xc0..=0xdf => Some((TrackKind::Audio, Codec::Mp2)),
+        0xbd80..=0xbd87 => Some((TrackKind::Audio, Codec::Ac3)),
+        0xbd88..=0xbd8f => Some((TrackKind::Audio, Codec::Dts)),
+        0xbda0..=0xbdaf => Some((TrackKind::Audio, Codec::PcmDvd)),
+        0xbd20..=0xbd3f => Some((TrackKind::Subtitle, Codec::DvdSubtitle)),
         _ => None,
     }
 }
@@ -323,7 +325,7 @@ mod tests {
     fn pes_timestamp_fields_stay_inside_the_header_and_validate_dts() {
         let timestamp = [0x21, 0, 1, 0, 1];
         // Bytes after a zero-length optional header are payload, even when they
-        // resemble PTS. Invalid timing must not become a catalog duration.
+        // resemble PTS. Invalid timing must not become a stream duration.
         for flags in [0x40, 0x80, 0xc0] {
             let data = [&[0x80, flags, 0][..], &timestamp].concat();
             let parsed = pes_payload(&data).unwrap();
@@ -360,7 +362,7 @@ mod tests {
         }
     }
     #[test]
-    fn invalid_sampled_timestamps_leave_catalog_duration_unknown() {
+    fn invalid_sampled_timestamps_leave_duration_unknown() {
         fn packet(timestamp: [u8; 5], header_length: u8) -> Vec<u8> {
             let mut bytes = vec![0, 0, 1, 0xe0, 0, 8, 0x80, 0x80, header_length];
             bytes.extend(timestamp);
@@ -399,7 +401,12 @@ mod tests {
             let mut streams = BTreeMap::new();
             scan_pes(bytes, &mut streams, true);
             let data = &streams[&0xe0].payload;
-            assert_eq!(identify_mpeg_video(data), Some(expected));
+            assert_eq!(
+                identify_mpeg_video(data)
+                    .as_ref()
+                    .map(scryer_media_model::Codec::as_str),
+                Some(expected)
+            );
             let start = data
                 .windows(4)
                 .position(|bytes| bytes == [0, 0, 1, 0xb3])
@@ -411,7 +418,12 @@ mod tests {
             let mut with_matrix = data.to_vec();
             with_matrix[start + 7] |= 2;
             with_matrix.splice(start + 8..start + 8, matrix);
-            assert_eq!(identify_mpeg_video(&with_matrix), Some(expected));
+            assert_eq!(
+                identify_mpeg_video(&with_matrix)
+                    .as_ref()
+                    .map(scryer_media_model::Codec::as_str),
+                Some(expected)
+            );
             assert_eq!(identify_mpeg_video(&with_matrix[..start + 40]), None);
         }
         let bytes = [
@@ -431,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_selection_preserves_program_stream_discovery_order() {
+    fn stream_order_preserves_program_stream_discovery_order() {
         fn packet(id: u8, data: &[u8]) -> Vec<u8> {
             let mut bytes = vec![0, 0, 1, id];
             bytes.extend(((3 + data.len()) as u16).to_be_bytes());
@@ -453,12 +465,10 @@ mod tests {
             packet(0xe7, &sd),
         ]
         .concat();
-        let analysis = crate::analyze_source(
+        let analysis = crate::probe_bounded(
             &mut std::io::Cursor::new(bytes),
             "mpg",
-            crate::AnalyzeOptions {
-                profile: crate::AnalysisProfile::DefaultRich,
-            },
+            &crate::ProbeOptions::new(),
         )
         .unwrap();
         assert_eq!(
@@ -478,11 +488,17 @@ mod tests {
 
     #[test]
     fn dvd_private_stream_types_are_distinct() {
-        assert_eq!(classify(0xbd80), Some((TrackKind::Audio, "ac3")));
+        assert_eq!(
+            classify(0xbd80),
+            Some((TrackKind::Audio, scryer_media_model::Codec::Ac3))
+        );
         assert_eq!(
             classify(0xbd20),
-            Some((TrackKind::Subtitle, "dvd_subtitle"))
+            Some((TrackKind::Subtitle, scryer_media_model::Codec::DvdSubtitle))
         );
-        assert_eq!(classify(0xbda0), Some((TrackKind::Audio, "pcm_dvd")));
+        assert_eq!(
+            classify(0xbda0),
+            Some((TrackKind::Audio, scryer_media_model::Codec::PcmDvd))
+        );
     }
 }

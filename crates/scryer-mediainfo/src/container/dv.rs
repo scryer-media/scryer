@@ -1,9 +1,10 @@
 //! Read DV DIF headers without decoding pictures or audio.
 use crate::{
-    MediaInfoError,
+    ProbeError,
     raw::{RawContainer, RawTrack},
     source::MediaSource,
 };
+use scryer_media_model::Codec;
 use scryer_media_model::{AnalysisDetails, ProbeStatus};
 use std::io::SeekFrom;
 
@@ -29,13 +30,13 @@ pub(crate) fn sniff(data: &[u8]) -> bool {
     data[0] == 0x1f && data[1] & 0xf0 == 0
 }
 
-pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, ProbeError> {
     source.seek(SeekFrom::Start(0))?;
     let mut header = [0; 480];
     source.read_exact(&mut header)?;
     // DIF header, subcode and VAUX blocks must occur at their prescribed positions.
     if !sniff(&header) {
-        return Err(MediaInfoError::Parse("invalid DV DIF header".into()));
+        return Err(ProbeError::Malformed("invalid DV DIF header".into()));
     }
     let pal = header[3] & 0x80 != 0;
     let stype = header[451] & 0x1f;
@@ -61,7 +62,7 @@ pub(crate) fn parse(source: &mut dyn MediaSource) -> Result<RawContainer, MediaI
     };
     let mut track = RawTrack {
         codec_id: "dvvideo".into(),
-        codec_name: Some("dvvideo".into()),
+        codec_name: Some(Codec::DvVideo),
         ..Default::default()
     };
     if let Some((width, height, fps, pixel)) = profile {

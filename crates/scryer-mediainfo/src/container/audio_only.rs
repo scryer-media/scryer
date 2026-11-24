@@ -1,7 +1,7 @@
 //! FLAC and WAVE files: their framing is checked so an audio-only file is never
 //! reported as unsupported video, and no audio data is decoded.
 
-use crate::MediaInfoError;
+use crate::ProbeError;
 use crate::detect::ContainerFormat;
 use crate::raw::RawContainer;
 use crate::source;
@@ -11,9 +11,9 @@ use crate::source;
 pub(crate) fn parse_audio_only(
     source: &mut dyn source::MediaSource,
     format: ContainerFormat,
-) -> Result<RawContainer, MediaInfoError> {
+) -> Result<RawContainer, ProbeError> {
     use std::io::SeekFrom;
-    let malformed = || MediaInfoError::Parse("invalid audio container framing".into());
+    let malformed = || ProbeError::Malformed("invalid audio container framing".into());
     source.seek(SeekFrom::Start(0))?;
     let name = if format == ContainerFormat::FlacAudio {
         let mut streaminfo = [0u8; 42];
@@ -109,7 +109,7 @@ pub(crate) fn parse_audio_only(
 
 #[cfg(test)]
 mod tests {
-    use crate::{AnalyzeOptions, analyze_source, test_facts};
+    use crate::{ProbeDepth, ProbeOptions, probe_bounded, test_facts};
 
     #[test]
     fn audio_only_signatures_override_video_suffixes_without_becoming_unsupported() {
@@ -125,10 +125,10 @@ mod tests {
         wave.extend(b"\x02\0\x10\0data\x02\0\0\0\0\0");
         for bytes in [&flac, &wave] {
             for extension in ["dat", "xvid", "wtv", "mkv"] {
-                let analysis = analyze_source(
+                let analysis = probe_bounded(
                     &mut std::io::Cursor::new(bytes),
                     extension,
-                    AnalyzeOptions::default(),
+                    &ProbeOptions::new().with_depth(ProbeDepth::Quick),
                 )
                 .unwrap();
                 assert!(!test_facts::has_video_with_duration(&analysis));
@@ -144,10 +144,10 @@ mod tests {
         wave[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
         for bytes in [flac, wave, b"fLaC".to_vec()] {
             assert!(
-                analyze_source(
+                probe_bounded(
                     &mut std::io::Cursor::new(bytes),
                     "wtv",
-                    AnalyzeOptions::default(),
+                    &ProbeOptions::new().with_depth(ProbeDepth::Quick),
                 )
                 .is_err()
             );

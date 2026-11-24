@@ -1,8 +1,10 @@
 //! FLV tags and the codec headers they carry.
 
-use crate::MediaInfoError;
+use crate::ProbeError;
 use crate::codec;
 use crate::raw::{RawContainer, RawTrack, TrackKind};
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use std::io::{Read, SeekFrom};
 
 const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;
@@ -21,11 +23,15 @@ struct FlvMetadata {
     frame_rate_fps: Option<f64>,
     video_bitrate_bps: Option<i64>,
     audio_bitrate_bps: Option<i64>,
+    /// Top-level text entries of `onMetaData`.
+    tags: std::collections::BTreeMap<String, String>,
+    /// Warnings raised while keeping those entries.
+    report: scryer_media_model::ProbeReport,
 }
 
 pub(crate) fn parse_flv_source(
     mut file: &mut dyn crate::source::MediaSource,
-) -> Result<RawContainer, MediaInfoError> {
+) -> Result<RawContainer, ProbeError> {
     let file_len = file.len();
     let mut header = [0_u8; 9];
     file.read_exact(&mut header)
@@ -52,7 +58,7 @@ pub(crate) fn parse_flv_source(
     // Tags carry the tracks themselves, so a budget exhausted mid-scan must end
     // the scan, not the parse: whatever tags were already read still describe
     // the file, and an empty result is rejected below on its own merits.
-    let scanned = (|| -> Result<(), MediaInfoError> {
+    let scanned = (|| -> Result<(), ProbeError> {
         for _ in 0..MAX_TAGS {
             let tag_start = file.stream_position()?;
             if tag_start >= file_len || tag_start >= scan_end {
@@ -101,7 +107,7 @@ pub(crate) fn parse_flv_source(
                 track.width.is_some() || track.codec_private.is_some()
             });
             let have_audio_details = audio_track.as_ref().is_some_and(|track: &RawTrack| {
-                if track.codec_name.as_deref() == Some("aac") {
+                if track.codec_name == Some(Codec::Aac) {
                     track.codec_private.is_some()
                 } else {
                     track.channels.is_some() && track.metadata.sample_rate.is_some()
@@ -115,6 +121,8 @@ pub(crate) fn parse_flv_source(
         Ok(())
     })();
     let mut details = scryer_media_model::AnalysisDetails::default();
+    details.tags = std::mem::take(&mut metadata.tags);
+    details.report.warnings = std::mem::take(&mut metadata.report.warnings);
     if let Err(error) = scanned {
         if !file.exhausted() {
             return Err(error);
@@ -125,7 +133,7 @@ pub(crate) fn parse_flv_source(
             .report
             .warnings
             .push(scryer_media_model::ProbeWarning {
-            code: "flv_tag_scan_budget".into(),
+            code: warning::FLV_TAG_SCAN_BUDGET.into(),
             message:
                 "FLV tag scanning stopped when the media byte or I/O-operation budget was exhausted"
                     .into(),
@@ -166,23 +174,23 @@ pub(crate) fn parse_flv_source(
     })
 }
 
-fn parse_video_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), MediaInfoError> {
+fn parse_video_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), ProbeError> {
     let Some((&flags, payload)) = data.split_first() else {
         return Ok(());
     };
     let frame_type = flags >> 4;
     let codec_id = flags & 0x0f;
     let codec_name = match codec_id {
-        2 => "flv1",
-        4 => "vp6f",
-        5 => "vp6a",
-        7 => "h264",
-        9 => "mpeg4",
+        2 => Codec::Flv1,
+        4 => Codec::Vp6f,
+        5 => Codec::Vp6a,
+        7 => Codec::H264,
+        9 => Codec::Mpeg4,
         _ => return Ok(()),
     };
-    let current =
-        track.get_or_insert_with(|| RawTrack::for_codec(TrackKind::Video, codec_name, None));
-    if current.codec_name.as_deref() != Some(codec_name) {
+    let current = track
+        .get_or_insert_with(|| RawTrack::for_codec(TrackKind::Video, codec_name.clone(), None));
+    if current.codec_name.as_ref() != Some(&codec_name) {
         return Ok(());
     }
     if frame_type != 1 {
@@ -225,24 +233,24 @@ fn parse_video_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
     Ok(())
 }
 
-fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), MediaInfoError> {
+fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), ProbeError> {
     let Some((&flags, payload)) = data.split_first() else {
         return Ok(());
     };
     let codec_id = flags >> 4;
     let codec_name = match codec_id {
-        0 | 3 if flags & 2 == 0 => "pcm_u8",
+        0 | 3 if flags & 2 == 0 => Codec::PcmU8,
         // Deprecated format 0 uses the author's platform byte order, which
         // cannot be recovered from the machine performing this inspection.
-        0 => "pcm_s16",
-        1 => "adpcm_swf",
-        2 | 14 => "mp3",
-        3 => "pcm_s16le",
-        4..=6 => "nellymoser",
-        7 => "pcm_alaw",
-        8 => "pcm_mulaw",
-        10 => "aac",
-        11 => "speex",
+        0 => Codec::PcmS16,
+        1 => Codec::AdpcmSwf,
+        2 | 14 => Codec::Mp3,
+        3 => Codec::PcmS16Le,
+        4..=6 => Codec::Nellymoser,
+        7 => Codec::PcmAlaw,
+        8 => Codec::PcmMulaw,
+        10 => Codec::Aac,
+        11 => Codec::Speex,
         _ => return Ok(()),
     };
     let channels = match codec_id {
@@ -251,9 +259,9 @@ fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
         2 | 10 | 14 => None,
         _ => Some(i32::from(flags & 1) + 1),
     };
-    let current =
-        track.get_or_insert_with(|| RawTrack::for_codec(TrackKind::Audio, codec_name, channels));
-    if current.codec_name.as_deref() != Some(codec_name) {
+    let current = track
+        .get_or_insert_with(|| RawTrack::for_codec(TrackKind::Audio, codec_name.clone(), channels));
+    if current.codec_name.as_ref() != Some(&codec_name) {
         return Ok(());
     }
     current.metadata.sample_rate = current.metadata.sample_rate.or(match codec_id {
@@ -274,8 +282,8 @@ fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
     if matches!(codec_id, 0 | 3) {
         current.metadata.sample_bit_depth = Some(if flags & 2 == 0 { 8 } else { 16 });
         current.metadata.sample_format = match codec_name {
-            "pcm_u8" => Some("u8".into()),
-            "pcm_s16le" => Some("s16le".into()),
+            Codec::PcmU8 => Some("u8".into()),
+            Codec::PcmS16Le => Some("s16le".into()),
             _ => None,
         };
     }
@@ -292,7 +300,7 @@ fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
             current.codec_private = Some(payload[1..].to_vec());
             current.audio_profile = codec::audio_profile::detect_header_audio_profile(
                 "aac",
-                Some("aac"),
+                Some(&Codec::Aac),
                 current.codec_private.as_deref(),
             );
             if let Some(channels) = config.channels {
@@ -352,7 +360,7 @@ fn parse_vp6_dimensions(data: &[u8], alpha: bool) -> Option<(i32, i32)> {
     ))
 }
 
-fn parse_script_metadata(data: &[u8], metadata: &mut FlvMetadata) -> Result<(), MediaInfoError> {
+fn parse_script_metadata(data: &[u8], metadata: &mut FlvMetadata) -> Result<(), ProbeError> {
     let mut reader = AmfReader::new(data);
     let name = reader.string_value()?;
     if name != b"onMetaData" {
@@ -374,7 +382,7 @@ fn parse_amf_object(
     metadata: &mut FlvMetadata,
     depth: usize,
     capture: bool,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     if depth >= MAX_AMF_DEPTH {
         return Err(parse_error("AMF nesting exceeds limit"));
     }
@@ -384,11 +392,15 @@ fn parse_amf_object(
             reader.u8()?;
             return Ok(());
         }
-        let key = reader.take_string(key_len)?.to_vec();
+        let key = reader.take_string(key_len)?;
         let marker = reader.u8()?;
         if capture && marker == 0 {
             let value = reader.f64()?;
-            capture_metadata_number(&key, value, metadata);
+            capture_metadata_number(key, value, metadata);
+        } else if capture && marker == 2 {
+            let len = reader.u16()? as usize;
+            let value = reader.take_string(len)?;
+            crate::tags::insert(&mut metadata.tags, key, value, &mut metadata.report);
         } else {
             skip_amf_value(reader, marker, metadata, depth + 1)?;
         }
@@ -401,7 +413,7 @@ fn skip_amf_value(
     marker: u8,
     metadata: &mut FlvMetadata,
     depth: usize,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     match marker {
         0 => reader.skip(8),
         1 => reader.skip(1),
@@ -555,7 +567,7 @@ fn resynchronize_tags(
     start: u64,
     file_len: u64,
     scan_end: u64,
-) -> Result<bool, MediaInfoError> {
+) -> Result<bool, ProbeError> {
     let end = file_len.min(scan_end);
     let length = end.saturating_sub(start).min(MAX_RESYNC_BYTES);
     if length < 30 {
@@ -589,7 +601,7 @@ fn tag_layout_end(data: &[u8], offset: usize) -> Option<usize> {
     (previous_size == 11_u32.checked_add(payload_size as u32)?).then_some(end)
 }
 
-fn read_u32_be(reader: &mut (impl Read + ?Sized)) -> Result<u32, MediaInfoError> {
+fn read_u32_be(reader: &mut (impl Read + ?Sized)) -> Result<u32, ProbeError> {
     let mut data = [0_u8; 4];
     reader.read_exact(&mut data)?;
     Ok(u32::from_be_bytes(data))
@@ -636,7 +648,7 @@ impl<'a> AmfReader<'a> {
         self.data.get(self.pos).copied()
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], MediaInfoError> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8], ProbeError> {
         let end = self
             .pos
             .checked_add(len)
@@ -649,38 +661,38 @@ impl<'a> AmfReader<'a> {
         Ok(value)
     }
 
-    fn take_string(&mut self, len: usize) -> Result<&'a [u8], MediaInfoError> {
+    fn take_string(&mut self, len: usize) -> Result<&'a [u8], ProbeError> {
         if len > MAX_AMF_STRING {
             return Err(parse_error("AMF string exceeds limit"));
         }
         self.take(len)
     }
 
-    fn skip(&mut self, len: usize) -> Result<(), MediaInfoError> {
+    fn skip(&mut self, len: usize) -> Result<(), ProbeError> {
         self.take(len).map(|_| ())
     }
 
-    fn skip_string(&mut self, len: usize) -> Result<(), MediaInfoError> {
+    fn skip_string(&mut self, len: usize) -> Result<(), ProbeError> {
         self.take_string(len).map(|_| ())
     }
 
-    fn u8(&mut self) -> Result<u8, MediaInfoError> {
+    fn u8(&mut self) -> Result<u8, ProbeError> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, MediaInfoError> {
+    fn u16(&mut self) -> Result<u16, ProbeError> {
         Ok(u16::from_be_bytes(self.take(2)?.try_into().unwrap()))
     }
 
-    fn u32(&mut self) -> Result<u32, MediaInfoError> {
+    fn u32(&mut self) -> Result<u32, ProbeError> {
         Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    fn f64(&mut self) -> Result<f64, MediaInfoError> {
+    fn f64(&mut self) -> Result<f64, ProbeError> {
         Ok(f64::from_be_bytes(self.take(8)?.try_into().unwrap()))
     }
 
-    fn string_value(&mut self) -> Result<&'a [u8], MediaInfoError> {
+    fn string_value(&mut self) -> Result<&'a [u8], ProbeError> {
         if self.u8()? != 2 {
             return Err(parse_error("AMF value is not a string"));
         }
@@ -689,8 +701,8 @@ impl<'a> AmfReader<'a> {
     }
 }
 
-fn parse_error(message: impl Into<String>) -> MediaInfoError {
-    MediaInfoError::Parse(message.into())
+fn parse_error(message: impl Into<String>) -> ProbeError {
+    ProbeError::Malformed(message.into())
 }
 
 #[cfg(test)]
@@ -705,12 +717,12 @@ mod tests {
         let analysis = (8_u64..64)
             .filter_map(|limit| {
                 let mut source = std::io::Cursor::new(fixture);
-                let analysis = crate::analyze_source_with_limits(
+                let analysis = crate::probe_bounded(
                     &mut source,
                     "flv",
-                    crate::AnalyzeOptions::default(),
-                    64 * 1024 * 1024,
-                    limit,
+                    &crate::ProbeOptions::new()
+                        .with_depth(crate::ProbeDepth::Quick)
+                        .with_io_limit(limit),
                 )
                 .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
                 analysis
@@ -764,19 +776,19 @@ mod tests {
     #[test]
     fn audio_flags_preserve_pcm_precision_and_codec_specific_rates() {
         for (flags, codec, rate, channels, depth) in [
-            (0x3c, "pcm_u8", 44_100, 1, Some(8)),
-            (0x3f, "pcm_s16le", 44_100, 2, Some(16)),
-            (0x02, "pcm_s16", 5_512, 1, Some(16)),
-            (0x4f, "nellymoser", 16_000, 1, None),
-            (0x5f, "nellymoser", 8_000, 1, None),
-            (0xbf, "speex", 16_000, 1, None),
-            (0x7c, "pcm_alaw", 8_000, 1, None),
-            (0x8c, "pcm_mulaw", 8_000, 1, None),
+            (0x3c, Codec::PcmU8, 44_100, 1, Some(8)),
+            (0x3f, Codec::PcmS16Le, 44_100, 2, Some(16)),
+            (0x02, Codec::PcmS16, 5_512, 1, Some(16)),
+            (0x4f, Codec::Nellymoser, 16_000, 1, None),
+            (0x5f, Codec::Nellymoser, 8_000, 1, None),
+            (0xbf, Codec::Speex, 16_000, 1, None),
+            (0x7c, Codec::PcmAlaw, 8_000, 1, None),
+            (0x8c, Codec::PcmMulaw, 8_000, 1, None),
         ] {
             let mut track = None;
             parse_audio_tag(&[flags, 0], &mut track).unwrap();
             let track = track.unwrap();
-            assert_eq!(track.codec_name.as_deref(), Some(codec));
+            assert_eq!(track.codec_name.as_ref(), Some(&codec));
             assert_eq!(track.channels, Some(channels));
             assert_eq!(track.metadata.sample_rate, Some(rate));
             assert_eq!(track.metadata.sample_bit_depth, depth);
@@ -784,7 +796,7 @@ mod tests {
                 track.metadata.channel_layout.as_deref(),
                 Some(if channels == 1 { "mono" } else { "stereo" })
             );
-            if codec == "pcm_s16" {
+            if codec == Codec::PcmS16 {
                 assert!(track.metadata.sample_format.is_none());
             }
         }
@@ -850,7 +862,13 @@ mod tests {
         let mut video = None;
         parse_video_tag(&[0x19, 0, 0, 0, 0, 0, 0, 1, 0xb0], &mut video).unwrap();
         let track = video.unwrap();
-        assert_eq!(track.codec_name.as_deref(), Some("mpeg4"));
+        assert_eq!(
+            track
+                .codec_name
+                .as_ref()
+                .map(scryer_media_model::Codec::as_str),
+            Some("mpeg4")
+        );
         assert_eq!(track.codec_private.as_deref(), Some(&[0, 0, 1, 0xb0][..]));
     }
 
@@ -864,6 +882,40 @@ mod tests {
         let mut vp6a = vec![0x12, 0, 0, 8];
         vp6a.extend_from_slice(&frame);
         assert_eq!(parse_vp6_dimensions(&vp6a, true), Some((319, 158)));
+    }
+
+    #[test]
+    fn on_metadata_strings_become_file_tags() {
+        fn amf_string(text: &[u8]) -> Vec<u8> {
+            let mut bytes = (text.len() as u16).to_be_bytes().to_vec();
+            bytes.extend_from_slice(text);
+            bytes
+        }
+        let mut payload = vec![2];
+        payload.extend(amf_string(b"onMetaData"));
+        payload.push(3);
+        payload.extend(amf_string(b"encoder"));
+        payload.push(2);
+        payload.extend(amf_string(b"synthetic-muxer 1.0"));
+        payload.extend(amf_string(b"width"));
+        payload.push(0);
+        payload.extend(320.0_f64.to_be_bytes());
+        payload.extend(amf_string(b"nested"));
+        payload.push(3);
+        payload.extend(amf_string(b"inner"));
+        payload.push(2);
+        payload.extend(amf_string(b"not a top-level entry"));
+        payload.extend([0, 0, 9]);
+        payload.extend([0, 0, 9]);
+
+        let mut metadata = FlvMetadata::default();
+        parse_script_metadata(&payload, &mut metadata).unwrap();
+        assert_eq!(metadata.width, Some(320));
+        assert_eq!(
+            metadata.tags.into_iter().collect::<Vec<_>>(),
+            [("encoder".to_owned(), "synthetic-muxer 1.0".to_owned())]
+        );
+        assert!(metadata.report.warnings.is_empty());
     }
 
     #[test]

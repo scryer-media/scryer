@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use scryer_mediainfo::{
-    AnalysisProfile, AnalyzeOptions, analyze_catalog_file, analyze_file_with_options,
-};
+use scryer_mediainfo::{ProbeDepth, ProbeOptions, probe, probe_path};
 use serde_json::Value;
 
 const MAX_DEPTH: usize = 3;
@@ -67,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 run_native(path, None, &mut rich_durations, &mut rich_failures);
                 run_native(
                     path,
-                    Some(AnalysisProfile::FfprobeParity),
+                    Some(ProbeDepth::FfprobeParity),
                     &mut parity_durations,
                     &mut parity_failures,
                 );
@@ -88,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 run_native(path, None, &mut rich_durations, &mut rich_failures);
                 run_native(
                     path,
-                    Some(AnalysisProfile::FfprobeParity),
+                    Some(ProbeDepth::FfprobeParity),
                     &mut parity_durations,
                     &mut parity_failures,
                 );
@@ -96,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => {
                 run_native(
                     path,
-                    Some(AnalysisProfile::FfprobeParity),
+                    Some(ProbeDepth::FfprobeParity),
                     &mut parity_durations,
                     &mut parity_failures,
                 );
@@ -113,13 +111,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     print_summary(
-        "scryer_mediainfo::analyze_catalog_file [default-rich]",
+        "scryer_mediainfo::probe [full]",
         &rich_durations,
         &rich_failures,
     );
     println!();
     print_summary(
-        "scryer_mediainfo::analyze_catalog_file [sonarr-ffprobe-parity]",
+        "scryer_mediainfo::probe [ffprobe-parity]",
         &parity_durations,
         &parity_failures,
     );
@@ -135,14 +133,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_native(
     path: &Path,
-    profile: Option<AnalysisProfile>,
+    profile: Option<ProbeDepth>,
     durations: &mut Vec<(PathBuf, Duration)>,
     failures: &mut Vec<(PathBuf, String)>,
 ) {
     let start = Instant::now();
     let result = match profile {
-        Some(profile) => analyze_file_with_options(path, AnalyzeOptions { profile }),
-        None => analyze_catalog_file(path),
+        Some(profile) => probe_path(path, &ProbeOptions::new().with_depth(profile)),
+        None => probe(path),
     };
     match result {
         Ok(_) => durations.push((path.to_path_buf(), start.elapsed())),

@@ -182,8 +182,8 @@ fn ffprobe_primary_stream<'a>(json: &'a Value, codec_type: &str) -> Option<&'a V
     // The same rule applied to the native streams: the default stream that is
     // not commentary, or the first that is not, read from FFprobe's own
     // disposition and title. Codec and channel count never pick the stream.
-    facts::primary_audio_index(candidates.iter().map(|stream| {
-        (
+    scryer_mediainfo::primary_audio_position(candidates.iter().map(|stream| {
+        scryer_mediainfo::AudioCandidate::new(
             stream["disposition"]["default"] == 1,
             stream["disposition"]["comment"] == 1,
             stream["tags"]["title"].as_str(),
@@ -370,8 +370,8 @@ fn compare_fixture_corpus_against_ffprobe() {
             continue;
         }
         seen.push(file_name.clone());
-        let analysis = scryer_mediainfo::analyze_catalog_file(&path)
-            .expect("canonical native analysis should succeed");
+        let analysis =
+            scryer_mediainfo::probe(&path).expect("canonical native analysis should succeed");
         let raw_reference = sonarr_ffprobe_json(&ffprobe, &path);
         let native_json = serde_json::to_value(&analysis).unwrap();
         let (ffprobe, reference_assumptions, expectation_errors) =
@@ -440,7 +440,8 @@ fn compare_fixture_corpus_against_ffprobe() {
             ),
             (
                 "audio_codec",
-                native_primary_audio.and_then(|stream| stream.codec.clone()),
+                native_primary_audio
+                    .and_then(|stream| stream.codec.as_ref().map(ToString::to_string)),
                 audio
                     .and_then(|stream| stream.get("codec_name"))
                     .and_then(Value::as_str)
@@ -655,7 +656,9 @@ fn compare_fixture_corpus_against_ffprobe() {
                 );
             }
 
-            if native.codec.as_deref() != probe.get("codec_name").and_then(Value::as_str) {
+            if native.codec.as_ref().map(scryer_media_model::Codec::as_str)
+                != probe.get("codec_name").and_then(Value::as_str)
+            {
                 mismatches.push(format!(
                     "{} audio_stream[{}] codec mismatch: native={:?} ffprobe={:?}",
                     path.file_name().unwrap().to_string_lossy(),
@@ -730,7 +733,9 @@ fn compare_fixture_corpus_against_ffprobe() {
             let native_forced = native.metadata.disposition.forced == Some(true);
             let native_default = native.metadata.disposition.default == Some(true);
 
-            if native.codec.as_deref() != probe.get("codec_name").and_then(Value::as_str) {
+            if native.codec.as_ref().map(scryer_media_model::Codec::as_str)
+                != probe.get("codec_name").and_then(Value::as_str)
+            {
                 mismatches.push(format!(
                     "{} subtitle_stream[{}] codec mismatch: native={:?} ffprobe={:?}",
                     path.file_name().unwrap().to_string_lossy(),
@@ -802,16 +807,16 @@ fn sparse_mkv_authored_bytes_require_unknowns_and_explicit_variants_require_fact
             sparse,
             "{name}: authored fixture audit"
         );
-        let negative = scryer_mediainfo::analyze_catalog_file(&media_dir().join(name)).unwrap();
+        let negative = scryer_mediainfo::probe(&media_dir().join(name)).unwrap();
         let negative = serde_json::to_value(negative).unwrap();
         assert!(
             sparse_mkv::unknown_fact_errors(&negative).is_empty(),
             "{name}"
         );
-        let explicit = scryer_mediainfo::analyze_source(
+        let explicit = scryer_mediainfo::probe_source(
             &mut std::io::Cursor::new(sparse_mkv::authored_bytes(name, true).unwrap()),
             "mkv",
-            scryer_mediainfo::AnalyzeOptions::default(),
+            &scryer_mediainfo::ProbeOptions::new().with_depth(scryer_mediainfo::ProbeDepth::Quick),
         )
         .unwrap();
         for stream in &explicit.streams {
@@ -838,10 +843,8 @@ fn sparse_mkv_authored_bytes_require_unknowns_and_explicit_variants_require_fact
 fn sparse_mkv_reference_defaults_require_exact_authored_evidence() {
     let name = sparse_mkv::NAMES[0];
     let bytes = std::fs::read(media_dir().join(name)).unwrap();
-    let native = serde_json::to_value(
-        scryer_mediainfo::analyze_catalog_file(&media_dir().join(name)).unwrap(),
-    )
-    .unwrap();
+    let native =
+        serde_json::to_value(scryer_mediainfo::probe(&media_dir().join(name)).unwrap()).unwrap();
     let reference = serde_json::json!({"streams":[
         {"codec_type":"video","tags":{"language":"eng"},"r_frame_rate":"1000/1"},
         {"codec_type":"audio","tags":{"language":"eng"},"channel_layout":"stereo"},
@@ -901,18 +904,18 @@ fn mkv_dolby_vision_mapping_never_adds_reads() {
     assert!(dolby_vision.len() > 256 * 1024);
 
     let analyze = |bytes: &[u8], profile| {
-        scryer_mediainfo::analyze_source(
+        scryer_mediainfo::probe_source(
             &mut std::io::Cursor::new(bytes.to_vec()),
             "mkv",
-            scryer_mediainfo::AnalyzeOptions { profile },
+            &scryer_mediainfo::ProbeOptions::new().with_depth(profile),
         )
         .unwrap()
     };
     for profile in [
-        scryer_mediainfo::AnalysisProfile::ContentProbe,
-        scryer_mediainfo::AnalysisProfile::Fast,
-        scryer_mediainfo::AnalysisProfile::DefaultRich,
-        scryer_mediainfo::AnalysisProfile::FfprobeParity,
+        scryer_mediainfo::ProbeDepth::Identify,
+        scryer_mediainfo::ProbeDepth::Quick,
+        scryer_mediainfo::ProbeDepth::Full,
+        scryer_mediainfo::ProbeDepth::FfprobeParity,
     ] {
         let with_dv = analyze(&dolby_vision, profile);
         let without_dv = analyze(&plain, profile);
@@ -921,7 +924,7 @@ fn mkv_dolby_vision_mapping_never_adds_reads() {
         assert_eq!(facts::hdr_signals(&without_dv), facts::HDR10, "{profile:?}");
         let (dv_read, plain_read) = (with_dv.report.bytes_read, without_dv.report.bytes_read);
         assert!(plain_read > 0, "{profile:?}");
-        if profile == scryer_mediainfo::AnalysisProfile::FfprobeParity {
+        if profile == scryer_mediainfo::ProbeDepth::FfprobeParity {
             // The PQ frame-payload HDR10+ probe runs only without a Dolby Vision record.
             assert!(
                 dv_read + 256 * 1024 <= plain_read,
@@ -935,10 +938,10 @@ fn mkv_dolby_vision_mapping_never_adds_reads() {
 
 #[test]
 fn mkv_dolby_vision_record_follows_its_track_past_cover_art() {
-    let analysis = scryer_mediainfo::analyze_source(
+    let analysis = scryer_mediainfo::probe_source(
         &mut std::io::Cursor::new(sparse_mkv::cover_art_then_dolby_vision_bytes()),
         "mkv",
-        scryer_mediainfo::AnalyzeOptions::default(),
+        &scryer_mediainfo::ProbeOptions::new().with_depth(scryer_mediainfo::ProbeDepth::Quick),
     )
     .unwrap();
     assert_eq!(facts::video_codec(&analysis), Some("hevc"));
@@ -949,7 +952,7 @@ fn mkv_dolby_vision_record_follows_its_track_past_cover_art() {
         .iter()
         .map(|stream| {
             (
-                stream.codec.as_deref(),
+                stream.codec.as_ref().map(scryer_media_model::Codec::as_str),
                 stream.metadata.hdr.dolby_vision,
                 stream
                     .metadata
@@ -987,8 +990,7 @@ fn compare_explicit_sparse_mkv_variants_against_ffprobe() {
     for name in sparse_mkv::NAMES {
         let path = directory.0.join(name);
         std::fs::write(&path, sparse_mkv::authored_bytes(name, true).unwrap()).unwrap();
-        let native =
-            serde_json::to_value(scryer_mediainfo::analyze_catalog_file(&path).unwrap()).unwrap();
+        let native = serde_json::to_value(scryer_mediainfo::probe(&path).unwrap()).unwrap();
         let reference = sonarr_ffprobe_json(&ffprobe, &path);
         let differences = analysis_parity::compare(&native, &reference);
         assert!(differences.is_empty(), "{name}: {differences:?}");

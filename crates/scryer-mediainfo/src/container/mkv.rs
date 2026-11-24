@@ -1,11 +1,13 @@
 //! Matroska and WebM: header, tracks, chapters and the bounded cluster probes.
 
+use scryer_media_model::warning;
+use scryer_media_model::{ChromaLocation, ChromaSubsampling, Codec};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 #[cfg(test)]
 use std::path::Path;
 
-use crate::AnalysisProfile;
-use crate::MediaInfoError;
+use crate::ProbeDepth;
+use crate::ProbeError;
 use crate::codec::ac3::{find_ac3_header, find_eac3_header};
 use crate::codec::dts::find_dts_header;
 use crate::codec::{
@@ -82,17 +84,14 @@ fn normalize_mkv_track_language(
 
 /// Parse an MKV/WebM file into a [`RawContainer`].
 #[cfg(test)]
-pub(crate) fn parse_mkv(
-    path: &Path,
-    profile: AnalysisProfile,
-) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse_mkv(path: &Path, profile: ProbeDepth) -> Result<RawContainer, ProbeError> {
     parse_mkv_source(&mut crate::source::FileSource::open(path)?, profile)
 }
 
 pub(crate) fn parse_mkv_source(
     source: &mut dyn crate::source::MediaSource,
-    profile: AnalysisProfile,
-) -> Result<RawContainer, MediaInfoError> {
+    profile: ProbeDepth,
+) -> Result<RawContainer, ProbeError> {
     let file = BufReader::new(source);
     let mut scanner = MkvRawScanner::new(file)?;
     let header = parse_mkv_header(&mut scanner)?;
@@ -156,7 +155,7 @@ pub(crate) fn parse_mkv_source(
             .map(hevc_nal_length_size)
             .unwrap_or(4);
 
-        if profile == AnalysisProfile::FfprobeParity
+        if profile == ProbeDepth::FfprobeParity
             && should_check_first_frame_hdr10plus(&tracks[video_idx])
         {
             hdr10plus_probe = Some(MkvHdr10PlusProbeRequest::new(
@@ -165,7 +164,7 @@ pub(crate) fn parse_mkv_source(
                 primary_video_signals.has_itu_t_t35_mapping,
                 Hdr10PlusProbeLimits::first_frame(),
             ));
-        } else if profile == AnalysisProfile::DefaultRich
+        } else if profile == ProbeDepth::Full
             && should_confirm_mkv_hdr10plus(&tracks[video_idx], &primary_video_signals)
         {
             hdr10plus_probe = Some(MkvHdr10PlusProbeRequest::new(
@@ -185,8 +184,14 @@ pub(crate) fn parse_mkv_source(
             .filter_map(|(track_num, track_idx, header_strip_prefix)| {
                 let codec_name = tracks[track_idx].codec_name.clone()?;
                 matches!(
-                    codec_name.as_str(),
-                    "ac3" | "eac3" | "truehd" | "dts" | "mp1" | "mp2" | "mp3"
+                    codec_name,
+                    Codec::Ac3
+                        | Codec::Eac3
+                        | Codec::TrueHd
+                        | Codec::Dts
+                        | Codec::Mp1
+                        | Codec::Mp2
+                        | Codec::Mp3
                 )
                 .then_some(MkvAudioProbeRequest {
                     target_track_num: track_num,
@@ -244,18 +249,18 @@ pub(crate) fn parse_mkv_source(
     if !profile.skips_deep_probes()
         && tracks.iter().any(|track| {
             matches!(
-                track.codec_name.as_deref(),
+                track.codec_name,
                 Some(
-                    "h264"
-                        | "hevc"
-                        | "av1"
-                        | "vp8"
-                        | "vp9"
-                        | "mpeg1video"
-                        | "mpeg2video"
-                        | "mpeg4"
-                        | "vc1"
-                        | "mjpeg"
+                    Codec::H264
+                        | Codec::Hevc
+                        | Codec::Av1
+                        | Codec::Vp8
+                        | Codec::Vp9
+                        | Codec::Mpeg1Video
+                        | Codec::Mpeg2Video
+                        | Codec::Mpeg4
+                        | Codec::Vc1
+                        | Codec::Mjpeg
                 )
             )
         })
@@ -288,7 +293,7 @@ pub(crate) fn parse_mkv_source(
             sample_report
                 .warnings
                 .push(scryer_media_model::ProbeWarning {
-                    code: "mkv_video_enrichment_budget".into(),
+                    code: warning::MKV_VIDEO_ENRICHMENT_BUDGET.into(),
                     message:
                         "Video enrichment stopped when the media byte or I/O-operation budget was exhausted"
                             .into(),
@@ -300,7 +305,7 @@ pub(crate) fn parse_mkv_source(
             sample_report
                 .warnings
                 .push(scryer_media_model::ProbeWarning {
-                    code: "video_enrichment_sample_limit".into(),
+                    code: warning::VIDEO_ENRICHMENT_SAMPLE_LIMIT.into(),
                     message: "Video enrichment sampled at most 16 blocks within an 8 MiB prefix"
                         .into(),
                     ..Default::default()
@@ -330,7 +335,7 @@ pub(crate) fn parse_mkv_source(
         details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.budget_exhausted |= deep_probe.frame_timing_budget_exhausted;
         details.report.warnings.push(scryer_media_model::ProbeWarning {
-            code: "mkv_frame_timing_sampled".into(),
+            code: warning::MKV_FRAME_TIMING_SAMPLED.into(),
             message: "Frame timing observes at most 12 timestamps or 24 blocks within a 32 MiB prefix; laced, nondefault track-scale, or inconclusive samples remain unknown".into(),
             stream_id: primary_video_track_num.map(|number| number.to_string()),
             ..Default::default()
@@ -399,7 +404,7 @@ impl Default for ParsedMkvInfo {
 
 fn parse_mkv_header<R: Read + Seek>(
     scanner: &mut MkvRawScanner<R>,
-) -> Result<ParsedMkvHeader, MediaInfoError> {
+) -> Result<ParsedMkvHeader, ProbeError> {
     let format_name = parse_mkv_doc_type(scanner)?;
     let segment = scanner.read_next_segment_header()?;
     let segment_data_offset = segment.data_offset;
@@ -480,7 +485,7 @@ fn parse_mkv_header<R: Read + Seek>(
     }
 
     let info = info.unwrap_or_default();
-    let tracks = tracks.ok_or_else(|| MediaInfoError::Parse("matroska tracks missing".into()))?;
+    let tracks = tracks.ok_or_else(|| ProbeError::Malformed("matroska tracks missing".into()))?;
 
     Ok(ParsedMkvHeader {
         format_name,
@@ -495,21 +500,21 @@ fn parse_mkv_header<R: Read + Seek>(
 
 fn parse_mkv_doc_type<R: Read + Seek>(
     scanner: &mut MkvRawScanner<R>,
-) -> Result<String, MediaInfoError> {
+) -> Result<String, ProbeError> {
     let header = match scanner.read_element_header() {
         Ok(Some(header)) => header,
-        Ok(None) => return Err(MediaInfoError::Parse("missing ebml header".into())),
-        Err(MediaInfoError::Parse(_)) => {
-            return Err(MediaInfoError::Parse("missing ebml header".into()));
+        Ok(None) => return Err(ProbeError::Malformed("missing ebml header".into())),
+        Err(ProbeError::Malformed(_)) => {
+            return Err(ProbeError::Malformed("missing ebml header".into()));
         }
         Err(error) => return Err(error),
     };
     if header.id != EBML_ID_EBML {
-        return Err(MediaInfoError::Parse("missing ebml header".into()));
+        return Err(ProbeError::Malformed("missing ebml header".into()));
     }
     let payload = scanner
         .read_sized_payload(header, scanner.file_len)?
-        .ok_or_else(|| MediaInfoError::Parse("missing ebml header payload".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("missing ebml header payload".into()))?;
     let doc_type = find_first_direct_ebml_child(&payload, EBML_ID_DOC_TYPE)
         .map(parse_ebml_string)
         .transpose()?
@@ -691,15 +696,15 @@ fn parse_mkv_track_entry(payload: &[u8]) -> Option<ParsedMkvTrack> {
     if codec_id == "S_TEXT/WEBVTT" {
         codec_name = None;
     }
-    if channels.is_none() && codec_name.as_deref() == Some("flac") {
+    if channels.is_none() && codec_name == Some(Codec::Flac) {
         channels = codec_private
             .as_deref()
             .and_then(parse_mkv_flac_codec_private_channels);
     }
-    let audio_profile = if codec_name.as_deref() == Some("dts") {
+    let audio_profile = if codec_name == Some(Codec::Dts) {
         None
     } else {
-        detect_header_audio_profile(&codec_id, codec_name.as_deref(), codec_private.as_deref())
+        detect_header_audio_profile(&codec_id, codec_name.as_ref(), codec_private.as_deref())
     };
 
     let mut metadata = mkv_stream_metadata(payload, track_number);
@@ -830,6 +835,8 @@ fn mkv_stream_metadata(payload: &[u8], track_number: u64) -> scryer_media_model:
                     EBML_ID_COLOUR => {
                         metadata.color.provenance = Provenance::Container;
                         let mut light = ContentLight::default();
+                        let mut subsampling = [None; 2];
+                        let mut siting = [None; 2];
                         children(data, |id, data| {
                             let value =
                                 parse_ebml_uint(data).and_then(|value| u32::try_from(value).ok());
@@ -853,6 +860,10 @@ fn mkv_stream_metadata(payload: &[u8], track_number: u64) -> scryer_media_model:
                                 0x55bb => {
                                     metadata.color.primaries = value.filter(|value| *value != 2)
                                 }
+                                0x55b3 => subsampling[0] = value,
+                                0x55b4 => subsampling[1] = value,
+                                0x55b7 => siting[0] = value,
+                                0x55b8 => siting[1] = value,
                                 0x55bc => light.max_cll = value,
                                 0x55bd => light.max_fall = value,
                                 0x55d0 => {
@@ -882,6 +893,8 @@ fn mkv_stream_metadata(payload: &[u8], track_number: u64) -> scryer_media_model:
                         if light.max_cll.is_some() || light.max_fall.is_some() {
                             metadata.color.content_light = Some(light);
                         }
+                        metadata.chroma_subsampling = colour_subsampling(subsampling);
+                        metadata.chroma_location = colour_chroma_siting(siting);
                     }
                     _ => {}
                 });
@@ -944,6 +957,33 @@ fn parse_mkv_video_payload(payload: &[u8]) -> (Option<i32>, Option<i32>, Option<
     }
 
     (width, height, color_transfer)
+}
+
+/// The sampling a Matroska Colour element's ChromaSubsamplingHorz and
+/// ChromaSubsamplingVert state, as the log2 of the chroma decimation. Absent
+/// elements state nothing; a monochrome picture cannot be stated this way.
+fn colour_subsampling([horizontal, vertical]: [Option<u32>; 2]) -> Option<ChromaSubsampling> {
+    Some(match (horizontal?, vertical?) {
+        (1, 1) => ChromaSubsampling::Yuv420,
+        (1, 0) => ChromaSubsampling::Yuv422,
+        (0, 0) => ChromaSubsampling::Yuv444,
+        (2, 0) => ChromaSubsampling::Yuv411,
+        (0, 1) => ChromaSubsampling::Yuv440,
+        _ => return None,
+    })
+}
+
+/// The chroma location a Matroska Colour element's ChromaSitingHorz and
+/// ChromaSitingVert state: 1 is co-sited with the left column or top row, 2
+/// is halfway between samples, and 0 or absence leaves it unstated.
+fn colour_chroma_siting([horizontal, vertical]: [Option<u32>; 2]) -> Option<ChromaLocation> {
+    Some(match (horizontal?, vertical?) {
+        (1, 1) => ChromaLocation::TopLeft,
+        (1, 2) => ChromaLocation::Left,
+        (2, 1) => ChromaLocation::Top,
+        (2, 2) => ChromaLocation::Center,
+        _ => return None,
+    })
 }
 
 fn parse_mkv_colour_payload(payload: &[u8]) -> Option<u32> {
@@ -1032,26 +1072,27 @@ fn merge_scanned_audio_channels(existing: Option<i32>, scanned: Option<i32>) -> 
     scanned.or(existing)
 }
 
-fn audio_channels_from_probe_bytes(codec_name: &str, data: &[u8]) -> Option<i32> {
+fn audio_channels_from_probe_bytes(codec_name: &Codec, data: &[u8]) -> Option<i32> {
     let mut cursor = 0usize;
     let mut channels = None;
 
     while let Some(candidate) = scan::find_audio_sync_candidate(data, cursor) {
         cursor = candidate.offset.saturating_add(1);
-        let parsed =
-            match (codec_name, candidate.kind) {
-                ("ac3", scan::AudioSyncKind::Ac3) => find_ac3_header(&data[candidate.offset..])
-                    .map(|header| i32::from(header.channels)),
-                ("eac3", scan::AudioSyncKind::Ac3) => find_eac3_header(&data[candidate.offset..])
-                    .map(|header| i32::from(header.channels)),
-                ("dts", scan::AudioSyncKind::Dts) => {
-                    detect_dts_channels_from_probe_bytes(&data[candidate.offset..]).or_else(|| {
-                        find_dts_header(&data[candidate.offset..])
-                            .map(|header| i32::from(header.channels))
-                    })
-                }
-                _ => None,
-            };
+        let parsed = match (codec_name, candidate.kind) {
+            (Codec::Ac3, scan::AudioSyncKind::Ac3) => {
+                find_ac3_header(&data[candidate.offset..]).map(|header| i32::from(header.channels))
+            }
+            (Codec::Eac3, scan::AudioSyncKind::Ac3) => {
+                find_eac3_header(&data[candidate.offset..]).map(|header| i32::from(header.channels))
+            }
+            (Codec::Dts, scan::AudioSyncKind::Dts) => {
+                detect_dts_channels_from_probe_bytes(&data[candidate.offset..]).or_else(|| {
+                    find_dts_header(&data[candidate.offset..])
+                        .map(|header| i32::from(header.channels))
+                })
+            }
+            _ => None,
+        };
         if let Some(parsed) = parsed {
             channels = Some(channels.map_or(parsed, |existing: i32| existing.max(parsed)));
         }
@@ -1065,11 +1106,11 @@ fn apply_unique_audio_prefix_channel_fallback<R: Read + Seek>(
     tracks: &mut [RawTrack],
 ) {
     for track_idx in 0..tracks.len() {
-        let Some(codec_name) = tracks[track_idx].codec_name.as_deref() else {
+        let Some(codec_name) = tracks[track_idx].codec_name.as_ref() else {
             continue;
         };
         if tracks[track_idx].kind != TrackKind::Audio
-            || !matches!(codec_name, "ac3" | "eac3" | "dts")
+            || !matches!(codec_name, Codec::Ac3 | Codec::Eac3 | Codec::Dts)
             || tracks[track_idx].channels.is_some()
             || audio_codec_track_count(tracks, codec_name) != 1
         {
@@ -1085,11 +1126,11 @@ fn apply_unique_audio_prefix_channel_fallback<R: Read + Seek>(
     }
 }
 
-fn audio_codec_track_count(tracks: &[RawTrack], codec_name: &str) -> usize {
+fn audio_codec_track_count(tracks: &[RawTrack], codec_name: &Codec) -> usize {
     tracks
         .iter()
         .filter(|track| {
-            track.kind == TrackKind::Audio && track.codec_name.as_deref() == Some(codec_name)
+            track.kind == TrackKind::Audio && track.codec_name.as_ref() == Some(codec_name)
         })
         .count()
 }
@@ -1274,7 +1315,7 @@ fn block_addition_mapping_type(payload: &[u8]) -> Option<u64> {
 }
 
 fn should_confirm_mkv_hdr10plus(track: &RawTrack, signals: &MkvTrackSignals) -> bool {
-    if track.codec_name.as_deref() != Some("hevc") {
+    if track.codec_name != Some(Codec::Hevc) {
         return false;
     }
 
@@ -1292,7 +1333,7 @@ fn should_confirm_mkv_hdr10plus(track: &RawTrack, signals: &MkvTrackSignals) -> 
 
 /// PQ HEVC without Dolby Vision gets a first-frame HDR10+ check.
 fn should_check_first_frame_hdr10plus(track: &RawTrack) -> bool {
-    track.codec_name.as_deref() == Some("hevc")
+    track.codec_name == Some(Codec::Hevc)
         && track.dovi_config.is_none()
         && track.color_transfer == Some(16)
 }

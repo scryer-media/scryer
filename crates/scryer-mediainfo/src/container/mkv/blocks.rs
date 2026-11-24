@@ -109,15 +109,15 @@ pub(super) struct AudioProfileProbeState {
 }
 
 impl AudioProfileProbeState {
-    pub(super) fn done(&self, codec_name: &str) -> bool {
+    pub(super) fn done(&self, codec_name: &Codec) -> bool {
         self.mpeg_header.is_some()
             || audio_profile_probe_is_terminal(codec_name, self.profile.as_deref())
             || self.inspected_blocks >= audio_profile_max_blocks(codec_name)
             || self.bytes_read >= MKV_AUDIO_PROFILE_SCAN_MAX_BYTES
     }
 
-    pub(super) fn merge_profile(&mut self, codec_name: &str, candidate: Option<String>) {
-        if codec_name != "dts" {
+    pub(super) fn merge_profile(&mut self, codec_name: &Codec, candidate: Option<String>) {
+        if *codec_name != Codec::Dts {
             merge_audio_profile(&mut self.profile, candidate);
             return;
         }
@@ -148,8 +148,8 @@ impl AudioProfileProbeState {
         }
     }
 
-    pub(super) fn finalize(self, codec_name: &str) -> ScannedAudioMetadata {
-        let profile = if codec_name == "dts"
+    pub(super) fn finalize(self, codec_name: &Codec) -> ScannedAudioMetadata {
+        let profile = if *codec_name == Codec::Dts
             && self.profile.as_deref().is_none_or(|profile| {
                 matches!(profile, "DTS" | "DTS-ES" | "DTS 96/24" | "DTS Express")
             })
@@ -169,21 +169,21 @@ impl AudioProfileProbeState {
     }
 }
 
-pub(super) fn audio_profile_max_blocks(codec_name: &str) -> usize {
+pub(super) fn audio_profile_max_blocks(codec_name: &Codec) -> usize {
     match codec_name {
         // Some AC-3 files start with stereo frames before the main 5.1 cadence.
-        "ac3" => 8,
+        Codec::Ac3 => 8,
         // An MKV E-AC-3 stream's profile is the one its leading independent
         // syncframe declares. Scanning deeper promotes false positives from
         // later dependent or converted frames.
-        "eac3" => MKV_EAC3_AUDIO_PROFILE_MAX_BLOCKS,
+        Codec::Eac3 => MKV_EAC3_AUDIO_PROFILE_MAX_BLOCKS,
         _ => MKV_AUDIO_PROFILE_MAX_BLOCKS,
     }
 }
 
-pub(super) fn audio_profile_probe_is_terminal(codec_name: &str, profile: Option<&str>) -> bool {
+pub(super) fn audio_profile_probe_is_terminal(codec_name: &Codec, profile: Option<&str>) -> bool {
     match (codec_name, profile) {
-        ("dts", Some("DTS")) => false,
+        (Codec::Dts, Some("DTS")) => false,
         (_, Some(_)) => true,
         _ => false,
     }
@@ -231,7 +231,7 @@ impl MkvHdr10PlusProbeRequest {
 pub(super) struct MkvAudioProbeRequest {
     pub(super) target_track_num: u64,
     pub(super) track_idx: usize,
-    pub(super) codec_name: String,
+    pub(super) codec_name: Codec,
     pub(super) header_strip_prefix: Option<Vec<u8>>,
 }
 
@@ -257,7 +257,7 @@ pub(super) struct MkvHdr10PlusProbeTarget {
 pub(super) struct MkvAudioProbeTarget {
     pub(super) target_track_num: u64,
     pub(super) track_idx: usize,
-    pub(super) codec_name: String,
+    pub(super) codec_name: Codec,
     pub(super) header_strip_prefix: Option<Vec<u8>>,
     pub(super) state: AudioProfileProbeState,
 }
@@ -376,17 +376,13 @@ pub(super) struct MkvRawScanner<R> {
 }
 
 impl<R: Read + Seek> MkvRawScanner<R> {
-    pub(super) fn new(mut reader: R) -> Result<Self, MediaInfoError> {
-        let file_len = reader
-            .seek(SeekFrom::End(0))
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
-        reader
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    pub(super) fn new(mut reader: R) -> Result<Self, ProbeError> {
+        let file_len = reader.seek(SeekFrom::End(0)).map_err(ProbeError::from)?;
+        reader.seek(SeekFrom::Start(0)).map_err(ProbeError::from)?;
         Self::new_with_file_len(reader, file_len)
     }
 
-    pub(super) fn new_with_file_len(reader: R, file_len: u64) -> Result<Self, MediaInfoError> {
+    pub(super) fn new_with_file_len(reader: R, file_len: u64) -> Result<Self, ProbeError> {
         Ok(Self {
             reader,
             file_len,
@@ -403,7 +399,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         samples_left: &mut usize,
         report: &mut scryer_media_model::ProbeReport,
         captions: &mut Vec<scryer_media_model::CaptionService>,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         if depth > 10 || *samples_left == 0 {
             return Ok(());
         }
@@ -433,18 +429,18 @@ impl<R: Read + Seek> MkvRawScanner<R> {
                                 .and_then(|id| id.parse::<u64>().ok())
                                 == Some(block.track_number)
                                 && matches!(
-                                    track.codec_name.as_deref(),
+                                    track.codec_name,
                                     Some(
-                                        "h264"
-                                            | "hevc"
-                                            | "av1"
-                                            | "vp8"
-                                            | "vp9"
-                                            | "mpeg1video"
-                                            | "mpeg2video"
-                                            | "mpeg4"
-                                            | "vc1"
-                                            | "mjpeg"
+                                        Codec::H264
+                                            | Codec::Hevc
+                                            | Codec::Av1
+                                            | Codec::Vp8
+                                            | Codec::Vp9
+                                            | Codec::Mpeg1Video
+                                            | Codec::Mpeg2Video
+                                            | Codec::Mpeg4
+                                            | Codec::Vc1
+                                            | Codec::Mjpeg
                                     )
                                 )
                         })
@@ -455,10 +451,10 @@ impl<R: Read + Seek> MkvRawScanner<R> {
                         )?
                     {
                         let bytes = self.read_bytes(length.min(64 * 1024))?;
-                        match track.codec_name.as_deref() {
-                            Some("av1") => crate::codec::av1::enrich(track, &bytes, report),
-                            Some("h264" | "hevc") => {
-                                let length_size = if track.codec_name.as_deref() == Some("h264") {
+                        match track.codec_name {
+                            Some(Codec::Av1) => crate::codec::av1::enrich(track, &bytes, report),
+                            Some(Codec::H264 | Codec::Hevc) => {
+                                let length_size = if track.codec_name == Some(Codec::H264) {
                                     track
                                         .codec_private
                                         .as_deref()
@@ -494,7 +490,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         Ok(())
     }
 
-    pub(super) fn read_next_segment_header(&mut self) -> Result<EbmlElementHeader, MediaInfoError> {
+    pub(super) fn read_next_segment_header(&mut self) -> Result<EbmlElementHeader, ProbeError> {
         while self.position()? < self.file_len {
             let Some(header) = self.read_element_header()? else {
                 break;
@@ -505,13 +501,13 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             }
             self.seek_to(child_end)?;
         }
-        Err(MediaInfoError::Parse("missing segment header".into()))
+        Err(ProbeError::Malformed("missing segment header".into()))
     }
 
     pub(super) fn run_deep_probe_plan(
         &mut self,
         plan: &mut MkvDeepProbePlan,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         if plan.is_empty() {
             return Ok(());
         }
@@ -530,7 +526,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
     pub(super) fn scan_prefix_for_chapter_count(
         &mut self,
         max_bytes: u64,
-    ) -> Result<Option<i32>, MediaInfoError> {
+    ) -> Result<Option<i32>, ProbeError> {
         let end = self.file_len.min(max_bytes);
         self.seek_to(0)?;
         while self.position()? < end {
@@ -551,9 +547,9 @@ impl<R: Read + Seek> MkvRawScanner<R> {
 
     pub(super) fn scan_prefix_for_audio_channels(
         &mut self,
-        codec_name: &str,
+        codec_name: &Codec,
         max_bytes: u64,
-    ) -> Result<Option<i32>, MediaInfoError> {
+    ) -> Result<Option<i32>, ProbeError> {
         let size = self.file_len.min(max_bytes);
         if size == 0 {
             return Ok(None);
@@ -568,7 +564,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         target_track_num: u64,
         timestamp_scale_ns: f64,
-    ) -> Result<Option<f64>, MediaInfoError> {
+    ) -> Result<Option<f64>, ProbeError> {
         let mut plan = MkvDeepProbePlan::new(
             Some(MkvFrameRateProbeRequest {
                 target_track_num,
@@ -586,7 +582,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         end: u64,
         plan: &mut MkvDeepProbePlan,
         depth: usize,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         const ROOT_IDS: &[u32] = &[EBML_ID_SEGMENT, EBML_ID_CLUSTER];
         while !plan.done() && self.position()? < end {
             let Some(header) = self.read_deep_probe_candidate_header(end, ROOT_IDS)? else {
@@ -616,7 +612,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         end: u64,
         plan: &mut MkvDeepProbePlan,
         depth: usize,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         const CLUSTER_IDS: &[u32] = &[EBML_ID_TIMESTAMP, EBML_ID_SIMPLE_BLOCK, EBML_ID_BLOCK_GROUP];
         let mut cluster_timestamp = 0_u64;
         while !plan.done() && self.position()? < end {
@@ -663,7 +659,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         cluster_timestamp: u64,
         plan: &mut MkvDeepProbePlan,
         depth: usize,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         const BLOCK_GROUP_IDS: &[u32] = &[EBML_ID_BLOCK, EBML_ID_BLOCK_ADDITIONS];
         let mut hdr10plus_target_block_in_group = false;
         while !plan.done() && self.position()? < end {
@@ -716,7 +712,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         block: &BlockHeaderInfo,
         plan: &mut MkvDeepProbePlan,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         if let Some(target) = plan.frame_rate.as_mut()
             && !target.state.done()
             && block.track_number == target.request.target_track_num
@@ -762,7 +758,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         end: u64,
         state: &mut Hdr10PlusProbeState,
         depth: usize,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         const BLOCK_ADDITION_IDS: &[u32] = &[EBML_ID_BLOCK_MORE];
         while !state.done() && self.position()? < end {
             let Some(header) = self.read_deep_probe_candidate_header(end, BLOCK_ADDITION_IDS)?
@@ -785,7 +781,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         end: u64,
         state: &mut Hdr10PlusProbeState,
         _depth: usize,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         const BLOCK_MORE_IDS: &[u32] = &[EBML_ID_BLOCK_ADDITIONAL];
         while !state.done() && self.position()? < end {
             let Some(header) = self.read_deep_probe_candidate_header(end, BLOCK_MORE_IDS)? else {
@@ -816,7 +812,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         block: &BlockHeaderInfo,
         state: &mut Hdr10PlusProbeState,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         if state.done() || block.lacing_type != 0 || block.payload_size == 0 {
             return Ok(());
         }
@@ -838,10 +834,10 @@ impl<R: Read + Seek> MkvRawScanner<R> {
     pub(super) fn inspect_audio_block_for_profile(
         &mut self,
         block: &BlockHeaderInfo,
-        codec_name: &str,
+        codec_name: &Codec,
         header_strip_prefix: Option<&[u8]>,
         state: &mut AudioProfileProbeState,
-    ) -> Result<(), MediaInfoError> {
+    ) -> Result<(), ProbeError> {
         if state.done(codec_name) || block.payload_size == 0 {
             return Ok(());
         }
@@ -905,12 +901,13 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             detect_audio_profile_from_probe_bytes(Some(codec_name), &prefix, suffix.as_deref()),
         );
         let parsed_channels = audio_channels_from_probe_bytes(codec_name, &prefix);
-        if matches!(codec_name, "mp1" | "mp2" | "mp3") && state.mpeg_header.is_none() {
+        if matches!(codec_name, Codec::Mp1 | Codec::Mp2 | Codec::Mp3) && state.mpeg_header.is_none()
+        {
             state.mpeg_header = crate::codec::mpeg_audio::find_mpeg_audio_header(&prefix);
         }
         let dolby_header = match codec_name {
-            "ac3" => find_ac3_header(&prefix),
-            "eac3" => find_eac3_header(&prefix),
+            Codec::Ac3 => find_ac3_header(&prefix),
+            Codec::Eac3 => find_eac3_header(&prefix),
             _ => None,
         };
         if let Some(header) = dolby_header
@@ -930,7 +927,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         end: u64,
         candidate_ids: &[u32],
-    ) -> Result<Option<EbmlElementHeader>, MediaInfoError> {
+    ) -> Result<Option<EbmlElementHeader>, ProbeError> {
         let start = self.position()?;
         if start < end {
             // Most callers just sought to an element boundary. Avoid reading
@@ -969,7 +966,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         end: u64,
         candidate_ids: &[u32],
-    ) -> Result<Option<u64>, MediaInfoError> {
+    ) -> Result<Option<u64>, ProbeError> {
         let mut pos = self.position()?;
         let mut buf = vec![0_u8; MKV_DEEP_PROBE_CANDIDATE_READ_BYTES];
         while pos < end {
@@ -986,7 +983,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             while bytes_read < read_len {
                 let read = self
                     .read(&mut buf[bytes_read..read_len])
-                    .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+                    .map_err(ProbeError::from)?;
                 if read == 0 {
                     break;
                 }
@@ -1008,9 +1005,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         Ok(None)
     }
 
-    pub(super) fn read_element_header(
-        &mut self,
-    ) -> Result<Option<EbmlElementHeader>, MediaInfoError> {
+    pub(super) fn read_element_header(&mut self) -> Result<Option<EbmlElementHeader>, ProbeError> {
         let Some((id, _)) = read_ebml_id_from_reader(self)? else {
             return Ok(None);
         };
@@ -1027,7 +1022,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         header: EbmlElementHeader,
         parent_end: u64,
-    ) -> Result<Option<Vec<u8>>, MediaInfoError> {
+    ) -> Result<Option<Vec<u8>>, ProbeError> {
         let child_end = header.end(parent_end, self.file_len);
         let Some(size) = header.size else {
             self.seek_to(child_end)?;
@@ -1036,15 +1031,15 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         let declared_end = header
             .data_offset
             .checked_add(size)
-            .ok_or_else(|| MediaInfoError::Parse("MKV element size overflow".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("MKV element size overflow".into()))?;
         if declared_end > parent_end || declared_end > self.file_len {
-            return Err(MediaInfoError::Parse(format!(
+            return Err(ProbeError::Malformed(format!(
                 "MKV element 0x{:X} declares {} bytes beyond remaining input",
                 header.id, size
             )));
         }
         if size > MKV_KEEP_ELEMENT_MAX_BYTES {
-            return Err(MediaInfoError::Parse(format!(
+            return Err(ProbeError::Malformed(format!(
                 "MKV element 0x{:X} exceeds parser budget",
                 header.id
             )));
@@ -1052,9 +1047,9 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         self.metadata_payload_bytes = self
             .metadata_payload_bytes
             .checked_add(size)
-            .ok_or_else(|| MediaInfoError::Parse("MKV metadata budget overflow".into()))?;
+            .ok_or_else(|| ProbeError::Malformed("MKV metadata budget overflow".into()))?;
         if self.metadata_payload_bytes > MKV_METADATA_AGGREGATE_MAX_BYTES {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "MKV metadata output exceeds parser budget".into(),
             ));
         }
@@ -1068,7 +1063,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         offset: u64,
         expected_id: u32,
-    ) -> Result<Option<Vec<u8>>, MediaInfoError> {
+    ) -> Result<Option<Vec<u8>>, ProbeError> {
         self.seek_to(offset)?;
         let Some(header) = self.read_element_header()? else {
             return Ok(None);
@@ -1083,7 +1078,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         &mut self,
         data_size: u64,
         cluster_timestamp: u64,
-    ) -> Result<Option<BlockHeaderInfo>, MediaInfoError> {
+    ) -> Result<Option<BlockHeaderInfo>, ProbeError> {
         if data_size < 4 {
             return Ok(None);
         }
@@ -1092,7 +1087,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         let peek_len = data_size.min(11) as usize;
         let mut buf = [0_u8; 11];
         self.read_exact(&mut buf[..peek_len])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
 
         let Some((track_number, track_len)) = parse_ebml_vint_value(&buf[..peek_len]) else {
             return Ok(None);
@@ -1121,32 +1116,28 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         }))
     }
 
-    pub(super) fn read_unsigned_payload(
-        &mut self,
-        size: u64,
-    ) -> Result<Option<u64>, MediaInfoError> {
+    pub(super) fn read_unsigned_payload(&mut self, size: u64) -> Result<Option<u64>, ProbeError> {
         if size == 0 || size > 8 {
             return Ok(None);
         }
         let mut buf = [0_u8; 8];
         let size = size as usize;
         self.read_exact(&mut buf[..size])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
         Ok(parse_ebml_uint(&buf[..size]))
     }
 
-    pub(super) fn read_bytes(&mut self, size: u64) -> Result<Vec<u8>, MediaInfoError> {
+    pub(super) fn read_bytes(&mut self, size: u64) -> Result<Vec<u8>, ProbeError> {
         let mut buf = vec![0_u8; size as usize];
-        self.read_exact(&mut buf)
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+        self.read_exact(&mut buf).map_err(ProbeError::from)?;
         Ok(buf)
     }
 
-    pub(super) fn position(&mut self) -> Result<u64, MediaInfoError> {
+    pub(super) fn position(&mut self) -> Result<u64, ProbeError> {
         Ok(self.pos)
     }
 
-    pub(super) fn seek_to(&mut self, pos: u64) -> Result<(), MediaInfoError> {
+    pub(super) fn seek_to(&mut self, pos: u64) -> Result<(), ProbeError> {
         if self.pos == pos {
             return Ok(());
         }
@@ -1155,7 +1146,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             .map(|new_pos| {
                 self.pos = new_pos;
             })
-            .map_err(|e| MediaInfoError::Io(e.to_string()))
+            .map_err(ProbeError::from)
     }
 }
 
@@ -1184,12 +1175,12 @@ pub(super) fn probe_mkv_deep_metadata<R: Read + Seek>(
     plan.into_result()
 }
 
-pub(super) fn audio_header_probe_bytes(codec_name: &str) -> usize {
+pub(super) fn audio_header_probe_bytes(codec_name: &Codec) -> usize {
     match codec_name {
-        "ac3" => 7,
-        "eac3" => 6,
-        "dts" => 32,
-        "mp1" | "mp2" | "mp3" => 4,
+        Codec::Ac3 => 7,
+        Codec::Eac3 => 6,
+        Codec::Dts => 32,
+        Codec::Mp1 | Codec::Mp2 | Codec::Mp3 => 4,
         _ => 0,
     }
 }
@@ -1250,7 +1241,7 @@ pub(super) fn parse_first_laced_frame_from_reader<R: Read>(
     reader: &mut R,
     payload_size: u64,
     lacing_type: u8,
-) -> Result<Option<(u64, u64)>, MediaInfoError> {
+) -> Result<Option<(u64, u64)>, ProbeError> {
     if payload_size == 0 {
         return Ok(None);
     }

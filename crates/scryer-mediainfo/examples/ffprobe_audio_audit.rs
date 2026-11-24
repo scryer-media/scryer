@@ -12,7 +12,7 @@ use std::process::Command;
 #[path = "../tests/support/details_facts.rs"]
 mod facts;
 
-use scryer_mediainfo::analyze_catalog_file;
+use scryer_mediainfo::probe;
 use serde_json::Value;
 
 const MAX_DEPTH: usize = 8;
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         stats.files_total += 1;
 
-        let native = match analyze_catalog_file(path) {
+        let native = match probe(path) {
             Ok(native) => native,
             Err(error) => {
                 record_example(
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let native_audio_streams: Vec<ProbeAudioStream> = facts::audio(&native)
             .into_iter()
             .map(|stream| ProbeAudioStream {
-                codec: stream.codec.clone(),
+                codec: stream.codec.as_ref().map(ToString::to_string),
                 profile: stream.metadata.profile.clone(),
                 channels: stream.channels,
                 bitrate_kbps: facts::kbps(stream.metadata.bitrate_bps),

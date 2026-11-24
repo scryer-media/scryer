@@ -1,4 +1,4 @@
-use scryer_media_model::StreamMetadata;
+use scryer_media_model::{Codec, StreamMetadata, warning};
 
 fn u16le(data: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
@@ -11,15 +11,15 @@ fn u32le(data: &[u8], at: usize) -> Option<u32> {
     ))
 }
 
-pub(crate) fn pcm_codec(tag: u16, bits: u16) -> Option<&'static str> {
+pub(crate) fn pcm_codec(tag: u16, bits: u16) -> Option<Codec> {
     match (tag, bits) {
-        (1, 8) => Some("pcm_u8"),
-        (1, 16) => Some("pcm_s16le"),
-        (1, 24) => Some("pcm_s24le"),
-        (1, 32) => Some("pcm_s32le"),
-        (1, 64) => Some("pcm_s64le"),
-        (3, 32) => Some("pcm_f32le"),
-        (3, 64) => Some("pcm_f64le"),
+        (1, 8) => Some(Codec::PcmU8),
+        (1, 16) => Some(Codec::PcmS16Le),
+        (1, 24) => Some(Codec::PcmS24Le),
+        (1, 32) => Some(Codec::PcmS32Le),
+        (1, 64) => Some(Codec::PcmS64Le),
+        (3, 32) => Some(Codec::PcmF32Le),
+        (3, 64) => Some(Codec::PcmF64Le),
         _ => None,
     }
 }
@@ -64,8 +64,9 @@ pub(crate) fn wave_format(data: &[u8]) -> StreamMetadata {
     if let Some(codec) = pcm_codec(tag, bits)
         && valid_bits <= bits
     {
-        metadata.sample_format = crate::codec::audio_config::pcm_sample_representation(codec)
-            .map(|(format, _)| format.into());
+        metadata.sample_format =
+            crate::codec::audio_config::pcm_sample_representation(codec.as_str())
+                .map(|(format, _)| format.into());
         metadata.sample_bit_depth = Some(u32::from(valid_bits));
     }
     metadata
@@ -83,23 +84,17 @@ struct AudioHeader {
 pub(crate) fn enrich_private_header(
     track: &mut crate::raw::RawTrack,
 ) -> Option<(&'static str, bool)> {
-    if !matches!(
-        track.codec_name.as_deref(),
-        Some("opus" | "vorbis" | "flac")
-    ) {
-        return None;
-    }
+    let read: fn(&[u8]) -> Option<_> = match track.codec_name {
+        Some(Codec::Opus) => opus,
+        Some(Codec::Vorbis) => vorbis,
+        Some(Codec::Flac) => flac,
+        _ => return None,
+    };
     let Some(data) = track.codec_private.as_deref() else {
-        return Some(("audio_configuration_unavailable", false));
+        return Some((warning::AUDIO_CONFIGURATION_UNAVAILABLE, false));
     };
-    let header = match track.codec_name.as_deref() {
-        Some("opus") => opus(data),
-        Some("vorbis") => vorbis(data),
-        Some("flac") => flac(data),
-        _ => None,
-    };
-    let Some(header) = header else {
-        return Some(("audio_configuration_malformed", false));
+    let Some(header) = read(data) else {
+        return Some((warning::AUDIO_CONFIGURATION_MALFORMED, false));
     };
     track.channels = Some(i32::from(header.channels));
     track.metadata.sample_rate = Some(header.sample_rate);
@@ -184,7 +179,7 @@ fn opus(data: &[u8]) -> Option<AudioHeader> {
         bitrate: None,
         warning: (2..=254)
             .contains(&family)
-            .then_some(("audio_channel_mapping_unsupported", false)),
+            .then_some((warning::AUDIO_CHANNEL_MAPPING_UNSUPPORTED, false)),
     })
 }
 
@@ -269,7 +264,7 @@ fn flac(data: &[u8]) -> Option<AudioHeader> {
         blocks += 1;
         if blocks > 256 || remaining.len() < 4 {
             layout = None;
-            warning = Some(("flac_metadata_incomplete", blocks > 256));
+            warning = Some((warning::FLAC_METADATA_INCOMPLETE, blocks > 256));
             break;
         }
         let size = (usize::from(remaining[1]) << 16)
@@ -277,7 +272,7 @@ fn flac(data: &[u8]) -> Option<AudioHeader> {
             | usize::from(remaining[3]);
         let Some(payload) = remaining.get(4..4 + size) else {
             layout = None;
-            warning = Some(("flac_metadata_incomplete", false));
+            warning = Some((warning::FLAC_METADATA_INCOMPLETE, false));
             break;
         };
         if remaining[0] & 0x7f == 4 {
@@ -288,7 +283,7 @@ fn flac(data: &[u8]) -> Option<AudioHeader> {
             let exhausted = comment_count.is_some_and(|count| count > 4096);
             if seen_comments || exhausted {
                 layout = None;
-                warning = Some(("flac_metadata_incomplete", exhausted));
+                warning = Some((warning::FLAC_METADATA_INCOMPLETE, exhausted));
                 break;
             }
             seen_comments = true;
@@ -297,7 +292,7 @@ fn flac(data: &[u8]) -> Option<AudioHeader> {
                 Some(CommentMask::Unspecified) => {}
                 None => {
                     layout = None;
-                    warning = Some(("flac_metadata_incomplete", false));
+                    warning = Some((warning::FLAC_METADATA_INCOMPLETE, false));
                     break;
                 }
             }

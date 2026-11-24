@@ -1,3 +1,5 @@
+use scryer_media_model::Codec;
+
 /// Track type discriminator for intermediate parsing results.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TrackKind {
@@ -16,8 +18,8 @@ pub(crate) struct RawTrack {
     /// Raw container codec identifier, e.g. `"V_MPEG4/ISO/AVC"` (MKV) or
     /// `"avc1"` (MP4 FourCC).
     pub codec_id: String,
-    /// Normalized codec name, e.g. `"h264"`.
-    pub codec_name: Option<String>,
+    /// Normalized codec, e.g. [`Codec::H264`].
+    pub codec_name: Option<Codec>,
     /// Audio codec profile / extension label when known (e.g. "LC",
     /// "DTS-HD MA + DTS:X", "Dolby TrueHD + Dolby Atmos").
     pub audio_profile: Option<String>,
@@ -45,7 +47,7 @@ pub(crate) struct RawTrack {
 
 impl RawTrack {
     /// A track known so far only by its kind and codec.
-    pub(crate) fn new(kind: TrackKind, codec_id: String, codec_name: Option<String>) -> Self {
+    pub(crate) fn new(kind: TrackKind, codec_id: String, codec_name: Option<Codec>) -> Self {
         Self {
             kind,
             codec_id,
@@ -56,10 +58,10 @@ impl RawTrack {
 
     /// A track whose container names the codec directly, so the identifier is
     /// also the normalized name.
-    pub(crate) fn for_codec(kind: TrackKind, codec: &str, channels: Option<i32>) -> Self {
+    pub(crate) fn for_codec(kind: TrackKind, codec: Codec, channels: Option<i32>) -> Self {
         Self {
             channels,
-            ..Self::new(kind, codec.into(), Some(codec.into()))
+            ..Self::new(kind, codec.as_str().to_owned(), Some(codec))
         }
     }
 }

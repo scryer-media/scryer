@@ -820,7 +820,8 @@ mod tests {
             0x7F, 0xFE, 0x80, 0x01, 0x7C, 0x7C, 0x05, 0xF2, 0xB7, 0x00, 0x00,
         ];
         assert_eq!(
-            detect_audio_profile_from_payload(Some("dts"), &payload).as_deref(),
+            detect_audio_profile_from_payload(Some(&scryer_media_model::Codec::Dts), &payload)
+                .as_deref(),
             Some("DTS")
         );
     }
@@ -831,7 +832,8 @@ mod tests {
         payload.extend_from_slice(&DTS_SYNCWORD_CORE_BE.to_be_bytes());
         payload.extend_from_slice(&DTS_SYNCWORD_XCH.to_be_bytes());
         assert_eq!(
-            detect_audio_profile_from_payload(Some("dts"), &payload).as_deref(),
+            detect_audio_profile_from_payload(Some(&scryer_media_model::Codec::Dts), &payload)
+                .as_deref(),
             Some("DTS-ES")
         );
     }
@@ -848,7 +850,12 @@ mod tests {
         suffix[16..20].copy_from_slice(&DTS_SYNCWORD_XLL_X.to_be_bytes());
 
         assert_eq!(
-            detect_audio_profile_from_probe_bytes(Some("dts"), &prefix, Some(&suffix)).as_deref(),
+            detect_audio_profile_from_probe_bytes(
+                Some(&scryer_media_model::Codec::Dts),
+                &prefix,
+                Some(&suffix)
+            )
+            .as_deref(),
             Some("DTS")
         );
     }

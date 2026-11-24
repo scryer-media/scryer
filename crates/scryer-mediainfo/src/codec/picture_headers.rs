@@ -5,26 +5,29 @@ use super::mjpeg::jpeg;
 use super::mpeg_video::{mpeg4_vol, mpeg12};
 use super::vp9::vp9;
 use crate::raw::RawTrack;
+use scryer_media_model::Codec;
 
 /// Fills what the codec's stream headers declare; tracks of other codecs are
 /// left unchanged.
 pub(crate) fn enrich(track: &mut RawTrack, data: &[u8]) {
-    match track.codec_name.as_deref() {
-        Some("mjpeg") => {
+    match track.codec_name {
+        Some(Codec::Mjpeg) => {
             let _ = jpeg(track, data);
         }
-        Some("vp9") => {
+        Some(Codec::Vp9) => {
             let _ = vp9(track, data);
         }
-        Some("vp8") if data.len() >= 10 && data[0] & 1 == 0 && data[3..6] == [0x9d, 1, 0x2a] => {
+        Some(Codec::Vp8)
+            if data.len() >= 10 && data[0] & 1 == 0 && data[3..6] == [0x9d, 1, 0x2a] =>
+        {
             track.metadata.bit_depth = Some(8);
             track.metadata.profile = Some(((data[0] >> 1) & 7).to_string());
             track.metadata.pixel_format = Some("yuv420p".into());
         }
-        Some("mpeg1video" | "mpeg2video") => {
+        Some(Codec::Mpeg1Video | Codec::Mpeg2Video) => {
             let _ = mpeg12(track, data);
         }
-        Some("mpeg4") => {
+        Some(Codec::Mpeg4) => {
             for index in 0..data.len().saturating_sub(4) {
                 if data[index..index + 4] == [0, 0, 1, 0xb0] {
                     let profile_level = data[index + 4];
@@ -59,7 +62,7 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8]) {
                 let _ = mpeg4_vol(track, &data[start + 4..]);
             }
         }
-        Some("vc1") => {
+        Some(Codec::Vc1) => {
             for index in 0..data.len().saturating_sub(5) {
                 if data[index..index + 4] == [0, 0, 1, 0x0f] && data[index + 4] >> 6 == 3 {
                     track.metadata.profile = Some("Advanced".into());
@@ -77,16 +80,16 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8]) {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn mjpeg_properties_reach_avi_and_matroska_catalog_analysis() {
+    fn mjpeg_properties_reach_avi_and_matroska_analysis() {
         for fixture in ["matrix_avi_005.avi", "matrix_mkv_015.mkv"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/media")
                 .join(fixture);
-            let analysis = crate::analyze_catalog_file(&path).unwrap();
+            let analysis = crate::probe(&path).unwrap();
             let video = analysis
                 .streams
                 .iter()
-                .find(|stream| stream.codec.as_deref() == Some("mjpeg"))
+                .find(|stream| stream.codec == Some(scryer_media_model::Codec::Mjpeg))
                 .unwrap();
             assert_eq!(video.metadata.bit_depth, Some(8), "{fixture}");
             assert_eq!(

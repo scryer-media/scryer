@@ -2,7 +2,9 @@
 
 use crate::raw::{RawContainer, RawTrack, TrackKind};
 use crate::scan::{self, AudioSyncKind};
-use crate::{AnalysisProfile, MediaInfoError};
+use crate::{ProbeDepth, ProbeError};
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use std::io::{Read, Seek, SeekFrom};
 #[cfg(test)]
 use std::path::Path;
@@ -31,32 +33,29 @@ fn format_chunk_id(chunk_id: riff::ChunkId) -> String {
 
 /// Parse an AVI (RIFF) container and extract stream metadata.
 #[cfg(test)]
-pub(crate) fn parse_avi(
-    path: &Path,
-    profile: AnalysisProfile,
-) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse_avi(path: &Path, profile: ProbeDepth) -> Result<RawContainer, ProbeError> {
     parse_avi_source(&mut crate::source::FileSource::open(path)?, profile)
 }
 
 pub(crate) fn parse_avi_source(
     mut file: &mut dyn crate::source::MediaSource,
-    profile: AnalysisProfile,
-) -> Result<RawContainer, MediaInfoError> {
+    profile: ProbeDepth,
+) -> Result<RawContainer, ProbeError> {
     let file_len = file.len();
 
     let riff_chunk = riff::Chunk::read(&mut file, 0)
-        .map_err(|e| MediaInfoError::Parse(format!("failed to read RIFF header: {e}")))?;
+        .map_err(|e| ProbeError::Malformed(format!("failed to read RIFF header: {e}")))?;
 
     if riff_chunk.id() != riff::RIFF_ID {
-        return Err(MediaInfoError::Parse("not a RIFF file".into()));
+        return Err(ProbeError::Malformed("not a RIFF file".into()));
     }
 
     let riff_type = riff_chunk
         .read_type(&mut file)
-        .map_err(|e| MediaInfoError::Parse(format!("failed to read RIFF type: {e}")))?;
+        .map_err(|e| ProbeError::Malformed(format!("failed to read RIFF type: {e}")))?;
 
     if !chunk_id_matches(riff_type, b"AVI ") {
-        return Err(MediaInfoError::Parse(format!(
+        return Err(ProbeError::Malformed(format!(
             "RIFF type is {}, expected 'AVI '",
             format_chunk_id(riff_type)
         )));
@@ -73,12 +72,12 @@ pub(crate) fn parse_avi_source(
 
     for offset in top_chunks {
         let child = riff::Chunk::read(&mut file, offset)
-            .map_err(|e| MediaInfoError::Parse(format!("error reading RIFF chunk: {e}")))?;
+            .map_err(|e| ProbeError::Malformed(format!("error reading RIFF chunk: {e}")))?;
 
         if child.id() == riff::LIST_ID {
             let list_type = child
                 .read_type(&mut file)
-                .map_err(|e| MediaInfoError::Parse(format!("error reading LIST type: {e}")))?;
+                .map_err(|e| ProbeError::Malformed(format!("error reading LIST type: {e}")))?;
 
             if chunk_id_matches(list_type, b"hdrl") {
                 parse_hdrl(
@@ -104,7 +103,7 @@ pub(crate) fn parse_avi_source(
     let mut details = scryer_media_model::AnalysisDetails::default();
     if let Some(offset) = idx1_offset {
         let idx1 = riff::Chunk::read(&mut file, offset)
-            .map_err(|e| MediaInfoError::Parse(format!("error reading idx1 chunk: {e}")))?;
+            .map_err(|e| ProbeError::Malformed(format!("error reading idx1 chunk: {e}")))?;
         // Complete accounting is optional. Never read a movie-sized index or
         // divide a partial byte total by the full duration.
         if idx1.len() <= 4 * 1024 * 1024 {
@@ -117,7 +116,7 @@ pub(crate) fn parse_avi_source(
                 details.report.status = scryer_media_model::ProbeStatus::Incomplete;
                 details.report.budget_exhausted = true;
                 details.report.warnings.push(scryer_media_model::ProbeWarning {
-                    code: "avi_index_read_budget".into(),
+                    code: warning::AVI_INDEX_READ_BUDGET.into(),
                     message: "AVI index accounting stopped when the media byte or I/O-operation budget was exhausted; index-derived bitrate remains partial".into(),
                     ..Default::default()
                 });
@@ -126,7 +125,7 @@ pub(crate) fn parse_avi_source(
             details.report.status = scryer_media_model::ProbeStatus::Incomplete;
             details.report.budget_exhausted = true;
             details.report.warnings.push(scryer_media_model::ProbeWarning {
-                code: "avi_index_budget".into(),
+                code: warning::AVI_INDEX_BUDGET.into(),
                 message: "AVI index exceeds the 4 MiB catalog budget; index-derived bitrate remains unknown".into(),
                 ..Default::default()
             });
@@ -165,9 +164,9 @@ fn avi_sampling_warning(report: &mut scryer_media_model::ProbeReport, budget: bo
     report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted |= budget;
     let code = if budget {
-        "avi_sample_budget"
+        warning::AVI_SAMPLE_BUDGET
     } else {
-        "avi_sample_reference_invalid"
+        warning::AVI_SAMPLE_REFERENCE_INVALID
     };
     if !report.warnings.iter().any(|warning| warning.code == code) {
         report.warnings.push(scryer_media_model::ProbeWarning {
@@ -186,7 +185,7 @@ fn enrich_movi<T: Read + Seek>(
     mut end: u64,
     tracks: &mut [AviTrack],
     details: &mut scryer_media_model::AnalysisDetails,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     let mut stack = Vec::new();
     let mut counts = vec![0_u8; tracks.len()];
     let mut remaining = 1024 * 1024_usize;
@@ -204,13 +203,9 @@ fn enrich_movi<T: Read + Seek>(
             avi_sampling_warning(&mut details.report, false);
             return Ok(());
         }
-        stream
-            .seek(SeekFrom::Start(at))
-            .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+        stream.seek(SeekFrom::Start(at)).map_err(ProbeError::from)?;
         let mut header = [0; 8];
-        stream
-            .read_exact(&mut header)
-            .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+        stream.read_exact(&mut header).map_err(ProbeError::from)?;
         let length = u64::from(read_u32_le(&header, 4));
         let payload = at + 8;
         let Some(payload_end) = payload.checked_add(length).filter(|value| *value <= end) else {
@@ -231,9 +226,7 @@ fn enrich_movi<T: Read + Seek>(
                 return Ok(());
             }
             let mut kind = [0; 4];
-            stream
-                .read_exact(&mut kind)
-                .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+            stream.read_exact(&mut kind).map_err(ProbeError::from)?;
             if &kind == b"rec " {
                 if stack.len() >= 8 {
                     avi_sampling_warning(&mut details.report, true);
@@ -271,7 +264,7 @@ fn enrich_movi<T: Read + Seek>(
         let take = length.min(buf.len() as u64).min(remaining as u64) as usize;
         stream
             .read_exact(&mut buf[..take])
-            .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+            .map_err(ProbeError::from)?;
         remaining -= take;
         counts[index] += 1;
         if (take as u64) < length {
@@ -285,7 +278,7 @@ fn enrich_movi<T: Read + Seek>(
         if let Some((rate, provenance)) = bitrate {
             track.bit_rate_bps = Some(rate);
             track.metadata.bitrate_provenance = provenance;
-        } else if track.codec_name.as_deref() == Some("mp3") {
+        } else if track.codec_name == Some(Codec::Mp3) {
             track.bit_rate_bps = None;
             track.metadata.estimated_bitrate_bps =
                 find_mp3_bitrate(&buf[..take]).and_then(|rate| u64::try_from(rate).ok());
@@ -312,11 +305,11 @@ fn enrich_movi<T: Read + Seek>(
 fn collect_child_offsets<T: Read + Seek>(
     parent: &riff::Chunk,
     stream: &mut T,
-) -> Result<Vec<u64>, MediaInfoError> {
+) -> Result<Vec<u64>, ProbeError> {
     let mut offsets = Vec::new();
     for child_result in parent.iter(stream) {
         let child = child_result
-            .map_err(|e| MediaInfoError::Parse(format!("error iterating chunks: {e}")))?;
+            .map_err(|e| ProbeError::Malformed(format!("error iterating chunks: {e}")))?;
         offsets.push(child.offset());
     }
     Ok(offsets)
@@ -329,35 +322,35 @@ fn read_header_chunk_contents<T: Read + Seek>(
     child: &riff::Chunk,
     stream: &mut T,
     file_len: u64,
-) -> Result<Vec<u8>, MediaInfoError> {
+) -> Result<Vec<u8>, ProbeError> {
     let parent_contents_start = parent
         .offset()
         .checked_add(12)
-        .ok_or_else(|| MediaInfoError::Parse("AVI parent chunk offset overflow".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("AVI parent chunk offset overflow".into()))?;
     let parent_contents_end = parent
         .offset()
         .checked_add(8)
         .and_then(|offset| offset.checked_add(u64::from(parent.len())))
-        .ok_or_else(|| MediaInfoError::Parse("AVI parent chunk size overflow".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("AVI parent chunk size overflow".into()))?;
     let contents_start = child
         .offset()
         .checked_add(8)
-        .ok_or_else(|| MediaInfoError::Parse("AVI chunk offset overflow".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("AVI chunk offset overflow".into()))?;
     let contents_end = contents_start
         .checked_add(u64::from(child.len()))
-        .ok_or_else(|| MediaInfoError::Parse("AVI chunk size overflow".into()))?;
+        .ok_or_else(|| ProbeError::Malformed("AVI chunk size overflow".into()))?;
 
     if child.offset() < parent_contents_start
         || contents_end > parent_contents_end
         || contents_end > file_len
     {
-        return Err(MediaInfoError::Parse(format!(
+        return Err(ProbeError::Malformed(format!(
             "AVI chunk {} exceeds enclosing or file bounds",
             format_chunk_id(child.id())
         )));
     }
     if child.len() > AVI_HEADER_CHUNK_MAX_BYTES {
-        return Err(MediaInfoError::Parse(format!(
+        return Err(ProbeError::Malformed(format!(
             "AVI chunk {} exceeds parser budget",
             format_chunk_id(child.id())
         )));
@@ -367,7 +360,7 @@ fn read_header_chunk_contents<T: Read + Seek>(
     stream
         .seek(SeekFrom::Start(contents_start))
         .and_then(|_| stream.read_exact(&mut data))
-        .map_err(|e| MediaInfoError::Parse(format!("error reading AVI header chunk: {e}")))?;
+        .map_err(|e| ProbeError::Malformed(format!("error reading AVI header chunk: {e}")))?;
     Ok(data)
 }
 
@@ -378,7 +371,7 @@ fn parse_hdrl<T: Read + Seek>(
     file_len: u64,
     duration_seconds: &mut Option<f64>,
     tracks: &mut Vec<AviTrack>,
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     let child_offsets = collect_child_offsets(hdrl, stream)?;
 
     let mut micro_sec_per_frame: Option<u32> = None;
@@ -387,7 +380,7 @@ fn parse_hdrl<T: Read + Seek>(
 
     for offset in child_offsets {
         let child = riff::Chunk::read(stream, offset)
-            .map_err(|e| MediaInfoError::Parse(format!("error in hdrl: {e}")))?;
+            .map_err(|e| ProbeError::Malformed(format!("error in hdrl: {e}")))?;
         if chunk_id_matches(child.id(), b"avih") {
             let data = read_header_chunk_contents(hdrl, &child, stream, file_len)?;
             if data.len() >= 48 {
@@ -396,7 +389,7 @@ fn parse_hdrl<T: Read + Seek>(
             }
         } else if child.id() == riff::LIST_ID {
             let list_type = child.read_type(stream).map_err(|e| {
-                MediaInfoError::Parse(format!("error reading LIST type in hdrl: {e}"))
+                ProbeError::Malformed(format!("error reading LIST type in hdrl: {e}"))
             })?;
             if chunk_id_matches(list_type, b"strl") {
                 if let Some(track) = parse_strl(&child, stream, file_len, stream_number as usize)? {
@@ -425,7 +418,7 @@ fn parse_strl<T: Read + Seek>(
     stream: &mut T,
     file_len: u64,
     stream_number: usize,
-) -> Result<Option<AviTrack>, MediaInfoError> {
+) -> Result<Option<AviTrack>, ProbeError> {
     let child_offsets = collect_child_offsets(strl, stream)?;
 
     let mut strh_data: Option<Vec<u8>> = None;
@@ -433,7 +426,7 @@ fn parse_strl<T: Read + Seek>(
 
     for offset in child_offsets {
         let child = riff::Chunk::read(stream, offset)
-            .map_err(|e| MediaInfoError::Parse(format!("error in strl: {e}")))?;
+            .map_err(|e| ProbeError::Malformed(format!("error in strl: {e}")))?;
         if chunk_id_matches(child.id(), b"strh") {
             strh_data = Some(read_header_chunk_contents(strl, &child, stream, file_len)?);
         } else if chunk_id_matches(child.id(), b"strf") {
@@ -501,7 +494,7 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
     let mut width: Option<i32> = None;
     let mut height: Option<i32> = None;
     let mut codec_id = String::from("unknown");
-    let mut codec_name: Option<String> = None;
+    let mut codec_name: Option<Codec> = None;
 
     if strf.len() >= 20 {
         let bi_width = read_i32_le(strf, 4);
@@ -526,7 +519,7 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
         if let Some(fcc) = fourcc {
             let fcc_trimmed = fcc.trim_end_matches('\0');
             codec_id = fcc_trimmed.to_owned();
-            codec_name = Some(map_video_fourcc(fcc_trimmed).to_owned());
+            codec_name = Some(map_video_fourcc(fcc_trimmed));
         }
     }
 
@@ -560,7 +553,7 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
 /// Build an audio `RawTrack` from strh + strf (WAVEFORMATEX).
 fn parse_audio_stream(_strh: &[u8], strf: &[u8]) -> RawTrack {
     let mut codec_id = String::from("unknown");
-    let mut codec_name: Option<String> = None;
+    let mut codec_name: Option<Codec> = None;
     let mut channels: Option<i32> = None;
     let mut bit_rate_bps: Option<i64> = None;
 
@@ -581,9 +574,8 @@ fn parse_audio_stream(_strh: &[u8], strf: &[u8]) -> RawTrack {
                     crate::codec::audio_config::pcm_codec(codec_format_tag, read_u16_le(strf, 14))
                 })
                 .flatten()
-                .map(str::to_owned)
         } else {
-            Some(map_audio_format_tag(codec_format_tag).to_owned())
+            Some(map_audio_format_tag(codec_format_tag))
         };
         channels = (n_channels > 0).then_some(n_channels as i32);
         bit_rate_bps = (n_avg_bytes_per_sec > 0).then_some(n_avg_bytes_per_sec as i64 * 8);
@@ -602,7 +594,7 @@ fn parse_audio_stream(_strh: &[u8], strf: &[u8]) -> RawTrack {
     });
     let audio_profile = crate::codec::audio_profile::detect_header_audio_profile(
         &codec_id,
-        codec_name.as_deref(),
+        codec_name.as_ref(),
         codec_private.as_deref(),
     );
     RawTrack {
@@ -652,10 +644,10 @@ fn apply_idx1_stream_sizes<T: Read + Seek>(
     idx1: &riff::Chunk,
     stream: &mut T,
     tracks: &mut [AviTrack],
-) -> Result<(), MediaInfoError> {
+) -> Result<(), ProbeError> {
     stream
         .seek(SeekFrom::Start(idx1.offset() + 8))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+        .map_err(ProbeError::from)?;
 
     let mut remaining = idx1.len() as usize;
     let mut buf = vec![0_u8; AVI_IDX1_READ_BATCH_BYTES];
@@ -667,7 +659,7 @@ fn apply_idx1_stream_sizes<T: Read + Seek>(
         }
         stream
             .read_exact(&mut buf[..read_len])
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
         remaining -= read_len;
 
         if tracks.iter().all(|track| track.stream_number < 100) {
@@ -726,20 +718,20 @@ fn backfill_track_bitrates(tracks: &mut [AviTrack]) {
 }
 
 /// Map a video FourCC to a canonical codec name.
-pub(crate) fn map_video_fourcc(fcc: &str) -> &'static str {
+pub(crate) fn map_video_fourcc(fcc: &str) -> Codec {
     match fcc {
-        "H264" | "h264" | "X264" | "x264" | "avc1" | "AVC1" => "h264",
-        "HEVC" | "hevc" | "H265" | "h265" | "hvc1" | "HVC1" | "hev1" | "HEV1" => "hevc",
+        "H264" | "h264" | "X264" | "x264" | "avc1" | "AVC1" => Codec::H264,
+        "HEVC" | "hevc" | "H265" | "h265" | "hvc1" | "HVC1" | "hev1" | "HEV1" => Codec::Hevc,
         "XVID" | "xvid" | "DX50" | "dx50" | "DIVX" | "divx" | "DIV3" | "div3" | "DIV4" | "div4"
-        | "DIV5" | "div5" | "MP4V" | "mp4v" | "FMP4" | "fmp4" => "mpeg4",
-        "MJPG" | "mjpg" => "mjpeg",
-        "WVC1" | "wvc1" => "vc1",
-        "WMV3" | "wmv3" => "wmv3",
-        "MP2V" | "mp2v" | "mpg2" | "MPG2" => "mpeg2video",
-        "MP1V" | "mp1v" | "mpg1" | "MPG1" => "mpeg1video",
-        "VP80" | "vp80" => "vp8",
-        "VP90" | "vp90" => "vp9",
-        _ => "unknown",
+        | "DIV5" | "div5" | "MP4V" | "mp4v" | "FMP4" | "fmp4" => Codec::Mpeg4,
+        "MJPG" | "mjpg" => Codec::Mjpeg,
+        "WVC1" | "wvc1" => Codec::Vc1,
+        "WMV3" | "wmv3" => Codec::Wmv3,
+        "MP2V" | "mp2v" | "mpg2" | "MPG2" => Codec::Mpeg2Video,
+        "MP1V" | "mp1v" | "mpg1" | "MPG1" => Codec::Mpeg1Video,
+        "VP80" | "vp80" => Codec::Vp8,
+        "VP90" | "vp90" => Codec::Vp9,
+        _ => Codec::Unknown,
     }
 }
 
@@ -754,20 +746,21 @@ fn wave_format_extensible_subformat(strf: &[u8]) -> Option<u16> {
 }
 
 /// Map a WAVEFORMATEX wFormatTag to a canonical codec name.
-fn map_audio_format_tag(tag: u16) -> &'static str {
+fn map_audio_format_tag(tag: u16) -> Codec {
     match tag {
-        0x0001 => "pcm_s16le",
-        0x0003 => "pcm_f32le",
-        0x0006 => "pcm_alaw",
-        0x0007 => "pcm_mulaw",
-        0x0055 => "mp3",
-        0x00FF => "aac",
-        0x0161 => "wmav2",
-        0x0162 => "wmapro",
-        0x2000 => "ac3",
-        0x2001 => "dts",
-        0xFFFE => "extensible",
-        _ => "unknown",
+        0x0001 => Codec::PcmS16Le,
+        0x0003 => Codec::PcmF32Le,
+        0x0006 => Codec::PcmAlaw,
+        0x0007 => Codec::PcmMulaw,
+        0x0055 => Codec::Mp3,
+        0x00FF => Codec::Aac,
+        0x0161 => Codec::WmaV2,
+        0x0162 => Codec::WmaPro,
+        0x2000 => Codec::Ac3,
+        0x2001 => Codec::Dts,
+        // Reached when the extensible header is too short to name its subformat.
+        0xFFFE => Codec::Other("extensible".into()),
+        _ => Codec::Unknown,
     }
 }
 
@@ -869,8 +862,8 @@ fn read_u16_le(data: &[u8], offset: usize) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::parse_avi;
-    use crate::AnalysisProfile;
-    use crate::MediaInfoError;
+    use crate::ProbeDepth;
+    use crate::ProbeError;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -916,9 +909,9 @@ mod tests {
             .concat(),
         );
 
-        let error = parse_avi(fixture.path(), AnalysisProfile::DefaultRich)
+        let error = parse_avi(fixture.path(), ProbeDepth::Full)
             .expect_err("invalid RIFF type should be rejected");
-        let MediaInfoError::Parse(message) = error else {
+        let ProbeError::Malformed(message) = error else {
             panic!("expected parse error for invalid RIFF type");
         };
         assert!(message.contains("expected 'AVI '"));
@@ -939,7 +932,7 @@ mod tests {
             .concat(),
         );
 
-        let container = parse_avi(fixture.path(), AnalysisProfile::DefaultRich)
+        let container = parse_avi(fixture.path(), ProbeDepth::Full)
             .expect("malformed chunk ids should not crash");
         assert_eq!(container.format_name, "avi");
         assert_eq!(container.duration_seconds, None);
@@ -963,9 +956,9 @@ mod tests {
             .concat(),
         );
 
-        let error = parse_avi(fixture.path(), AnalysisProfile::DefaultRich)
+        let error = parse_avi(fixture.path(), ProbeDepth::Full)
             .expect_err("truncated avih must be rejected before allocation");
-        let MediaInfoError::Parse(message) = error else {
+        let ProbeError::Malformed(message) = error else {
             panic!("expected parse error for oversized avih");
         };
         assert!(message.contains("exceeds enclosing or file bounds"));
@@ -983,7 +976,7 @@ mod tests {
     fn oversized_index_is_skipped_without_losing_video_headers() {
         use crate::source::BoundedSource;
         let mut bytes = include_bytes!("../../tests/media/matrix_avi_002.avi").to_vec();
-        // Append a large second index; no payload from it is needed for catalog facts.
+        // Append a large second index; no payload from it is needed for the reported facts.
         bytes.extend_from_slice(b"idx1");
         bytes.extend_from_slice(&(8 * 1024 * 1024_u32).to_le_bytes());
         bytes.resize(bytes.len() + 8 * 1024 * 1024, 0);
@@ -991,7 +984,7 @@ mod tests {
         bytes[4..8].copy_from_slice(&riff_length.to_le_bytes());
         let mut source =
             BoundedSource::new(std::io::Cursor::new(bytes), 1024 * 1024).with_io_limit(1024);
-        let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
+        let raw = super::parse_avi_source(&mut source, ProbeDepth::Full).unwrap();
         assert!(
             raw.tracks
                 .iter()
@@ -1013,7 +1006,7 @@ mod tests {
     fn avi_authored_mpeg4_preserves_sequence_properties_and_rational_timing() {
         let mut source =
             std::io::Cursor::new(include_bytes!("../../tests/media/matrix_avi_002.avi").as_slice());
-        let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
+        let raw = super::parse_avi_source(&mut source, ProbeDepth::Full).unwrap();
         let video = raw
             .tracks
             .iter()
@@ -1036,7 +1029,7 @@ mod tests {
     fn avi_avc_timing_and_extensible_aac_configuration_are_not_misread() {
         let mut source =
             std::io::Cursor::new(include_bytes!("../../tests/media/matrix_avi_013.avi").as_slice());
-        let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
+        let raw = super::parse_avi_source(&mut source, ProbeDepth::Full).unwrap();
         let video = raw
             .tracks
             .iter()
@@ -1046,13 +1039,25 @@ mod tests {
         let mp3 = raw
             .tracks
             .iter()
-            .find(|track| track.codec_name.as_deref() == Some("mp3"))
+            .find(|track| {
+                track
+                    .codec_name
+                    .as_ref()
+                    .map(scryer_media_model::Codec::as_str)
+                    == Some("mp3")
+            })
             .unwrap();
         assert_eq!(mp3.metadata.channel_layout.as_deref(), Some("stereo"));
         let aac = raw
             .tracks
             .iter()
-            .find(|track| track.codec_name.as_deref() == Some("aac"))
+            .find(|track| {
+                track
+                    .codec_name
+                    .as_ref()
+                    .map(scryer_media_model::Codec::as_str)
+                    == Some("aac")
+            })
             .unwrap();
         assert_eq!(aac.audio_profile.as_deref(), Some("LC"));
         let config =
@@ -1071,12 +1076,12 @@ mod tests {
         let analysis = (24_u64..256)
             .filter_map(|limit| {
                 let mut source = std::io::Cursor::new(fixture);
-                let analysis = crate::analyze_source_with_limits(
+                let analysis = crate::probe_bounded(
                     &mut source,
                     "avi",
-                    crate::AnalyzeOptions::default(),
-                    64 * 1024 * 1024,
-                    limit,
+                    &crate::ProbeOptions::new()
+                        .with_depth(crate::ProbeDepth::Quick)
+                        .with_io_limit(limit),
                 )
                 .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
                 analysis
@@ -1107,7 +1112,7 @@ mod tests {
         super::AviTrack {
             raw: crate::raw::RawTrack {
                 kind: crate::raw::TrackKind::Audio,
-                codec_name: Some("mp3".into()),
+                codec_name: Some(scryer_media_model::Codec::Mp3),
                 ..Default::default()
             },
             stream_number: number,

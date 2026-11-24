@@ -1,4 +1,5 @@
 use super::*;
+use scryer_media_model::Codec;
 
 /// Lightweight counters for parser I/O during bounded probing.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -130,7 +131,7 @@ fn uniform_sample_timing_retains_declarations_without_claiming_observations() {
     }
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/hevc_hdr10plus.mp4");
-    let analysis = crate::analyze_catalog_file(&path).unwrap();
+    let analysis = crate::probe(&path).unwrap();
     let video = analysis
         .streams
         .iter()
@@ -194,12 +195,8 @@ fn sample_timing_handles_reordering_vfr_and_bounded_unknowns() {
 #[test]
 fn partial_fragment_walk_preserves_headers_without_using_partial_timing() {
     let mut bytes = include_bytes!("../../../tests/media/hevc_hdr10plus.mp4").to_vec();
-    let baseline = parse_mp4_source(
-        &mut Cursor::new(bytes.clone()),
-        "mp4",
-        AnalysisProfile::DefaultRich,
-    )
-    .unwrap();
+    let baseline =
+        parse_mp4_source(&mut Cursor::new(bytes.clone()), "mp4", ProbeDepth::Full).unwrap();
     for index in 0..200_u32 {
         let tfhd = [
             0x18_u32.to_be_bytes(),
@@ -218,8 +215,7 @@ fn partial_fragment_walk_preserves_headers_without_using_partial_timing() {
         .concat();
         bytes.extend_from_slice(&make_box(b"moof", &make_box(b"traf", &traf)));
     }
-    let raw =
-        parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
+    let raw = parse_mp4_source(&mut Cursor::new(bytes), "mp4", ProbeDepth::Full).unwrap();
     assert!(raw.details.report.budget_exhausted);
     assert_eq!(raw.duration_seconds, baseline.duration_seconds);
     assert_eq!(raw.tracks[0].codec_name, baseline.tracks[0].codec_name);
@@ -239,8 +235,7 @@ fn fragment_budget_exhaustion_is_visible_in_outer_report() {
     traf.extend_from_slice(&make_box(b"trun", &trun));
     bytes.extend_from_slice(&make_box(b"moof", &make_box(b"traf", &traf)));
 
-    let container =
-        parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
+    let container = parse_mp4_source(&mut Cursor::new(bytes), "mp4", ProbeDepth::Full).unwrap();
     let report = container.details.report;
     assert_eq!(report.status, scryer_media_model::ProbeStatus::Incomplete);
     assert!(report.budget_exhausted);
@@ -319,7 +314,7 @@ fn av1_mp4_enrichment_reads_metadata_after_the_first_sample() {
         track_id: Some(1),
         raw: RawTrack {
             kind: TrackKind::Video,
-            codec_name: Some("av1".into()),
+            codec_name: Some(Codec::Av1),
             ..Default::default()
         },
     }];
@@ -328,7 +323,7 @@ fn av1_mp4_enrichment_reads_metadata_after_the_first_sample() {
         &mut Cursor::new(bytes),
         &context,
         &mut tracks,
-        AnalysisProfile::DefaultRich,
+        ProbeDepth::Full,
         &mut report,
     );
     assert_eq!(
@@ -476,16 +471,41 @@ fn codec_type_to_fourcc_roundtrips() {
 
 #[test]
 fn normalize_mp4_codecs() {
-    assert_eq!(normalize_codec_name("avc1").as_deref(), Some("h264"));
-    assert_eq!(normalize_codec_name("av01").as_deref(), Some("av1"));
-    assert_eq!(normalize_codec_name("mp4a").as_deref(), Some("aac"));
-    assert_eq!(normalize_codec_name("fLaC").as_deref(), Some("flac"));
-    assert_eq!(normalize_codec_name("Opus").as_deref(), Some("opus"));
+    assert_eq!(
+        normalize_codec_name("avc1")
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("h264")
+    );
+    assert_eq!(
+        normalize_codec_name("av01")
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("av1")
+    );
+    assert_eq!(
+        normalize_codec_name("mp4a")
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("aac")
+    );
+    assert_eq!(
+        normalize_codec_name("fLaC")
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("flac")
+    );
+    assert_eq!(
+        normalize_codec_name("Opus")
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str),
+        Some("opus")
+    );
     assert_eq!(normalize_codec_name("unknown"), None);
 }
 
 #[test]
-fn catalog_box_walk_is_independent_of_fragment_count() {
+fn box_walk_is_independent_of_fragment_count() {
     for count in [1_000, 100_000] {
         let file = make_box(b"free", &[]).repeat(count);
         let mut reader = TrackedReader::new(Cursor::new(file));
@@ -497,7 +517,7 @@ fn catalog_box_walk_is_independent_of_fragment_count() {
         let raw = parse_mp4_source(
             &mut Cursor::new(make_box(b"free", &[]).repeat(count)),
             "mp4",
-            AnalysisProfile::DefaultRich,
+            ProbeDepth::Full,
         )
         .unwrap();
         assert!(raw.details.report.budget_exhausted);
@@ -540,7 +560,7 @@ fn metadata_copy_rejects_truncated_kept_box_before_allocating() {
 
     let error = prepare_mp4_metadata_from_reader(&mut reader)
         .expect_err("truncated moov must be rejected before allocation");
-    let MediaInfoError::Parse(message) = error else {
+    let ProbeError::Malformed(message) = error else {
         panic!("expected parse error for truncated moov");
     };
     assert!(message.contains("extends past end of input"));

@@ -1,7 +1,9 @@
 //! Structured AVC/HEVC signaling read from the sequence parameter sets.
 use crate::raw::RawTrack;
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use scryer_media_model::{
-    ColorMetadata, ProbeReport, ProbeWarning, Provenance, Rational, StreamMetadata,
+    ChromaLocation, ColorMetadata, ProbeReport, ProbeWarning, Provenance, Rational, StreamMetadata,
 };
 use std::io::Cursor;
 
@@ -48,6 +50,24 @@ fn pixel_format(chroma: u8, depth: i32, matrix: Option<u32>) -> Option<String> {
         family.into()
     } else {
         format!("{family}{depth}le")
+    })
+}
+
+/// The chroma location an H.264 or HEVC `chroma_sample_loc_type_top_field`
+/// names (Rec. ITU-T H.264 E.2.1, H.265 E.3.1). It is meaningful only for
+/// 4:2:0 sampling; other sampling leaves the location unstated.
+fn chroma_location(chroma_format_idc: u8, loc_type: u64) -> Option<ChromaLocation> {
+    if chroma_format_idc != 1 {
+        return None;
+    }
+    Some(match loc_type {
+        0 => ChromaLocation::Left,
+        1 => ChromaLocation::Center,
+        2 => ChromaLocation::TopLeft,
+        3 => ChromaLocation::Top,
+        4 => ChromaLocation::BottomLeft,
+        5 => ChromaLocation::Bottom,
+        _ => return None,
     })
 }
 
@@ -105,6 +125,10 @@ fn avc(data: &[u8]) -> Option<StreamMetadata> {
             ..Default::default()
         };
     }
+    details.chroma_location = sps
+        .chroma_sample_loc
+        .as_ref()
+        .and_then(|loc| chroma_location(chroma, u64::from(loc.chroma_sample_loc_type_top_field)));
     details.pixel_format = pixel_format(chroma, depth, details.color.matrix);
     Some(details)
 }
@@ -161,6 +185,10 @@ fn hevc(data: &[u8]) -> Option<StreamMetadata> {
             provenance: Provenance::Bitstream,
             ..Default::default()
         };
+        details.chroma_location = vui
+            .chroma_loc_info
+            .as_ref()
+            .and_then(|loc| chroma_location(sps.chroma_format_idc, loc.top_field));
         details.declared_frame_rate = vui.vui_timing_info.as_ref().and_then(|timing| {
             let ticks = timing
                 .num_ticks_poc_diff_one_minus1
@@ -176,26 +204,23 @@ fn hevc(data: &[u8]) -> Option<StreamMetadata> {
 }
 
 pub(crate) fn enrich(track: &mut RawTrack, data: &[u8], report: &mut ProbeReport) {
-    if !matches!(track.codec_name.as_deref(), Some("h264" | "hevc")) {
-        return;
-    }
+    let read: fn(&[u8]) -> Option<StreamMetadata> = match track.codec_name {
+        Some(Codec::H264) => avc,
+        Some(Codec::Hevc) => hevc,
+        _ => return,
+    };
     if data.len() > 1024 * 1024 {
         report.status = scryer_media_model::ProbeStatus::Incomplete;
         report.budget_exhausted = true;
         report.warnings.push(ProbeWarning {
-            code: "sps_enrichment_limit".into(),
+            code: warning::SPS_ENRICHMENT_LIMIT.into(),
             message: "SPS enrichment exceeded its bounded configuration size".into(),
             stream_id: track.metadata.id.clone(),
             ..Default::default()
         });
         return;
     }
-    let incoming = match track.codec_name.as_deref() {
-        Some("h264") => avc(data),
-        Some("hevc") => hevc(data),
-        _ => None,
-    };
-    let Some(incoming) = incoming else {
+    let Some(incoming) = read(data) else {
         return;
     };
     let current = &mut track.metadata;
@@ -213,11 +238,11 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8], report: &mut ProbeReport
             .is_some_and(|(old, new)| old != new);
     if conflict
         && !report.warnings.iter().any(|warning| {
-            warning.code == "color_signaling_conflict" && warning.stream_id == current.id
+            warning.code == warning::COLOR_SIGNALING_CONFLICT && warning.stream_id == current.id
         })
     {
         report.warnings.push(ProbeWarning {
-            code: "color_signaling_conflict".into(),
+            code: warning::COLOR_SIGNALING_CONFLICT.into(),
             message: "SPS color signaling overrides conflicting container metadata".into(),
             stream_id: current.id.clone(),
             ..Default::default()
@@ -238,6 +263,7 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8], report: &mut ProbeReport
     current.profile = incoming.profile.or(current.profile.take());
     current.level = incoming.level.or(current.level);
     current.pixel_format = incoming.pixel_format.or(current.pixel_format.take());
+    current.chroma_location = incoming.chroma_location.or(current.chroma_location);
     if incoming.field_order.as_deref() != Some("interlaced") || current.field_order.is_none() {
         current.field_order = incoming.field_order.or(current.field_order.take());
     }

@@ -9,7 +9,9 @@ use crate::codec::stream_probe::{
 use crate::raw::{RawContainer, RawTrack, TrackKind};
 use crate::scan;
 use crate::source::ProbeBudget;
-use crate::{AnalysisProfile, MediaInfoError};
+use crate::{ProbeDepth, ProbeError};
+use scryer_media_model::Codec;
+use scryer_media_model::warning;
 use std::io::{Read, Seek, SeekFrom};
 
 /// Size of a transport payload packet without any outer framing.
@@ -47,16 +49,13 @@ struct TsPacketLayout {
 
 pub(crate) fn parse_ts_source(
     source: &mut dyn crate::source::MediaSource,
-    profile: AnalysisProfile,
-) -> Result<RawContainer, MediaInfoError> {
+    profile: ProbeDepth,
+) -> Result<RawContainer, ProbeError> {
     // PAT/PMT and timestamp scans consume individual 188-byte packets. Coalesce
     // their reads before reaching a file or disc extent on network storage.
     let mut file = std::io::BufReader::with_capacity(64 * 1024, source);
-    let file_size = file
-        .seek(SeekFrom::End(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let file_size = file.seek(SeekFrom::End(0)).map_err(ProbeError::from)?;
+    file.seek(SeekFrom::Start(0)).map_err(ProbeError::from)?;
 
     let layout = detect_ts_packet_layout(&mut file)?;
     let es_entries = parse_program_map(&mut file, layout)?;
@@ -64,7 +63,7 @@ pub(crate) fn parse_ts_source(
     let mut report = scryer_media_model::ProbeReport::default();
     let mut caption_services = Vec::new();
 
-    if profile != AnalysisProfile::ContentProbe {
+    if profile != ProbeDepth::Identify {
         // Stream probing only fills in detail for tracks the program map already
         // described. An exhausted budget leaves that detail unknown; it must not
         // discard the tracks themselves.
@@ -82,7 +81,7 @@ pub(crate) fn parse_ts_source(
             report.status = scryer_media_model::ProbeStatus::Incomplete;
             report.budget_exhausted = true;
             report.warnings.push(scryer_media_model::ProbeWarning {
-                code: "ts_probe_read_budget".into(),
+                code: warning::TS_PROBE_READ_BUDGET.into(),
                 message:
                     "Stream probing stopped when the media byte or I/O-operation budget was exhausted"
                         .into(),
@@ -108,14 +107,12 @@ pub(crate) fn parse_ts_source(
         .and_then(|duration| {
             final_frame_seconds
                 .map(|frame| duration + frame)
-                .or_else(|| (profile == AnalysisProfile::ContentProbe).then_some(duration))
+                .or_else(|| (profile == ProbeDepth::Identify).then_some(duration))
         });
-    let duration_provenance = if profile == AnalysisProfile::ContentProbe
-        && duration_seconds.is_some()
-    {
+    let duration_provenance = if profile == ProbeDepth::Identify && duration_seconds.is_some() {
         report.status = scryer_media_model::ProbeStatus::Incomplete;
         report.warnings.push(scryer_media_model::ProbeWarning {
-            code: "content_probe_duration_estimate".into(),
+            code: warning::CONTENT_PROBE_DURATION_ESTIMATE.into(),
             message: "Discovery uses the selected video's timestamp span; the final frame duration has not been inspected".into(),
             ..Default::default()
         });
@@ -178,10 +175,8 @@ struct EsEntry {
 fn parse_program_map<T: Read + Seek>(
     stream: &mut T,
     layout: TsPacketLayout,
-) -> Result<Vec<EsEntry>, MediaInfoError> {
-    stream
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+) -> Result<Vec<EsEntry>, ProbeError> {
+    stream.seek(SeekFrom::Start(0)).map_err(ProbeError::from)?;
 
     let mut raw_packet = vec![0u8; layout.raw_packet_size];
     let mut packet = [0u8; TS_PACKET_SIZE];
@@ -195,13 +190,13 @@ fn parse_program_map<T: Read + Seek>(
 
     loop {
         if packets_scanned >= PROGRAM_MAP_PROBE_PACKETS {
-            return Err(MediaInfoError::Parse(format!(
+            return Err(ProbeError::Malformed(format!(
                 "program map not found within first {PROGRAM_MAP_PROBE_PACKETS} packets"
             )));
         }
 
         if !read_ts_packet(stream, layout, &mut raw_packet, &mut packet)? {
-            return Err(MediaInfoError::Parse(
+            return Err(ProbeError::Malformed(
                 "program map not found before end of file".into(),
             ));
         }
@@ -219,7 +214,7 @@ fn parse_program_map<T: Read + Seek>(
                     3 + usize::from(((u16::from(section[1]) & 15) << 8) | u16::from(section[2]));
                 let data = section
                     .get(8..length.saturating_sub(4))
-                    .ok_or_else(|| MediaInfoError::Parse("truncated PAT".into()))?;
+                    .ok_or_else(|| ProbeError::Malformed("truncated PAT".into()))?;
                 for entry in data.as_chunks::<4>().0 {
                     let program = u16::from_be_bytes([entry[0], entry[1]]);
                     let pid = u16::from_be_bytes([entry[2] & 31, entry[3]]);
@@ -230,7 +225,7 @@ fn parse_program_map<T: Read + Seek>(
                         programs.push((program, pid));
                     }
                     if programs.len() > 64 {
-                        return Err(MediaInfoError::UnsupportedFormat(
+                        return Err(ProbeError::Unsupported(
                             "TS program inventory exceeds budget".into(),
                         ));
                     }
@@ -264,21 +259,21 @@ fn parse_program_map<T: Read + Seek>(
     }
 }
 
-fn parse_pmt_section(section: &[u8]) -> Result<Vec<EsEntry>, MediaInfoError> {
+fn parse_pmt_section(section: &[u8]) -> Result<Vec<EsEntry>, ProbeError> {
     if section.len() < 16 {
-        return Err(MediaInfoError::Parse("PMT section too short".into()));
+        return Err(ProbeError::Malformed("PMT section too short".into()));
     }
 
     let section_length = ((section[1] as u16 & 0x0F) << 8 | section[2] as u16) as usize;
     if section_length < 13 {
-        return Err(MediaInfoError::Parse("PMT section length too short".into()));
+        return Err(ProbeError::Malformed("PMT section length too short".into()));
     }
 
     let program_info_length = ((section[10] as u16 & 0x0F) << 8 | section[11] as u16) as usize;
     let es_start = 12 + program_info_length;
     let es_end = 3 + section_length.saturating_sub(4);
     if es_start > section.len() || es_end > section.len() || es_start > es_end {
-        return Err(MediaInfoError::Parse(
+        return Err(ProbeError::Malformed(
             "PMT elementary stream table truncated".into(),
         ));
     }
@@ -335,7 +330,7 @@ impl PsiSectionAssembler {
         self.assembling = false;
     }
 
-    fn push_packet(&mut self, packet: &[u8]) -> Result<Option<Vec<u8>>, MediaInfoError> {
+    fn push_packet(&mut self, packet: &[u8]) -> Result<Option<Vec<u8>>, ProbeError> {
         let payload = ts_payload(packet);
         if payload.is_empty() {
             return Ok(None);
@@ -411,7 +406,7 @@ fn build_track(es: &EsEntry) -> RawTrack {
         },
         kind,
         codec_id: format!("0x{:02X}", es.stream_type),
-        codec_name: Some(codec_name.to_owned()),
+        codec_name: Some(codec_name),
         audio_profile: stream_type_audio_profile(es.stream_type).map(str::to_owned),
         codec_private: None,
         width: None,
@@ -435,36 +430,36 @@ fn stream_type_audio_profile(stream_type: u8) -> Option<&'static str> {
     }
 }
 
-fn classify_stream_type(stream_type: u8, descriptors: &[u8]) -> (TrackKind, &'static str) {
+fn classify_stream_type(stream_type: u8, descriptors: &[u8]) -> (TrackKind, Codec) {
     match stream_type {
-        0x01 => (TrackKind::Video, "mpeg1video"),
-        0x02 => (TrackKind::Video, "mpeg2video"),
-        0x10 => (TrackKind::Video, "mpeg4"),
-        0x1B => (TrackKind::Video, "h264"),
-        0x24 => (TrackKind::Video, "hevc"),
-        0x42 => (TrackKind::Video, "cavs"),
-        0xD2 => (TrackKind::Video, "avs2"),
-        0xD4 => (TrackKind::Video, "avs3"),
-        0xDB => (TrackKind::Video, "h264"),
-        0xEA => (TrackKind::Video, "vc1"),
-        0x03 | 0x04 => (TrackKind::Audio, "mp2"),
-        0x0F => (TrackKind::Audio, "aac"),
-        0x11 => (TrackKind::Audio, "aac_latm"),
-        0x81 => (TrackKind::Audio, "ac3"),
-        0x82 | 0x85 | 0x86 | 0xA2 => (TrackKind::Audio, "dts"),
-        0x83 => (TrackKind::Audio, "truehd"),
-        0x84 | 0x87 | 0xA1 | 0xC2 => (TrackKind::Audio, "eac3"),
-        0x90 => (TrackKind::Subtitle, "hdmv_pgs_subtitle"),
-        0x92 => (TrackKind::Subtitle, "hdmv_text_subtitle"),
-        0xC1 => (TrackKind::Audio, "ac3"),
-        0xCF => (TrackKind::Audio, "aac"),
+        0x01 => (TrackKind::Video, Codec::Mpeg1Video),
+        0x02 => (TrackKind::Video, Codec::Mpeg2Video),
+        0x10 => (TrackKind::Video, Codec::Mpeg4),
+        0x1B => (TrackKind::Video, Codec::H264),
+        0x24 => (TrackKind::Video, Codec::Hevc),
+        0x42 => (TrackKind::Video, Codec::Cavs),
+        0xD2 => (TrackKind::Video, Codec::Avs2),
+        0xD4 => (TrackKind::Video, Codec::Avs3),
+        0xDB => (TrackKind::Video, Codec::H264),
+        0xEA => (TrackKind::Video, Codec::Vc1),
+        0x03 | 0x04 => (TrackKind::Audio, Codec::Mp2),
+        0x0F => (TrackKind::Audio, Codec::Aac),
+        0x11 => (TrackKind::Audio, Codec::AacLatm),
+        0x81 => (TrackKind::Audio, Codec::Ac3),
+        0x82 | 0x85 | 0x86 | 0xA2 => (TrackKind::Audio, Codec::Dts),
+        0x83 => (TrackKind::Audio, Codec::TrueHd),
+        0x84 | 0x87 | 0xA1 | 0xC2 => (TrackKind::Audio, Codec::Eac3),
+        0x90 => (TrackKind::Subtitle, Codec::HdmvPgsSubtitle),
+        0x92 => (TrackKind::Subtitle, Codec::HdmvTextSubtitle),
+        0xC1 => (TrackKind::Audio, Codec::Ac3),
+        0xCF => (TrackKind::Audio, Codec::Aac),
         0x06 => classify_private_pes(descriptors),
-        _ if stream_type >= 0x80 => (TrackKind::Video, "unknown"),
-        _ => (TrackKind::Video, "unknown"),
+        _ if stream_type >= 0x80 => (TrackKind::Video, Codec::Unknown),
+        _ => (TrackKind::Video, Codec::Unknown),
     }
 }
 
-fn classify_private_pes(descriptors: &[u8]) -> (TrackKind, &'static str) {
+fn classify_private_pes(descriptors: &[u8]) -> (TrackKind, Codec) {
     let mut pos = 0;
     while pos + 2 <= descriptors.len() {
         let tag = descriptors[pos];
@@ -472,18 +467,18 @@ fn classify_private_pes(descriptors: &[u8]) -> (TrackKind, &'static str) {
         let desc_end = (pos + 2 + len).min(descriptors.len());
 
         match tag {
-            0x6A => return (TrackKind::Audio, "ac3"),
-            0x7A => return (TrackKind::Audio, "eac3"),
-            0x7B => return (TrackKind::Audio, "dts"),
-            0x7C => return (TrackKind::Audio, "aac"),
-            0x59 => return (TrackKind::Subtitle, "dvb_subtitle"),
-            0x56 => return (TrackKind::Subtitle, "dvb_teletext"),
+            0x6A => return (TrackKind::Audio, Codec::Ac3),
+            0x7A => return (TrackKind::Audio, Codec::Eac3),
+            0x7B => return (TrackKind::Audio, Codec::Dts),
+            0x7C => return (TrackKind::Audio, Codec::Aac),
+            0x59 => return (TrackKind::Subtitle, Codec::DvbSubtitle),
+            0x56 => return (TrackKind::Subtitle, Codec::DvbTeletext),
             _ => {}
         }
 
         pos = desc_end;
     }
-    (TrackKind::Audio, "unknown")
+    (TrackKind::Audio, Codec::Unknown)
 }
 
 fn extract_language(kind: TrackKind, descriptors: &[u8]) -> Option<String> {
@@ -593,7 +588,7 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
     layout: TsPacketLayout,
     report: &mut scryer_media_model::ProbeReport,
     captions: &mut Vec<scryer_media_model::CaptionService>,
-) -> Result<Option<u64>, MediaInfoError> {
+) -> Result<Option<u64>, ProbeError> {
     let mut states = Vec::new();
     let mut state_by_pid = [None; TS_PID_COUNT];
     for (track_index, entry) in es_entries.iter().enumerate() {
@@ -612,9 +607,7 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
         return Ok(None);
     }
 
-    stream
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    stream.seek(SeekFrom::Start(0)).map_err(ProbeError::from)?;
 
     let mut batch = vec![0_u8; layout.raw_packet_size * STREAM_PROBE_BATCH_PACKETS];
     let mut raw_packet = vec![0_u8; layout.raw_packet_size];
@@ -626,9 +619,7 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
 
     while packets_scanned < STREAM_PROBE_PACKET_LIMIT && active_states > 0 {
         if batch_mode {
-            let batch_start = stream
-                .stream_position()
-                .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            let batch_start = stream.stream_position().map_err(ProbeError::from)?;
             let remaining_packets = STREAM_PROBE_PACKET_LIMIT - packets_scanned;
             let packet_count = remaining_packets.min(STREAM_PROBE_BATCH_PACKETS);
             let read_len = packet_count * layout.raw_packet_size;
@@ -647,7 +638,7 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
                 if batch[sync] != SYNC_BYTE {
                     stream
                         .seek(SeekFrom::Start(batch_start + offset as u64))
-                        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+                        .map_err(ProbeError::from)?;
                     batch_mode = false;
                     break;
                 }
@@ -749,7 +740,7 @@ fn process_stream_probe_packet(
 struct TsStreamProbeState {
     track_index: usize,
     kind: TrackKind,
-    codec_name: Option<String>,
+    codec_name: Option<Codec>,
     budget: ProbeBudget,
     buffer: Vec<u8>,
     pts_values: Vec<u64>,
@@ -759,7 +750,7 @@ struct TsStreamProbeState {
 }
 
 impl TsStreamProbeState {
-    fn new(track_index: usize, kind: TrackKind, codec_name: Option<String>) -> Self {
+    fn new(track_index: usize, kind: TrackKind, codec_name: Option<Codec>) -> Self {
         Self {
             track_index,
             kind,
@@ -804,7 +795,7 @@ impl TsStreamProbeState {
         let stopped_on_budget =
             !self.complete && (self.budget.exhausted() || packet_budget_exhausted);
         if !self.complete
-            && self.codec_name.as_deref() == Some("aac")
+            && self.codec_name == Some(Codec::Aac)
             && let Some(header) = find_adts_header_with_minimum(&self.buffer, 2)
             && let Some(bitrate) = header.bit_rate_bps
         {
@@ -818,7 +809,7 @@ impl TsStreamProbeState {
             self.metadata_report.budget_exhausted |= exhausted;
             self.metadata_report.status = scryer_media_model::ProbeStatus::Incomplete;
             self.metadata_report.warnings.push(scryer_media_model::ProbeWarning {
-                code: if exhausted { "ts_stream_probe_budget" } else { "ts_stream_probe_incomplete" }.into(),
+                code: if exhausted { warning::TS_STREAM_PROBE_BUDGET } else { warning::TS_STREAM_PROBE_INCOMPLETE }.into(),
                 message: if exhausted {
                     "Transport stream enrichment reached its read budget before all requested metadata was established"
                 } else {
@@ -831,7 +822,7 @@ impl TsStreamProbeState {
         if self.kind == TrackKind::Video
             && let Some(observed_fps) = estimate_frame_rate_from_pts(&self.pts_values)
             && should_use_pts_frame_rate(
-                track.codec_name.as_deref(),
+                track.codec_name.as_ref(),
                 track.frame_rate_fps,
                 observed_fps,
             )
@@ -857,26 +848,28 @@ impl TsStreamProbeState {
             return;
         }
 
-        match self.codec_name.as_deref() {
-            Some("h264") => probe_h264_track(&self.buffer, track),
-            Some("hevc") => probe_hevc_track(&self.buffer, track),
-            Some("vc1") => probe_vc1_track(&self.buffer, track),
-            Some("mpeg1video") | Some("mpeg2video") => probe_mpeg_video_track(&self.buffer, track),
-            Some("aac") => probe_aac_track(&self.buffer, track),
-            Some("aac_latm") => probe_latm_track(&self.buffer, track),
-            Some("mp2") => probe_mpeg_audio_track(&self.buffer, track),
-            Some("ac3") => probe_ac3_track(&self.buffer, track),
-            Some("eac3") => probe_eac3_track(&self.buffer, track),
-            Some("truehd") => probe_truehd_track(&self.buffer, track),
-            Some("dts") => probe_dts_track(&self.buffer, track),
-            Some("unknown") if self.kind == TrackKind::Audio => {
+        match self.codec_name {
+            Some(Codec::H264) => probe_h264_track(&self.buffer, track),
+            Some(Codec::Hevc) => probe_hevc_track(&self.buffer, track),
+            Some(Codec::Vc1) => probe_vc1_track(&self.buffer, track),
+            Some(Codec::Mpeg1Video) | Some(Codec::Mpeg2Video) => {
+                probe_mpeg_video_track(&self.buffer, track)
+            }
+            Some(Codec::Aac) => probe_aac_track(&self.buffer, track),
+            Some(Codec::AacLatm) => probe_latm_track(&self.buffer, track),
+            Some(Codec::Mp2) => probe_mpeg_audio_track(&self.buffer, track),
+            Some(Codec::Ac3) => probe_ac3_track(&self.buffer, track),
+            Some(Codec::Eac3) => probe_eac3_track(&self.buffer, track),
+            Some(Codec::TrueHd) => probe_truehd_track(&self.buffer, track),
+            Some(Codec::Dts) => probe_dts_track(&self.buffer, track),
+            Some(Codec::Unknown) if self.kind == TrackKind::Audio => {
                 probe_unknown_audio_track(&self.buffer, track);
                 // Identification establishes the codec, not completion of its
                 // metadata. Continue with that codec's bounded sampling rules.
                 if track
                     .codec_name
-                    .as_deref()
-                    .is_some_and(|name| name != "unknown")
+                    .as_ref()
+                    .is_some_and(|name| *name != Codec::Unknown)
                 {
                     self.codec_name.clone_from(&track.codec_name);
                 }
@@ -894,54 +887,60 @@ impl TsStreamProbeState {
     }
 
     fn probe_complete(&self, track: &RawTrack) -> bool {
-        match self.codec_name.as_deref() {
-            Some("h264") | Some("hevc") | Some("vc1") | Some("mpeg1video") | Some("mpeg2video") => {
+        match self.codec_name {
+            Some(Codec::H264)
+            | Some(Codec::Hevc)
+            | Some(Codec::Vc1)
+            | Some(Codec::Mpeg1Video)
+            | Some(Codec::Mpeg2Video) => {
                 track.width.is_some() && track.height.is_some() && self.pts_values.len() >= 8
             }
-            Some("aac") => {
+            Some(Codec::Aac) => {
                 track.channels.is_some()
                     && track.audio_profile.is_some()
                     && (track.bit_rate_bps.is_some()
                         || track.metadata.estimated_bitrate_bps.is_some())
             }
-            Some("aac_latm") | Some("eac3") => {
+            Some(Codec::AacLatm) | Some(Codec::Eac3) => {
                 track.channels.is_some() && track.audio_profile.is_some()
             }
-            Some("mp2") | Some("ac3") => track.channels.is_some(),
-            Some("truehd") => track.audio_profile.is_some(),
-            Some("dts") => {
+            Some(Codec::Mp2) | Some(Codec::Ac3) => track.channels.is_some(),
+            Some(Codec::TrueHd) => track.audio_profile.is_some(),
+            Some(Codec::Dts) => {
                 track.channels.is_some()
                     && track.audio_profile.as_deref().is_some_and(|profile| {
                         profile != "DTS"
                             && (!profile.starts_with("DTS-HD") || track.channels.unwrap_or(0) > 6)
                     })
             }
-            Some("unknown") if self.kind == TrackKind::Audio => {
-                track.codec_name.as_deref() != Some("unknown") && track.channels.is_some()
+            Some(Codec::Unknown) if self.kind == TrackKind::Audio => {
+                track.codec_name != Some(Codec::Unknown) && track.channels.is_some()
             }
             _ => false,
         }
     }
 
     fn track_probe_needed(&self, track: &RawTrack) -> bool {
-        match self.codec_name.as_deref() {
-            Some("h264") | Some("hevc") | Some("vc1") | Some("mpeg1video") | Some("mpeg2video") => {
-                track.width.is_none() || track.height.is_none()
-            }
-            Some("aac") => {
+        match self.codec_name {
+            Some(Codec::H264)
+            | Some(Codec::Hevc)
+            | Some(Codec::Vc1)
+            | Some(Codec::Mpeg1Video)
+            | Some(Codec::Mpeg2Video) => track.width.is_none() || track.height.is_none(),
+            Some(Codec::Aac) => {
                 track.channels.is_none()
                     || track.audio_profile.is_none()
                     || (track.bit_rate_bps.is_none()
                         && track.metadata.estimated_bitrate_bps.is_none())
             }
-            Some("aac_latm") | Some("eac3") => {
+            Some(Codec::AacLatm) | Some(Codec::Eac3) => {
                 track.channels.is_none() || track.audio_profile.is_none()
             }
-            Some("mp2") | Some("ac3") => track.channels.is_none(),
-            Some("truehd") => track.audio_profile.is_none(),
-            Some("dts") => !self.probe_complete(track),
-            Some("unknown") if self.kind == TrackKind::Audio => {
-                track.codec_name.as_deref() == Some("unknown") || track.channels.is_none()
+            Some(Codec::Mp2) | Some(Codec::Ac3) => track.channels.is_none(),
+            Some(Codec::TrueHd) => track.audio_profile.is_none(),
+            Some(Codec::Dts) => !self.probe_complete(track),
+            Some(Codec::Unknown) if self.kind == TrackKind::Audio => {
+                track.codec_name == Some(Codec::Unknown) || track.channels.is_none()
             }
             _ => true,
         }
@@ -960,9 +959,13 @@ impl TsStreamProbeState {
             return true;
         }
 
-        match self.codec_name.as_deref() {
-            Some("aac") => crossed_probe_boundary(before_len, after_len, 64 * 1024, 16 * 1024),
-            Some("h264") | Some("hevc") | Some("vc1") | Some("mpeg1video") | Some("mpeg2video") => {
+        match self.codec_name {
+            Some(Codec::Aac) => crossed_probe_boundary(before_len, after_len, 64 * 1024, 16 * 1024),
+            Some(Codec::H264)
+            | Some(Codec::Hevc)
+            | Some(Codec::Vc1)
+            | Some(Codec::Mpeg1Video)
+            | Some(Codec::Mpeg2Video) => {
                 crossed_probe_boundary(before_len, after_len, 4 * 1024, 4 * 1024)
             }
             _ => crossed_probe_boundary(before_len, after_len, 2 * 1024, 2 * 1024),
@@ -979,7 +982,7 @@ fn is_plausible_frame_rate(frame_rate_fps: Option<f64>) -> bool {
 }
 
 fn should_use_pts_frame_rate(
-    codec_name: Option<&str>,
+    codec_name: Option<&Codec>,
     existing: Option<f64>,
     observed: f64,
 ) -> bool {
@@ -989,7 +992,7 @@ fn should_use_pts_frame_rate(
     if !is_plausible_frame_rate(existing) {
         return true;
     }
-    if matches!(codec_name, Some("h264" | "hevc"))
+    if matches!(codec_name, Some(Codec::H264 | Codec::Hevc))
         && existing.is_some_and(|existing| observed < existing * 0.75)
     {
         return false;
@@ -1304,7 +1307,7 @@ fn read_ts_packet<T: Read + Seek>(
     layout: TsPacketLayout,
     raw_packet: &mut [u8],
     packet: &mut [u8; TS_PACKET_SIZE],
-) -> Result<bool, MediaInfoError> {
+) -> Result<bool, ProbeError> {
     let n = read_full(stream, raw_packet);
     if n < layout.raw_packet_size {
         return Ok(false);
@@ -1320,17 +1323,15 @@ fn resync<T: Read + Seek>(
     stream: &mut T,
     layout: TsPacketLayout,
     raw_packet: &mut [u8],
-) -> Result<bool, MediaInfoError> {
-    let current = stream
-        .stream_position()
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+) -> Result<bool, ProbeError> {
+    let current = stream.stream_position().map_err(ProbeError::from)?;
     let rewind = current.saturating_sub((layout.raw_packet_size - 1) as u64);
 
     for offset in 0..layout.raw_packet_size {
         let candidate_start = rewind + offset as u64;
         stream
             .seek(SeekFrom::Start(candidate_start))
-            .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+            .map_err(ProbeError::from)?;
         if read_full(stream, raw_packet) < layout.raw_packet_size {
             return Ok(false);
         }
@@ -1342,15 +1343,9 @@ fn resync<T: Read + Seek>(
     Ok(false)
 }
 
-fn detect_ts_packet_layout<T: Read + Seek>(
-    stream: &mut T,
-) -> Result<TsPacketLayout, MediaInfoError> {
-    let current = stream
-        .stream_position()
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
-    stream
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+fn detect_ts_packet_layout<T: Read + Seek>(stream: &mut T) -> Result<TsPacketLayout, ProbeError> {
+    let current = stream.stream_position().map_err(ProbeError::from)?;
+    stream.seek(SeekFrom::Start(0)).map_err(ProbeError::from)?;
 
     let probe_len = TS_FEC_PACKET_SIZE * 100;
     let mut probe = vec![0u8; probe_len];
@@ -1359,7 +1354,7 @@ fn detect_ts_packet_layout<T: Read + Seek>(
 
     stream
         .seek(SeekFrom::Start(current))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+        .map_err(ProbeError::from)?;
 
     let candidates = [
         TsPacketLayout {
@@ -1379,7 +1374,7 @@ fn detect_ts_packet_layout<T: Read + Seek>(
     candidates
         .into_iter()
         .max_by_key(|layout| packet_layout_score(&probe, *layout))
-        .ok_or_else(|| MediaInfoError::Parse("unable to determine TS packet layout".into()))
+        .ok_or_else(|| ProbeError::Malformed("unable to determine TS packet layout".into()))
 }
 
 fn packet_layout_score(data: &[u8], layout: TsPacketLayout) -> usize {

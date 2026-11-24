@@ -1,5 +1,6 @@
 use super::*;
 use crate::codec::aac::find_adts_header;
+use scryer_media_model::Codec;
 
 #[test]
 fn budget_exhausted_during_stream_probing_keeps_the_program_map_tracks() {
@@ -10,12 +11,12 @@ fn budget_exhausted_during_stream_probing_keeps_the_program_map_tracks() {
     let analysis = (8_u64..128)
         .filter_map(|limit| {
             let mut source = std::io::Cursor::new(fixture);
-            let analysis = crate::analyze_source_with_limits(
+            let analysis = crate::probe_bounded(
                 &mut source,
                 "ts",
-                crate::AnalyzeOptions::default(),
-                64 * 1024 * 1024,
-                limit,
+                &crate::ProbeOptions::new()
+                    .with_depth(crate::ProbeDepth::Quick)
+                    .with_io_limit(limit),
             )
             .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
             analysis
@@ -72,12 +73,14 @@ fn delayed_program_map_uses_buffered_source_reads() {
         input: std::io::Cursor::new(bytes),
         reads: 0,
     };
-    let raw = parse_ts_source(&mut source, AnalysisProfile::ContentProbe).unwrap();
-    assert!(
-        raw.tracks
-            .iter()
-            .any(|track| track.codec_name.as_deref() == Some("h264"))
-    );
+    let raw = parse_ts_source(&mut source, ProbeDepth::Identify).unwrap();
+    assert!(raw.tracks.iter().any(|track| {
+        track
+            .codec_name
+            .as_ref()
+            .map(scryer_media_model::Codec::as_str)
+            == Some("h264")
+    }));
     assert!(
         source.reads < 200,
         "{} underlying reads for delayed PSI",
@@ -230,7 +233,13 @@ fn short_aac_samples_are_estimated_only_when_enrichment_finishes() {
             "continue collecting toward the regular 128-frame target"
         );
         assert!(track.metadata.estimated_bitrate_bps.is_none());
-        assert_eq!(state.codec_name.as_deref(), Some("aac"));
+        assert_eq!(
+            state
+                .codec_name
+                .as_ref()
+                .map(scryer_media_model::Codec::as_str),
+            Some("aac")
+        );
         state.finish(&mut track, exhausted);
         assert_eq!(
             track.metadata.estimated_bitrate_bps,
@@ -250,7 +259,7 @@ fn short_aac_samples_are_estimated_only_when_enrichment_finishes() {
 #[test]
 fn completed_transport_enrichment_does_not_report_an_unused_budget() {
     let mut track = RawTrack {
-        codec_name: Some("aac".into()),
+        codec_name: Some(Codec::Aac),
         ..Default::default()
     };
     let mut state = TsStreamProbeState::new(0, TrackKind::Audio, Some("aac".into()));
@@ -289,7 +298,7 @@ fn parses_adts_header_channels_and_bitrate() {
     assert_eq!(header.channel_layout, "stereo");
     assert!(header.bit_rate_bps.is_some());
     let mut track = RawTrack {
-        codec_name: Some("aac".into()),
+        codec_name: Some(Codec::Aac),
         ..Default::default()
     };
     probe_aac_track(&data, &mut track);
@@ -327,12 +336,12 @@ fn pts_frame_rate_estimate_prefers_dense_cadence_over_repeated_field_gaps() {
 #[test]
 fn h264_ts_keeps_plausible_sps_frame_rate_over_sparse_pts_cadence() {
     assert!(!should_use_pts_frame_rate(
-        Some("h264"),
+        Some(&scryer_media_model::Codec::H264),
         Some(30000.0 / 1001.0),
         30000.0 / 3003.0
     ));
     assert!(should_use_pts_frame_rate(
-        Some("mpeg2video"),
+        Some(&scryer_media_model::Codec::Mpeg2Video),
         Some(24.0),
         12.0
     ));
