@@ -23,7 +23,8 @@ fn remote_reference(value: &str) -> bool {
 /// Unreadable files remain errors; malformed, oversized, and local references hold.
 pub(crate) fn playlist_is_relocatable(path: &Path) -> io::Result<bool> {
     let mut bytes = Vec::new();
-    std::fs::File::open(path)?
+    crate::disk::Disk::process()
+        .open_blocking(path, crate::disk::Open::read())?
         .take(MAX_PLAYLIST_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_PLAYLIST_BYTES {

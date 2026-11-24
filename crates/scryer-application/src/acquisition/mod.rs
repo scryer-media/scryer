@@ -18,6 +18,7 @@ pub(crate) mod decision_helpers;
 pub mod decision_pipeline;
 pub(crate) mod decision_steps;
 pub(crate) mod delay_profile;
+pub(crate) mod grab_job;
 pub(crate) mod pending;
 pub(crate) mod policy;
 pub(crate) mod release_search;

@@ -17,6 +17,9 @@ async fn run_import(
     preparation_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     resolved_title_authorization: Option<&User>,
 ) -> AppResult<ImportResult> {
+    // The download's workspace is not removed while this pass reads it.
+    let workspace_reader =
+        crate::import::archive_extraction::read_download_workspace(app, completed)?;
     let mut preparation_permit = Some(match preparation_permit {
         Some(permit) => permit,
         None => {
@@ -37,6 +40,7 @@ async fn run_import(
         archive_password,
         &mut preparation_permit,
         resolved_title_authorization,
+        workspace_reader.as_ref(),
     ))
     .await?
     {
@@ -129,19 +133,78 @@ async fn run_import(
     let mut subtitles_pending =
         subtitle_failed || subtitle_plan.has_pending_sources(delivered_sources.into_iter());
     let subtitles_outstanding = subtitles_pending;
+    // A cleanup refusal that needs reconciliation ends the import so, and
+    // records no hold an operator could release.
+    let mut cleanup_refused = false;
     if !subtitles_pending
         && result
             .as_ref()
             .is_ok_and(|result| result.decision == ImportDecision::Imported)
-        && complete_deferred_import_source_cleanup(app, source_cleanups)
-            .await
-            .is_err()
     {
-        subtitles_pending = true;
-        tracing::warn!(
-            import_id,
-            "verified source cleanup could not finish; import remains successful and sources retained"
-        );
+        match complete_deferred_import_source_cleanup(app, import_id, source_cleanups, source_hold)
+            .await
+        {
+            Ok(()) => {}
+            Err(DeferredCleanupFailure::NeedsReconciliation(error)) => {
+                tracing::error!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup was refused; sources retained for reconciliation"
+                );
+                subtitles_pending = true;
+                cleanup_refused = true;
+                result = Err(error);
+            }
+            // No sources are held, so nothing waits for a release: the attempt
+            // ends failed with the cleanup's own error and is retried. Its
+            // files are placed and cataloged, so it is recorded as the retry
+            // it waits for, never as a failed import: no failed event or
+            // history entry is written for a file that was imported.
+            Err(DeferredCleanupFailure::Failed(error)) => {
+                tracing::warn!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup could not finish; sources retained and the import retried"
+                );
+                subtitles_pending = true;
+                cleanup_refused = true;
+                let title_id = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|imported| imported.title_id.clone());
+                let failed = ImportResult {
+                    decision: ImportDecision::Failed,
+                    skip_reason: completed_import_error_skip_reason(&error),
+                    error_message: Some(error.to_string()),
+                    reason_code: error.reason().map(str::to_string),
+                    needs_reconciliation: false,
+                    source_cleanup_failed: true,
+                    release_burned: false,
+                    title_id,
+                    ..base_completed_import_result(
+                        import_id,
+                        completed,
+                        release_evidence,
+                        started_at,
+                    )
+                };
+                app.update_import_status_and_notify(
+                    import_id,
+                    completed_import_status_for_result(&failed, ImportStatus::Failed),
+                    serde_json::to_string(&failed).ok(),
+                )
+                .await?;
+                result = Ok(failed);
+            }
+            Err(DeferredCleanupFailure::Held(error)) => {
+                subtitles_pending = true;
+                tracing::warn!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup could not finish; import remains successful and sources retained"
+                );
+            }
+        }
     }
     if source_hold
         && !subtitles_pending
@@ -165,7 +228,7 @@ async fn run_import(
 
     if subtitles_pending {
         workspace_reference.retain();
-        if source_hold {
+        if source_hold && !cleanup_refused {
             let reason = if target.archive_processing_pending {
                 HeldSourcesReason::ArchiveExtractionFailed
             } else if subtitles_outstanding {
@@ -207,7 +270,10 @@ async fn run_import(
         }
     }
 
-    // Clean up extracted archive directory if we created one
+    // A pass-scoped extraction goes with the pass. A download's own workspace
+    // outlives it: a pack imported in part is retried by later passes of the
+    // same download, which reuse the workspace instead of extracting again.
+    // It goes when the download settles.
     if result
         .as_ref()
         .is_ok_and(|result| result.decision == ImportDecision::Imported)
@@ -215,7 +281,9 @@ async fn run_import(
         && let Some(ref dir) = target.extracted_dir
     {
         workspace_reference.retain();
-        crate::archive_extractor::cleanup_extracted_dir(dir).await;
+        if !crate::import::archive_extraction::is_download_workspace_path(dir) {
+            crate::archive_extractor::cleanup_extracted_dir(dir).await;
+        }
     }
 
     result
@@ -233,13 +301,14 @@ async fn run_import(
 ///   for this title and reopens the scope's search, so the retry seeks a
 ///   different candidate instead of the same lie.
 /// - [`RejectionDisposition::Skip`] records `already_present`: the release lost
-///   a fair comparison and there is nothing to look for.
+///   a fair comparison and there is nothing to look for. A grab's losing file
+///   also blocks the release name, so it is not fetched again.
 /// - [`RejectionDisposition::Hold`] records `skipped`: nobody can decide this
 ///   without an operator.
 ///
 /// All three leave the download in `ImportBlocked` — `result_state.rs` maps
 /// every non-`Imported` decision there — so the dispositions differ only in
-/// their side effects (design §9, D17 restated).
+/// their side effects.
 async fn carry_out_import_rejection(
     app: &AppUseCase,
     actor: &User,
@@ -252,6 +321,7 @@ async fn carry_out_import_rejection(
     let ImportRejectionContext {
         rejection,
         disposition,
+        blocklist,
         release_title,
         source_title,
         source_video,
@@ -291,6 +361,15 @@ async fn carry_out_import_rejection(
             ("rejected", ImportDecision::Rejected)
         }
         crate::import_decide::RejectionDisposition::Skip => {
+            if let Some(directive) = blocklist.as_ref() {
+                crate::post_download_gate::blocklist_release_for_title(
+                    app,
+                    title,
+                    release_title,
+                    Some(directive.reason.clone()),
+                )
+                .await;
+            }
             ("already_present", ImportDecision::Skipped)
         }
         crate::import_decide::RejectionDisposition::Hold => ("skipped", ImportDecision::Skipped),
@@ -333,6 +412,9 @@ async fn carry_out_import_rejection(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -345,6 +427,8 @@ async fn carry_out_import_rejection(
 struct ImportRejectionContext<'a> {
     rejection: crate::post_download_gate::ImportedFileRejection,
     disposition: crate::import_decide::RejectionDisposition,
+    /// A block on the release name the decision earned beside a `Skip`.
+    blocklist: Option<crate::import_decide::BlocklistDirective>,
     release_title: &'a str,
     source_title: Option<&'a str>,
     source_video: &'a Path,
@@ -356,6 +440,45 @@ struct ImportRejectionContext<'a> {
     /// rather than only under the episode it happens to be tied to.
     series_movie_link_id: Option<&'a str>,
     episode_artifacts: &'a [scryer_domain::Episode],
+}
+
+/// A refusal that would block the release because it lost to the library,
+/// re-read against the files this download already placed.
+///
+/// Losing to a file an earlier pass of this same download placed says nothing
+/// against the release: it already imported. That refusal becomes the
+/// placed-by-this-download skip, with no block on the name. Every other refusal
+/// passes through unchanged, and only a refusal that carries a block reads the
+/// download's placed files.
+async fn refusal_against_own_placed_file(
+    app: &AppUseCase,
+    import_id: &str,
+    completed: &CompletedDownload,
+    source_video: &Path,
+    scope_label: &str,
+    better_library_copy: Option<&crate::import_decide::BetterLibraryCopy>,
+    refusal: (
+        crate::post_download_gate::ImportedFileRejection,
+        crate::import_decide::RejectionDisposition,
+        Option<crate::import_decide::BlocklistDirective>,
+    ),
+) -> AppResult<(
+    crate::post_download_gate::ImportedFileRejection,
+    crate::import_decide::RejectionDisposition,
+    Option<crate::import_decide::BlocklistDirective>,
+)> {
+    let (Some(copy), Some(_)) = (better_library_copy, refusal.2.as_ref()) else {
+        return Ok(refusal);
+    };
+    let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+    if !placed_files.placed_incumbent(Some(completed), source_video, &copy.file_id) {
+        return Ok(refusal);
+    }
+    Ok((
+        crate::import_decide::placed_by_this_download_rejection(scope_label, &copy.path),
+        crate::import_decide::RejectionDisposition::Skip,
+        None,
+    ))
 }
 
 struct CompletedImportTarget {
@@ -373,9 +496,14 @@ enum CompletedImportTargetResolution {
     Finished(Box<ImportResult>),
 }
 
+/// Where the archives of an import for `title` are extracted: a tracked
+/// download's own workspace in the title's library root when `download` names
+/// one, else a fresh workspace in the title folder. Earlier workspaces left in
+/// the title folder and the library root are swept by their usual age rule.
 pub(super) async fn archive_extraction_destination_for_title(
     app: &AppUseCase,
     import_id: &str,
+    download: Option<&crate::import::archive_extraction::DownloadExtractionKey>,
     title: &scryer_domain::Title,
 ) -> AppResult<crate::archive_extractor::ArchiveExtractionDestination> {
     let title = &app.title_for_naming(title).await;
@@ -384,12 +512,18 @@ pub(super) async fn archive_extraction_destination_for_title(
         folder_template,
         ..
     } = resolve_import_paths(app, title).await?;
-    let staging_parent = effective_title_folder_path(&media_root, title, &folder_template, None);
-    ensure_import_title_folder_available(app, title, &staging_parent).await?;
-    Ok(
-        crate::archive_extractor::ArchiveExtractionDestination::new(staging_parent, import_id)
+    let title_folder = effective_title_folder_path(&media_root, title, &folder_template, None);
+    ensure_import_title_folder_available(app, title, &title_folder).await?;
+    Ok(match download {
+        Some(download) => download
+            .destination(Path::new(&media_root))
+            .with_stale_cleanup_parent(title_folder)
             .with_stale_cleanup_parent(media_root),
-    )
+        None => {
+            crate::archive_extractor::ArchiveExtractionDestination::new(title_folder, import_id)
+                .with_stale_cleanup_parent(media_root)
+        }
+    })
 }
 
 /// Require `ResolveImports` on the library of the title an import resolved to.
@@ -436,7 +570,8 @@ async fn relocate_titleless_archive_workspace_for_title(
         return Ok(TitlelessArchiveRelocation::Ready(extracted_dir));
     }
 
-    tokio::fs::create_dir_all(&target_parent)
+    Disk::process()
+        .create_dir(&target_parent, crate::disk::Parents::Create)
         .await
         .map_err(|error| {
             AppError::Repository(format!(
@@ -452,24 +587,32 @@ async fn relocate_titleless_archive_workspace_for_title(
     );
     // Keep the name recorded by the ownership marker and never replace an
     // existing directory. Unsupported filesystems can extract under the title.
-    let Some(result) = crate::fs_safety::exclusive_rename(&extracted_dir, &target).await else {
-        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-        return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
-    };
-    match result {
-        Ok(()) => Ok(TitlelessArchiveRelocation::Ready(target)),
+    let disk = crate::disk::Disk::process();
+    match disk.move_onto_free_name(&extracted_dir, &target).await {
+        Ok(crate::disk::FreeNameMove::NotOffered) => {
+            crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
+            Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle)
+        }
+        Ok(crate::disk::FreeNameMove::Moved) => Ok(TitlelessArchiveRelocation::Ready(target)),
         Err(error) => {
             crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-            if crate::fs_safety::is_cross_device_error(&error)
-                || error.kind() == std::io::ErrorKind::AlreadyExists
+            use crate::disk::reason;
+            // Windows extracts under the title on any refusal, as it did
+            // before it had this rename.
+            if cfg!(windows)
+                || matches!(
+                    error.reason(),
+                    reason::DISK_MOVE_NEEDS_COPY | reason::DISK_DESTINATION_EXISTS
+                )
             {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
             Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING, format!(
-                "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
+                "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {}",
                 title_name,
                 extracted_dir.display(),
-                target.display()
+                target.display(),
+                error.words()
             )))
         }
     }
@@ -478,6 +621,7 @@ async fn relocate_titleless_archive_workspace_for_title(
 async fn archive_extraction_destination_for_completed_facet(
     app: &AppUseCase,
     import_id: &str,
+    download: Option<&crate::import::archive_extraction::DownloadExtractionKey>,
     completed: &CompletedDownload,
 ) -> AppResult<
     Option<(
@@ -507,10 +651,11 @@ async fn archive_extraction_destination_for_completed_facet(
         return Ok(None);
     };
 
-    Ok(Some((
-        crate::archive_extractor::ArchiveExtractionDestination::new(root_path, import_id),
-        facet,
-    )))
+    let destination = match download {
+        Some(download) => download.destination(Path::new(&root_path)),
+        None => crate::archive_extractor::ArchiveExtractionDestination::new(root_path, import_id),
+    };
+    Ok(Some((destination, facet)))
 }
 
 fn archive_probe_facet_from_completed(completed: &CompletedDownload) -> Option<MediaFacet> {
@@ -636,6 +781,10 @@ async fn archive_password_candidates(
     candidates
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the titleless probe carries durable evidence and the pass's workspace reader explicitly"
+)]
 async fn try_match_titleless_archive_from_inner_video(
     app: &AppUseCase,
     import_id: &str,
@@ -644,13 +793,21 @@ async fn try_match_titleless_archive_from_inner_video(
     release_evidence: &ReleaseEvidence,
     archive_password: Option<&str>,
     resolved_title_authorization: Option<&User>,
+    workspace_reader: Option<&crate::import::archive_extraction::WorkspaceReader>,
 ) -> AppResult<Option<TitlelessArchiveMatch>> {
     let is_sample = titleless_sample_rule(completed);
     if !archive_extraction_would_be_needed_best_effort(dest_dir, is_sample) {
         return Ok(None);
     }
-    let Some((destination, facet)) =
-        archive_extraction_destination_for_completed_facet(app, import_id, completed).await?
+    let download =
+        crate::import::archive_extraction::DownloadExtractionKey::for_completed(completed);
+    let Some((destination, facet)) = archive_extraction_destination_for_completed_facet(
+        app,
+        import_id,
+        download.as_ref(),
+        completed,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -671,23 +828,53 @@ async fn try_match_titleless_archive_from_inner_video(
         .imports
         .set_archive_processing_pending(import_id, true)
         .await?;
-    mark_import_extracting(app, import_id).await?;
-    let Some(extracted_dir) = ({
-        let _archive_extraction_permit = app
-            .runtime
-            .imports
-            .execution_coordinator
-            .acquire_archive_extraction()
-            .await;
-        crate::archive_extractor::extract_archives_if_needed(
-            dest_dir,
-            is_sample,
-            Some(destination),
-            &passwords,
-            archive_provider.clone(),
-        )
-        .await?
-    }) else {
+    let reused = match &download {
+        Some(download) => {
+            crate::import::archive_extraction::completed_download_extraction(
+                app, download, dest_dir,
+            )
+            .await?
+        }
+        None => None,
+    };
+    let extracted = match reused {
+        Some(reused) => Some(reused),
+        None => {
+            mark_import_extracting(app, import_id).await?;
+            let _archive_extraction_permit = app
+                .runtime
+                .imports
+                .execution_coordinator
+                .acquire_archive_extraction()
+                .await;
+            match &download {
+                Some(download) => {
+                    crate::import::archive_extraction::extract_download_archives(
+                        app,
+                        download,
+                        dest_dir,
+                        is_sample,
+                        destination,
+                        &passwords,
+                        archive_provider.clone(),
+                        workspace_reader,
+                    )
+                    .await?
+                }
+                None => {
+                    crate::archive_extractor::extract_archives_if_needed(
+                        dest_dir,
+                        is_sample,
+                        Some(destination),
+                        &passwords,
+                        archive_provider.clone(),
+                    )
+                    .await?
+                }
+            }
+        }
+    };
+    let Some(extracted_dir) = extracted else {
         return Ok(None);
     };
 
@@ -701,8 +888,8 @@ async fn try_match_titleless_archive_from_inner_video(
             discover_video_files(dest_dir, is_series)?
                 .into_iter()
                 .filter(|file| {
-                    file.path()
-                        .canonicalize()
+                    Disk::process()
+                        .canonicalize_blocking(file.path())
                         .is_ok_and(|path| !replaced.contains(&path))
                 }),
         );
@@ -734,14 +921,28 @@ async fn try_match_titleless_archive_from_inner_video(
             // for) a title the actor cannot resolve imports for. The probe
             // workspace is left in the facet root rather than removed here.
             authorize_resolved_import_title(app, resolved_title_authorization, &title).await?;
-            let destination =
-                match archive_extraction_destination_for_title(app, import_id, &title).await {
-                    Ok(destination) => destination,
-                    Err(error) => {
-                        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-                        return Err(error);
-                    }
-                };
+            if download.is_some() {
+                // A download's workspace stays where it was extracted; the
+                // title folder is still checked before anything is placed.
+                archive_extraction_destination_for_title(app, import_id, download.as_ref(), &title)
+                    .await?;
+                workspace_reference.retain();
+                return Ok(Some(TitlelessArchiveMatch {
+                    title,
+                    extracted_dir,
+                }));
+            }
+            let destination = match archive_extraction_destination_for_title(
+                app, import_id, None, &title,
+            )
+            .await
+            {
+                Ok(destination) => destination,
+                Err(error) => {
+                    crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
+                    return Err(error);
+                }
+            };
             let relocation = relocate_titleless_archive_workspace_for_title(
                 &title.name,
                 destination,
@@ -751,9 +952,16 @@ async fn try_match_titleless_archive_from_inner_video(
             let extracted_dir = match relocation {
                 TitlelessArchiveRelocation::Ready(extracted_dir) => extracted_dir,
                 TitlelessArchiveRelocation::ReextractUnderMatchedTitle => {
+                    // Without an extraction key every pass extracts again; the
+                    // re-extraction under the matched title is what repeats,
+                    // so it gets the same attempts a keyed extraction gets.
+                    crate::import::archive_extraction::begin_keyless_reextraction(
+                        app, completed,
+                    )?;
                     mark_import_extracting(app, import_id).await?;
                     let destination =
-                        archive_extraction_destination_for_title(app, import_id, &title).await?;
+                        archive_extraction_destination_for_title(app, import_id, None, &title)
+                            .await?;
                     ({
                         let _archive_extraction_permit = app
                             .runtime
@@ -790,6 +998,23 @@ async fn try_match_titleless_archive_from_inner_video(
     Ok(None)
 }
 
+/// A failed upgrade never falls through to a placement beside the file it
+/// would have replaced: that file fails and the existing one stays. An error
+/// that already names its condition, needs reconciliation or was cancelled
+/// is returned as it is.
+fn upgrade_preparation_failed(error: AppError) -> AppError {
+    if error.reason().is_some()
+        || error.requires_manual_reconciliation()
+        || matches!(error, AppError::Canceled(_))
+    {
+        return error;
+    }
+    AppError::validation_refused(
+        crate::error_reasons::import::UPGRADE_PREPARATION_FAILED,
+        format!("the existing file was kept because preparing its replacement failed: {error}"),
+    )
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "completed import target resolution carries explicit durable evidence and preparation ownership"
@@ -804,6 +1029,7 @@ async fn resolve_completed_import_target(
     archive_password: Option<&str>,
     preparation_permit: &mut Option<tokio::sync::OwnedSemaphorePermit>,
     resolved_title_authorization: Option<&User>,
+    workspace_reader: Option<&crate::import::archive_extraction::WorkspaceReader>,
 ) -> AppResult<CompletedImportTargetResolution> {
     // 2. TITLE MATCHING
     let mut title = None;
@@ -867,6 +1093,7 @@ async fn resolve_completed_import_target(
             release_evidence,
             archive_password,
             resolved_title_authorization,
+            workspace_reader,
         )
         .await;
         *preparation_permit = Some(
@@ -1006,12 +1233,30 @@ async fn resolve_completed_import_target(
                 .set_archive_processing_pending(import_id, true)
                 .await?;
         }
-        let extraction_destination =
-            if needs_archives && !(loose_video_available && archive_provider.is_none()) {
-                Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
-            } else {
-                None
-            };
+        let download =
+            crate::import::archive_extraction::DownloadExtractionKey::for_completed(completed);
+        // An extraction an earlier pass of this download made is read again,
+        // never redone.
+        let reused = match &download {
+            Some(download) if needs_archives => {
+                crate::import::archive_extraction::completed_download_extraction(
+                    app, download, dest_dir,
+                )
+                .await
+            }
+            _ => Ok(None),
+        };
+        let extraction_destination = if matches!(reused, Ok(None))
+            && needs_archives
+            && !(loose_video_available && archive_provider.is_none())
+        {
+            Some(
+                archive_extraction_destination_for_title(app, import_id, download.as_ref(), &title)
+                    .await?,
+            )
+        } else {
+            None
+        };
         let passwords = if extraction_destination.is_some() {
             archive_password_candidates(app, completed, release_evidence, archive_password).await
         } else {
@@ -1037,8 +1282,11 @@ async fn resolve_completed_import_target(
         } else {
             None
         };
-        drop(preparation_permit.take());
-        let extraction = async {
+        let extraction = if !matches!(reused, Ok(None)) {
+            reused
+        } else {
+            drop(preparation_permit.take());
+            let extraction = async {
             let acquire = app.runtime.imports.execution_coordinator.acquire_archive_extraction();
             let cancellation = extraction_stream.as_ref().map(|stream| stream.cancellation_token());
             let _archive_extraction_permit = if let Some(token) = &cancellation {
@@ -1054,25 +1302,44 @@ async fn resolve_completed_import_target(
             if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
                 return Err(AppError::Canceled("queued archive extraction was cancelled".into()));
             }
-            crate::archive_extractor::extract_archives_if_needed(
-                dest_dir,
-                automatic_scan_sample_rule(&title.facet),
-                extraction_destination,
-                &passwords,
-                archive_provider,
-            )
-            .await
+            match (&download, extraction_destination) {
+                (Some(download), Some(destination)) => {
+                    crate::import::archive_extraction::extract_download_archives(
+                        app,
+                        download,
+                        dest_dir,
+                        automatic_scan_sample_rule(&title.facet),
+                        destination,
+                        &passwords,
+                        archive_provider,
+                        workspace_reader,
+                    )
+                    .await
+                }
+                (_, destination) => {
+                    crate::archive_extractor::extract_archives_if_needed(
+                        dest_dir,
+                        automatic_scan_sample_rule(&title.facet),
+                        destination,
+                        &passwords,
+                        archive_provider,
+                    )
+                    .await
+                }
+            }
         }.await;
-        if let Some(stream) = extraction_stream {
-            stream.finish().await;
-        }
-        *preparation_permit = Some(
-            app.runtime
-                .imports
-                .execution_coordinator
-                .acquire_preparation()
-                .await,
-        );
+            if let Some(stream) = extraction_stream {
+                stream.finish().await;
+            }
+            *preparation_permit = Some(
+                app.runtime
+                    .imports
+                    .execution_coordinator
+                    .acquire_preparation()
+                    .await,
+            );
+            extraction
+        };
         extracted_dir = match extraction {
             Ok(dir) => dir,
             Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),
@@ -1097,8 +1364,8 @@ async fn resolve_completed_import_target(
                 discover_video_files(dest_dir, is_series)?
                     .into_iter()
                     .filter(|file| {
-                        file.path()
-                            .canonicalize()
+                        Disk::process()
+                            .canonicalize_blocking(file.path())
                             .is_ok_and(|path| !replaced.contains(&path))
                     }),
             );
@@ -1219,8 +1486,8 @@ async fn dispatch_completed_import_target(
     subtitle_deliveries: &mut Vec<(PathBuf, PathBuf)>,
 ) -> AppResult<ImportResult> {
     // The target title is settled and nothing has been written yet: the last
-    // point an import can be refused cleanly while an operation owns the title
-    // (FR-084). The refusal reaches the operator as a failed import record.
+    // point an import can be refused cleanly while an operation owns the title.
+    // The refusal reaches the operator as a failed import record.
     let _location_guard = app
         .acquire_location_title_mutation(
             &crate::location::ownership_guard::COMPLETED_IMPORT_ENTRY,
@@ -1416,6 +1683,9 @@ async fn hold_replacement_for_manual_resolution(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1424,8 +1694,32 @@ async fn hold_replacement_for_manual_resolution(
     Ok(result)
 }
 
-/// The library row an earlier additional import created from this exact source
-/// video, when that copy still exists and its sampled content proof matches
+/// The import source's size in bytes, read once. A source that is gone reads
+/// as zero, as before, and the later steps settle it; a source whose reading
+/// failed is a retryable error, never a zero that would skip the
+/// identical-incumbent guard.
+async fn import_source_size(source_video: &Path) -> AppResult<i64> {
+    match Disk::process().follow(source_video).await {
+        PathReading::Known { len, .. } => Ok(len.unwrap_or(0) as i64),
+        PathReading::Missing { .. } => Ok(0),
+        reading => {
+            let cause = reading
+                .unknown_reason()
+                .unwrap_or(reason::DISK_PATH_UNREACHABLE);
+            Err(AppError::temporary_unavailable_reason(
+                cause,
+                format!(
+                    "failed to read the size of import source {}: {cause}",
+                    source_video.display()
+                ),
+                None,
+            ))
+        }
+    }
+}
+
+/// The library row an earlier additional import created from these source
+/// bytes, when that copy still exists and its sampled content proof matches
 /// the source.
 ///
 /// `additional_import_dest_path` mints a fresh " (N)" name whenever the previous
@@ -1434,29 +1728,47 @@ async fn hold_replacement_for_manual_resolution(
 /// land as yet another numbered file every pass. Resolving the earlier copy as
 /// the destination lets the duplicate check reject the retry instead.
 ///
-/// Path and size alone would also match a later download that reuses the same
-/// source path with different bytes, so the head/tail sampled proof (never a
+/// The source path does not identify the bytes: an archived release is
+/// extracted into a freshly named workspace on every pass. Candidates are the
+/// title's additional copies of the same catalog size, those recorded from
+/// the same source path first so the common retry costs one proof. Size alone
+/// would also match different bytes, so the head/tail sampled proof (never a
 /// full read) has to agree too. A copy that is gone is simply no match; any
 /// other failure to read the evidence is an error, so the caller backs off
 /// instead of minting another destination on unverified state.
+///
+/// `placed_by_this_download` names the library file an earlier pass of the
+/// same download placed from this source. That copy is the answer whatever its
+/// bytes are now, so it is never proved, overwritten or copied again.
 async fn existing_additional_import_media_file(
     app: &AppUseCase,
     title: &scryer_domain::Title,
     source_video: &Path,
     source_size: i64,
-) -> AppResult<Option<crate::TitleMediaFile>> {
+    placed_by_this_download: Option<&str>,
+) -> AppResult<Option<PriorAdditionalImport>> {
     let source_key = path_to_stored_string(source_video);
-    let candidates = app
+    let additional = app
         .services
         .library
         .media_files
         .list_media_files_for_title(&title.id)
         .await?
         .into_iter()
-        .filter(|file| file.role == crate::MediaFileRole::Additional)
-        .filter(|file| file.original_file_path.as_deref() == Some(source_key.as_str()))
-        .filter(|file| file.size_bytes == source_size)
-        .collect::<Vec<_>>();
+        .filter(|file| file.role == crate::MediaFileRole::Additional);
+    let mut candidates = Vec::new();
+    for file in additional {
+        if placed_by_this_download == Some(file.id.as_str()) {
+            return Ok(Some(PriorAdditionalImport {
+                file,
+                placed_by_this_download: true,
+            }));
+        }
+        if file.size_bytes == source_size {
+            candidates.push(file);
+        }
+    }
+    candidates.sort_by_key(|file| file.original_file_path.as_deref() != Some(source_key.as_str()));
     if candidates.is_empty() {
         return Ok(None);
     }
@@ -1466,14 +1778,16 @@ async fn existing_additional_import_media_file(
         let mut source_proof = None;
         for candidate in candidates {
             let copy_path = Path::new(&candidate.file_path);
-            match std::fs::metadata(copy_path) {
-                Ok(metadata) if metadata.len() as i64 == source_size => {}
-                Ok(_) => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
+            match Disk::process().follow_blocking(copy_path) {
+                PathReading::Known { len: Some(len), .. } if len as i64 == source_size => {}
+                PathReading::Known { .. } | PathReading::Missing { .. } => continue,
+                reading => {
                     return Err(AppError::Repository(format!(
-                        "failed to stat earlier additional import {}: {error}",
-                        copy_path.display()
+                        "failed to stat earlier additional import {}: {}",
+                        copy_path.display(),
+                        reading
+                            .unknown_reason()
+                            .unwrap_or(reason::DISK_PATH_UNREACHABLE)
                     )));
                 }
             }
@@ -1487,13 +1801,24 @@ async fn existing_additional_import_media_file(
             if copy_proof.size_bytes == source_proof.size_bytes
                 && copy_proof.sample_blake3 == source_proof.sample_blake3
             {
-                return Ok(Some(candidate));
+                return Ok(Some(PriorAdditionalImport {
+                    file: candidate,
+                    placed_by_this_download: false,
+                }));
             }
         }
         Ok(None)
     })
     .await
     .map_err(|error| AppError::Repository(error.to_string()))?
+}
+
+/// An additional copy a retried import resolves instead of minting a new one.
+struct PriorAdditionalImport {
+    file: crate::TitleMediaFile,
+    /// An earlier pass of this download placed it from this source; otherwise
+    /// its sampled bytes match the source.
+    placed_by_this_download: bool,
 }
 
 #[expect(
@@ -1574,8 +1899,54 @@ async fn import_additional_movie_download(
         };
         full_folder_path.join(&rendered_filename)
     };
-    let prior_additional_file =
-        existing_additional_import_media_file(app, title, source_video, source_size).await?;
+    let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+    let prior_additional_file = existing_additional_import_media_file(
+        app,
+        title,
+        source_video,
+        source_size,
+        placed_files.placed_from_source(Some(completed), source_video),
+    )
+    .await?;
+    if let Some(prior) = prior_additional_file
+        .as_ref()
+        .filter(|prior| prior.placed_by_this_download)
+    {
+        let linked_episode_ids = series_movie_context
+            .and_then(|context| context.linked_episode_id)
+            .map(|episode_id| vec![episode_id.to_string()])
+            .unwrap_or_default();
+        return carry_out_import_rejection(
+            app,
+            actor,
+            title,
+            import_id,
+            completed,
+            ImportRejectionContext {
+                blocklist: None,
+                rejection: crate::import_decide::placed_by_this_download_rejection(
+                    "this title",
+                    &prior.file.file_path,
+                ),
+                disposition: crate::import_decide::RejectionDisposition::Skip,
+                release_title: &parsed.raw_title,
+                source_title: source_title.as_deref(),
+                source_video,
+                dest_path: Path::new(&prior.file.file_path),
+                source_size,
+                quality: parsed.quality.clone(),
+                episode_ids: &linked_episode_ids,
+                series_movie_link_id: series_movie_context
+                    .map(|context| context.series_movie_link_id),
+                episode_artifacts: series_movie_context
+                    .map(|context| context.linked_episode_artifacts)
+                    .unwrap_or(&[]),
+            },
+            started_at,
+        )
+        .await;
+    }
+    let prior_additional_file = prior_additional_file.map(|prior| prior.file);
     let dest_path = match prior_additional_file.as_ref() {
         Some(prior) => PathBuf::from(&prior.file_path),
         None => additional_import_dest_path(&canonical_dest_path, parsed),
@@ -1629,6 +2000,18 @@ async fn import_additional_movie_download(
         } else {
             "rejected"
         };
+        // Settled before the artifact that lets a later run call it imported.
+        let skip_reason = Some(
+            skip_reason_for_import_check_rejection(
+                app,
+                import_id,
+                Some(completed),
+                code,
+                source_video,
+                &dest_path,
+            )
+            .await?,
+        );
         persist_file_import_artifact(
             app,
             import_id,
@@ -1642,8 +2025,6 @@ async fn import_additional_movie_download(
             linked_episode_artifacts,
         )
         .await?;
-        let skip_reason =
-            Some(skip_reason_for_import_check_rejection(app, code, &dest_path).await?);
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
@@ -1664,6 +2045,9 @@ async fn import_additional_movie_download(
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1786,6 +2170,9 @@ async fn import_additional_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -1867,10 +2254,7 @@ async fn import_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = tokio::fs::metadata(&source_video)
-        .await
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let source_size = import_source_size(&source_video).await?;
 
     let ImportPathSettings {
         media_root,
@@ -1887,8 +2271,7 @@ async fn import_movie_download(
         .library
         .media_files
         .list_media_files_for_title(&title.id)
-        .await
-        .unwrap_or_default()
+        .await?
         .into_iter()
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
@@ -2067,6 +2450,9 @@ async fn import_movie_download(
                 completed_at: Utc::now(),
                 upgrade: false,
                 upgrade_previous_path: None,
+                reason_code: None,
+                needs_reconciliation: false,
+                source_cleanup_failed: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2120,6 +2506,18 @@ async fn import_movie_download(
         } else {
             "rejected"
         };
+        // Settled before the artifact that lets a later run call it imported.
+        let skip_reason = Some(
+            skip_reason_for_import_check_rejection(
+                app,
+                import_id,
+                Some(completed),
+                code,
+                &source_video,
+                &dest_path,
+            )
+            .await?,
+        );
         persist_file_import_artifact(
             app,
             import_id,
@@ -2133,8 +2531,6 @@ async fn import_movie_download(
             &[],
         )
         .await?;
-        let skip_reason =
-            Some(skip_reason_for_import_check_rejection(app, code, &dest_path).await?);
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
@@ -2155,6 +2551,9 @@ async fn import_movie_download(
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2192,7 +2591,7 @@ async fn import_movie_download(
         .await;
     }
 
-    // **The one import decision** (design §3): subject, landed score, truth
+    // **The one import decision**: subject, landed score, truth
     // verdict and admission in one call, over the same incumbents and the same
     // comparator the grab path consulted. This used to be a bare
     // `new_score > old_score` against a stored `acquisition_score`, and — until
@@ -2224,8 +2623,19 @@ async fn import_movie_download(
         crate::import_decide::ImportDecisionOutcome::Reject {
             rejection,
             disposition,
-            ..
+            better_library_copy,
+            blocklist,
         } => {
+            let (rejection, disposition, blocklist) = refusal_against_own_placed_file(
+                app,
+                import_id,
+                completed,
+                &source_video,
+                "this title",
+                better_library_copy.as_ref(),
+                (rejection, disposition, blocklist),
+            )
+            .await?;
             return carry_out_import_rejection(
                 app,
                 actor,
@@ -2235,6 +2645,7 @@ async fn import_movie_download(
                 ImportRejectionContext {
                     rejection,
                     disposition,
+                    blocklist,
                     release_title: &prepared.parsed.raw_title,
                     source_title: source_title.as_deref(),
                     source_video: &source_video,
@@ -2250,6 +2661,95 @@ async fn import_movie_download(
             .await;
         }
     };
+    // A file an earlier pass of this same download placed is never an
+    // incumbent to replace, whatever its bytes are now.
+    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
+        && !superseded.is_empty()
+    {
+        let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+        if let Some(own) = superseded.iter().find(|file| {
+            placed_files.placed_incumbent(Some(completed), &source_video, &file.id)
+        }) {
+            return carry_out_import_rejection(
+                app,
+                actor,
+                title,
+                import_id,
+                completed,
+                ImportRejectionContext {
+                    blocklist: None,
+                    rejection: crate::import_decide::placed_by_this_download_rejection(
+                        "this title",
+                        &own.file_path,
+                    ),
+                    disposition: crate::import_decide::RejectionDisposition::Skip,
+                    release_title: &prepared.parsed.raw_title,
+                    source_title: source_title.as_deref(),
+                    source_video: &source_video,
+                    dest_path: &dest_path,
+                    source_size,
+                    quality: prepared.parsed.quality.clone(),
+                    episode_ids: &[],
+                    series_movie_link_id: None,
+                    episode_artifacts: &[],
+                },
+                started_at,
+            )
+            .await;
+        }
+    }
+    // A source that ties with its own earlier import is not an upgrade.
+    // Replacing it would recycle the library copy and write the same bytes
+    // again on every retried pass. Every superseded file is compared, and one
+    // that could not be compared is never replaced.
+    let superseded_identity = match &plan.superseded {
+        crate::import_decide::SupersededIncumbents::Title(superseded) => {
+            crate::upgrade::superseded_source_identity(
+                superseded.iter().collect(),
+                &source_video,
+                source_size,
+                |_| true,
+            )
+            .await
+        }
+        _ => crate::upgrade::SupersededSourceIdentity::NoneIdentical,
+    };
+    if let crate::upgrade::SupersededSourceIdentity::Undecided(existing_file) = superseded_identity
+    {
+        return Err(crate::upgrade::incumbent_identity_undecided_error(
+            existing_file,
+            &source_video,
+        ));
+    }
+    if let crate::upgrade::SupersededSourceIdentity::Identical(existing_file) = superseded_identity
+    {
+        return carry_out_import_rejection(
+            app,
+            actor,
+            title,
+            import_id,
+            completed,
+            ImportRejectionContext {
+                rejection: crate::import_decide::identical_incumbent_rejection(
+                    "this title",
+                    &existing_file.file_path,
+                ),
+                disposition: crate::import_decide::RejectionDisposition::Skip,
+                blocklist: None,
+                release_title: &prepared.parsed.raw_title,
+                source_title: source_title.as_deref(),
+                source_video: &source_video,
+                dest_path: &dest_path,
+                source_size,
+                quality: prepared.parsed.quality.clone(),
+                episode_ids: &[],
+                series_movie_link_id: None,
+                episode_artifacts: &[],
+            },
+            started_at,
+        )
+        .await;
+    }
     if let Some(directive) = plan.blocklist_after_import.as_ref() {
         tracing::info!(title_id = %title.id, code = directive.code, "{}", directive.reason);
         crate::post_download_gate::blocklist_release_for_title(
@@ -2330,6 +2830,9 @@ async fn import_movie_download(
                     completed_at: Utc::now(),
                     upgrade: true,
                     upgrade_previous_path: outcome.previous_path.clone(),
+                    reason_code: None,
+                    needs_reconciliation: false,
+                    source_cleanup_failed: false,
                 };
                 tracing::info!(
                     title = %title.name,
@@ -2384,6 +2887,7 @@ async fn import_movie_download(
                     ImportRejectionContext {
                         rejection,
                         disposition: crate::import_decide::RejectionDisposition::Hold,
+                        blocklist: None,
                         release_title: &prepared.parsed.raw_title,
                         source_title: source_title.as_deref(),
                         source_video: &source_video,
@@ -2399,14 +2903,8 @@ async fn import_movie_download(
                 .await;
             }
             Err(err) => {
-                if import_mode == scryer_domain::ImportMode::Move {
-                    tracing::error!(error = %err, "movie upgrade failed in move mode");
-                    return Err(err);
-                }
-                tracing::error!(
-                    error = %err,
-                    "upgrade failed, falling through to normal import"
-                );
+                tracing::error!(error = %err, "movie upgrade failed; keeping the existing file");
+                return Err(upgrade_preparation_failed(err));
             }
         }
     }
@@ -2609,6 +3107,9 @@ async fn import_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2712,10 +3213,7 @@ async fn import_series_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = tokio::fs::metadata(&source_video)
-        .await
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let source_size = import_source_size(&source_video).await?;
 
     let ImportPathSettings {
         media_root,
@@ -2781,8 +3279,7 @@ async fn import_series_movie_download(
         .library
         .media_files
         .list_media_files_for_title(&title.id)
-        .await
-        .unwrap_or_default();
+        .await?;
     let series_movie_files: Vec<_> = existing_files
         .iter()
         .filter(|file| file.file_path == path_to_stored_string(&dest_path))
@@ -2964,6 +3461,9 @@ async fn import_series_movie_download(
                 completed_at: Utc::now(),
                 upgrade: false,
                 upgrade_previous_path: None,
+                reason_code: None,
+                needs_reconciliation: false,
+                source_cleanup_failed: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -3010,7 +3510,7 @@ async fn import_series_movie_download(
     )
     .await?;
 
-    // **The one import decision** (design §3). A linked movie is a scope like
+    // **The one import decision**. A linked movie is a scope like
     // any other; hand-rolling its comparison is what let it disagree with the
     // grab that fetched the file.
     let decision_input = crate::import_decide::ImportDecisionInput {
@@ -3031,7 +3531,7 @@ async fn import_series_movie_download(
         // Every primary file of the title, not the handful that happen to sit at
         // this import's destination path: the subject holds *every* file linked
         // to this series-movie link, wherever it lives, so a path filter here
-        // used to leave the lookup empty and panic (D14/A1).
+        // used to leave the lookup empty and panic.
         incumbent_rows: crate::import_decide::IncumbentRows::Title(&existing_files),
         scope_label: "this series-movie link",
     };
@@ -3040,8 +3540,19 @@ async fn import_series_movie_download(
         crate::import_decide::ImportDecisionOutcome::Reject {
             rejection,
             disposition,
-            ..
+            better_library_copy,
+            blocklist,
         } => {
+            let (rejection, disposition, blocklist) = refusal_against_own_placed_file(
+                app,
+                import_id,
+                completed,
+                &source_video,
+                "this series-movie link",
+                better_library_copy.as_ref(),
+                (rejection, disposition, blocklist),
+            )
+            .await?;
             return carry_out_import_rejection(
                 app,
                 actor,
@@ -3051,6 +3562,7 @@ async fn import_series_movie_download(
                 ImportRejectionContext {
                     rejection,
                     disposition,
+                    blocklist,
                     release_title: &prepared.parsed.raw_title,
                     source_title: source_title.as_deref(),
                     source_video: &source_video,
@@ -3066,6 +3578,91 @@ async fn import_series_movie_download(
             .await;
         }
     };
+    // Same guards as the title path: a file this download placed is never
+    // replaced, and identical bytes are never an upgrade.
+    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
+        && !superseded.is_empty()
+    {
+        let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+        if let Some(own) = superseded.iter().find(|file| {
+            placed_files.placed_incumbent(Some(completed), &source_video, &file.id)
+        }) {
+            return carry_out_import_rejection(
+                app,
+                actor,
+                title,
+                import_id,
+                completed,
+                ImportRejectionContext {
+                    blocklist: None,
+                    rejection: crate::import_decide::placed_by_this_download_rejection(
+                        "this series-movie link",
+                        &own.file_path,
+                    ),
+                    disposition: crate::import_decide::RejectionDisposition::Skip,
+                    release_title: &prepared.parsed.raw_title,
+                    source_title: source_title.as_deref(),
+                    source_video: &source_video,
+                    dest_path: &dest_path,
+                    source_size,
+                    quality: prepared.parsed.quality.clone(),
+                    episode_ids: &linked_episode_ids,
+                    series_movie_link_id: Some(series_movie_link_id),
+                    episode_artifacts: &linked_episode_artifacts,
+                },
+                started_at,
+            )
+            .await;
+        }
+    }
+    let superseded_identity = match &plan.superseded {
+        crate::import_decide::SupersededIncumbents::Title(superseded) => {
+            crate::upgrade::superseded_source_identity(
+                superseded.iter().collect(),
+                &source_video,
+                source_size,
+                |_| true,
+            )
+            .await
+        }
+        _ => crate::upgrade::SupersededSourceIdentity::NoneIdentical,
+    };
+    if let crate::upgrade::SupersededSourceIdentity::Undecided(existing_file) = superseded_identity
+    {
+        return Err(crate::upgrade::incumbent_identity_undecided_error(
+            existing_file,
+            &source_video,
+        ));
+    }
+    if let crate::upgrade::SupersededSourceIdentity::Identical(existing_file) = superseded_identity
+    {
+        return carry_out_import_rejection(
+            app,
+            actor,
+            title,
+            import_id,
+            completed,
+            ImportRejectionContext {
+                rejection: crate::import_decide::identical_incumbent_rejection(
+                    "this series-movie link",
+                    &existing_file.file_path,
+                ),
+                disposition: crate::import_decide::RejectionDisposition::Skip,
+                blocklist: None,
+                release_title: &prepared.parsed.raw_title,
+                source_title: source_title.as_deref(),
+                source_video: &source_video,
+                dest_path: &dest_path,
+                source_size,
+                quality: prepared.parsed.quality.clone(),
+                episode_ids: &linked_episode_ids,
+                series_movie_link_id: Some(series_movie_link_id),
+                episode_artifacts: &linked_episode_artifacts,
+            },
+            started_at,
+        )
+        .await;
+    }
     if let Some(directive) = plan.blocklist_after_import.as_ref() {
         tracing::info!(title_id = %title.id, code = directive.code, "{}", directive.reason);
         crate::post_download_gate::blocklist_release_for_title(
@@ -3182,6 +3779,9 @@ async fn import_series_movie_download(
                         completed_at: Utc::now(),
                         upgrade: true,
                         upgrade_previous_path: outcome.previous_path.clone(),
+                        reason_code: None,
+                        needs_reconciliation: false,
+                        source_cleanup_failed: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     app.update_import_status_and_notify(
@@ -3251,6 +3851,9 @@ async fn import_series_movie_download(
                         completed_at: Utc::now(),
                         upgrade: false,
                         upgrade_previous_path: None,
+                        reason_code: None,
+                        needs_reconciliation: false,
+                        source_cleanup_failed: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -3259,17 +3862,11 @@ async fn import_series_movie_download(
                     return Ok(result);
                 }
                 Err(err) => {
-                    if import_mode == scryer_domain::ImportMode::Move {
-                        tracing::error!(
-                            error = %err,
-                            "series movie upgrade failed in move mode"
-                        );
-                        return Err(err);
-                    }
                     tracing::error!(
                         error = %err,
-                        "series movie upgrade failed, falling through to normal import"
+                        "series movie upgrade failed; keeping the existing file"
                     );
+                    return Err(upgrade_preparation_failed(err));
                 }
             }
         }
@@ -3278,7 +3875,9 @@ async fn import_series_movie_download(
     persist_title_folder_path_if_missing(app, title, &full_folder_path).await?;
     // Ensure the configured episodic destination directory exists.
     if let Some(parent) = dest_path.parent()
-        && let Err(err) = tokio::fs::create_dir_all(parent).await
+        && let Err(err) = Disk::process()
+            .create_dir(parent, crate::disk::Parents::Create)
+            .await
     {
         tracing::warn!(error = %err, path = %parent.display(), "failed to create episodic import directory");
     }
@@ -3482,6 +4081,9 @@ async fn import_series_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -3649,51 +4251,160 @@ async fn mark_wanted_completed_for_series_movie_link(
     series_movie_link_id: &str,
     landed_import: bool,
 ) {
-    match app
+    // The link's own row, whatever its status, completed the way an episode's
+    // row is: a landed import clears the in-flight grab, anything else keeps it.
+    // One keyed write, so a transition between a read and the write cannot be
+    // overwritten; a link with no row writes nothing.
+    let now = Utc::now().to_rfc3339();
+    if let Err(err) = app
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-            statuses: vec!["wanted".into()],
-            media_types: vec!["series_movie".into()],
-            title_id: Some(title_id.to_string()),
-            limit: 100,
-            ..AcquisitionScopeStatesQuery::default()
-        })
+        .complete_acquisition_scope_for_key(
+            title_id,
+            crate::AcquisitionScopeKey::SeriesMovieLink(series_movie_link_id),
+            Some(&now),
+            landed_import,
+        )
         .await
     {
-        Ok(items) => {
-            for item in items {
-                if item.series_movie_link_id.as_deref() == Some(series_movie_link_id) {
-                    let now = Utc::now().to_rfc3339();
-                    let _ = app
-                        .services
-                        .workflow
-                        .acquisition_scope_states
-                        .transition_acquisition_scope_to_completed(
-                            &AcquisitionScopeCompleteTransition {
-                                id: item.id.clone(),
-                                last_search_at: Some(now),
-                                grabbed_release: if landed_import {
-                                    None
-                                } else {
-                                    item.grabbed_release.clone()
-                                },
-                            },
-                        )
-                        .await;
-                    return;
-                }
-            }
+        tracing::warn!(
+            error = %err,
+            title_id = title_id,
+            series_movie_link_id = series_movie_link_id,
+            "failed to mark wanted item completed for series movie"
+        );
+    }
+}
+
+#[cfg(test)]
+mod series_movie_link_completion_tests {
+    use super::*;
+    use crate::{AcquisitionScopeKey, AcquisitionScopeState, AcquisitionScopeStatus};
+
+    const TITLE_ID: &str = "title-under-test";
+    const LINK_ID: &str = "link-under-test";
+    const RELEASE: &str = "Synthetic.Feature.2024.1080p-GROUP";
+
+    fn link_scope(
+        id: &str,
+        link_id: &str,
+        status: AcquisitionScopeStatus,
+        grabbed_release: Option<&str>,
+    ) -> AcquisitionScopeState {
+        let now = Utc::now().to_rfc3339();
+        AcquisitionScopeState {
+            id: id.to_string(),
+            title_id: TITLE_ID.to_string(),
+            title_name: None,
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: Some(link_id.to_string()),
+            season_number: None,
+            episode_number: None,
+            media_type: "series_movie".to_string(),
+            last_search_at: None,
+            status,
+            grabbed_release: grabbed_release.map(str::to_string),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: now.clone(),
+            updated_at: now,
         }
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                title_id = title_id,
-                series_movie_link_id = series_movie_link_id,
-                "failed to look up wanted item for series movie"
+    }
+
+    /// An app whose scope ledger holds a `grabbed` row for the link and more
+    /// than a hundred other wanted link rows on the same title.
+    async fn app_with_grabbed_link_scope() -> AppUseCase {
+        let (mut app, _user) = crate::lib_tests::bootstrap();
+        let scopes = crate::lib_tests::in_memory_acquisition_scope_states();
+        app.services.workflow.acquisition_scope_states = scopes.clone();
+        for index in 0..150 {
+            scopes
+                .upsert_acquisition_scope_state(&link_scope(
+                    &format!("other-scope-{index:03}"),
+                    &format!("other-link-{index:03}"),
+                    AcquisitionScopeStatus::Wanted,
+                    None,
+                ))
+                .await
+                .expect("seed another link scope");
+        }
+        scopes
+            .upsert_acquisition_scope_state(&link_scope(
+                "scope-under-test",
+                LINK_ID,
+                AcquisitionScopeStatus::Grabbed,
+                Some(RELEASE),
+            ))
+            .await
+            .expect("seed the grabbed link scope");
+        app
+    }
+
+    async fn scope_for_link(app: &AppUseCase, link_id: &str) -> AcquisitionScopeState {
+        app.services
+            .workflow
+            .acquisition_scope_states
+            .get_acquisition_scope_state_for_scope(
+                TITLE_ID,
+                AcquisitionScopeKey::SeriesMovieLink(link_id),
+            )
+            .await
+            .expect("read the link scope")
+            .expect("the link scope exists")
+    }
+
+    #[tokio::test]
+    async fn a_landed_import_completes_a_grabbed_link_scope_and_clears_its_grab() {
+        let app = app_with_grabbed_link_scope().await;
+
+        mark_wanted_completed_for_series_movie_link(&app, TITLE_ID, LINK_ID, true).await;
+
+        let scope = scope_for_link(&app, LINK_ID).await;
+        assert_eq!(scope.status, AcquisitionScopeStatus::Completed);
+        assert_eq!(scope.grabbed_release, None);
+        assert!(scope.last_search_at.is_some());
+        for index in [0, 99, 100, 149] {
+            assert_eq!(
+                scope_for_link(&app, &format!("other-link-{index:03}"))
+                    .await
+                    .status,
+                AcquisitionScopeStatus::Wanted,
+                "another link's scope is untouched"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_manual_completion_completes_a_grabbed_link_scope_and_keeps_its_grab() {
+        let app = app_with_grabbed_link_scope().await;
+
+        mark_wanted_completed_for_series_movie_link(&app, TITLE_ID, LINK_ID, false).await;
+
+        let scope = scope_for_link(&app, LINK_ID).await;
+        assert_eq!(scope.status, AcquisitionScopeStatus::Completed);
+        assert_eq!(scope.grabbed_release.as_deref(), Some(RELEASE));
+    }
+
+    #[tokio::test]
+    async fn a_link_without_a_scope_row_gets_none() {
+        let app = app_with_grabbed_link_scope().await;
+
+        mark_wanted_completed_for_series_movie_link(&app, TITLE_ID, "link-without-row", true)
+            .await;
+
+        assert_eq!(
+            scope_for_link(&app, LINK_ID).await.status,
+            AcquisitionScopeStatus::Grabbed,
+            "completing a link with no row leaves every other row alone"
+        );
     }
 }
 
@@ -3748,19 +4459,6 @@ mod archive_relocation_tests {
         ));
         assert!(source.is_dir());
         assert!(!moved.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cross_device_rename_error_is_detected() {
-        let error = std::io::Error::from_raw_os_error(18);
-        assert!(crate::fs_safety::is_cross_device_error(&error));
-    }
-
-    #[test]
-    fn unrelated_rename_error_is_not_cross_device() {
-        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        assert!(!crate::fs_safety::is_cross_device_error(&error));
     }
 }
 

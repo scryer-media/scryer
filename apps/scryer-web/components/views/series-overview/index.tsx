@@ -10,6 +10,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Clapperboard } from "lucide-react";
 import { useClient } from "urql";
+import { useGrab } from "@/lib/hooks/use-grab";
 import type { Release } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -31,10 +32,6 @@ import {
   SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID,
   seriesOverviewSeriesMovieRowId,
 } from "@/lib/utils/dom-ids";
-import {
-  queueExistingMutation,
-  queueReplacementMutation,
-} from "@/lib/graphql/mutations";
 import {
   assertNoReplaceConflict,
   retryWithReplaceOnConflict,
@@ -315,6 +312,7 @@ function SeriesOverviewViewImpl({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const client = useClient();
+  const grab = useGrab();
   const { confirmReplaceConflict, replaceConflictDialog } =
     useDownloadConflictConfirmation();
   const backLabel = title?.facet === "ANIME" ? t("nav.anime") : t("nav.series");
@@ -554,7 +552,10 @@ function SeriesOverviewViewImpl({
     };
     measure();
     // Capture so scrolls of the inner main scroller are seen as well.
-    window.addEventListener("scroll", schedule, { capture: true, passive: true });
+    window.addEventListener("scroll", schedule, {
+      capture: true,
+      passive: true,
+    });
     window.addEventListener("resize", schedule, { passive: true });
     return () => {
       if (frame) cancelAnimationFrame(frame);
@@ -956,19 +957,15 @@ function SeriesOverviewViewImpl({
       const replacesPrimary = hasPrimaryMediaFile(
         mediaFilesByEpisode[episode.id],
       );
-      const mutation = replacesPrimary
-        ? queueReplacementMutation
-        : queueExistingMutation;
       return retryWithReplaceOnConflict(
         input,
         async (nextInput) => {
-          const { data, error: mutationError } = await client
-            .mutation(mutation, { input: nextInput })
-            .toPromise();
-          if (mutationError) throw mutationError;
-          return replacesPrimary
-            ? data?.queueReplacementRelease
-            : data?.queueExistingTitleDownload;
+          const outcome = await grab(
+            replacesPrimary
+              ? { replacement: nextInput }
+              : { existing: nextInput },
+          );
+          return outcome.queued;
         },
         "A download is already in progress for this episode.",
         confirmReplaceConflict,
@@ -990,7 +987,7 @@ function SeriesOverviewViewImpl({
     },
     [
       onTitleChanged,
-      client,
+      grab,
       confirmReplaceConflict,
       mediaFilesByEpisode,
       setGlobalStatus,
@@ -1009,20 +1006,17 @@ function SeriesOverviewViewImpl({
       }
 
       try {
-        const { data, error: mutationError } = await client
-          .mutation(queueExistingMutation, {
-            input: {
-              titleId: title.id,
-              scope: { episode: episode.id },
-              candidateToken: release.candidateToken,
-              sizeBytes: release.sizeBytes ?? null,
-              purpose: "ADDITIONAL_FILE",
-            },
-          })
-          .toPromise();
-        if (mutationError) throw mutationError;
+        const outcome = await grab({
+          existing: {
+            titleId: title.id,
+            scope: { episode: episode.id },
+            candidateToken: release.candidateToken,
+            sizeBytes: release.sizeBytes ?? null,
+            purpose: "ADDITIONAL_FILE",
+          },
+        });
         assertNoReplaceConflict(
-          data?.queueExistingTitleDownload,
+          outcome.queued,
           "A download is already in progress for this episode.",
         );
         setGlobalStatus(t("status.queuedLatest", { name: title.name }), {
@@ -1035,7 +1029,7 @@ function SeriesOverviewViewImpl({
         });
       }
     },
-    [onTitleChanged, client, setGlobalStatus, t, title],
+    [onTitleChanged, grab, setGlobalStatus, t, title],
   );
 
   const handleAutoSearchEpisode = React.useCallback(
@@ -1171,19 +1165,15 @@ function SeriesOverviewViewImpl({
       const replacesPrimary = hasPrimaryMediaFile(
         mediaFilesBySeriesMovieLink[link.id],
       );
-      const mutation = replacesPrimary
-        ? queueReplacementMutation
-        : queueExistingMutation;
       return retryWithReplaceOnConflict(
         input,
         async (nextInput) => {
-          const { data, error: mutationError } = await client
-            .mutation(mutation, { input: nextInput })
-            .toPromise();
-          if (mutationError) throw mutationError;
-          return replacesPrimary
-            ? data?.queueReplacementRelease
-            : data?.queueExistingTitleDownload;
+          const outcome = await grab(
+            replacesPrimary
+              ? { replacement: nextInput }
+              : { existing: nextInput },
+          );
+          return outcome.queued;
         },
         "A download is already in progress for this series movie.",
         confirmReplaceConflict,
@@ -1206,7 +1196,7 @@ function SeriesOverviewViewImpl({
         });
     },
     [
-      client,
+      grab,
       confirmReplaceConflict,
       mediaFilesBySeriesMovieLink,
       onTitleChanged,
@@ -1226,20 +1216,17 @@ function SeriesOverviewViewImpl({
       }
 
       try {
-        const { data, error: mutationError } = await client
-          .mutation(queueExistingMutation, {
-            input: {
-              titleId: title.id,
-              scope: releaseQueueScopeInput(release, { seriesMovie: link.id }),
-              candidateToken: release.candidateToken,
-              sizeBytes: release.sizeBytes ?? null,
-              purpose: "ADDITIONAL_FILE",
-            },
-          })
-          .toPromise();
-        if (mutationError) throw mutationError;
+        const outcome = await grab({
+          existing: {
+            titleId: title.id,
+            scope: releaseQueueScopeInput(release, { seriesMovie: link.id }),
+            candidateToken: release.candidateToken,
+            sizeBytes: release.sizeBytes ?? null,
+            purpose: "ADDITIONAL_FILE",
+          },
+        });
         assertNoReplaceConflict(
-          data?.queueExistingTitleDownload,
+          outcome.queued,
           "A download is already in progress for this series movie.",
         );
         setGlobalStatus(t("status.queueSuccess", { name: release.title }), {
@@ -1252,7 +1239,7 @@ function SeriesOverviewViewImpl({
         });
       }
     },
-    [client, onTitleChanged, setGlobalStatus, t, title],
+    [grab, onTitleChanged, setGlobalStatus, t, title],
   );
 
   const handleAutoSearchSeriesMovie = React.useCallback(

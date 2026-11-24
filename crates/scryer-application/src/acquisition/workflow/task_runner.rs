@@ -29,17 +29,13 @@ const BACKGROUND_COLD_TARGET_VALUE: f64 = 0.25;
 /// that is spread over several walks.
 pub(crate) const BACKGROUND_TITLE_WALK_QUERY_BUDGET: usize = 120;
 
-/// How far apart two instances' maintenance evaluation passes can drift. Much
+/// How far apart two instances' lifecycle evaluation passes can drift. Much
 /// smaller than the eight-hour cadence on purpose: the jitter is there to keep
 /// a fleet from sweeping in lockstep, not to postpone the first pass.
-const MAINTENANCE_EVALUATION_JITTER_WINDOW: std::time::Duration =
+const LIFECYCLE_EVALUATION_JITTER_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
-/// Same rationale, distinct salt, for the action handler's twelve-hour cadence.
-const LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW: std::time::Duration =
-    std::time::Duration::from_secs(30 * 60);
-
-/// Same rationale again for the media-server signal sweep (RFC 137 §7.3). The
+/// Same rationale again for the media-server signal sweep. The
 /// jitter matters more here than for the local passes: every instance in a
 /// fleet would otherwise hit the same Jellyfin server at the same moment.
 const MEDIA_SERVER_SIGNAL_SYNC_JITTER_WINDOW: std::time::Duration =
@@ -1205,6 +1201,10 @@ struct BackgroundAcquisitionCycleState {
     grabbed_urls: HashSet<String>,
     attempted_urls_by_route: Vec<(DownloadRouteKey, String)>,
     failed_routes: Vec<DownloadRouteKey>,
+    /// Indexers whose monthly limit refused a grab in this cycle. Their
+    /// remaining candidates are passed over without another attempt; the
+    /// releases themselves stay eligible.
+    limit_refused_indexers: HashSet<String>,
     /// Scopes this cycle declined to search because every uncovered indexer was
     /// cooling down or quota-spent. Work the cycle *wanted* to do and will do
     /// as soon as the condition lifts, so a cooldown that expires inside the
@@ -1316,6 +1316,16 @@ impl BackgroundAcquisitionCycleCoordinator {
 
     fn failed_routes(&self) -> Vec<DownloadRouteKey> {
         self.lock().failed_routes.clone()
+    }
+
+    fn indexer_limit_refused(&self, indexer_id: Option<&str>) -> bool {
+        indexer_id.is_some_and(|id| self.lock().limit_refused_indexers.contains(id))
+    }
+
+    fn mark_indexer_limit_refused(&self, indexer_id: Option<&str>) {
+        if let Some(id) = indexer_id {
+            self.lock().limit_refused_indexers.insert(id.to_string());
+        }
     }
 
     fn mark_failed_route(&self, route: DownloadRouteKey) {
@@ -2199,6 +2209,7 @@ async fn try_series_pack_for_title(
     cycle: &BackgroundAcquisitionCycleCoordinator,
     session: &mut TitleWalkSession,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    convergence_inputs: &crate::acquisition::convergence::ConvergenceInputMemo,
 ) -> AppResult<Option<Vec<String>>> {
     let Some(proposal) = plan_series_pack_for_title(
         app,
@@ -2214,6 +2225,7 @@ async fn try_series_pack_for_title(
         claimed_episode_ids,
         session,
         reads,
+        convergence_inputs,
     )
     .await?
     else {
@@ -2268,6 +2280,7 @@ async fn plan_series_pack_for_title(
     claimed_episode_ids: &HashSet<String>,
     session: &mut TitleWalkSession,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    convergence_inputs: &crate::acquisition::convergence::ConvergenceInputMemo,
 ) -> AppResult<Option<GrabProposal>> {
     let mut title_subject = app
         .resolve_release_search_subject_for_title(search_title)
@@ -2308,14 +2321,37 @@ async fn plan_series_pack_for_title(
     );
     let eligible_collection_ids =
         crate::acquisition_coverage::eligible_series_pack_collection_ids(&episodes);
-    if eligible_collection_ids.is_empty()
-        || crate::acquisition_coverage::eligible_missing_series_pack_episode_count(
-            &episodes,
-            &owned_episode_ids,
-        ) < 2
+    let missing_count = crate::acquisition_coverage::eligible_missing_series_pack_episode_count(
+        &episodes,
+        &owned_episode_ids,
+    );
+    // Nothing missing fails every minimum, so it never pays the profile read.
+    if eligible_collection_ids.is_empty() || missing_count == 0 {
+        return Ok(None);
+    }
+    let pack_thresholds = match app
+        .pack_thresholds_for_walk(
+            search_title,
+            Some(title_subject.category.as_str()),
+            convergence_inputs,
+        )
+        .await
+    {
+        Ok(thresholds) => thresholds,
+        Err(error) => {
+            warn!(
+                title_id = title.id.as_str(),
+                error = %error,
+                "series-pack search: failed to resolve quality profile"
+            );
+            return Ok(None);
+        }
+    };
+    if missing_count < pack_thresholds.min_missing_episodes_for_pack as usize
         || !crate::acquisition_coverage::title_series_pack_missing_ratio_qualifies(
             &episodes,
             &owned_episode_ids,
+            pack_thresholds.min_missing_percent_for_series_pack,
         )
     {
         return Ok(None);
@@ -2414,6 +2450,7 @@ async fn plan_series_pack_for_title(
         claimed_episode_ids,
         reads,
         !session.options.intent.is_interactive(),
+        convergence.min_missing_percent_for_series_pack,
     )
     .await?;
     let session_finalized = app
@@ -2450,7 +2487,12 @@ async fn plan_series_pack_for_title(
         )
         .await;
     }
-    let blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&evaluated_candidates),
+        )
+        .await;
 
     // Only the *best* candidate's coverage here, not the union across the list.
     //
@@ -2671,6 +2713,9 @@ async fn commit_season_pack_proposal(
         if failed_routes.contains(&pack_route) {
             continue;
         }
+        if cycle.indexer_limit_refused(best_pack.indexer_id.as_deref()) {
+            continue;
+        }
         let pack_url = best_pack
             .canonical_download_source()
             .map(|(source, _)| source);
@@ -2860,8 +2905,14 @@ async fn commit_season_pack_proposal(
                             grabbed_at: Some(now.to_rfc3339()),
                         })
                         .await?;
-                    let pack_blocklist =
-                        app.load_title_release_blocklist_signatures(&title.id).await;
+                    let pack_blocklist = app
+                        .load_title_release_blocklist_signatures(
+                            &title.id,
+                            crate::app_usecase_discovery::search_result_blocklist_keys(
+                                pack_results,
+                            ),
+                        )
+                        .await;
                     persist_standby_candidates(
                         app,
                         item,
@@ -2922,6 +2973,20 @@ async fn commit_season_pack_proposal(
                         "season pack grabbed; skipping individual episode searches for this season"
                     );
                     return Ok(grabbed_episode_ids);
+                }
+                Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                    // Nothing was sent, so this says nothing about the pack:
+                    // no attempt row, no blocklist entry, no failed job. The
+                    // indexer's other packs are passed over for the rest of
+                    // the cycle and the next candidate is tried.
+                    cycle.mark_indexer_limit_refused(best_pack.indexer_id.as_deref());
+                    info!(
+                        title = title.name.as_str(),
+                        season = season_num,
+                        indexer_id = ?best_pack.indexer_id,
+                        reason = err.reason().unwrap_or_default(),
+                        "season pack grab refused by the indexer's monthly limit; trying other indexers"
+                    );
                 }
                 Err(err) => {
                     let submit_unavailable = is_download_submit_unavailable_error(&err);
@@ -3018,6 +3083,7 @@ async fn evaluate_series_pack_candidates(
     claimed_episode_ids: &HashSet<String>,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
     automatic: bool,
+    min_missing_percent: u32,
 ) -> AppResult<(Vec<IndexerSearchResult>, HashSet<String>)> {
     let mut groups = HashMap::<Vec<String>, Vec<(usize, IndexerSearchResult)>>::new();
     let mut collection_ids = HashSet::new();
@@ -3033,6 +3099,7 @@ async fn evaluate_series_pack_candidates(
             parsed,
             episodes,
             owned_episode_ids,
+            min_missing_percent,
         ) {
             continue;
         }
@@ -3120,7 +3187,7 @@ async fn series_pack_candidate_anchors(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&title.id))
         .await?;
     let mut states_by_episode = states
         .into_iter()
@@ -4260,6 +4327,7 @@ async fn process_single_target(
             cycle,
             session,
             &context.reads,
+            &context.convergence_inputs,
         )
         .await
         {
@@ -4415,11 +4483,32 @@ async fn process_single_target(
     {
         let season_key = (title.id.clone(), season_num);
 
-        // Only attempt a season pack search when >= 2 episodes from this season
-        // are due this cycle (mirrors Sonarr: count > 1 missing → SeasonSearchCriteria).
+        // Only attempt a season pack search when at least the quality profile's
+        // pack minimum of this season's episodes are due this cycle (default 2,
+        // mirroring Sonarr: count > 1 missing → SeasonSearchCriteria).
         let due_count = season_due_counts.get(&season_key).copied().unwrap_or(0);
+        let season_pack_due = due_count > 0
+            && match app
+                .pack_thresholds_for_walk(
+                    &search_title,
+                    Some(pending_subject.for_convergence().category.as_str()),
+                    &context.convergence_inputs,
+                )
+                .await
+            {
+                Ok(thresholds) => due_count >= thresholds.min_missing_episodes_for_pack as usize,
+                Err(error) => {
+                    warn!(
+                        title_id = title.id.as_str(),
+                        season = season_num,
+                        error = %error,
+                        "season-pack search: failed to resolve quality profile; searching episodes"
+                    );
+                    false
+                }
+            };
 
-        if due_count >= 2 && cycle.begin_season_pack(&season_key) {
+        if season_pack_due && cycle.begin_season_pack(&season_key) {
             let recent_failed_seasons =
                 load_recent_failed_season_pack_seasons_for_title(app, &title.id, now).await;
 
@@ -4820,24 +4909,25 @@ async fn process_single_target(
     // Load the per-title blocklist (covers post-import failures like fake/non-video
     // files, in addition to the download-client snapshot checked below). It is the
     // single, removable exclusion source; the failed-attempt log never gates.
-    let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let db_blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+        )
+        .await;
     let existing_files = context
         .reads
         .primary_file_cutoffs(app)
         .await
         .unwrap_or_default();
     let cutoff_scope = app.cutoff_scope_for(&subject.submission_scope).await;
-    let analyzed_cutoff_quality =
-        crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-            &existing_files,
-            &cutoff_scope,
-        );
 
     let upgrade_context = match app
-        .resolve_upgrade_context_for_title_with_category_and_quality(
+        .resolve_upgrade_context_for_scope(
             &search_title,
             Some(subject.category.as_str()),
-            analyzed_cutoff_quality,
+            &existing_files,
+            &cutoff_scope,
         )
         .await
     {
@@ -4923,7 +5013,11 @@ async fn process_single_target(
     // can return from the loop. Otherwise the pending-review side effect depends
     // on incidental candidate ordering.
     let mut parked_ambiguous_identity = false;
-    if let Some(candidate) = results.iter().find(|candidate| {
+    // When the parked candidate already carries its decision's annotation,
+    // its review text is the explanation its decision row records, so that
+    // explanation is built once and serves both.
+    let mut parked_review_explanation = None;
+    if let Some((candidate_index, candidate)) = results.iter().enumerate().find(|(_, candidate)| {
         candidate
             .quality_profile_decision
             .as_ref()
@@ -4939,15 +5033,30 @@ async fn process_single_target(
             .as_ref()
             .map(|decision| decision.preference_score)
             .unwrap_or_default();
+        let shared = candidate_carries_auto_decision(
+            candidate,
+            ReleaseAutoDecisionCode::AmbiguousIdentity,
+        )
+        .then(|| {
+            release_decision_explanation_for(
+                candidate,
+                ReleaseAutoDecisionCode::AmbiguousIdentity,
+            )
+        });
+        let review_explanation = match &shared {
+            Some(explanation) => Some(explanation.as_str().to_owned()),
+            None => serialize_decision_explanation(candidate),
+        };
         app.park_pending_release_for_review(
             item,
             title,
             candidate,
             candidate_score,
-            serialize_decision_explanation(candidate),
+            review_explanation,
             *now,
         )
         .await;
+        parked_review_explanation = shared.map(|explanation| (candidate_index, explanation));
     }
     let mut eligible: Vec<usize> = Vec::new();
     let mut next_pending_role = PendingReleaseRole::Primary;
@@ -4973,8 +5082,27 @@ async fn process_single_target(
             }
         })
         .collect::<Vec<_>>();
+    let explained_decisions = candidate_decisions
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, &(candidate, decision_code, incumbent_bar))| {
+            let explanation = match parked_review_explanation.take_if(|(parked_index, _)| {
+                *parked_index == candidate_index
+                    && decision_code == ReleaseAutoDecisionCode::AmbiguousIdentity
+            }) {
+                Some((_, explanation)) => explanation,
+                None => release_decision_explanation_for(candidate, decision_code),
+            };
+            ExplainedReleaseDecision {
+                candidate,
+                decision_code,
+                incumbent_bar,
+                explanation,
+            }
+        })
+        .collect();
     let decision_outcomes =
-        record_release_decisions(app, item, title, &candidate_decisions, now).await;
+        record_explained_release_decisions(app, item, title, explained_decisions, now).await;
 
     for (candidate_index, &(candidate, decision_code, _)) in
         candidate_decisions.iter().enumerate()
@@ -5331,7 +5459,12 @@ async fn process_single_target(
     // Re-read the blocklist: a definitive grab failure in the walk above wrote
     // entries the loop's snapshot predates, and retaining a release this cycle
     // just burned would hand the next walk a row it must immediately skip.
-    let retention_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let retention_blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+        )
+        .await;
     let retention_complete = persist_standby_candidates(
         app,
         item,
@@ -5432,7 +5565,12 @@ async fn propose_covered_episode_evidence(
         .await?;
 
     let failed_routes = cycle.failed_routes();
-    let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let db_blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+        )
+        .await;
     let eligible = results
         .iter()
         .enumerate()
@@ -5550,6 +5688,17 @@ async fn commit_scope_grab(
             .as_ref()
             .map(|decision| decision.preference_score)
             .unwrap_or(0);
+
+        // An indexer whose monthly limit already refused a grab this cycle
+        // is passed over without spending one of the attempts. So is one
+        // already known to be at its limit, before anything is written.
+        if cycle.indexer_limit_refused(candidate.indexer_id.as_deref()) {
+            continue;
+        }
+        if app.indexer_monthly_grab_refused_now(candidate.indexer_id.as_deref()) {
+            cycle.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+            continue;
+        }
 
         // ── Grab attempt ────────────────────────────────────────────────────
         grab_attempts += 1;
@@ -5887,6 +6036,23 @@ async fn commit_scope_grab(
                         claimed_episode_ids: recovered_scope_episode_ids(app, &submission_scope)
                             .await,
                     });
+                }
+
+                if err.is_indexer_monthly_limit_refusal() {
+                    // Nothing was sent, so this says nothing about the
+                    // release: no failed attempt, no blocklist entry, no
+                    // failed job, and the attempt is handed back so a capped
+                    // indexer cannot use up the cap.
+                    cycle.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+                    grab_attempts -= 1;
+                    info!(
+                        title = title.name.as_str(),
+                        release = candidate.title.as_str(),
+                        indexer_id = ?candidate.indexer_id,
+                        reason = err.reason().unwrap_or_default(),
+                        "grab refused by the indexer's monthly limit; trying other indexers"
+                    );
+                    continue;
                 }
 
                 // ── Grab failed — try next candidate ────────────────────────
@@ -6587,55 +6753,33 @@ pub async fn start_background_acquisition_poller(
         advertise_acquisition_job_schedule(&app, true, rss_sync_tick).await;
     }
 
-    // Maintenance evaluation (RFC 137 section 10) runs on an eight-hour
+    // Lifecycle evaluation runs on an eight-hour
     // cadence, offset by a per-instance jitter so a fleet of instances does not
     // sweep their libraries in lockstep. The jitter window is deliberately much
     // smaller than the cadence: it exists to spread load, not to delay the
     // first pass by most of a working day. The job itself re-reads the instance
     // gate at the start of every run, so an operator arming or disarming
     // evaluation never has to restart Scryer.
-    let maintenance_evaluation_cadence = std::time::Duration::from_secs(
-        crate::jobs::MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS as u64,
+    let lifecycle_evaluation_cadence = std::time::Duration::from_secs(
+        crate::jobs::LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS as u64,
     );
-    let maintenance_evaluation_offset = match app.discovery_scheduler_seed().await {
+    let lifecycle_evaluation_offset = match app.discovery_scheduler_seed().await {
         Ok(seed) => crate::scheduler::stable_jitter_offset(
             &seed,
+            // Stable jitter seed, not a name: changing it moves every instance's offset.
             "maintenance_rule_evaluation",
             "global",
-            MAINTENANCE_EVALUATION_JITTER_WINDOW,
+            LIFECYCLE_EVALUATION_JITTER_WINDOW,
         ),
         Err(error) => {
-            warn!(error = %error, "could not resolve the scheduler seed; maintenance evaluation runs unjittered");
+            warn!(error = %error, "could not resolve the scheduler seed; lifecycle evaluation runs unjittered");
             std::time::Duration::ZERO
         }
     };
     app.advertise_job_next_run_at(
-        JobKey::MaintenanceRuleEvaluation,
+        JobKey::LifecycleRuleEvaluation,
         Utc::now()
-            + chrono::Duration::from_std(maintenance_evaluation_offset)
-                .unwrap_or_else(|_| chrono::Duration::zero()),
-    )
-    .await;
-
-    let lifecycle_action_cadence = std::time::Duration::from_secs(
-        crate::jobs::LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS as u64,
-    );
-    let lifecycle_action_offset = match app.discovery_scheduler_seed().await {
-        Ok(seed) => crate::scheduler::stable_jitter_offset(
-            &seed,
-            "lifecycle_action_handling",
-            "global",
-            LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW,
-        ),
-        Err(error) => {
-            warn!(error = %error, "could not resolve the scheduler seed; action handling runs unjittered");
-            std::time::Duration::ZERO
-        }
-    };
-    app.advertise_job_next_run_at(
-        JobKey::LifecycleActionHandling,
-        Utc::now()
-            + chrono::Duration::from_std(lifecycle_action_offset)
+            + chrono::Duration::from_std(lifecycle_evaluation_offset)
                 .unwrap_or_else(|_| chrono::Duration::zero()),
     )
     .await;
@@ -6707,15 +6851,11 @@ pub async fn start_background_acquisition_poller(
     // directly.
     let mut rss_sync_interval = tokio::time::interval(rss_sync_tick);
     let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_mins(1));
-    let mut maintenance_evaluation_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + maintenance_evaluation_offset,
-        maintenance_evaluation_cadence,
+    let mut lifecycle_evaluation_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + lifecycle_evaluation_offset,
+        lifecycle_evaluation_cadence,
     );
-    maintenance_evaluation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut lifecycle_action_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + lifecycle_action_offset,
-        lifecycle_action_cadence,
-    );
+    lifecycle_evaluation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut media_server_signal_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + media_server_signal_offset,
         media_server_signal_cadence,
@@ -7095,33 +7235,18 @@ pub async fn start_background_acquisition_poller(
                     }
                 }).await;
             }
-            _ = maintenance_evaluation_interval.tick() => {
-                let cadence = maintenance_evaluation_cadence;
+            _ = lifecycle_evaluation_interval.tick() => {
+                let cadence = lifecycle_evaluation_cadence;
                 let next_run_in =
                     chrono::Duration::from_std(cadence).unwrap_or_else(|_| chrono::Duration::hours(8));
-                admit_scheduled_job(&app, &mut supervisor, "maintenance_rule_evaluation", cadence, Some((JobKey::MaintenanceRuleEvaluation, next_run_in)), move |app| async move {
+                admit_scheduled_job(&app, &mut supervisor, "lifecycle_rule_evaluation", cadence, Some((JobKey::LifecycleRuleEvaluation, next_run_in)), move |app| async move {
                     app.advertise_job_next_run_at(
-                        JobKey::MaintenanceRuleEvaluation,
+                        JobKey::LifecycleRuleEvaluation,
                         Utc::now() + next_run_in,
                     ).await;
-                    if let Err(e) = app.run_scheduled_job_now(JobKey::MaintenanceRuleEvaluation, JobTriggerSource::ScheduledInterval).await {
-                        warn!(error = %e, "scheduled maintenance rule evaluation failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "maintenance_rule_evaluation").increment(1);
-                    }
-                }).await;
-            }
-            _ = lifecycle_action_interval.tick() => {
-                let cadence = lifecycle_action_cadence;
-                let next_run_in =
-                    chrono::Duration::from_std(cadence).unwrap_or_else(|_| chrono::Duration::hours(12));
-                admit_scheduled_job(&app, &mut supervisor, "lifecycle_action_handling", cadence, Some((JobKey::LifecycleActionHandling, next_run_in)), move |app| async move {
-                    app.advertise_job_next_run_at(
-                        JobKey::LifecycleActionHandling,
-                        Utc::now() + next_run_in,
-                    ).await;
-                    if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::ScheduledInterval).await {
-                        warn!(error = %e, "scheduled maintenance action handling failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_action_handling").increment(1);
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleRuleEvaluation, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "scheduled lifecycle rule evaluation failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_rule_evaluation").increment(1);
                     }
                 }).await;
             }
@@ -7270,14 +7395,14 @@ mod task_runner_tests {
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let (finish, finish_rx) = tokio::sync::oneshot::channel();
         assert!(
-            tasks.try_spawn("maintenance_rule_evaluation", budget, async move {
+            tasks.try_spawn("lifecycle_rule_evaluation", budget, async move {
                 started.send(()).unwrap();
                 finish_rx.await.unwrap();
             })
         );
         started_rx.await.unwrap();
         assert!(
-            !tasks.try_spawn("maintenance_rule_evaluation", budget, async {
+            !tasks.try_spawn("lifecycle_rule_evaluation", budget, async {
                 panic!("a second tick must not queue another evaluation");
             })
         );
@@ -7287,9 +7412,9 @@ mod task_runner_tests {
         assert!(tasks.tasks.try_join_next().is_none());
         finish.send(()).unwrap();
         let done = tasks.join_next().await.unwrap();
-        assert_eq!(done.name, "maintenance_rule_evaluation");
+        assert_eq!(done.name, "lifecycle_rule_evaluation");
         done.result.unwrap();
-        assert!(tasks.try_spawn("maintenance_rule_evaluation", budget, async {}));
+        assert!(tasks.try_spawn("lifecycle_rule_evaluation", budget, async {}));
         tasks.join_next().await.unwrap().result.unwrap();
         assert!(tasks.is_empty());
     }
@@ -7955,15 +8080,15 @@ mod task_runner_tests {
         let mut tasks = ScheduledTaskSupervisor::<()>::new();
         let budget = scheduled_task_overdue_budget(secs(60));
         assert!(
-            tasks.try_spawn("maintenance_rule_evaluation", budget, async {
+            tasks.try_spawn("lifecycle_rule_evaluation", budget, async {
                 panic!("synthetic evaluation failure");
             })
         );
         let failed = tasks.join_next().await.unwrap();
         // The panic still releases the job's slot under its own name.
-        assert_eq!(failed.name, "maintenance_rule_evaluation");
+        assert_eq!(failed.name, "lifecycle_rule_evaluation");
         assert!(failed.result.unwrap_err().is_panic());
-        assert!(tasks.try_spawn("maintenance_rule_evaluation", budget, async {}));
+        assert!(tasks.try_spawn("lifecycle_rule_evaluation", budget, async {}));
         tasks.join_next().await.unwrap().result.unwrap();
     }
 

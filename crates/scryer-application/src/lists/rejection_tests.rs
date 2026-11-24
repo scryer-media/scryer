@@ -45,6 +45,8 @@ pub(crate) fn rejected_request(id: &str, origin: MediaRequestOrigin) -> MediaReq
         created_by_user_id: "owner-one".to_string(),
         created_at: at(0),
         updated_at: at(5),
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 

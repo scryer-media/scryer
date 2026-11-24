@@ -1,4 +1,4 @@
-use crate::maintenance::{self, USER_PACKAGE_PREFIX as MAINTENANCE_USER_PACKAGE_PREFIX};
+use crate::lifecycle::{self, USER_PACKAGE_PREFIX as LIFECYCLE_USER_PACKAGE_PREFIX};
 use crate::request::{
     self, PERSON_TARGETED_REQUEST_ROOT, USER_PACKAGE_PREFIX as REQUEST_USER_PACKAGE_PREFIX,
 };
@@ -50,32 +50,52 @@ struct RuleInputCatalog {
 struct FamilyContract {
     json: &'static str,
     name: &'static str,
+    /// Input sections that each repeat the family's `facts` and
+    /// `observations` for a narrower subject. The contract documents those
+    /// two namespaces once; the catalog repeats them under each section.
+    nested_fact_sections: &'static [&'static str],
     catalog: OnceLock<RuleInputCatalog>,
 }
 
 impl FamilyContract {
     const fn new(json: &'static str, name: &'static str) -> Self {
+        Self::with_nested_fact_sections(json, name, &[])
+    }
+
+    const fn with_nested_fact_sections(
+        json: &'static str,
+        name: &'static str,
+        nested_fact_sections: &'static [&'static str],
+    ) -> Self {
         Self {
             json,
             name,
+            nested_fact_sections,
             catalog: OnceLock::new(),
         }
     }
 
     fn catalog(&'static self) -> &'static RuleInputCatalog {
         self.catalog
-            .get_or_init(|| build_input_catalog(self.json, self.name))
+            .get_or_init(|| build_input_catalog(self.json, self.name, self.nested_fact_sections))
     }
 }
+
+/// The lifecycle input sections that carry one season's or one episode's
+/// facts beside the title's: `input.season.facts.<name>` and
+/// `input.episode.observations.<name>` read like their `input.facts` and
+/// `input.observations` counterparts.
+pub const LIFECYCLE_NESTED_FACT_SECTIONS: &[&str] = &["season", "episode"];
 
 static RELEASE_CONTRACT: FamilyContract = FamilyContract::new(
     include_str!("../rule-input-contract.json"),
     "rule-input-contract.json",
 );
 
-static MAINTENANCE_CONTRACT: FamilyContract = FamilyContract::new(
-    include_str!("../maintenance-input-contract.json"),
-    "maintenance-input-contract.json",
+static LIFECYCLE_CONTRACT: FamilyContract = FamilyContract::with_nested_fact_sections(
+    include_str!("../lifecycle-input-contract.json"),
+    "lifecycle-input-contract.json",
+    LIFECYCLE_NESTED_FACT_SECTIONS,
 );
 
 static REQUEST_CONTRACT: FamilyContract = FamilyContract::new(
@@ -108,6 +128,8 @@ struct InputPathContext {
     /// must name its fact with a literal, because the engine reads that set to
     /// decide whether the subject is even knowable enough to consult the rule.
     static_facts_only: bool,
+    /// Sections that hold a narrower subject's facts, read like `input.facts`.
+    nested_fact_sections: &'static [&'static str],
     /// The family's own source bounds. Static analysis parses exactly what the
     /// family's engine would load, so a rule the engine accepts is never
     /// refused here for its size.
@@ -121,17 +143,19 @@ impl InputPathContext {
             catalog: RELEASE_CONTRACT.catalog(),
             allow_release_extra: true,
             static_facts_only: false,
+            nested_fact_sections: &[],
             limits: RuntimeLimits::release_defaults(),
         }
     }
 
-    fn maintenance() -> Self {
+    fn lifecycle() -> Self {
         Self {
-            family: "maintenance",
-            catalog: MAINTENANCE_CONTRACT.catalog(),
+            family: "lifecycle",
+            catalog: LIFECYCLE_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
-            limits: RuntimeLimits::maintenance_defaults(),
+            nested_fact_sections: LIFECYCLE_NESTED_FACT_SECTIONS,
+            limits: RuntimeLimits::lifecycle_defaults(),
         }
     }
 
@@ -141,6 +165,7 @@ impl InputPathContext {
             catalog: REQUEST_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
+            nested_fact_sections: &[],
             limits: RuntimeLimits::request_defaults(),
         }
     }
@@ -174,6 +199,9 @@ pub struct ValidationResult {
     pub valid: bool,
     pub errors: Vec<String>,
     pub diagnostics: Vec<ValidationDiagnostic>,
+    /// Conditions worth telling the author about that do not make the source
+    /// invalid. Never counted in `valid`, `errors`, or `diagnostics`.
+    pub warnings: Vec<ValidationDiagnostic>,
 }
 
 impl ValidationResult {
@@ -182,6 +210,7 @@ impl ValidationResult {
             valid: true,
             errors: Vec::new(),
             diagnostics: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -198,7 +227,13 @@ impl ValidationResult {
             valid: diagnostics.is_empty(),
             errors: diagnostics.iter().map(|d| d.message.clone()).collect(),
             diagnostics,
+            warnings: Vec::new(),
         }
+    }
+
+    fn with_warnings(mut self, warnings: Vec<ValidationDiagnostic>) -> Self {
+        self.warnings = warnings;
+        self
     }
 
     /// Regorus exposes compiler locations only in its diagnostic text. Decode
@@ -222,6 +257,47 @@ impl ValidationResult {
             diagnostic.column = parts.next().and_then(leading_number);
         }
         Self::from_diagnostics(vec![diagnostic])
+    }
+}
+
+/// One-based line and character column of a byte offset in a source.
+///
+/// Diagnostics point where an editor would: one column per character. Regorus
+/// counts a tab as four columns and a token by its bytes, so its own columns
+/// drift on indented or non-ASCII lines.
+pub(crate) fn character_position(source: &str, byte_offset: usize) -> Option<(usize, usize)> {
+    let before = source.get(..byte_offset)?;
+    let line = before.matches('\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |index| index + 1);
+    Some((line, before[line_start..].chars().count() + 1))
+}
+
+/// The character column for a regorus column on one-based `line` of `source`.
+///
+/// For positions regorus reports only as text, such as a compile error. It
+/// replays regorus's count: four for a tab, the byte length for anything else.
+pub(crate) fn character_column(source: &str, line: usize, regorus_column: usize) -> Option<usize> {
+    let text = source.split('\n').nth(line.checked_sub(1)?)?;
+    let mut column = 1;
+    for (index, ch) in text.chars().enumerate() {
+        if column >= regorus_column {
+            return Some(index + 1);
+        }
+        column += if ch == '\t' { 4 } else { ch.len_utf8() };
+    }
+    Some(text.chars().count() + 1)
+}
+
+impl ValidationResult {
+    /// Restate every diagnostic column regorus reported for `source` as a
+    /// character column. Positions the scan computed are characters already.
+    fn with_character_columns(mut self, source: &str) -> Self {
+        for diagnostic in &mut self.diagnostics {
+            if let (Some(line), Some(column)) = (diagnostic.line, diagnostic.column) {
+                diagnostic.column = character_column(source, line, column).or(Some(column));
+            }
+        }
+        self
     }
 }
 
@@ -274,20 +350,44 @@ impl InputReferencePath {
             .any(|component| matches!(component, InputPathComponent::Dynamic))
     }
 
-    /// The fact this path reads, when it reads one by name.
-    ///
-    /// `input.facts.tags[0]` and `input.facts.files[_].quality` both name
-    /// `tags` / `files`; `input.facts` on its own names nothing.
-    fn fact_name(&self) -> Option<&str> {
+    /// Where a fact namespace's fact names start in this path, and the
+    /// nested section it belongs to: `input.facts.<name>` starts at 2 with no
+    /// section, `input.season.facts.<name>` at 3 in `season`.
+    fn fact_namespace<'a>(&self, nested: &[&'a str]) -> Option<(usize, Option<&'a str>)> {
         match self.components.as_slice() {
             [
                 InputPathComponent::Field(input),
                 InputPathComponent::Field(facts),
-                InputPathComponent::Field(name),
                 ..,
-            ] if input == "input" && facts == "facts" => Some(name.as_str()),
+            ] if input == "input" && facts == "facts" => Some((2, None)),
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(section),
+                InputPathComponent::Field(facts),
+                ..,
+            ] if input == "input" && facts == "facts" => nested
+                .iter()
+                .find(|nested| **nested == section.as_str())
+                .map(|nested| (3, Some(*nested))),
             _ => None,
         }
+    }
+
+    /// The fact this path reads, when it reads one by name.
+    ///
+    /// `input.facts.tags[0]` and `input.facts.files[_].quality` both name
+    /// `tags` / `files`; `input.facts` on its own names nothing. A nested
+    /// section's fact is qualified by its section: `input.season.facts.tags`
+    /// names `season.tags`.
+    fn fact_name(&self, nested: &[&str]) -> Option<String> {
+        let (start, section) = self.fact_namespace(nested)?;
+        let InputPathComponent::Field(name) = self.components.get(start)? else {
+            return None;
+        };
+        Some(match section {
+            Some(section) => format!("{section}.{name}"),
+            None => name.clone(),
+        })
     }
 
     /// The person-targeted path this reference reads, when it reads one.
@@ -321,33 +421,32 @@ impl InputReferencePath {
     }
 
     /// True when the path selects a fact with something other than a literal
-    /// name — `input.facts[key]`, `input.facts[_]`, `input.facts[i]`.
-    fn selects_fact_dynamically(&self) -> bool {
-        matches!(
-            self.components.as_slice(),
-            [
-                InputPathComponent::Field(input),
-                InputPathComponent::Field(facts),
-                selector,
-                ..,
-            ] if input == "input"
-                && facts == "facts"
-                && !matches!(selector, InputPathComponent::Field(_))
-        )
+    /// name — `input.facts[key]`, `input.facts[_]`, `input.facts[i]`, and the
+    /// same under a nested section.
+    fn selects_fact_dynamically(&self, nested: &[&str]) -> bool {
+        self.fact_namespace(nested).is_some_and(|(start, _)| {
+            self.components
+                .get(start)
+                .is_some_and(|selector| !matches!(selector, InputPathComponent::Field(_)))
+        })
     }
 
     /// True when the path reads the whole `input.facts` object without naming
     /// a fact — e.g. `object.get(input.facts, "x", false)` or
     /// `count(input.facts)`. Such a read reaches facts the referenced-fact set
     /// never sees, so an unknown fact would be read as absent instead of
-    /// holding the rule.
-    fn reads_facts_object_wholesale(&self) -> bool {
+    /// holding the rule. A nested section read whole (`input.season`) carries
+    /// its facts with it, so it counts too.
+    fn reads_facts_object_wholesale(&self, nested: &[&str]) -> bool {
+        if let Some((start, _)) = self.fact_namespace(nested) {
+            return self.components.len() == start;
+        }
         matches!(
             self.components.as_slice(),
             [
                 InputPathComponent::Field(input),
-                InputPathComponent::Field(facts),
-            ] if input == "input" && facts == "facts"
+                InputPathComponent::Field(section),
+            ] if input == "input" && nested.contains(&section.as_str())
         )
     }
 
@@ -364,7 +463,11 @@ impl InputReferencePath {
     }
 }
 
-fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCatalog {
+fn build_input_catalog(
+    contract_json: &str,
+    contract_name: &str,
+    nested_fact_sections: &[&str],
+) -> RuleInputCatalog {
     let contract: RuleInputContract = serde_json::from_str(contract_json)
         .unwrap_or_else(|e| panic!("{contract_name} should be valid: {e}"));
 
@@ -381,10 +484,34 @@ fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCat
         for field in section.fields {
             let field_path = format!("{}.{}", section.path, field.field);
             known_paths.insert(field_path.clone());
-            if field.field_type.ends_with("[]") {
+            // `string[]?` is a list that may be null; it is still indexable.
+            let field_type = field
+                .field_type
+                .strip_suffix('?')
+                .unwrap_or(&field.field_type);
+            if field_type.ends_with("[]") {
                 array_container_paths.insert(field_path.clone());
                 known_paths.insert(format!("{field_path}[]"));
             }
+        }
+    }
+
+    // Each nested section repeats both fact namespaces under its own name.
+    for section in nested_fact_sections {
+        for set in [&mut known_paths, &mut array_container_paths] {
+            let nested: Vec<String> = set
+                .iter()
+                .filter_map(|path| {
+                    ["input.facts", "input.observations"]
+                        .iter()
+                        .find_map(|namespace| {
+                            let rest = path.strip_prefix(namespace)?;
+                            (rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
+                                .then(|| format!("input.{section}.{}{rest}", &namespace[6..]))
+                        })
+                })
+                .collect();
+            set.extend(nested);
         }
     }
 
@@ -444,7 +571,7 @@ fn unsupported_dynamic_input_path_message(path: &str) -> String {
 /// narrower than every family Scryer runs, so a source the engine already holds
 /// — a large community pack, say — would fail to parse here and turn a static
 /// question into an error the caller cannot answer.
-fn parse_module(
+pub(crate) fn parse_module(
     rego_source: &str,
     policy_path: &str,
     limits: &RuntimeLimits,
@@ -468,7 +595,7 @@ enum StaticReferenceComponent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StaticReference {
+pub(crate) struct StaticReference {
     components: Vec<StaticReferenceComponent>,
 }
 
@@ -480,6 +607,17 @@ impl StaticReference {
         }
     }
 
+    /// The leading literal fields, up to the first computed component.
+    pub(crate) fn fields(&self) -> Vec<String> {
+        self.components
+            .iter()
+            .map_while(|component| match component {
+                StaticReferenceComponent::Field(field) => Some(field.clone()),
+                StaticReferenceComponent::Dynamic => None,
+            })
+            .collect()
+    }
+
     fn starts_with(&self, fields: &[&str]) -> bool {
         fields
             .iter()
@@ -488,7 +626,7 @@ impl StaticReference {
     }
 }
 
-fn static_reference(expr: &Expr) -> Option<StaticReference> {
+pub(crate) fn static_reference(expr: &Expr) -> Option<StaticReference> {
     match expr {
         Expr::Var { span, .. } => Some(StaticReference {
             components: vec![StaticReferenceComponent::Field(span.text().to_string())],
@@ -682,7 +820,7 @@ fn visit_query_expr_nodes(query: &Query, sink: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn visit_rule_expr_nodes(rule: &Rule, mut sink: impl FnMut(&Expr)) {
+pub(crate) fn visit_rule_expr_nodes(rule: &Rule, mut sink: impl FnMut(&Expr)) {
     match rule {
         Rule::Spec { head, bodies, .. } => {
             match head {
@@ -924,12 +1062,12 @@ fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<Valid
     errors.into_values().collect()
 }
 
-/// Names of the `input.facts.<name>` facts a maintenance policy references.
+/// Names of the `input.facts.<name>` facts a lifecycle policy references.
 ///
 /// This is the compile-time half of host-derived unknownness: the engine holds
 /// this set per rule and, at evaluation time, refuses to consult a rule whose
 /// referenced facts are not all resolvable for that subject. It is deliberately
-/// *static* — [`validate_maintenance_rule`] rejects dynamic fact access,
+/// *static* — [`validate_lifecycle_rule`] rejects dynamic fact access,
 /// `input` imports and bare `input` references precisely so this set can never
 /// be an underestimate of what a rule actually reads.
 ///
@@ -949,14 +1087,15 @@ fn module_referenced_facts(
         // Mirrored here, not only in validation: a stored revision that
         // predates (or somehow bypassed) validation must still never load with
         // an underestimated fact set.
-        if path.selects_fact_dynamically() {
+        let nested = ctx.nested_fact_sections;
+        if path.selects_fact_dynamically(nested) {
             error = Some(dynamic_fact_access_message(&path.display));
-        } else if path.reads_facts_object_wholesale() {
+        } else if path.reads_facts_object_wholesale(nested) {
             error = Some(whole_facts_object_message(&path.display));
         } else if path.references_input_wholesale() {
             error = Some(whole_input_document_message(&path.display));
-        } else if let Some(name) = path.fact_name() {
-            facts.insert(name.to_string());
+        } else if let Some(name) = path.fact_name(nested) {
+            facts.insert(name);
         }
     });
     match error {
@@ -975,22 +1114,22 @@ fn walk_module_input_paths(
     }
 }
 
-/// Facts a maintenance policy reads, plus the parse work needed to find them.
+/// Facts a lifecycle policy reads, plus the parse work needed to find them.
 ///
 /// Fails rather than guessing: a source that will not parse, or that pulls part
 /// of `input` in through an import, has no statically resolvable fact set, and
 /// a rule whose fact set is unknown must never load.
-pub(crate) fn maintenance_fact_references(
+pub(crate) fn lifecycle_fact_references(
     rego_source: &str,
     policy_path: &str,
 ) -> Result<BTreeSet<String>, String> {
-    fact_references(rego_source, policy_path, InputPathContext::maintenance())
+    fact_references(rego_source, policy_path, InputPathContext::lifecycle())
 }
 
-pub(crate) fn maintenance_fact_references_from_module(
+pub(crate) fn lifecycle_fact_references_from_module(
     module: &Module,
 ) -> Result<BTreeSet<String>, String> {
-    module_fact_references(module, InputPathContext::maintenance())
+    module_fact_references(module, InputPathContext::lifecycle())
 }
 
 /// The same work for any family whose facts arrive in observation envelopes.
@@ -1013,7 +1152,7 @@ fn module_fact_references(
     module_referenced_facts(module, ctx)
 }
 
-/// The `input.facts.<name>` facts a maintenance matcher reads, for callers
+/// The `input.facts.<name>` facts a lifecycle matcher reads, for callers
 /// outside this crate that must decide something about a rule *before* it runs.
 ///
 /// This is the same static set the engine holds rules on, exposed once so an
@@ -1021,17 +1160,30 @@ fn module_fact_references(
 /// reads. It fails for exactly the sources the engine would refuse to load, so
 /// a caller that cannot get an answer here must reject the rule rather than
 /// assume it reads nothing.
-pub fn maintenance_referenced_facts(
+///
+/// A season or episode fact is listed both qualified (`season.tags`) and by
+/// its bare name (`tags`): a season's facts are the same facts as a title's,
+/// so a caller asking whether a rule reads a fact by name, such as a watch
+/// fact or a person fact, is answered for every level the rule reads it at.
+pub fn lifecycle_referenced_facts(
     rego_source: &str,
     rule_set_id: &str,
 ) -> Result<BTreeSet<String>, RulesError> {
-    maintenance_fact_references(rego_source, &maintenance::user_policy_path(rule_set_id))
-        .map_err(RulesError::Compilation)
+    let qualified =
+        lifecycle_fact_references(rego_source, &lifecycle::user_policy_path(rule_set_id))
+            .map_err(RulesError::Compilation)?;
+    let bare: Vec<String> = qualified
+        .iter()
+        .filter_map(|fact| fact.split_once('.').map(|(_, name)| name.to_string()))
+        .collect();
+    let mut facts = qualified;
+    facts.extend(bare);
+    Ok(facts)
 }
 
 /// Facts a request rule reads, plus the parse work needed to find them.
 ///
-/// The request family holds a rule on unobservable facts exactly as maintenance
+/// The request family holds a rule on unobservable facts exactly as lifecycle
 /// does, so it needs the same statically resolvable set and fails for the same
 /// sources: one that will not parse, imports part of `input`, hands the document
 /// around whole, or selects a fact by a computed name.
@@ -1068,7 +1220,7 @@ pub fn request_referenced_facts(
 /// Authoring or previewing a rule that reads any of these is a way of asking the
 /// instance about one named person, so the application gates it on
 /// permission-management authority — the request-family counterpart of
-/// [`crate::maintenance::PERSON_TARGETED_MAINTENANCE_FACTS`]. An empty result
+/// [`crate::lifecycle::PERSON_TARGETED_LIFECYCLE_FACTS`]. An empty result
 /// means the rule decides on content and the draft alone.
 ///
 /// Fails for the same sources the engine would refuse to load: a rule whose
@@ -1109,6 +1261,65 @@ pub fn request_person_targeted_paths(
     }
 }
 
+/// Whether a request rule may read any of `facts`: by name under
+/// `input.facts` or `input.observations`, or through any reference that does
+/// not name what it reads (the whole input document, the whole fact or
+/// observation object, or a computed selector). True for a source whose
+/// references cannot be read off it, so a caller that skips a read for rules
+/// answering false can never hand a rule a value it reads.
+pub fn request_rule_may_read_facts(rego_source: &str, rule_set_id: &str, facts: &[&str]) -> bool {
+    request_rule_may_read_fact_families(rego_source, rule_set_id, &[facts])[0]
+}
+
+/// [`request_rule_may_read_facts`] for several fact families at once, from one
+/// parse of the source: one answer per family, in the order given.
+pub fn request_rule_may_read_fact_families(
+    rego_source: &str,
+    rule_set_id: &str,
+    families: &[&[&str]],
+) -> Vec<bool> {
+    let policy_path = request::user_policy_path(rule_set_id);
+    let ctx = InputPathContext::request();
+    let Ok(module) = parse_module(rego_source, &policy_path, &ctx.limits) else {
+        return vec![true; families.len()];
+    };
+    if input_import_error(&module, ctx.family).is_some() {
+        return vec![true; families.len()];
+    }
+    let nested = ctx.nested_fact_sections;
+    let mut reads = vec![false; families.len()];
+    walk_module_input_paths(&module, ctx, |path| {
+        let unnamed = path.references_input_wholesale()
+            || path.selects_fact_dynamically(nested)
+            || path.reads_facts_object_wholesale(nested);
+        let fact_name = path.fact_name(nested);
+        let observation = match path.components.as_slice() {
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(observations),
+                rest @ ..,
+            ] if input == "input" && observations == "observations" => match rest.first() {
+                Some(InputPathComponent::Field(name)) => Some(Some(name.as_str())),
+                _ => Some(None),
+            },
+            _ => None,
+        };
+        for (family, read) in families.iter().zip(reads.iter_mut()) {
+            *read = *read
+                || unnamed
+                || fact_name
+                    .as_ref()
+                    .is_some_and(|name| family.contains(&name.as_str()))
+                || match observation {
+                    Some(Some(name)) => family.contains(&name),
+                    Some(None) => true,
+                    None => false,
+                };
+        }
+    });
+    reads
+}
+
 /// Reject any import that pulls `input` (or part of it) into scope.
 ///
 /// `import input.facts` would let a rule write `facts.monitored`, which the
@@ -1132,26 +1343,34 @@ fn input_import_error(module: &Module, family: &str) -> Option<String> {
 }
 
 /// Leading name of a rule head reference, e.g. `match` for `match["x"]`.
-fn rule_head_name(expr: &Expr) -> Option<&str> {
+/// The top-level input sections one lifecycle rule reads: `facts`,
+/// `season`, `episode`, `subject` and so on.
+pub(crate) fn rule_input_sections(rule: &Rule) -> BTreeSet<String> {
+    let mut sections = BTreeSet::new();
+    visit_rule(
+        rule,
+        &mut |path: &InputReferencePath| {
+            if let [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(section),
+                ..,
+            ] = path.components.as_slice()
+                && input == "input"
+            {
+                sections.insert(section.clone());
+            }
+        },
+        InputPathContext::lifecycle(),
+    );
+    sections
+}
+
+pub(crate) fn rule_head_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Var { span, .. } => Some(span.text()),
         Expr::RefDot { refr, .. } | Expr::RefBrack { refr, .. } => rule_head_name(refr),
         _ => None,
     }
-}
-
-fn module_defines_rule(module: &Module, name: &str) -> bool {
-    module.policy.iter().any(|rule| {
-        let refr = match rule.as_ref() {
-            Rule::Spec { head, .. } => match head {
-                RuleHead::Compr { refr, .. }
-                | RuleHead::Set { refr, .. }
-                | RuleHead::Func { refr, .. } => refr,
-            },
-            Rule::Default { refr, .. } => refr,
-        };
-        rule_head_name(refr) == Some(name)
-    })
 }
 
 fn visit_rule(rule: &Rule, sink: &mut dyn FnMut(&InputReferencePath), ctx: InputPathContext) {
@@ -1395,11 +1614,11 @@ fn validate_input_reference_path(
     // Fact names must be literal: the engine derives the set of facts a rule
     // depends on from these paths, and a computed name would leave that set
     // silently incomplete.
-    if ctx.static_facts_only && path.selects_fact_dynamically() {
+    if ctx.static_facts_only && path.selects_fact_dynamically(ctx.nested_fact_sections) {
         return Some(dynamic_fact_access_message(&path.display));
     }
 
-    if ctx.static_facts_only && path.reads_facts_object_wholesale() {
+    if ctx.static_facts_only && path.reads_facts_object_wholesale(ctx.nested_fact_sections) {
         return Some(whole_facts_object_message(&path.display));
     }
 
@@ -1598,29 +1817,38 @@ pub fn validate_managed_rule(
     validate_user_rule(rego_source, rule_set_id)
 }
 
-/// Validate a user-authored maintenance matcher without persisting it.
+/// Validate a user-authored lifecycle matcher without persisting it.
 ///
 /// The caller is expected to have already called
-/// [`crate::maintenance::rewrite_package_declaration`] on the source.
+/// [`crate::lifecycle::rewrite_package_declaration`] on the source.
 ///
 /// Checks:
-/// 1. Package declaration matches `scryer.maintenance.user.<rule_set_id>`.
+/// 1. Package declaration matches `scryer.lifecycle.user.<rule_set_id>`.
 /// 2. Source and the generated decision wrapper both compile.
 /// 3. No import pulls part of `input` into scope, `input` is never referenced
 ///    as a whole value, and every fact is selected by a literal name. All three
 ///    keep the referenced-fact set statically resolvable, which is what lets the
 ///    engine hold a rule whose facts it cannot observe.
-/// 4. The source defines a rule named `match`. The wrapper defaults an
-///    undefined `match` to false, so a matcher that never defines one would
-///    quietly evaluate to no-match forever — this is the only place that catches
-///    it.
-/// 5. Every `input.*` reference resolves in the maintenance catalog.
-/// 6. A dry run against synthetic input yields a well-formed decision.
-pub fn validate_maintenance_rule(
+/// 4. The source defines at least one action head. The wrapper defaults every
+///    undefined head, so a rule that defines none would quietly do nothing
+///    forever; this is the only place that catches it. `match` is an ordinary
+///    helper name.
+/// 5. Every `input.*` reference resolves in the lifecycle catalog.
+/// 6. Every value written for `set_quality_profile`, `add_tags` or
+///    `remove_tags` is a plain literal the action accepts, within the tag
+///    count; no action head is written as a function; the source reads no
+///    `data` outside its own package; and it does not define or import under
+///    a name the `days_since` helper resolves. The engine runs the same scan
+///    when it loads the rule and refuses to evaluate a source that fails it.
+/// 7. A dry run against synthetic input yields a well-formed decision.
+///
+/// A rule name that is neither part of the contract nor used anywhere else in
+/// the source is reported in `warnings` and does not make the source invalid.
+pub fn validate_lifecycle_rule(
     rego_source: &str,
     rule_set_id: &str,
 ) -> Result<ValidationResult, RulesError> {
-    let expected_pkg = format!("package {MAINTENANCE_USER_PACKAGE_PREFIX}.{rule_set_id}");
+    let expected_pkg = format!("package {LIFECYCLE_USER_PACKAGE_PREFIX}.{rule_set_id}");
     if !rego_source.lines().any(|line| line.trim() == expected_pkg) {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_PACKAGE_REQUIRED,
@@ -1628,63 +1856,106 @@ pub fn validate_maintenance_rule(
         ));
     }
 
-    let mut engine = runtime::configured_engine(&RuntimeLimits::maintenance_defaults());
+    let mut engine = runtime::configured_engine(&RuntimeLimits::lifecycle_defaults());
 
-    let policy_path = maintenance::user_policy_path(rule_set_id);
+    let policy_path = lifecycle::user_policy_path(rule_set_id);
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
-        return Ok(ValidationResult::compilation_error(e));
+        return Ok(ValidationResult::compilation_error(e).with_character_columns(rego_source));
     }
     let policy_module_index = engine.get_modules().len() - 1;
+    let module = engine.get_modules()[policy_module_index].clone();
+    let module = module.as_ref();
+    // The same host modules the engine loads, so a rule that calls a host
+    // helper dry-runs here exactly as it will run.
+    for (path, source) in crate::lifecycle_actions::helper_modules(rule_set_id, module) {
+        if let Err(e) = engine.add_policy(path, source) {
+            return Ok(ValidationResult::compilation_error(e));
+        }
+    }
     if let Err(e) = engine.add_policy(
-        maintenance::decision_wrapper_policy_path(rule_set_id),
-        maintenance::decision_wrapper_source(rule_set_id),
+        lifecycle::decision_wrapper_policy_path(rule_set_id),
+        lifecycle::decision_wrapper_source(rule_set_id),
     ) {
         return Ok(ValidationResult::compilation_error(e));
     }
 
-    let module = &engine.get_modules()[policy_module_index];
-
-    if let Some(error) = input_import_error(module, "maintenance") {
+    if let Some(error) = input_import_error(module, "lifecycle") {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_INPUT_IMPORT_UNSUPPORTED,
             error,
         ));
     }
 
-    let input_path_errors = module_input_path_errors(module, InputPathContext::maintenance());
+    let input_path_errors = module_input_path_errors(module, InputPathContext::lifecycle());
     if !input_path_errors.is_empty() {
         return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
-    if !module_defines_rule(module, "match") {
+    let scan = crate::lifecycle_actions::scan_module(module);
+    let warnings = scan.warnings.iter().map(action_scan_diagnostic).collect();
+    if !scan.errors.is_empty() {
+        let errors = scan.errors.iter().map(action_scan_diagnostic).collect();
+        return Ok(ValidationResult::from_diagnostics(errors).with_warnings(warnings));
+    }
+    if scan.defined_heads.is_empty() {
         return Ok(ValidationResult::invalid_code(
-            crate::diagnostic_codes::RULE_MATCH_REQUIRED,
-            "maintenance rule must define a boolean 'match' rule, for example: match if { ... }",
-        ));
+            crate::diagnostic_codes::RULE_ACTION_REQUIRED,
+            "lifecycle rule must define at least one action, for example: unmonitor if { ... }",
+        )
+        .with_warnings(warnings));
     }
 
-    let input_value = serde_json::to_value(maintenance::synthetic_maintenance_input())
+    let input_value = serde_json::to_value(lifecycle::synthetic_lifecycle_input())
         .map_err(RulesError::Serialization)?;
     engine.set_input(input_value.into());
 
-    match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
-        Ok(value) => match maintenance::decode_decision(&value) {
-            Ok(_) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid_code(
+    let result = match engine.eval_rule(lifecycle::decision_wrapper_rule_path(rule_set_id)) {
+        // Decoded at every level the rule acts at, so a season or episode
+        // head of the wrong type is refused as a title head would be.
+        Ok(value) => match scan
+            .levels()
+            .into_iter()
+            .try_for_each(|level| lifecycle::decode_decision(&value, level).map(|_| ()))
+        {
+            Ok(()) => ValidationResult::valid(),
+            Err(e) => ValidationResult::invalid_code(
                 crate::diagnostic_codes::RULE_OUTPUT_INVALID,
                 format!("output error: {e}"),
-            )),
+            ),
         },
-        Err(e) => Ok(ValidationResult::invalid_code(
+        Err(e) => ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_RUNTIME_ERROR,
             format!("runtime error: {e}"),
-        )),
-    }
+        ),
+    };
+    Ok(result.with_warnings(warnings))
 }
 
-/// The heads a request rule may write. At least one of the first four has to be
-/// defined or the rule can never contribute anything to a decision.
-const REQUEST_VOTE_HEADS: [&str; 4] = ["approve", "deny", "manual", "tags"];
+fn action_scan_diagnostic(
+    issue: &crate::lifecycle_actions::LifecycleActionScanIssue,
+) -> ValidationDiagnostic {
+    let mut diagnostic = ValidationDiagnostic::new(issue.code, issue.message.clone());
+    diagnostic.line = Some(issue.line);
+    diagnostic.column = Some(issue.column);
+    // These two concern a rule the author named, and the name is the fact a
+    // client needs to point at it; the action codes name their head in the
+    // code's own meaning.
+    if matches!(
+        issue.code,
+        crate::diagnostic_codes::RULE_UNREFERENCED_RULE
+            | crate::diagnostic_codes::RULE_HOST_HELPER_REDEFINED
+    ) {
+        diagnostic.path = Some(issue.rule.clone());
+    }
+    diagnostic
+}
+
+fn rule_scan_diagnostic(issue: &crate::rule_scan::RuleScanIssue) -> ValidationDiagnostic {
+    let mut diagnostic = ValidationDiagnostic::new(issue.code, issue.message.clone());
+    diagnostic.line = Some(issue.line);
+    diagnostic.column = Some(issue.column);
+    diagnostic
+}
 
 /// Validate a user-authored request rule without persisting it.
 ///
@@ -1699,12 +1970,19 @@ const REQUEST_VOTE_HEADS: [&str; 4] = ["approve", "deny", "manual", "tags"];
 ///    the referenced-fact set statically resolvable, which is what lets the
 ///    engine hold a rule whose facts it cannot observe.
 /// 4. Every `input.*` reference resolves in the request catalog.
-/// 5. The source defines at least one of `approve`, `deny`, `manual`, or `tags`.
-///    The wrapper defaults every head, so a rule defining none of them — one
-///    that only writes `reasons`, say — would compile, load, and abstain
-///    forever; this is the only place that catches it.
-/// 6. A dry run against synthetic input yields a well-formed decision, which is
-///    also what proves the rule's `reasons` and `tags` are inside their bounds.
+/// 5. The head scan of [`crate::request_actions`]: every valued head is a plain
+///    literal it accepts, no head the host reads is a function, and `data` is
+///    read only inside the rule's own package.
+/// 6. The source decides something: a vote, a shaping head, or `add_tags`. The wrapper defaults every head, so a rule defining none of
+///    them — one that only writes `reasons` or `notify`, say — would compile,
+///    load, and abstain forever; this is the only place that catches it.
+/// 7. A dry run against synthetic input yields a well-formed decision, which is
+///    also what proves the rule's `reasons` and tags are inside their bounds.
+///
+/// Whether a quality profile, monitor type or audio language a rule writes
+/// exists for this instance is the host's check, made on the literals the
+/// scan reports. A rule name that is neither a head nor used anywhere else in
+/// the source is reported in `warnings` and does not make the source invalid.
 pub fn validate_request_rule(
     rego_source: &str,
     rule_set_id: &str,
@@ -1731,7 +2009,8 @@ pub fn validate_request_rule(
         return Ok(ValidationResult::compilation_error(e));
     }
 
-    let module = &engine.get_modules()[policy_module_index];
+    let module = engine.get_modules()[policy_module_index].clone();
+    let module = module.as_ref();
 
     if let Some(error) = input_import_error(module, "request") {
         return Ok(ValidationResult::invalid_code(
@@ -1745,34 +2024,40 @@ pub fn validate_request_rule(
         return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
-    if !REQUEST_VOTE_HEADS
-        .iter()
-        .any(|head| module_defines_rule(module, head))
-    {
+    let scan = crate::request_actions::scan_request_module(module);
+    let warnings: Vec<ValidationDiagnostic> =
+        scan.warnings.iter().map(rule_scan_diagnostic).collect();
+    if !scan.errors.is_empty() {
+        let errors = scan.errors.iter().map(rule_scan_diagnostic).collect();
+        return Ok(ValidationResult::from_diagnostics(errors).with_warnings(warnings));
+    }
+    if !scan.decides_something() {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_VOTE_REQUIRED,
-            "request rule can never vote: define at least one of 'approve', 'deny', 'manual', \
-             or 'tags', for example: approve if { ... }",
-        ));
+            "request rule decides nothing: define a vote ('approve', 'deny' or 'manual'), \
+             a 'set_' head or 'add_tags', for example: approve if { ... }",
+        )
+        .with_warnings(warnings));
     }
 
     let input_value = serde_json::to_value(request::synthetic_request_input())
         .map_err(RulesError::Serialization)?;
     engine.set_input(input_value.into());
 
-    match engine.eval_rule(request::decision_wrapper_rule_path(rule_set_id)) {
+    let result = match engine.eval_rule(request::decision_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match request::decode_decision(&value) {
-            Ok(_) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid_code(
+            Ok(_) => ValidationResult::valid(),
+            Err(e) => ValidationResult::invalid_code(
                 crate::diagnostic_codes::RULE_OUTPUT_INVALID,
                 format!("output error: {e}"),
-            )),
+            ),
         },
-        Err(e) => Ok(ValidationResult::invalid_code(
+        Err(e) => ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_RUNTIME_ERROR,
             format!("runtime error: {e}"),
-        )),
-    }
+        ),
+    };
+    Ok(result.with_warnings(warnings))
 }
 
 /// Verify that the evaluation result is a map of string → integer.
@@ -1826,7 +2111,7 @@ fn synthetic_test_input() -> UserRuleInput {
             stereoscopy: None,
             raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265.DDP.5.1".to_string(),
             normalized_tokens: vec![],
-            quality: Some("2160P".to_string()),
+            quality: Some("2160p".to_string()),
             source: Some("WEB-DL".to_string()),
             video_codec: Some("H.265".to_string()),
             audio: Some("DDP".to_string()),
@@ -1919,7 +2204,6 @@ fn synthetic_test_input() -> UserRuleInput {
             codes: vec!["quality_tier_0".to_string(), "source_webdl".to_string()],
         },
         file: Some(FileDoc {
-            details: Default::default(),
             video_codec: Some("hevc".to_string()),
             video_width: Some(3840),
             video_height: Some(2160),
@@ -2301,12 +2585,12 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_input_contract_copies_are_byte_identical() {
+    fn lifecycle_input_contract_copies_are_byte_identical() {
         assert_eq!(
-            include_str!("../maintenance-input-contract.json"),
-            include_str!("../../../apps/scryer-web/lib/contracts/maintenance-input-contract.json"),
-            "crates/scryer-rules/maintenance-input-contract.json and \
-             apps/scryer-web/lib/contracts/maintenance-input-contract.json must stay byte-identical"
+            include_str!("../lifecycle-input-contract.json"),
+            include_str!("../../../apps/scryer-web/lib/contracts/lifecycle-input-contract.json"),
+            "crates/scryer-rules/lifecycle-input-contract.json and \
+             apps/scryer-web/lib/contracts/lifecycle-input-contract.json must stay byte-identical"
         );
     }
 
@@ -2320,40 +2604,40 @@ mod tests {
         );
     }
 
-    fn validate_maintenance_body(id: &str, body: &str) -> ValidationResult {
-        let source = maintenance::rewrite_package_declaration(body, id);
-        validate_maintenance_rule(&source, id).expect("validation should not fail outright")
+    fn validate_lifecycle_body(id: &str, body: &str) -> ValidationResult {
+        let source = lifecycle::rewrite_package_declaration(body, id);
+        validate_lifecycle_rule(&source, id).expect("validation should not fail outright")
     }
 
-    fn maintenance_policy(id: &str, body: &str) -> maintenance::MaintenancePolicy {
-        maintenance::MaintenancePolicy {
+    fn lifecycle_policy(id: &str, body: &str) -> lifecycle::LifecyclePolicy {
+        lifecycle::LifecyclePolicy {
             id: id.to_string(),
             name: format!("rule {id}"),
-            rego_source: maintenance::rewrite_package_declaration(body, id),
+            rego_source: lifecycle::rewrite_package_declaration(body, id),
         }
     }
 
     /// The engine is the second gate: a revision stored before a rule existed
     /// (or one that somehow bypassed validation) must still be refused at load,
     /// so the fact set the engine holds a rule on is never an underestimate.
-    fn maintenance_build_error(id: &str, body: &str) -> String {
-        maintenance::MaintenanceRulesEngine::build(&[maintenance_policy(id, body)])
+    fn lifecycle_build_error(id: &str, body: &str) -> String {
+        lifecycle::LifecycleRulesEngine::build(&[lifecycle_policy(id, body)])
             .err()
             .map(|error| error.to_string())
             .unwrap_or_else(|| panic!("engine build should have refused {id}"))
     }
 
     #[test]
-    fn maintenance_source_and_loaded_module_fact_hooks_agree() {
+    fn lifecycle_source_and_loaded_module_fact_hooks_agree() {
         for (id, body) in [
-            ("known_fact", "match if {\n  input.facts.monitored\n}\n"),
+            ("known_fact", "unmonitor if {\n  input.facts.monitored\n}\n"),
             (
                 "dynamic_fact",
-                "match if {\n  some fact\n  input.facts[fact]\n}\n",
+                "unmonitor if {\n  some fact\n  input.facts[fact]\n}\n",
             ),
         ] {
-            let policy = maintenance_policy(id, body);
-            let path = maintenance::user_policy_path(id);
+            let policy = lifecycle_policy(id, body);
+            let path = lifecycle::user_policy_path(id);
             let module = parse_module(
                 &policy.rego_source,
                 &path,
@@ -2362,10 +2646,10 @@ mod tests {
             .expect("source should parse");
 
             let source_result =
-                <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts(
+                <lifecycle::LifecycleFamily as crate::policy::PolicyFamily>::referenced_facts(
                     &policy, &path,
                 );
-            let module_result = <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts_from_module(
+            let module_result = <lifecycle::LifecycleFamily as crate::policy::PolicyFamily>::referenced_facts_from_module(
                 &policy, &path, &module,
             );
             assert_eq!(source_result, module_result, "{id}");
@@ -2373,8 +2657,8 @@ mod tests {
     }
 
     /// Both gates refuse a source, with the same explanation.
-    fn assert_maintenance_rejected_everywhere(id: &str, body: &str, expected: &str) {
-        let result = validate_maintenance_body(id, body);
+    fn assert_lifecycle_rejected_everywhere(id: &str, body: &str, expected: &str) {
+        let result = validate_lifecycle_body(id, body);
         assert!(!result.valid, "{id} should not validate");
         assert!(
             result.errors.iter().any(|error| error.contains(expected)),
@@ -2382,7 +2666,7 @@ mod tests {
             result.errors
         );
 
-        let build_error = maintenance_build_error(id, body);
+        let build_error = lifecycle_build_error(id, body);
         assert!(
             build_error.contains(expected),
             "{id} build error: {build_error}"
@@ -2390,10 +2674,10 @@ mod tests {
     }
 
     #[test]
-    fn valid_maintenance_rule_passes_validation() {
-        let result = validate_maintenance_body(
+    fn valid_lifecycle_rule_passes_validation() {
+        let result = validate_lifecycle_body(
             "unmonitored_and_stale",
-            "match if {\n  \
+            "unmonitor if {\n  \
                not input.facts.monitored\n  \
                input.facts.files[0].quality == \"2160P\"\n\
              }\n\n\
@@ -2405,10 +2689,10 @@ mod tests {
     /// The advanced surface stays documented and reachable: envelope fields,
     /// including the per-file detail under `value[]`, still validate.
     #[test]
-    fn a_maintenance_rule_may_read_the_observation_envelope_directly() {
-        let result = validate_maintenance_body(
+    fn a_lifecycle_rule_may_read_the_observation_envelope_directly() {
+        let result = validate_lifecycle_body(
             "envelope_reader",
-            "match if {\n  \
+            "unmonitor if {\n  \
                input.observations.monitored.status == \"known\"\n  \
                not input.observations.monitored.value\n  \
                input.observations.files.value[0].quality == \"2160P\"\n\
@@ -2422,26 +2706,30 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_without_match_is_rejected() {
-        let result = validate_maintenance_body(
-            "no_match_rule",
+    fn lifecycle_rule_without_an_action_is_rejected() {
+        for body in [
             "unknown if {\n  not input.facts.monitored\n}\n",
-        );
-        assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("must define a boolean 'match' rule"),
-            "{:?}",
-            result.errors
-        );
+            // `match` is an ordinary helper now; on its own it decides nothing.
+            "match if {\n  not input.facts.monitored\n}\n",
+        ] {
+            let result = validate_lifecycle_body("no_action_rule", body);
+            assert!(!result.valid, "{body}");
+            assert_eq!(
+                result.diagnostics[0].code,
+                crate::diagnostic_codes::RULE_ACTION_REQUIRED,
+                "{body}: {:?}",
+                result.diagnostics
+            );
+        }
     }
 
     /// The referenced-fact set is what makes an unobservable fact hold a rule,
     /// so a fact name the host cannot read off the source is refused outright.
     #[test]
-    fn maintenance_rule_with_dynamic_fact_access_is_rejected() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_with_dynamic_fact_access_is_rejected() {
+        let result = validate_lifecycle_body(
             "dynamic_fact",
-            "match if {\n  some fact\n  input.facts[fact]\n}\n",
+            "unmonitor if {\n  some fact\n  input.facts[fact]\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2459,10 +2747,10 @@ mod tests {
     /// false)` reads fact `x` without ever writing the path, so an unknown `x`
     /// would decide as a plain false instead of holding the rule.
     #[test]
-    fn maintenance_rule_reading_the_whole_fact_object_is_rejected() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_reading_the_whole_fact_object_is_rejected() {
+        let result = validate_lifecycle_body(
             "whole_object",
-            "match if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
+            "unmonitor if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2474,9 +2762,9 @@ mod tests {
             result.errors
         );
 
-        let build_error = maintenance_build_error(
+        let build_error = lifecycle_build_error(
             "whole_object",
-            "match if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
+            "unmonitor if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
         );
         assert!(
             build_error.contains("Unsupported reference to the whole fact object"),
@@ -2490,34 +2778,34 @@ mod tests {
     /// would never fire and an unobservable fact would decide as a plain
     /// absence. Both gates — validation and engine build — refuse them.
     #[test]
-    fn maintenance_rule_referencing_the_whole_input_document_is_rejected() {
+    fn lifecycle_rule_referencing_the_whole_input_document_is_rejected() {
         const EXPECTED: &str = "Unsupported reference to the whole input document";
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_alias",
-            "match if {\n  \
+            "unmonitor if {\n  \
                doc := input\n  \
                doc.facts.watched_by_user_ids\n\
              }\n",
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_object_get",
-            "match if {\n  object.get(input, [\"facts\", \"monitored\"], false)\n}\n",
+            "unmonitor if {\n  object.get(input, [\"facts\", \"monitored\"], false)\n}\n",
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_as_function_argument",
-            "match if {\n  watched(input)\n}\n\n\
+            "unmonitor if {\n  watched(input)\n}\n\n\
              watched(doc) if {\n  doc.facts.last_watched_at\n}\n",
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_walk",
-            "match if {\n  \
+            "unmonitor if {\n  \
                some path, value\n  \
                walk(input, [path, value])\n  \
                path == [\"facts\", \"monitored\"]\n  \
@@ -2526,9 +2814,9 @@ mod tests {
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_bare_comparison",
-            "match if {\n  input == {}\n}\n",
+            "unmonitor if {\n  input == {}\n}\n",
             EXPECTED,
         );
     }
@@ -2537,10 +2825,10 @@ mod tests {
     /// override target is a bare `input`, so the rule body underneath it reads
     /// facts that never appear in the referenced-fact set.
     #[test]
-    fn maintenance_rule_overriding_the_whole_input_document_is_rejected() {
-        assert_maintenance_rejected_everywhere(
+    fn lifecycle_rule_overriding_the_whole_input_document_is_rejected() {
+        assert_lifecycle_rejected_everywhere(
             "input_with_override",
-            "match if {\n  \
+            "unmonitor if {\n  \
                inner with input as {\"facts\": {\"monitored\": false}}\n\
              }\n\n\
              inner if {\n  not input.facts.monitored\n}\n",
@@ -2548,39 +2836,58 @@ mod tests {
         );
     }
 
-    /// Over-approximating on purpose: a `with input.facts.<name> as ...`
-    /// override still names its fact, so the referenced-fact set keeps counting
-    /// it — the rule is held on a fact it only substitutes for, which errs
-    /// toward holding rather than deciding.
+    /// A `with input.facts.<name> as ...` override decides from a value the
+    /// rule wrote, not the one Scryer observed, so it is refused at both the
+    /// save and the load, by code.
     #[test]
-    fn maintenance_rule_may_override_a_named_fact() {
-        let body = "match if {\n  \
+    fn lifecycle_rule_overriding_a_named_fact_is_refused() {
+        let body = "unmonitor if {\n  \
                       inner with input.facts.monitored as false\n\
                     }\n\n\
                     inner if {\n  not input.facts.monitored\n}\n";
-        let result = validate_maintenance_body("named_fact_override", body);
-        assert!(result.valid, "errors: {:?}", result.errors);
+        let result = validate_lifecycle_body("named_fact_override", body);
+        assert!(!result.valid);
+        let codes: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![crate::diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED],
+            "{:?}",
+            result.errors
+        );
 
-        let facts = maintenance_referenced_facts(
-            &maintenance::rewrite_package_declaration(body, "named_fact_override"),
+        let engine = lifecycle::LifecycleRulesEngine::build(&[lifecycle_policy(
             "named_fact_override",
-        )
-        .expect("named-fact override should resolve a fact set");
-        assert!(
-            facts.contains("monitored"),
-            "override should still count the fact: {facts:?}"
+            body,
+        )])
+        .expect("a refused rule still loads");
+        let evaluation = engine
+            .evaluator()
+            .evaluate(&lifecycle::synthetic_lifecycle_input())
+            .expect("evaluation runs");
+        assert!(evaluation.records.is_empty(), "{:?}", evaluation.records);
+        assert_eq!(
+            evaluation
+                .errors
+                .iter()
+                .map(|error| error.code)
+                .collect::<Vec<_>>(),
+            vec![crate::diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED]
         );
     }
 
     /// The rejection is exactly a *bare* `input`: the walker emits maximal
     /// paths, so an ordinary fact read must stay untouched at both gates.
     #[test]
-    fn maintenance_rule_reading_a_named_fact_is_still_accepted() {
-        let body = "match if {\n  not input.facts.monitored\n}\n";
-        let result = validate_maintenance_body("named_fact_read", body);
+    fn lifecycle_rule_reading_a_named_fact_is_still_accepted() {
+        let body = "unmonitor if {\n  not input.facts.monitored\n}\n";
+        let result = validate_lifecycle_body("named_fact_read", body);
         assert!(result.valid, "errors: {:?}", result.errors);
 
-        maintenance::MaintenanceRulesEngine::build(&[maintenance_policy("named_fact_read", body)])
+        lifecycle::LifecycleRulesEngine::build(&[lifecycle_policy("named_fact_read", body)])
             .expect("a named fact read should load");
     }
 
@@ -2601,12 +2908,12 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_importing_part_of_input_is_rejected() {
-        let source = maintenance::rewrite_package_declaration(
-            "import input.facts\n\nmatch if {\n  facts.monitored\n}\n",
+    fn lifecycle_rule_importing_part_of_input_is_rejected() {
+        let source = lifecycle::rewrite_package_declaration(
+            "import input.facts\n\nunmonitor if {\n  facts.monitored\n}\n",
             "imported_facts",
         );
-        let result = validate_maintenance_rule(&source, "imported_facts").expect("validates");
+        let result = validate_lifecycle_rule(&source, "imported_facts").expect("validates");
         assert!(!result.valid);
         assert!(
             result.errors[0].contains("Unsupported import 'input.facts'"),
@@ -2620,94 +2927,100 @@ mod tests {
     /// template. Pinned here rather than parsed out of the gallery so the two
     /// have to be changed together deliberately.
     #[test]
-    fn every_pinned_maintenance_template_validates() {
+    fn every_pinned_lifecycle_template_validates() {
         let templates: [(&str, &str); 15] = [
             (
                 "dead-wanted",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
             ),
             (
                 "library-aging",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.has_file\n\tnot \"keep\" in input.facts.tags\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.has_file\n\tnot \"keep\" in input.facts.tags\n}\n",
             ),
             (
                 "added-age",
-                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.added_at)\n\tage > 180 * day_ns\n}\n",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nunmonitor if {\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.added_at)\n\tage > 180 * day_ns\n}\n",
             ),
             (
                 "oversized",
-                "package rules\nimport rego.v1\n\nmatch if input.facts.total_file_size_bytes > 40000000000\n",
+                "package rules\nimport rego.v1\n\nunmonitor if input.facts.total_file_size_bytes > 40000000000\n",
             ),
             (
                 "4k-purge",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tsome file in input.facts.files\n\tfile.video_height >= 2160\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tsome file in input.facts.files\n\tfile.video_height >= 2160\n}\n",
             ),
             (
                 "requested-expiry",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tnot \"keep\" in input.facts.tags\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.requested\n\tnot \"keep\" in input.facts.tags\n}\n",
             ),
             (
                 "departed-requester",
-                "package rules\nimport rego.v1\n\nmatch if {\n\t\"departed-user\" in input.facts.requested_by_usernames\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\t\"departed-user\" in input.facts.requested_by_usernames\n}\n",
             ),
             (
                 "system-added",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
             ),
             (
                 "watched-by-every-requester",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
             ),
             (
                 "no-profile",
-                "package rules\nimport rego.v1\n\nmatch if not input.facts.quality_profile_id\n",
+                "package rules\nimport rego.v1\n\nunmonitor if not input.facts.quality_profile_id\n",
             ),
             (
                 "expired-request-leases",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
             ),
             (
                 "tagged-for-removal",
-                "package rules\nimport rego.v1\n\nmatch if {\n\t\"remove\" in input.facts.tags\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\t\"remove\" in input.facts.tags\n}\n",
             ),
             (
                 "flag-for-review",
-                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tinput.facts.has_file\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.first_imported_at)\n\tage > 365 * day_ns\n}\n",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nunmonitor if {\n\tinput.facts.has_file\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.first_imported_at)\n\tage > 365 * day_ns\n}\n",
             ),
             (
                 "left-every-public-list",
-                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tinput.facts.lists_left_all\n\tinput.facts.lists_left_handled\n\tgone := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.lists_left_at)\n\tgone > 30 * day_ns\n}\n",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nunmonitor if {\n\tinput.facts.lists_left_all\n\tinput.facts.lists_left_handled\n\tgone := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.lists_left_at)\n\tgone > 30 * day_ns\n}\n",
             ),
             (
                 "list-added-never-watched",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.lists_added_by_list\n\tinput.facts.lists_days_on_list > 90\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.lists_added_by_list\n\tinput.facts.lists_days_on_list > 90\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n",
             ),
         ];
 
         for (index, (template_id, rego_source)) in templates.into_iter().enumerate() {
-            let rule_id = format!("maintenance_template_{index}");
-            let rewritten = maintenance::rewrite_package_declaration(rego_source, &rule_id);
-            let result = validate_maintenance_rule(&rewritten, &rule_id).expect("validates");
+            let rule_id = format!("lifecycle_template_{index}");
+            let rewritten = lifecycle::rewrite_package_declaration(rego_source, &rule_id);
+            let result = validate_lifecycle_rule(&rewritten, &rule_id).expect("validates");
             assert!(result.valid, "{template_id}: {:?}", result.errors);
         }
     }
 
     #[test]
-    fn maintenance_rule_with_non_boolean_match_is_rejected() {
-        let result = validate_maintenance_body("numeric_match", "match := 42\n");
+    fn lifecycle_rule_with_non_boolean_match_is_rejected() {
+        let result = validate_lifecycle_body("numeric_match", "unmonitor := 42\n");
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("'match' must be a boolean"),
+        let codes: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![crate::diagnostic_codes::RULE_OUTPUT_INVALID],
             "{:?}",
             result.errors
         );
     }
 
     #[test]
-    fn maintenance_rule_with_unknown_input_path_is_rejected() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_with_unknown_input_path_is_rejected() {
+        let result = validate_lifecycle_body(
             "watch_count",
-            "match if {\n  input.facts.watch_count == 0\n}\n",
+            "unmonitor if {\n  input.facts.watch_count == 0\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2717,13 +3030,13 @@ mod tests {
         );
     }
 
-    /// The `input.release.extra.<key>` escape hatch is release-only: maintenance
+    /// The `input.release.extra.<key>` escape hatch is release-only: lifecycle
     /// facts are all catalogued, so an uncatalogued path is always a typo.
     #[test]
-    fn maintenance_rule_cannot_use_release_extra_paths() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_cannot_use_release_extra_paths() {
+        let result = validate_lifecycle_body(
             "extra_path",
-            "match if {\n  input.release.extra.anything == \"x\"\n}\n",
+            "unmonitor if {\n  input.release.extra.anything == \"x\"\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2734,9 +3047,9 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_with_wrong_package_is_rejected() {
-        let source = maintenance::rewrite_package_declaration("match := true\n", "actual_id");
-        let result = validate_maintenance_rule(&source, "expected_id").unwrap();
+    fn lifecycle_rule_with_wrong_package_is_rejected() {
+        let source = lifecycle::rewrite_package_declaration("unmonitor := true\n", "actual_id");
+        let result = validate_lifecycle_rule(&source, "expected_id").unwrap();
         assert!(!result.valid);
         assert!(result.errors[0].contains("package declaration"));
     }
@@ -2966,7 +3279,7 @@ mod tests {
                 .entries
                 .iter()
                 .any(|entry| entry.code == "x264_4k_penalty" && entry.delta == -200),
-            "prefer-hevc should penalize canonical 2160P H.264 input"
+            "prefer-hevc should penalize canonical 2160p H.264 input"
         );
     }
 
@@ -3059,7 +3372,7 @@ mod tests {
         }
     }
 
-    /// The engine is the second gate, exactly as it is for maintenance: a stored
+    /// The engine is the second gate, exactly as it is for lifecycle: a stored
     /// revision that somehow bypassed validation must still be refused at load,
     /// so the fact set the engine holds a rule on is never an underestimate.
     fn request_build_error(id: &str, body: &str) -> String {
@@ -3125,7 +3438,7 @@ mod tests {
                input.facts.certification_rank <= 2\n  \
                input.request.lease_days <= 30\n\
              }\n\n\
-             tags contains \"family\"\n\n\
+             add_tags := [\"family\"]\n\n\
              reasons contains \"family_rated\"\n",
         );
         assert!(result.valid, "errors: {:?}", result.errors);
@@ -3155,12 +3468,11 @@ mod tests {
             "reasons contains \"adult_content\" if {\n  input.facts.is_adult\n}\n",
         );
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("can never vote")
-                && result.errors[0].contains("'approve'")
-                && result.errors[0].contains("'tags'"),
+        assert_eq!(
+            result.diagnostics[0].code,
+            crate::diagnostic_codes::RULE_VOTE_REQUIRED,
             "{:?}",
-            result.errors
+            result.diagnostics
         );
     }
 
@@ -3170,7 +3482,7 @@ mod tests {
     fn request_rule_that_only_tags_is_accepted() {
         let result = validate_request_body(
             "tags_only",
-            "tags contains \"family\" if {\n  input.facts.certification_rank <= 1\n}\n",
+            "add_tags := [\"family\"] if {\n  input.facts.certification_rank <= 1\n}\n",
         );
         assert!(result.valid, "errors: {:?}", result.errors);
     }
@@ -3278,20 +3590,21 @@ mod tests {
         }
     }
 
-    /// The bounded decoders run in the dry-run too, so an author learns their
-    /// tag is unusable at save time rather than at submit time.
+    /// An `add_tags` literal is checked at save time, at the literal, so an
+    /// author learns it is unusable before any request reaches the rule.
     #[test]
-    fn request_rule_emitting_a_malformed_tag_is_rejected() {
+    fn request_rule_adding_a_malformed_tag_is_rejected_at_the_literal() {
         let result = validate_request_body(
             "bad_tag",
-            "approve := true\n\ntags contains \"scryer:managed\"\n",
+            "approve := true\n\nadd_tags := [\"scryer:managed\"]\n",
         );
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("output error") && result.errors[0].contains("reserved"),
-            "{:?}",
-            result.errors
+        let diagnostic = &result.diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            crate::diagnostic_codes::RULE_ACTION_VALUE_INVALID
         );
+        assert_eq!((diagnostic.line, diagnostic.column), (Some(5), Some(14)));
     }
 
     #[test]
@@ -3374,6 +3687,36 @@ mod tests {
                 "is_adult".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn a_request_rule_may_read_a_fact_unless_every_reference_names_another() {
+        let watched = ["on_requester_watchlist", "requester_watchlist_days"];
+        let reads = |body: &str| {
+            request_rule_may_read_facts(
+                &request::rewrite_package_declaration(body, "fact_reader"),
+                "fact_reader",
+                &watched,
+            )
+        };
+        assert!(!reads(
+            "approve if {\n  input.facts.certification_rank <= 2\n  \
+             input.observations.is_adult.status == \"known\"\n  \
+             input.requester.username == \"synthetic\"\n}\n"
+        ));
+        for body in [
+            "approve if {\n  input.facts.on_requester_watchlist\n}\n",
+            "approve if {\n  input.facts.requester_watchlist_days < 30\n}\n",
+            "manual if {\n  input.observations.on_requester_watchlist.status == \"unknown\"\n}\n",
+            "manual if {\n  some name\n  input.observations[name].status == \"unknown\"\n}\n",
+            "manual if {\n  count(input.observations) > 0\n}\n",
+            "approve if {\n  walk(input, [_, _])\n}\n",
+            "approve if {\n  some name\n  input.facts[name] == true\n}\n",
+            "approve if {\n  count(input.facts) > 0\n}\n",
+            "approve if {\n  not valid rego\n",
+        ] {
+            assert!(reads(body), "{body}");
+        }
     }
 
     /// The gate the application authors on: which named people the rule asks
@@ -3494,32 +3837,52 @@ mod tests {
         );
     }
 
-    /// Each family judges paths against its own catalog: a maintenance fact is
-    /// not a request fact, and neither is a request fact a maintenance one.
+    /// Each family judges paths against its own catalog: a lifecycle fact is
+    /// not a request fact, and neither is a request fact a lifecycle one.
     #[test]
     fn the_three_family_catalogs_do_not_leak_into_each_other() {
-        let request_reading_a_maintenance_fact = validate_request_body(
-            "maintenance_fact",
+        let request_reading_a_lifecycle_fact = validate_request_body(
+            "lifecycle_fact",
             "approve if {\n  input.facts.monitored\n}\n",
         );
-        assert!(!request_reading_a_maintenance_fact.valid);
+        assert!(!request_reading_a_lifecycle_fact.valid);
         assert!(
-            request_reading_a_maintenance_fact.errors[0]
+            request_reading_a_lifecycle_fact.errors[0]
                 .contains("Unknown rule input path 'input.facts.monitored'"),
             "{:?}",
-            request_reading_a_maintenance_fact.errors
+            request_reading_a_lifecycle_fact.errors
         );
 
-        let maintenance_reading_a_request_fact = validate_maintenance_body(
+        let lifecycle_reading_a_request_fact = validate_lifecycle_body(
             "request_fact",
-            "match if {\n  input.facts.certification_rank <= 2\n}\n",
+            "unmonitor if {\n  input.facts.previous_request_count > 2\n}\n",
         );
-        assert!(!maintenance_reading_a_request_fact.valid);
+        assert!(!lifecycle_reading_a_request_fact.valid);
         assert!(
-            maintenance_reading_a_request_fact.errors[0]
-                .contains("Unknown rule input path 'input.facts.certification_rank'"),
+            lifecycle_reading_a_request_fact.errors[0]
+                .contains("Unknown rule input path 'input.facts.previous_request_count'"),
             "{:?}",
-            maintenance_reading_a_request_fact.errors
+            lifecycle_reading_a_request_fact.errors
+        );
+
+        // Content ratings and awards are facts of both families.
+        let lifecycle_reading_shared_facts = validate_lifecycle_body(
+            "shared_facts",
+            "unmonitor if {\n  input.facts.certification_rank <= 2\n  input.facts.award_count == 0\n  some award in input.facts.awards\n  award.given_to == \"work\"\n}\n",
+        );
+        assert!(
+            lifecycle_reading_shared_facts.valid,
+            "{:?}",
+            lifecycle_reading_shared_facts.errors
+        );
+        let request_reading_awards = validate_request_body(
+            "request_awards",
+            "approve if {\n  some award in input.facts.awards\n  award.award_id == \"Q1\"\n}\n",
+        );
+        assert!(
+            request_reading_awards.valid,
+            "{:?}",
+            request_reading_awards.errors
         );
     }
 

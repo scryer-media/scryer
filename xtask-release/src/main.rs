@@ -638,7 +638,24 @@ fn scan_release_hygiene_content(path: &Path, content: &str) -> Vec<String> {
             continue;
         }
 
-        if release_hygiene_line_has_local_path_token(line)
+        // These diagnostics fixtures exercise redaction of synthetic paths. Strip
+        // only the known fixture paths, leaving any other path on the line visible.
+        let hygiene_line = match path_text.as_ref() {
+            "crates/scryer-application/src/diagnostics/tests.rs" => line
+                .replace(
+                    r"C:\Users\someone\Downloads\Synthetic.Release.mkv",
+                    "<fixture>",
+                )
+                .replace(
+                    r"C:\Users\CanaryWinUser\Downloads\Synthetic.Feature.2020.1080p.mkv",
+                    "<fixture>",
+                ),
+            "crates/scryer/src/diagnostics_routes.rs" => {
+                line.replace("\"info /home/x\"", "\"<fixture>\"")
+            }
+            _ => line.to_owned(),
+        };
+        if release_hygiene_line_has_local_path_token(&hygiene_line)
             && !release_hygiene_path_is_allowlisted(
                 &path_text,
                 RELEASE_LOCAL_PATH_ALLOWLIST_PREFIXES,
@@ -2287,21 +2304,16 @@ fn write_package_version(path: &Path, version: &Version) -> Result<()> {
     Ok(())
 }
 
+/// Re-locks the workspace packages whose version the release just bumped, in
+/// every tracked lockfile. A release never moves a registry or git
+/// dependency: those change only through a deliberate dependency update.
 fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
-    step("Refreshing Cargo.lock after version bump");
-    let mut generate_lockfile = ctx.release_command_in("cargo", &ctx.repo_root);
-    generate_lockfile.arg("generate-lockfile");
-    run_checked(&mut generate_lockfile)?;
-
-    let mut metadata = ctx.release_command_in("cargo", &ctx.repo_root);
-    metadata.args(["metadata", "--locked", "--format-version", "1"]);
-    metadata.stdout(Stdio::null());
-    run_checked(&mut metadata)?;
-    ok("Cargo.lock refreshed and locked metadata passed");
-
-    // Independently rooted projects pin the bumped crates by path, so their
-    // lockfiles go stale with the manifests and `--locked` then fails there.
-    for cargo_lock in independent_cargo_lockfiles(ctx)? {
+    // The workspace lockfile first, then the independently rooted projects:
+    // they pin the bumped crates by path, so their lockfiles go stale with the
+    // manifests and `--locked` then fails there.
+    let mut cargo_lockfiles = vec![ctx.path("Cargo.lock")];
+    cargo_lockfiles.extend(independent_cargo_lockfiles(ctx)?);
+    for cargo_lock in cargo_lockfiles {
         let cargo_dir = cargo_lock
             .parent()
             .context("tracked Cargo.lock did not have a parent directory")?;
@@ -2309,11 +2321,11 @@ fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
             .strip_prefix(&ctx.repo_root)
             .unwrap_or(&cargo_lock)
             .display();
-        step(format!("Refreshing {display_path} after version bump"));
-        // `--workspace` re-locks only the path packages whose version moved
-        // and leaves every registry dependency where it was.
+        step(format!(
+            "Re-locking bumped workspace packages in {display_path}"
+        ));
         let mut update = ctx.release_command_in("cargo", cargo_dir);
-        update.args(["update", "--workspace"]);
+        update.args(RELEASE_LOCKFILE_REFRESH_ARGS);
         run_checked(&mut update)?;
 
         let mut metadata = ctx.release_command_in("cargo", cargo_dir);
@@ -2321,11 +2333,16 @@ fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
         metadata.stdout(Stdio::null());
         run_checked(&mut metadata)?;
         ok(format!(
-            "{display_path} refreshed and locked metadata passed"
+            "{display_path} re-locked and locked metadata passed"
         ));
     }
     Ok(())
 }
+
+/// The `cargo` arguments that refresh a lockfile after a version bump.
+/// `--workspace` re-locks only the path packages whose version moved and
+/// leaves every registry and git dependency where it was.
+const RELEASE_LOCKFILE_REFRESH_ARGS: [&str; 2] = ["update", "--workspace"];
 
 /// Tracked lockfiles other than the release workspace's own.
 fn independent_cargo_lockfiles(ctx: &TaskContext) -> Result<Vec<PathBuf>> {
@@ -4343,6 +4360,8 @@ fn run_scryer_rust_fmt(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     Ok(())
 }
 
+/// Audits every tracked lockfile exactly as committed; nothing is updated
+/// first, so the audit covers the versions the release ships.
 fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     let cargo_lockfiles = git_tracked_cargo_lockfiles(ctx)?;
     for cargo_lock in &cargo_lockfiles {
@@ -4355,15 +4374,6 @@ fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> 
                 cargo_lock.display()
             );
         }
-        let display_path = cargo_lock
-            .strip_prefix(&ctx.repo_root)
-            .unwrap_or(cargo_lock)
-            .display();
-        prefixed_step(prefix, format!("Updating {display_path} (cargo update)"));
-        let mut update = ctx.release_command_in("cargo", cargo_dir);
-        update.arg("update");
-        run_streaming(&mut update, prefix)?;
-        prefixed_ok(prefix, format!("{display_path} updated"));
     }
 
     if !command_available("cargo-audit")? {
@@ -4379,27 +4389,6 @@ fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> 
         "RUSTSEC-2026-0006",
         "RUSTSEC-2026-0020",
         "RUSTSEC-2026-0021",
-        // Extism currently pins wasmtime 41.x upstream, so these remain release
-        // blockers until the runtime stack moves onto a patched wasmtime line.
-        "RUSTSEC-2026-0085",
-        "RUSTSEC-2026-0086",
-        "RUSTSEC-2026-0087",
-        "RUSTSEC-2026-0088",
-        "RUSTSEC-2026-0089",
-        "RUSTSEC-2026-0091",
-        "RUSTSEC-2026-0092",
-        "RUSTSEC-2026-0093",
-        "RUSTSEC-2026-0094",
-        "RUSTSEC-2026-0095",
-        "RUSTSEC-2026-0096",
-        "RUSTSEC-2026-0114",
-        // Wasmtime's compiled-code cache pins zstd 0.13 upstream. It only calls
-        // zstd::decode_all and zstd::encode_all on its own local cache files, which
-        // never reach the reused contexts, seekable API or streaming write decoder
-        // these cover. Remove them once wasmtime moves to zstd 0.14.3.
-        "RUSTSEC-2026-0391",
-        "RUSTSEC-2026-0398",
-        "RUSTSEC-2026-0403",
     ];
     warn(format!(
         "Ignoring advisories pending upstream fixes: {}",
@@ -6612,6 +6601,21 @@ merge :2
                 "crates/scryer-application/src/lib.rs:1: sibling e2e repo reference: let fixture = manifest_dir.join(\"../e2e/testdata\").join(name);"
                     .to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn release_hygiene_allows_known_diagnostics_paths_only() {
+        let path = Path::new("crates/scryer-application/src/diagnostics/tests.rs");
+        let fixture = r"C:\Users\someone\Downloads\Synthetic.Release.mkv";
+        assert!(scan_release_hygiene_content(path, fixture).is_empty());
+        assert_eq!(
+            scan_release_hygiene_content(path, &format!("{fixture} /home/private/file")).len(),
+            1
+        );
+        assert_eq!(
+            scan_release_hygiene_content(Path::new("other.rs"), fixture).len(),
+            1
         );
     }
 

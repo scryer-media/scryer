@@ -603,6 +603,12 @@ async fn privileged_root_queries_refuse_viewers_with_library_access_denied() {
         "cutoff unmet titles",
     );
     assert_refused_with(
+        app.list_cutoff_unmet_titles_page(&viewer, None, None, 10, 0)
+            .await,
+        denied,
+        "cutoff unmet titles page",
+    );
+    assert_refused_with(
         app.storage_root_usage(&viewer).await,
         denied,
         "storage roots",
@@ -877,4 +883,142 @@ async fn activity_stream_sends_viewers_a_bare_catalog_refresh_signal() {
         .map(|(_, event)| event)
         .expect("analyzed event");
     assert!(full.message.contains("Harbor Lantern"), "{}", full.message);
+}
+
+// ── Import history: one title read per page ───────────────────────────────
+
+fn history_import(result_title: Option<&str>, payload_title: Option<&str>) -> ImportRecord {
+    let now = Utc::now();
+    let result_json = result_title.map(|title_id| {
+        serde_json::json!({
+            "import_id": "synthetic-import",
+            "decision": "imported",
+            "skip_reason": null,
+            "title_id": title_id,
+            "source_system": null,
+            "source_ref": null,
+            "source_title": null,
+            "source_path": "/synthetic/source.mkv",
+            "dest_path": null,
+            "quality": null,
+            "episode_ids": [],
+            "file_size_bytes": null,
+            "link_type": null,
+            "error_message": null,
+            "started_at": now,
+            "completed_at": now,
+        })
+        .to_string()
+    });
+    let payload_json = match payload_title {
+        Some(title_id) => serde_json::json!({
+            "requested_by_user_id": null,
+            "title_id": title_id,
+            "download_client_item_id": "synthetic-item",
+            "client_type": "synthetic",
+            "requested_at": now.to_rfc3339(),
+        })
+        .to_string(),
+        None => "{}".to_string(),
+    };
+    ImportRecord {
+        id: Id::new().0,
+        source_client_id: None,
+        source_system: "synthetic".to_string(),
+        source_ref: Id::new().0,
+        import_type: ImportType::MovieDownload,
+        status: ImportStatus::Completed,
+        payload_json,
+        result_json,
+        download_id: None,
+        import_transfer_phase: None,
+        import_transfer_bytes: None,
+        import_transfer_total_bytes: None,
+        import_transfer_started_at: None,
+        import_transfer_updated_at: None,
+        started_at: None,
+        finished_at: None,
+        created_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+    }
+}
+
+/// The history used to read each distinct title on its own. Reading every
+/// title of the page at once must keep exactly the same rows in the same
+/// order for every kind of actor.
+#[tokio::test]
+async fn import_history_reads_its_titles_at_once_and_keeps_the_same_rows() {
+    let fixture = seed_fixture().await;
+    let imports = Arc::new(TrackingImportRepo::default());
+    let app = fixture
+        .app
+        .clone()
+        .with_test_overrides(|services| services.with_imports(imports.clone()));
+    let movie = fixture.movie_title.id.as_str();
+    let series = fixture.series_title.id.as_str();
+    imports.records.lock().await.extend([
+        history_import(Some(movie), None),
+        history_import(None, Some(series)),
+        history_import(Some(movie), Some(series)),
+        history_import(Some("title-synthetic-absent"), None),
+        history_import(None, None),
+        history_import(None, Some(movie)),
+        history_import(Some(series), None),
+    ]);
+
+    for (label, actor) in [
+        ("full admin", fixture.admin.clone()),
+        (
+            "movie title manager",
+            title_manager_for(&fixture.movie_library_id),
+        ),
+        (
+            "mixed grants",
+            mixed_actor(&fixture.movie_library_id, &fixture.series_library_id),
+        ),
+    ] {
+        let batched = app
+            .list_import_history(&actor, 50)
+            .await
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+
+        // The per-title reads the history used before.
+        let allowed = app
+            .require_privileged_library_ids(&actor, None)
+            .await
+            .expect("privileged libraries")
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let mut per_title = Vec::new();
+        for record in imports.list_imports(50).await.expect("imports") {
+            let visible = match crate::services::import_record_title_id(&record) {
+                Some(title_id) => app
+                    .services
+                    .catalog
+                    .titles
+                    .get_by_id(&title_id)
+                    .await
+                    .expect("title read")
+                    .is_some_and(|title| allowed.contains(&title.library_id)),
+                None => false,
+            };
+            if visible {
+                per_title.push(record);
+            }
+        }
+
+        assert_eq!(
+            batched.iter().map(|record| &record.id).collect::<Vec<_>>(),
+            per_title
+                .iter()
+                .map(|record| &record.id)
+                .collect::<Vec<_>>(),
+            "{label}: same rows in the same order"
+        );
+    }
+    let admin_rows = app
+        .list_import_history(&fixture.admin, 50)
+        .await
+        .expect("admin history");
+    assert_eq!(admin_rows.len(), 5, "rows without a live title stay hidden");
 }

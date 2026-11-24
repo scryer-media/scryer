@@ -59,6 +59,8 @@ pub const ROUTE_LIBRARY_REQUIRED: &str = "LIST_ROUTE_LIBRARY_REQUIRED";
 pub const ROUTE_LIBRARY_NOT_FOUND: &str = "LIST_ROUTE_LIBRARY_NOT_FOUND";
 /// A route sends a title kind to a library of another kind.
 pub const ROUTE_LIBRARY_KIND_MISMATCH: &str = "LIST_ROUTE_LIBRARY_KIND_MISMATCH";
+/// A route names an audio language Scryer does not know.
+pub const ROUTE_AUDIO_LANGUAGE_UNKNOWN: &str = "LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN";
 /// The per-sync cap is below one.
 pub const SYNC_CAP_INVALID: &str = "LIST_SYNC_CAP_INVALID";
 /// The list is turned off, so it cannot be synced on request.
@@ -174,6 +176,7 @@ pub const ALL: &[&str] = &[
     ROUTE_LIBRARY_REQUIRED,
     ROUTE_LIBRARY_NOT_FOUND,
     ROUTE_LIBRARY_KIND_MISMATCH,
+    ROUTE_AUDIO_LANGUAGE_UNKNOWN,
     SYNC_CAP_INVALID,
     DISABLED,
     EXCLUSION_IDS_REQUIRED,
@@ -223,6 +226,15 @@ pub const ALL: &[&str] = &[
 /// shown where no translation is known and written to logs.
 pub fn refused(reason: &'static str, message: impl Into<String>) -> AppError {
     AppError::validation_refused(reason, message)
+}
+
+/// [`refused`] carrying the values a client needs, each as its own extension.
+pub fn refused_with_facts(
+    reason: &'static str,
+    message: impl Into<String>,
+    facts: Vec<crate::RefusalFact>,
+) -> AppError {
+    AppError::validation_refused_with_facts(reason, message, facts)
 }
 
 #[cfg(test)]

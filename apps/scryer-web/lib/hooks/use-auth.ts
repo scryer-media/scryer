@@ -422,6 +422,10 @@ export async function refreshInitialAuthenticationSession(
   adopt();
   authBootstrapSnapshot = null;
   await loadAuthBootstrapSnapshot();
+  // Choosing no authentication starts a session without a token, so nothing
+  // else announces it. Without this, state read before the choice (the
+  // account's settings and tours among it) stays unread until a reload.
+  dispatchAuthSessionChanged();
 }
 
 function loadAuthBootstrapSnapshot(): Promise<AuthBootstrapSnapshot> {

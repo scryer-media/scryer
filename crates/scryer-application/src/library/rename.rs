@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -8,6 +9,8 @@ use scryer_domain::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+
+use crate::disk::{Disk, EntryKind, Removal, Remove};
 
 use futures_util::stream::{StreamExt, TryStreamExt};
 
@@ -1397,10 +1400,11 @@ impl AppUseCase {
                 if !directory_is_empty(&current).await {
                     break;
                 }
-                if let Err(error) = tokio::fs::remove_dir(&current).await {
+                let removal = Disk::process().remove(&current, Remove::EmptyDir).await;
+                if !matches!(removal, Ok(Removal::Removed)) {
                     warn!(
                         directory = %current.display(),
-                        error = %error,
+                        error = ?removal,
                         "could not remove the folder a rename emptied"
                     );
                     break;
@@ -1491,35 +1495,44 @@ impl AppUseCase {
         }
         // Every title of the facet, not only those in the plan: a rename of a
         // single title can still land in or around another title's folder.
-        let titles = self
-            .services
-            .catalog
-            .titles
-            .list(Some(preview.facet.clone()), None)
+        // A bulk rename shares these, and what it learned from disk, between
+        // its titles.
+        let context = rename_overlap::current_rename_overlap_context();
+        let recorded = context.recorded_title_folders(self, &preview.facet).await?;
+        let roots = self
+            .all_library_root_folders()
             .await?
             .into_iter()
-            .map(|title| (title.id.clone(), title))
-            .collect::<HashMap<_, _>>();
+            .map(|root| root.path)
+            .collect::<Vec<_>>();
+        let spellings = context
+            .comparison_spellings(&preview.title_folders, &recorded, roots)
+            .await;
         let recorded_folders = |include: &dyn Fn(&str) -> bool| {
-            titles
-                .values()
-                .filter(|title| include(&title.id))
-                .filter_map(|title| {
-                    let folder_path = title.folder_path.as_deref()?.trim();
-                    (!folder_path.is_empty()).then(|| RenamePlanTitleFolder {
-                        title_id: title.id.clone(),
-                        folder_path: folder_path.to_string(),
-                    })
+            recorded
+                .iter()
+                .filter(|folder| include(&folder.title_id))
+                .map(|folder| RenamePlanTitleFolder {
+                    title_id: folder.title_id.clone(),
+                    folder_path: folder.folder_path.clone(),
                 })
                 .collect::<Vec<_>>()
         };
         // Counting every title as moving can only find more overlaps, so a
         // plan clear on that count needs no per-item lookups.
-        if planned_title_folder_overlap(&preview.title_folders, &recorded_folders(&|_| true))
-            .is_none()
+        if title_folder_overlap_in(
+            &preview.title_folders,
+            &recorded_folders(&|_| true),
+            &spellings,
+        )
+        .is_none()
         {
             return Ok(());
         }
+        let libraries = recorded
+            .iter()
+            .map(|folder| (folder.title_id.as_str(), folder.library_id.as_str()))
+            .collect::<HashMap<_, _>>();
         let planned = match self.rename_plan_titles_with_work(preview).await? {
             Some(moving) => preview
                 .title_folders
@@ -1538,7 +1551,7 @@ impl AppUseCase {
             .collect::<HashSet<_>>();
         let mut standing = recorded_folders(&|title_id| !planned_ids.contains(title_id));
         loop {
-            let Some(overlap) = planned_title_folder_overlap(&planned, &standing) else {
+            let Some(overlap) = title_folder_overlap_in(&planned, &standing, &spellings) else {
                 return Ok(());
             };
             // A record at or above a library root is not a title folder at
@@ -1549,9 +1562,12 @@ impl AppUseCase {
                 if claim.planned {
                     continue;
                 }
-                if let Some(title) = titles.get(&claim.folder.title_id)
+                if let Some(library_id) = libraries.get(claim.folder.title_id.as_str())
                     && self
-                        .rename_title_folder_root_violation(title, &claim.folder.folder_path)
+                        .rename_title_folder_root_violation_in_library(
+                            library_id,
+                            &claim.folder.folder_path,
+                        )
                         .await?
                         .is_some()
                 {
@@ -1684,6 +1700,17 @@ impl AppUseCase {
         title: &Title,
         folder_path: &str,
     ) -> AppResult<Option<crate::title_folder_rules::TitleFolderRootViolation>> {
+        self.rename_title_folder_root_violation_in_library(&title.library_id, folder_path)
+            .await
+    }
+
+    /// [`Self::rename_title_folder_root_violation`] for a title of the library
+    /// `library_id`.
+    async fn rename_title_folder_root_violation_in_library(
+        &self,
+        library_id: &str,
+        folder_path: &str,
+    ) -> AppResult<Option<crate::title_folder_rules::TitleFolderRootViolation>> {
         let all_roots = self
             .all_library_root_folders()
             .await?
@@ -1694,7 +1721,7 @@ impl AppUseCase {
             .services
             .catalog
             .libraries
-            .get_by_id(&title.library_id)
+            .get_by_id(library_id)
             .await?
             .map(|library| {
                 library
@@ -1960,26 +1987,33 @@ impl AppUseCase {
         let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) else {
             return path.to_path_buf();
         };
-        let Ok(mut entries) = tokio::fs::read_dir(parent).await else {
-            return path.to_path_buf();
-        };
-        let mut case_insensitive_match = None;
-        loop {
-            let Ok(Some(entry)) = entries.next_entry().await else {
-                break;
+        // The exact name ends the scan; an entry the listing failed on ends
+        // it with what was found so far.
+        let (wanted, name) = (path_to_stored_string(path), file_name.to_os_string());
+        let disk = Disk::process();
+        let found = disk.visit(parent, None, move |found, entry| {
+            let Ok(entry) = entry else {
+                return ControlFlow::Break(());
             };
-            if entry.file_name() == file_name {
-                return entry.path();
+            let exact = entry.name() == name;
+            if exact
+                || crate::stored_paths::paths_match_ignoring_case(
+                    &path_to_stored_string(entry.path()),
+                    &wanted,
+                )
+            {
+                *found = Some(entry.into_path());
             }
-            let entry_path = entry.path();
-            if crate::stored_paths::paths_match_ignoring_case(
-                &path_to_stored_string(&entry_path),
-                &path_to_stored_string(path),
-            ) {
-                case_insensitive_match = Some(entry_path);
+            if exact {
+                return ControlFlow::Break(());
             }
-        }
-        case_insensitive_match.unwrap_or_else(|| path.to_path_buf())
+            ControlFlow::Continue(())
+        });
+        found
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| path.to_path_buf())
     }
 
     async fn library_id_for_rename_item(&self, item: &RenameApplyItemResult) -> Option<String> {
@@ -4522,10 +4556,7 @@ fn path_is_inside_any_library_root(path: &Path, roots: &[LibraryRootFolder]) -> 
 }
 
 async fn directory_is_empty(path: &Path) -> bool {
-    match tokio::fs::read_dir(path).await {
-        Ok(mut entries) => matches!(entries.next_entry().await, Ok(None)),
-        Err(_) => false,
-    }
+    matches!(Disk::process().has_entries(path).await, Ok(false))
 }
 
 /// Whether `path` is one of the renamed titles' own folders, or sits inside one
@@ -4557,19 +4588,51 @@ struct PlannedTitleFolderOverlap<'a> {
     nested: bool,
 }
 
+/// [`title_folder_overlap_in`] with every folder spelled by resolving it on
+/// disk on its own, case included, the way the guard did before it shared
+/// disk facts between folders; tests compare the guard's spellings against
+/// this.
+#[cfg(test)]
+fn planned_title_folder_overlap<'a>(
+    planned: &'a [RenamePlanTitleFolder],
+    standing: &'a [RenamePlanTitleFolder],
+) -> Option<PlannedTitleFolderOverlap<'a>> {
+    let spellings = planned
+        .iter()
+        .chain(standing)
+        .map(|folder| {
+            (
+                folder.folder_path.clone(),
+                rename_overlap::per_folder_spelling(&folder.folder_path),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    title_folder_overlap_in(planned, standing, &spellings)
+}
+
 /// The first pair of different titles that would end up sharing a folder, or
 /// with one's folder inside the other's, once a rename puts files in the
 /// `planned` folders. `standing` folders are where titles the rename does not
 /// move stay; two of them overlapping already is left alone, since this
 /// rename changes nothing there.
-fn planned_title_folder_overlap<'a>(
+///
+/// Each folder is compared by its spelling in `spellings`, keyed by stored
+/// folder; a folder missing from it is compared as stored.
+fn title_folder_overlap_in<'a>(
     planned: &'a [RenamePlanTitleFolder],
     standing: &'a [RenamePlanTitleFolder],
+    spellings: &HashMap<String, String>,
 ) -> Option<PlannedTitleFolderOverlap<'a>> {
     use crate::title_folder_rules::{
         containing_folder_keys, folder_containment_key, stored_path_is_inside_folder,
     };
 
+    let spelling_of = |raw: &str| -> String {
+        spellings
+            .get(raw)
+            .cloned()
+            .unwrap_or_else(|| raw.to_string())
+    };
     let claims = planned
         .iter()
         .map(|folder| TitleFolderClaim {
@@ -4586,13 +4649,7 @@ fn planned_title_folder_overlap<'a>(
         .iter()
         .map(|claim| {
             let raw = &claim.folder.folder_path;
-            let path = stored_path_to_path_buf(raw);
-            let resolved = crate::folder_ownership::resolved_folder_identity(&path).unwrap_or(path);
-            let mut spelling = path_to_stored_string(&resolved);
-            if crate::folder_ownership::folder_case_insensitive(&resolved) {
-                spelling = spelling.to_lowercase();
-            }
-            (raw.clone(), spelling)
+            (raw.clone(), spelling_of(raw))
         })
         .collect::<HashMap<_, _>>();
     let mut keyed = Vec::new();
@@ -4715,21 +4772,20 @@ fn path_file_stem(path: &Path) -> Option<String> {
 /// read. Planning is otherwise database-only, but external subtitles have no
 /// catalog rows at all, so the source directory is the only place they exist.
 async fn rename_companion_directory_entries(directory: &Path) -> Vec<String> {
-    let Ok(mut entries) = tokio::fs::read_dir(directory).await else {
-        return Vec::new();
-    };
-    let mut names = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if entry
-            .file_type()
-            .await
-            .map(|file_type| file_type.is_file())
-            .unwrap_or(false)
-            && let Some(name) = entry.file_name().to_str()
+    // Names read before an entry the listing failed on are kept.
+    let disk = Disk::process();
+    let names = disk.visit(directory, Vec::new(), |names, entry| {
+        let Ok(entry) = entry else {
+            return ControlFlow::Break(());
+        };
+        if entry.kind().is_ok_and(|kind| kind == EntryKind::File)
+            && let Some(name) = entry.name().to_str()
         {
             names.push(name.to_string());
         }
-    }
+        ControlFlow::Continue(())
+    });
+    let mut names = names.await.unwrap_or_default();
     names.sort();
     names
 }
@@ -6300,6 +6356,9 @@ fn collapse_separators(raw: &str) -> String {
         .to_string()
 }
 
+#[path = "rename_overlap.rs"]
+mod rename_overlap;
+
 #[cfg(test)]
 #[path = "library_rename_tests.rs"]
 mod library_rename_tests;
@@ -6554,6 +6613,9 @@ impl AppUseCase {
         let mut files_renamed = 0usize;
         let mut failures = Vec::new();
         let mut progress_persisted_at: Option<std::time::Instant> = None;
+        // The folder-overlap guard's facts, shared by this job's titles and
+        // dropped with the job.
+        let overlap_context = std::sync::Arc::new(rename_overlap::RenameOverlapContext::default());
 
         for (index, title) in titles.iter().enumerate() {
             let progress = TitleRenameProgress {
@@ -6579,21 +6641,22 @@ impl AppUseCase {
 
             // Each title is previewed and applied inside the job so the plan is
             // built against what is on disk now, not what the caller saw.
-            let outcome = async {
-                let preview = self
-                    .preview_rename_for_title(&actor, &title.id, title.facet.clone())
-                    .await?;
-                let fingerprint = preview.fingerprint.clone();
-                self.apply_rename_for_title_after_preview(
-                    &actor,
-                    &title.id,
-                    title.facet.clone(),
-                    preview,
-                    &fingerprint,
-                )
-                .await
-            }
-            .await;
+            let outcome =
+                rename_overlap::with_rename_overlap_context(overlap_context.clone(), async {
+                    let preview = self
+                        .preview_rename_for_title(&actor, &title.id, title.facet.clone())
+                        .await?;
+                    let fingerprint = preview.fingerprint.clone();
+                    self.apply_rename_for_title_after_preview(
+                        &actor,
+                        &title.id,
+                        title.facet.clone(),
+                        preview,
+                        &fingerprint,
+                    )
+                    .await
+                })
+                .await;
 
             match outcome {
                 Ok(result) => {

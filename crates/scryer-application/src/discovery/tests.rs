@@ -3026,6 +3026,8 @@ fn pending_watchlist_request(
         created_by_user_id: "requester-fixture".to_string(),
         created_at: now,
         updated_at: now,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 
@@ -4056,6 +4058,8 @@ fn requested_titles_match_by_media_kind_as_well_as_external_id() {
         origin: Default::default(),
         created_at: now,
         updated_at: now,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     };
     let requested = DiscoveryRequestedVisibility::from_media_requests(&[request]);
     assert!(requested.item_is_requested(&rendered_test_item("tmdb:movie:4100", "movie")));

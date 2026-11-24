@@ -4,10 +4,12 @@
 //! the replacement is imported and validated before the old file is recycled
 //! or deleted.
 
+use crate::disk::{Access, Disk, EntryKind, Parents, Remove, Replace, reason};
 use crate::domain_events::{
     DomainEventActor, created_media_update, deleted_media_update, modified_media_update,
     new_title_domain_event, title_context_snapshot,
 };
+use crate::location::model::VerificationDepth;
 use crate::recycle_bin::{self, RecycleBinConfig};
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::types::TitleMediaFile;
@@ -142,6 +144,125 @@ fn configured_roots_match(left: &Path, right: &Path) -> bool {
         && recycle_bin::path_is_under_configured_root(right, left)
 }
 
+/// Whether the library file an import would replace already holds the source's
+/// bytes.
+///
+/// Import admission accepts a tie, so a source that is imported a second time
+/// (a retried pass over a download whose files stay in the client's folder)
+/// ties with its own earlier copy and would replace it: the copy goes to the
+/// recycle bin and the same bytes are written again, once per retry. Identical
+/// bytes are never an upgrade, so callers settle such a source as already
+/// imported instead.
+///
+/// The catalog size gates the probe: a replacement of a different size, which
+/// is every real upgrade, reads nothing. Only an equal size costs the sampled
+/// content proof of both files (size plus first and last windows, never a
+/// full read). A file that is gone holds nothing, so it is different; any
+/// other failure to read either file leaves the answer undecided, and the
+/// caller must not replace the library file on it.
+pub(crate) async fn incumbent_source_identity(
+    existing_file: &TitleMediaFile,
+    source_path: &Path,
+    source_size: i64,
+) -> IncumbentIdentity {
+    if source_size <= 0 || existing_file.size_bytes != source_size {
+        return IncumbentIdentity::Different;
+    }
+    let incumbent_path = stored_path_to_path_buf(&existing_file.file_path);
+    let source_path = source_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let source = crate::fs_integrity::import_content_proof(&source_path);
+        let incumbent = crate::fs_integrity::import_content_proof(&incumbent_path);
+        match (source, incumbent) {
+            (Ok(source), Ok(incumbent)) => {
+                if source.size_bytes == incumbent.size_bytes
+                    && source.sample_blake3 == incumbent.sample_blake3
+                {
+                    IncumbentIdentity::Identical
+                } else {
+                    IncumbentIdentity::Different
+                }
+            }
+            (Err(error), _) | (_, Err(error))
+                if error.reason() == Some(crate::error_reasons::import::FILE_NOT_FOUND) =>
+            {
+                IncumbentIdentity::Different
+            }
+            _ => IncumbentIdentity::Undecided,
+        }
+    })
+    .await
+    .unwrap_or(IncumbentIdentity::Undecided)
+}
+
+/// Whether a library file holds an import source's bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IncumbentIdentity {
+    /// The sampled proofs of both files agree.
+    Identical,
+    /// The sizes or the sampled proofs differ, or one of the files is gone.
+    Different,
+    /// A file could not be read, so nothing is known.
+    Undecided,
+}
+
+/// Which superseded library file, if any, already holds the source's bytes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SupersededSourceIdentity<'a> {
+    /// No superseded file holds them; the import may replace them.
+    NoneIdentical,
+    /// This superseded file holds them; the source is not imported over it.
+    Identical(&'a TitleMediaFile),
+    /// A same-size superseded file could not be compared; nothing is replaced.
+    Undecided(&'a TitleMediaFile),
+}
+
+/// Compares the source with every superseded library file. Only same-size
+/// files are read. Any identical file that `settles` accepts settles the
+/// answer; an identical file it refuses counts as different. Otherwise any
+/// file that could not be compared leaves it undecided.
+pub(crate) async fn superseded_source_identity<'a>(
+    superseded: Vec<&'a TitleMediaFile>,
+    source_path: &Path,
+    source_size: i64,
+    settles: impl Fn(&TitleMediaFile) -> bool,
+) -> SupersededSourceIdentity<'a> {
+    let mut undecided = None;
+    for existing_file in superseded {
+        match incumbent_source_identity(existing_file, source_path, source_size).await {
+            IncumbentIdentity::Identical if settles(existing_file) => {
+                return SupersededSourceIdentity::Identical(existing_file);
+            }
+            IncumbentIdentity::Identical => {}
+            IncumbentIdentity::Undecided => {
+                undecided.get_or_insert(existing_file);
+            }
+            IncumbentIdentity::Different => {}
+        }
+    }
+    match undecided {
+        Some(existing_file) => SupersededSourceIdentity::Undecided(existing_file),
+        None => SupersededSourceIdentity::NoneIdentical,
+    }
+}
+
+/// The retryable failure for a source that could not be compared with the
+/// library file it would replace. The library file stays in place.
+pub(crate) fn incumbent_identity_undecided_error(
+    existing_file: &TitleMediaFile,
+    source_path: &Path,
+) -> AppError {
+    AppError::temporary_unavailable_reason(
+        crate::error_reasons::import::INCUMBENT_IDENTITY_UNDECIDED,
+        format!(
+            "could not compare {} with the library file {} it would replace; the library file was left in place and the import will be retried",
+            source_path.display(),
+            existing_file.file_path
+        ),
+        None,
+    )
+}
+
 /// Execute a guarded file upgrade: import and validate replacement, then retire old.
 ///
 /// The old file is not recycled or deleted until the replacement file is on disk,
@@ -187,7 +308,7 @@ pub(crate) async fn execute_upgrade(
 
     let same_final_path = old_path == dest_path;
     let import_path = if same_final_path {
-        sibling_guard_path(dest_path, "replacement")
+        sibling_guard_path(dest_path, UPGRADE_REPLACEMENT_PREFIX)
     } else {
         dest_path.to_path_buf()
     };
@@ -313,6 +434,26 @@ struct PreparedUpgradeReplacement {
     same_final_path: bool,
     source_cleanup: Option<ImportSourceCleanupGuard>,
     destination_permit: crate::import_workflow::ImportDestinationPermit,
+    /// The episodes the replaced file covered, as its recycle entry records
+    /// them; empty for a movie.
+    replaced_episode_ids: Vec<String>,
+}
+
+/// The episodes an upgrade replaced: its targets, or the replaced file's own
+/// episode when no target was given. The same set the upgrade's events carry.
+fn replaced_episode_ids(
+    target_episode_ids: &[String],
+    existing_file: &TitleMediaFile,
+) -> Vec<String> {
+    let mut episode_ids = target_episode_ids.to_vec();
+    if episode_ids.is_empty()
+        && let Some(episode_id) = existing_file.episode_id.clone()
+    {
+        episode_ids.push(episode_id);
+    }
+    episode_ids.sort();
+    episode_ids.dedup();
+    episode_ids
 }
 
 enum OldFileDisposition {
@@ -329,6 +470,29 @@ const UPGRADE_GUARD_PHASE_DB_SWAPPED: &str = "db_swapped";
 const UPGRADE_GUARD_PHASE_DISPOSED: &str = "disposed";
 const SAME_PATH_UPGRADE_GUARD_DIR: &str = ".scryer-upgrade-guards";
 const SAME_PATH_UPGRADE_GUARD_STALE_AFTER_SECONDS: i64 = 15 * 60;
+const SAME_PATH_UPGRADE_GUARD_SUFFIX: &str = ".guard.json";
+
+/// Sibling name prefix of the file a same-path upgrade moves aside.
+pub const UPGRADE_OLD_PREFIX: &str = ".scry-uo-";
+/// What releases before [`UPGRADE_OLD_PREFIX`] wrote; still recognised.
+pub const LEGACY_UPGRADE_OLD_PREFIX: &str = ".scryer-upgrade-old-";
+/// Sibling name prefix of the verified replacement a same-path upgrade stages.
+pub const UPGRADE_REPLACEMENT_PREFIX: &str = ".scry-ur-";
+/// What releases before [`UPGRADE_REPLACEMENT_PREFIX`] wrote; still recognised.
+pub const LEGACY_UPGRADE_REPLACEMENT_PREFIX: &str = ".scryer-upgrade-replacement-";
+/// Sibling name prefix of an occupant a rollback moves off the final path.
+const UPGRADE_ROLLBACK_OCCUPANT_PREFIX: &str = ".scry-ub-";
+
+fn is_upgrade_old_name(name: &str) -> bool {
+    name.starts_with(UPGRADE_OLD_PREFIX) || name.starts_with(LEGACY_UPGRADE_OLD_PREFIX)
+}
+
+/// Whether `name` is a staged same-path upgrade replacement, under the current
+/// or the legacy prefix.
+pub fn is_upgrade_replacement_name(name: &str) -> bool {
+    name.starts_with(UPGRADE_REPLACEMENT_PREFIX)
+        || name.starts_with(LEGACY_UPGRADE_REPLACEMENT_PREFIX)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SamePathUpgradeGuardManifest {
@@ -382,9 +546,12 @@ fn same_path_upgrade_guard_dir(media_root: &Path) -> PathBuf {
 fn same_path_upgrade_guard_path(media_root: &Path, backup_path: &Path) -> PathBuf {
     let file_name = backup_path
         .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new(".scryer-upgrade-old"));
-    same_path_upgrade_guard_dir(media_root)
-        .join(format!("{}.guard.json", file_name.to_string_lossy()))
+        // Without its trailing dash, so a nameless path never reads as a guard.
+        .unwrap_or_else(|| std::ffi::OsStr::new(UPGRADE_OLD_PREFIX.trim_end_matches('-')));
+    same_path_upgrade_guard_dir(media_root).join(format!(
+        "{}{SAME_PATH_UPGRADE_GUARD_SUFFIX}",
+        file_name.to_string_lossy()
+    ))
 }
 
 async fn write_same_path_upgrade_guard(
@@ -392,13 +559,16 @@ async fn write_same_path_upgrade_guard(
     manifest: &SamePathUpgradeGuardManifest,
 ) -> AppResult<()> {
     if let Some(parent) = guard_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create same-path upgrade guard directory {}: {}",
-                parent.display(),
-                error
-            ))
-        })?;
+        Disk::process()
+            .create_dir(parent, Parents::Create)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to create same-path upgrade guard directory {}: {}",
+                    parent.display(),
+                    error
+                ))
+            })?;
     }
     let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| {
         AppError::Repository(format!(
@@ -407,13 +577,16 @@ async fn write_same_path_upgrade_guard(
             error
         ))
     })?;
-    tokio::fs::write(guard_path, bytes).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to write same-path upgrade guard {}: {}",
-            guard_path.display(),
-            error
-        ))
-    })
+    Disk::process()
+        .write(guard_path, bytes, Replace::Allowed, Access::Default)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to write same-path upgrade guard {}: {}",
+                guard_path.display(),
+                error
+            ))
+        })
 }
 
 async fn remove_same_path_upgrade_guard_file(guard_path: &Path) {
@@ -428,9 +601,8 @@ async fn remove_same_path_upgrade_guard_file(guard_path: &Path) {
 
     if let Some(parent) = guard_path.parent()
         && parent.file_name().and_then(|name| name.to_str()) == Some(SAME_PATH_UPGRADE_GUARD_DIR)
-        && let Err(error) = tokio::fs::remove_dir(parent).await
-        && error.kind() != std::io::ErrorKind::NotFound
-        && error.kind() != std::io::ErrorKind::DirectoryNotEmpty
+        && let Err(error) = Disk::process().remove(parent, Remove::EmptyDir).await
+        && error.reason() != reason::DISK_DIRECTORY_NOT_EMPTY
     {
         tracing::debug!(
             error = %error,
@@ -443,7 +615,7 @@ async fn remove_same_path_upgrade_guard_file(guard_path: &Path) {
 async fn read_same_path_upgrade_guard(
     guard_path: &Path,
 ) -> AppResult<SamePathUpgradeGuardManifest> {
-    let bytes = tokio::fs::read(guard_path).await.map_err(|error| {
+    let bytes = Disk::process().read(guard_path).await.map_err(|error| {
         AppError::Repository(format!(
             "failed to read same-path upgrade guard {}: {}",
             guard_path.display(),
@@ -489,9 +661,9 @@ pub(crate) async fn same_path_upgrade_guard_media_file_ids_locked(
     for root in app.all_library_root_folders().await? {
         let root_path = stored_path_to_path_buf(&root.path);
         let guard_dir = same_path_upgrade_guard_dir(&root_path);
-        let mut entries = match tokio::fs::read_dir(&guard_dir).await {
+        let entries = match Disk::process().list(&guard_dir).await {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.reason() == reason::DISK_PATH_MISSING => continue,
             Err(error) => {
                 tracing::warn!(
                     error = %error,
@@ -501,19 +673,9 @@ pub(crate) async fn same_path_upgrade_guard_media_file_ids_locked(
                 continue;
             }
         };
-        while let Some(entry) = entries.next_entry().await.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read same-path upgrade guard protected-id entry under {}: {}",
-                guard_dir.display(),
-                error
-            ))
-        })? {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type().await else {
-                continue;
-            };
-            if file_type.is_symlink()
-                || !file_type.is_file()
+        for entry in entries {
+            let path = entry.path;
+            if entry.reading.kind() != Some(EntryKind::File)
                 || !is_same_path_upgrade_guard_file(&path)
             {
                 continue;
@@ -541,9 +703,9 @@ async fn reconcile_same_path_upgrade_guards_under_root(
 ) -> AppResult<u32> {
     let mut reconciled = 0u32;
     let guard_dir = same_path_upgrade_guard_dir(root);
-    let mut entries = match tokio::fs::read_dir(&guard_dir).await {
+    let entries = match Disk::process().list(&guard_dir).await {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.reason() == reason::DISK_PATH_MISSING => return Ok(0),
         Err(error) => {
             tracing::warn!(
                 error = %error,
@@ -554,26 +716,9 @@ async fn reconcile_same_path_upgrade_guards_under_root(
         }
     };
 
-    while let Some(entry) = entries.next_entry().await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to read same-path upgrade guard scan entry under {}: {}",
-            guard_dir.display(),
-            error
-        ))
-    })? {
-        let path = entry.path();
-        let file_type = match entry.file_type().await {
-            Ok(file_type) => file_type,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    path = %path.display(),
-                    "failed to read file type while scanning same-path upgrade guards"
-                );
-                continue;
-            }
-        };
-        if file_type.is_symlink() || !file_type.is_file() || !is_same_path_upgrade_guard_file(&path)
+    for entry in entries {
+        let path = entry.path;
+        if entry.reading.kind() != Some(EntryKind::File) || !is_same_path_upgrade_guard_file(&path)
         {
             continue;
         }
@@ -594,7 +739,7 @@ async fn reconcile_same_path_upgrade_guards_under_root(
 fn is_same_path_upgrade_guard_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".scryer-upgrade-old-") && name.ends_with(".guard.json"))
+        .map(|name| is_upgrade_old_name(name) && name.ends_with(SAME_PATH_UPGRADE_GUARD_SUFFIX))
         .unwrap_or(false)
 }
 
@@ -656,16 +801,14 @@ fn validate_same_path_upgrade_guard(
     if !backup_path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".scryer-upgrade-old-"))
-        .unwrap_or(false)
+        .is_some_and(is_upgrade_old_name)
     {
         return Err("backup filename is not an upgrade-old guard filename".to_string());
     }
     if !staged_replacement_path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".scryer-upgrade-replacement-"))
-        .unwrap_or(false)
+        .is_some_and(is_upgrade_replacement_name)
     {
         return Err(
             "staged replacement filename is not an upgrade-replacement guard filename".to_string(),
@@ -688,10 +831,28 @@ fn same_path_upgrade_guard_is_recent(updated_at: DateTime<Utc>) -> bool {
         < Duration::seconds(SAME_PATH_UPGRADE_GUARD_STALE_AFTER_SECONDS)
 }
 
+/// What is at `path` now, without following a link; `None` when nothing is.
+// disk-guard: these readings decide whether a file is moved aside, restored
+// over a path or later removed, so each must see a link or file another
+// process put there a moment ago; an owner reading may be reused.
+#[allow(clippy::disallowed_methods)]
+async fn current_upgrade_entry_kind(path: &Path) -> std::io::Result<Option<EntryKind>> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => Ok(Some(match metadata.file_type() {
+            kind if kind.is_symlink() => EntryKind::Symlink,
+            kind if kind.is_file() => EntryKind::File,
+            kind if kind.is_dir() => EntryKind::Directory,
+            _ => EntryKind::Other,
+        })),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 async fn same_path_guard_regular_file_exists(path: &Path, role: &str) -> AppResult<bool> {
-    let metadata = match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+    let kind = match current_upgrade_entry_kind(path).await {
+        Ok(Some(kind)) => kind,
+        Ok(None) => return Ok(false),
         Err(error) => {
             return Err(AppError::Repository(format!(
                 "failed to stat same-path upgrade {role} {}: {}",
@@ -700,7 +861,7 @@ async fn same_path_guard_regular_file_exists(path: &Path, role: &str) -> AppResu
             )));
         }
     };
-    if metadata.file_type().is_symlink() {
+    if kind == EntryKind::Symlink {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::SYMLINK_REFUSED,
             format!(
@@ -709,7 +870,7 @@ async fn same_path_guard_regular_file_exists(path: &Path, role: &str) -> AppResu
             ),
         ));
     }
-    if !metadata.is_file() {
+    if kind != EntryKind::File {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::REGULAR_FILE_REQUIRED,
             format!(
@@ -922,7 +1083,11 @@ async fn dispose_same_path_guard_after_confirmed_db_swap(
         }
     };
     if replacement.file_path != manifest.replacement_path
-        || !stored_path_to_path_buf(&replacement.file_path).exists()
+        || Disk::process()
+            .follow(stored_path_to_path_buf(&replacement.file_path))
+            .await
+            .exists()
+            != Some(true)
         || replacement.title_id != manifest.title_id
     {
         tracing::warn!(
@@ -949,14 +1114,17 @@ async fn dispose_same_path_guard_after_confirmed_db_swap(
             title_id: &manifest.title_id,
             media_root: Some(&manifest.media_root),
             // The same-path guard manifest does not record the old row, which
-            // is already gone by the time the guard disposes of the backup.
+            // is already gone by the time the guard disposes of the backup,
+            // nor the episodes it covered.
             media_row: None,
+            episode_ids: Vec::new(),
         };
         let recycle_result = recycle_bin::recycle_replaced_media_file(
             &recycle_config,
             backup_path,
             recycle_metadata,
             true,
+            app.resolve_verification_depth().await,
         )
         .await?;
         let replacement_path = stored_path_to_path_buf(&manifest.replacement_path);
@@ -1177,6 +1345,7 @@ async fn prepare_replacement_before_old_removal(
         same_final_path,
         source_cleanup: file_result.source_cleanup.clone(),
         destination_permit: file_result.destination_permit(),
+        replaced_episode_ids: replaced_episode_ids(target_episode_ids, existing_file),
     })
 }
 
@@ -1235,6 +1404,8 @@ async fn finalize_distinct_path_upgrade(
     replacement_media_root: Option<&str>,
     old_file_media_root: Option<&str>,
 ) -> AppResult<bool> {
+    // The user's depth, read once for this upgrade's recycle and rollback.
+    let depth = app.resolve_verification_depth().await;
     let old_disposition = match prepare_old_file_disposition_for_upgrade(
         recycle_config,
         existing_file,
@@ -1242,6 +1413,8 @@ async fn finalize_distinct_path_upgrade(
         &existing_file.file_path,
         title,
         old_file_media_root,
+        &replacement.replaced_episode_ids,
+        depth,
     )
     .await
     {
@@ -1270,7 +1443,8 @@ async fn finalize_distinct_path_upgrade(
         )
         .await
     {
-        let rollback_result = rollback_old_file_disposition(&old_disposition, old_path).await;
+        let rollback_result =
+            rollback_old_file_disposition(&old_disposition, old_path, depth).await;
         rollback_new_replacement(
             app,
             &replacement.new_file_id,
@@ -1324,6 +1498,10 @@ async fn finalize_distinct_path_upgrade(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "old-file disposition needs the original, its episodes, and recycle context"
+)]
 async fn prepare_old_file_disposition_for_upgrade(
     recycle_config: &RecycleBinConfig,
     existing_file: &TitleMediaFile,
@@ -1331,6 +1509,8 @@ async fn prepare_old_file_disposition_for_upgrade(
     manifest_original_path: &str,
     title: &Title,
     media_root: Option<&str>,
+    replaced_episode_ids: &[String],
+    depth: VerificationDepth,
 ) -> AppResult<OldFileDisposition> {
     if recycle_config.enabled {
         let metadata = recycle_bin::ReplacedMediaRecycleMetadata {
@@ -1342,12 +1522,14 @@ async fn prepare_old_file_disposition_for_upgrade(
             media_row: Some(recycle_bin::RecycledMediaRowSnapshot::from_media_file(
                 existing_file,
             )),
+            episode_ids: replaced_episode_ids.to_vec(),
         };
         return recycle_bin::recycle_replaced_media_file(
             recycle_config,
             old_file_source_path,
             metadata,
             false,
+            depth,
         )
         .await
         .map(|result| {
@@ -1358,11 +1540,9 @@ async fn prepare_old_file_disposition_for_upgrade(
     }
 
     recycle_bin::ensure_source_within_roots(recycle_config, old_file_source_path)?;
-    let metadata = match tokio::fs::symlink_metadata(old_file_source_path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(OldFileDisposition::Noop);
-        }
+    let kind = match current_upgrade_entry_kind(old_file_source_path).await {
+        Ok(Some(kind)) => kind,
+        Ok(None) => return Ok(OldFileDisposition::Noop),
         Err(error) => {
             return Err(AppError::Repository(format!(
                 "failed to stat old file {} before upgrade disposition: {}",
@@ -1371,7 +1551,7 @@ async fn prepare_old_file_disposition_for_upgrade(
             )));
         }
     };
-    if metadata.file_type().is_symlink() {
+    if kind == EntryKind::Symlink {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::SYMLINK_REFUSED,
             format!(
@@ -1380,7 +1560,7 @@ async fn prepare_old_file_disposition_for_upgrade(
             ),
         ));
     }
-    if !metadata.is_file() {
+    if kind != EntryKind::File {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::REGULAR_FILE_REQUIRED,
             format!(
@@ -1390,8 +1570,9 @@ async fn prepare_old_file_disposition_for_upgrade(
         ));
     }
 
-    let backup_path = sibling_guard_path(old_file_source_path, "old");
-    tokio::fs::rename(old_file_source_path, &backup_path)
+    let backup_path = sibling_guard_path(old_file_source_path, UPGRADE_OLD_PREFIX);
+    Disk::process()
+        .move_replacing(old_file_source_path, &backup_path)
         .await
         .map_err(|error| {
             AppError::Repository(format!(
@@ -1426,11 +1607,13 @@ async fn commit_old_file_disposition_after_db_success(
 async fn rollback_old_file_disposition(
     disposition: &OldFileDisposition,
     original_path: &Path,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     match disposition {
         OldFileDisposition::Noop => Ok(()),
         OldFileDisposition::PendingRecycle(result) => {
-            recycle_bin::restore_recycled_file_exact(&result.recycled_path, original_path).await?;
+            recycle_bin::restore_recycled_file_exact(&result.recycled_path, original_path, depth)
+                .await?;
             if let Err(error) =
                 crate::fs_safety::remove_dir_all_safely_if_exists(&result.entry_dir).await
             {
@@ -1506,7 +1689,7 @@ async fn finalize_same_path_upgrade(
         .await;
     let guard_root =
         resolve_same_path_upgrade_guard_root(recycle_config, old_file_media_root, old_path)?;
-    let backup_path = sibling_guard_path(old_path, "old");
+    let backup_path = sibling_guard_path(old_path, UPGRADE_OLD_PREFIX);
     let guard_path = same_path_upgrade_guard_path(&guard_root, &backup_path);
     let guard = SamePathUpgradeGuardManifest::new(
         title,
@@ -1518,7 +1701,7 @@ async fn finalize_same_path_upgrade(
     );
     write_same_path_upgrade_guard(&guard_path, &guard).await?;
 
-    if let Err(error) = tokio::fs::rename(old_path, &backup_path).await {
+    if let Err(error) = Disk::process().move_replacing(old_path, &backup_path).await {
         remove_same_path_upgrade_guard_file(&guard_path).await;
         rollback_new_replacement(
             app,
@@ -1537,7 +1720,10 @@ async fn finalize_same_path_upgrade(
     }
     update_same_path_upgrade_guard_phase(&guard_path, UPGRADE_GUARD_PHASE_OLD_MOVED).await?;
 
-    if let Err(error) = tokio::fs::rename(&replacement.import_path, old_path).await {
+    if let Err(error) = Disk::process()
+        .move_replacing(&replacement.import_path, old_path)
+        .await
+    {
         if let Err(restore_error) = restore_same_path_backup(old_path, &backup_path).await {
             tracing::error!(
                 error = %restore_error,
@@ -1666,6 +1852,8 @@ async fn finalize_same_path_upgrade(
         old_file_media_root,
         &replacement.new_file_id,
         &replacement_physical_path,
+        &replacement.replaced_episode_ids,
+        app.resolve_verification_depth().await,
     )
     .await?;
     update_same_path_upgrade_guard_phase(&guard_path, UPGRADE_GUARD_PHASE_DISPOSED).await?;
@@ -1686,6 +1874,8 @@ async fn dispose_old_file_after_verified_upgrade(
     media_root: Option<&str>,
     replacement_file_id: &str,
     replacement_path: &Path,
+    replaced_episode_ids: &[String],
+    depth: VerificationDepth,
 ) -> AppResult<bool> {
     if !recycle_config.enabled {
         recycle_bin::ensure_source_within_roots(recycle_config, old_file_source_path)?;
@@ -1702,12 +1892,14 @@ async fn dispose_old_file_after_verified_upgrade(
         media_row: Some(recycle_bin::RecycledMediaRowSnapshot::from_media_file(
             existing_file,
         )),
+        episode_ids: replaced_episode_ids.to_vec(),
     };
     let recycle_result = recycle_bin::recycle_replaced_media_file(
         recycle_config,
         old_file_source_path,
         metadata,
         true,
+        depth,
     )
     .await?;
 
@@ -1753,7 +1945,7 @@ async fn validate_replacement_media_file(
         ));
     }
     let replacement_path_buf = stored_path_to_path_buf(&replacement.file_path);
-    if !replacement_path_buf.exists() {
+    if Disk::process().follow(&replacement_path_buf).await.exists() != Some(true) {
         return Err(format!(
             "replacement media file does not exist on disk: {}",
             replacement.file_path
@@ -1833,22 +2025,25 @@ async fn rollback_new_replacement(
     }
 }
 
-fn sibling_guard_path(path: &Path, label: &str) -> PathBuf {
+fn sibling_guard_path(path: &Path, kind: &str) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("media"));
-    let prefix = format!(".scryer-upgrade-{}-{}-", label, scryer_domain::Id::new().0);
+    let prefix = format!("{kind}{}-", scryer_domain::Id::new().0);
     // The id keeps the name unique; the file name only says what it guards,
-    // so it is shortened to keep the whole name within the filesystem limit.
+    // so it is shortened to keep the whole name, and the guard file named
+    // after it, within the filesystem limit.
     let file_name = crate::library::rename::truncate_utf8_bytes(
         &file_name.to_string_lossy(),
-        crate::location::verify::FILE_NAME_MAX_BYTES.saturating_sub(prefix.len()),
+        crate::location::verify::FILE_NAME_MAX_BYTES
+            .saturating_sub(prefix.len() + SAME_PATH_UPGRADE_GUARD_SUFFIX.len()),
     );
     parent.join(format!("{prefix}{file_name}"))
 }
 
 async fn restore_same_path_backup(final_path: &Path, backup_path: &Path) -> AppResult<()> {
+    let disk = Disk::process();
     if !same_path_guard_regular_file_exists(backup_path, "backup").await? {
         return Err(AppError::Repository(format!(
             "failed to restore old file after guarded same-path upgrade failure because backup is missing: {}",
@@ -1859,8 +2054,8 @@ async fn restore_same_path_backup(final_path: &Path, backup_path: &Path) -> AppR
     let moved_occupant = if same_path_guard_regular_file_exists(final_path, "final occupant")
         .await?
     {
-        let moved_aside = sibling_guard_path(final_path, "rollback-occupant");
-        tokio::fs::rename(final_path, &moved_aside)
+        let moved_aside = sibling_guard_path(final_path, UPGRADE_ROLLBACK_OCCUPANT_PREFIX);
+        disk.move_replacing(final_path, &moved_aside)
             .await
             .map_err(|error| {
                 AppError::Repository(format!(
@@ -1875,10 +2070,10 @@ async fn restore_same_path_backup(final_path: &Path, backup_path: &Path) -> AppR
         None
     };
 
-    if let Err(error) = tokio::fs::rename(backup_path, final_path).await {
+    if let Err(error) = disk.move_replacing(backup_path, final_path).await {
         if let Some(moved_aside) = moved_occupant.as_ref() {
-            match tokio::fs::rename(moved_aside, final_path).await {
-                Ok(()) => {
+            match disk.move_replacing(moved_aside, final_path).await {
+                Ok(_) => {
                     return Err(AppError::Repository(format!(
                         "failed to restore old file after guarded same-path upgrade failure: {} -> {}: {}; moved-aside occupant {} was restored",
                         backup_path.display(),
@@ -1922,8 +2117,8 @@ async fn restore_same_path_backup(final_path: &Path, backup_path: &Path) -> AppR
 }
 
 async fn restore_backup_to_absent_path(final_path: &Path, backup_path: &Path) -> AppResult<()> {
-    match tokio::fs::symlink_metadata(final_path).await {
-        Ok(_) => {
+    match current_upgrade_entry_kind(final_path).await {
+        Ok(Some(_)) => {
             return Err(AppError::validation_refused(
                 crate::error_reasons::import::DESTINATION_OCCUPIED,
                 format!(
@@ -1933,7 +2128,7 @@ async fn restore_backup_to_absent_path(final_path: &Path, backup_path: &Path) ->
                 ),
             ));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(None) => {}
         Err(error) => {
             return Err(AppError::Repository(format!(
                 "failed to stat old upgrade restore destination {}: {}",
@@ -1948,8 +2143,10 @@ async fn restore_backup_to_absent_path(final_path: &Path, backup_path: &Path) ->
             backup_path.display()
         )));
     }
-    tokio::fs::rename(backup_path, final_path)
+    Disk::process()
+        .move_replacing(backup_path, final_path)
         .await
+        .map(drop)
         .map_err(|error| {
             AppError::Repository(format!(
                 "failed to restore old upgrade backup: {} -> {}: {}",
@@ -2081,11 +2278,264 @@ mod long_name_tests {
     fn same_path_upgrade_staging_name_fits_a_generated_name() {
         let generated = format!("{}.mkv", "a".repeat(212));
         assert_eq!(generated.len(), 216);
-        let staged = sibling_guard_path(&Path::new("/library/Show").join(generated), "replacement");
+        let staged = sibling_guard_path(
+            &Path::new("/library/Show").join(generated),
+            UPGRADE_REPLACEMENT_PREFIX,
+        );
         let staged_len = staged.file_name().unwrap().len();
         assert!(
             staged_len <= 255,
             "staging name is {staged_len} bytes; filesystems allow 255"
         );
+    }
+
+    /// The guard file is named after the backup plus a suffix, so a backup of a
+    /// name at the limit must still leave room for it.
+    #[test]
+    fn the_guard_file_of_a_backup_at_the_name_limit_fits() {
+        let root = Path::new("/library");
+        let longest = format!("{}.mkv", "a".repeat(251));
+        let backup = sibling_guard_path(&root.join("Show").join(longest), UPGRADE_OLD_PREFIX);
+        let guard = same_path_upgrade_guard_path(root, &backup);
+        let guard_len = guard.file_name().unwrap().len();
+        assert!(guard_len <= 255, "guard name is {guard_len} bytes");
+        assert!(is_same_path_upgrade_guard_file(&guard));
+    }
+
+    #[test]
+    fn upgrades_write_the_short_names() {
+        let final_path = Path::new("/library/Show/Episode.mkv");
+        for (prefix, expected) in [
+            (UPGRADE_OLD_PREFIX, ".scry-uo-"),
+            (UPGRADE_REPLACEMENT_PREFIX, ".scry-ur-"),
+            (UPGRADE_ROLLBACK_OCCUPANT_PREFIX, ".scry-ub-"),
+        ] {
+            let name = sibling_guard_path(final_path, prefix);
+            let name = name.file_name().unwrap().to_str().unwrap();
+            assert!(name.starts_with(expected), "{name}");
+            assert!(name.ends_with("-Episode.mkv"), "{name}");
+        }
+    }
+
+    #[test]
+    fn current_and_legacy_upgrade_names_are_both_recognised() {
+        assert!(is_upgrade_old_name(".scry-uo-1-Episode.mkv"));
+        assert!(is_upgrade_old_name(".scryer-upgrade-old-1-Episode.mkv"));
+        assert!(is_upgrade_replacement_name(".scry-ur-1-Episode.mkv"));
+        assert!(is_upgrade_replacement_name(
+            ".scryer-upgrade-replacement-1-Episode.mkv"
+        ));
+        for unrelated in [
+            ".scry-ub-1-Episode.mkv",
+            ".scry-u-1-Episode.mkv",
+            ".scryer-upgrade-1-Episode.mkv",
+            ".scryer-upgrade-rollback-occupant-1-Episode.mkv",
+            "scry-uo-1-Episode.mkv",
+            ".scryer-ax-0123456789abcdef",
+        ] {
+            assert!(!is_upgrade_old_name(unrelated), "{unrelated}");
+            assert!(!is_upgrade_replacement_name(unrelated), "{unrelated}");
+        }
+        assert!(!is_upgrade_old_name(".scry-ur-1-Episode.mkv"));
+        assert!(!is_upgrade_replacement_name(".scry-uo-1-Episode.mkv"));
+    }
+
+    #[test]
+    fn guard_files_are_recognised_under_either_backup_prefix_only() {
+        let guards = Path::new("/library").join(SAME_PATH_UPGRADE_GUARD_DIR);
+        for name in [
+            ".scry-uo-1-Episode.mkv.guard.json",
+            ".scryer-upgrade-old-1-Episode.mkv.guard.json",
+        ] {
+            assert!(
+                is_same_path_upgrade_guard_file(&guards.join(name)),
+                "{name}"
+            );
+        }
+        for name in [
+            ".scry-uo-1-Episode.mkv",
+            ".scry-ur-1-Episode.mkv.guard.json",
+            ".scryer-upgrade-replacement-1-Episode.mkv.guard.json",
+            ".scry-uo.guard.json",
+        ] {
+            assert!(
+                !is_same_path_upgrade_guard_file(&guards.join(name)),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod incumbent_identity_tests {
+    use super::*;
+
+    fn library_row(id: &str, path: &Path, size_bytes: i64) -> TitleMediaFile {
+        TitleMediaFile {
+            id: id.to_string(),
+            file_path: path.to_string_lossy().into_owned(),
+            size_bytes,
+            ..Default::default()
+        }
+    }
+
+    fn write_fixture(path: &Path, bytes: &[u8]) -> i64 {
+        std::fs::write(path, bytes).expect("write fixture");
+        bytes.len() as i64
+    }
+
+    #[tokio::test]
+    async fn identity_is_identical_only_when_the_sampled_proofs_agree() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let same = dir.path().join("same.mkv");
+        write_fixture(&same, b"quiet harbour episode bytes");
+        let other = dir.path().join("other.mkv");
+        write_fixture(&other, b"quiet harbour episode BYTES");
+
+        assert_eq!(
+            incumbent_source_identity(&library_row("same", &same, size), &source, size).await,
+            IncumbentIdentity::Identical
+        );
+        assert_eq!(
+            incumbent_source_identity(&library_row("other", &other, size), &source, size).await,
+            IncumbentIdentity::Different
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_of_a_gone_incumbent_is_different() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let gone = dir.path().join("gone.mkv");
+
+        assert_eq!(
+            incumbent_source_identity(&library_row("gone", &gone, size), &source, size).await,
+            IncumbentIdentity::Different
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_of_an_unreadable_incumbent_is_undecided() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        // A folder where the library file should be cannot be read as one.
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+
+        assert_eq!(
+            incumbent_source_identity(&library_row("unreadable", &unreadable, size), &source, size)
+                .await,
+            IncumbentIdentity::Undecided
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_of_a_different_catalog_size_reads_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        // Unreadable, so any read would make it undecided.
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+
+        assert_eq!(
+            incumbent_source_identity(
+                &library_row("unreadable", &unreadable, size + 1),
+                &source,
+                size
+            )
+            .await,
+            IncumbentIdentity::Different
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identical_second_ranked_incumbent_settles_the_superseded_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let first = dir.path().join("first.mkv");
+        write_fixture(&first, b"quiet harbour episode BYTES");
+        let second = dir.path().join("second.mkv");
+        write_fixture(&second, b"quiet harbour episode bytes");
+        let first_row = library_row("first", &first, size);
+        let second_row = library_row("second", &second, size);
+
+        match superseded_source_identity(vec![&first_row, &second_row], &source, size, |_| true)
+            .await
+        {
+            SupersededSourceIdentity::Identical(file) => assert_eq!(file.id, "second"),
+            other => panic!("expected the second incumbent to be identical, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_identical_incumbent_wins_over_an_undecided_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+        let same = dir.path().join("same.mkv");
+        write_fixture(&same, b"quiet harbour episode bytes");
+        let unreadable_row = library_row("unreadable", &unreadable, size);
+        let same_row = library_row("same", &same, size);
+
+        match superseded_source_identity(vec![&unreadable_row, &same_row], &source, size, |_| true)
+            .await
+        {
+            SupersededSourceIdentity::Identical(file) => assert_eq!(file.id, "same"),
+            other => panic!("expected the readable twin to settle it, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_undecided_incumbent_with_no_identical_one_is_undecided() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let other = dir.path().join("other.mkv");
+        write_fixture(&other, b"quiet harbour episode BYTES");
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+        let other_row = library_row("other", &other, size);
+        let unreadable_row = library_row("unreadable", &unreadable, size);
+
+        match superseded_source_identity(vec![&other_row, &unreadable_row], &source, size, |_| true)
+            .await
+        {
+            SupersededSourceIdentity::Undecided(file) => assert_eq!(file.id, "unreadable"),
+            other => panic!("expected an undecided answer, got {other:?}"),
+        }
+        let error = incumbent_identity_undecided_error(&unreadable_row, &source);
+        assert_eq!(
+            error.reason(),
+            Some(crate::error_reasons::import::INCUMBENT_IDENTITY_UNDECIDED)
+        );
+    }
+
+    /// An identical file covering only some target episodes does not settle
+    /// the source; the import goes on as an upgrade.
+    #[tokio::test]
+    async fn an_identical_incumbent_that_does_not_settle_is_not_identical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let partial = dir.path().join("partial.mkv");
+        write_fixture(&partial, b"quiet harbour episode bytes");
+        let partial_row = library_row("partial", &partial, size);
+
+        match superseded_source_identity(vec![&partial_row], &source, size, |file| {
+            file.id != "partial"
+        })
+        .await
+        {
+            SupersededSourceIdentity::NoneIdentical => {}
+            other => panic!("expected the partial twin not to settle it, got {other:?}"),
+        }
     }
 }

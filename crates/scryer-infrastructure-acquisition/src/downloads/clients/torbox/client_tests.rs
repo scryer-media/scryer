@@ -177,10 +177,6 @@ impl Fixture {
         fixture
     }
 
-    fn settings(&self, cached_only: bool) -> TorboxSettings {
-        settings_in(self.dir.path(), cached_only)
-    }
-
     fn runtime_with(
         &self,
         cached_only: bool,

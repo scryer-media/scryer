@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use scryer_application::disk::{Disk, Open, Parents, Remove};
 use scryer_application::{AppError, AppResult};
 use sqlx::ConnectOptions;
 
@@ -140,24 +141,28 @@ impl SqliteServices {
             let file_path = file_path.split('?').next().unwrap_or(file_path);
             let db_file = std::path::Path::new(file_path);
             if let Some(parent) = db_file.parent() {
-                if !parent.as_os_str().is_empty() && !parent.exists() {
+                let disk = Disk::process();
+                if !parent.as_os_str().is_empty()
+                    && disk.follow(parent).await.exists() != Some(true)
+                {
                     tracing::info!(path = %parent.display(), "creating database directory");
-                    std::fs::create_dir_all(parent).map_err(|err| {
-                        AppError::Repository(format!(
-                            "cannot create database directory {}: {err}",
-                            parent.display(),
-                        ))
-                    })?;
+                    disk.create_dir(parent, Parents::Create)
+                        .await
+                        .map_err(|err| {
+                            AppError::Repository(format!(
+                                "cannot create database directory {}: {}",
+                                parent.display(),
+                                err.words(),
+                            ))
+                        })?;
                 }
-                if parent.exists() {
-                    let meta = std::fs::metadata(parent);
+                if disk.follow(parent).await.exists() == Some(true) {
                     let probe = parent.join(".scryer-probe");
-                    let writable = std::fs::File::create(&probe).is_ok();
-                    let _ = std::fs::remove_file(&probe);
+                    let writable = disk.open(&probe, Open::create()).await.is_ok();
+                    let _ = disk.remove(&probe, Remove::File).await;
                     tracing::debug!(
                         path = %parent.display(),
                         writable,
-                        permissions = ?meta.as_ref().map(|m| m.permissions()),
                         "database directory check",
                     );
                 }
@@ -172,6 +177,10 @@ impl SqliteServices {
                 .min_connections(1)
                 .idle_timeout(None)
                 .max_lifetime(None)
+                // An acquire that times out while it is checking the only
+                // connection drops that connection, and the database with it.
+                // Tests that jump the paused clock would trip the default.
+                .acquire_timeout(std::time::Duration::from_secs(24 * 60 * 60))
         } else {
             sqlx::sqlite::SqlitePoolOptions::new()
                 .max_connections(sqlite_max_connections_from_env())

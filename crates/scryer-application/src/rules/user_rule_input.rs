@@ -365,7 +365,6 @@ pub(crate) fn file_doc_from_analysis(analysis: &crate::MediaFileAnalysis) -> scr
     );
 
     scryer_rules::FileDoc {
-        details: analysis.details.clone(),
         video_codec: analysis.video_codec.as_ref().map(ToString::to_string),
         video_width: analysis.video_width,
         video_height: analysis.video_height,
@@ -446,6 +445,8 @@ mod tests {
                 allow_bd_disk: false,
                 allow_upgrades: true,
                 ignore_proper_repack: false,
+                min_missing_episodes_for_pack: None,
+                min_missing_percent_for_series_pack: None,
                 prefer_dual_audio: false,
                 required_audio_languages: vec![],
                 scoring_persona: crate::ScoringPersona::Balanced,

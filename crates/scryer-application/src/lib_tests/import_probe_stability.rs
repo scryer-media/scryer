@@ -300,6 +300,7 @@ async fn probe_stability_timestamp_finalization_imports_without_rejected_artifac
                 title_id: Some(fixture.title.id.clone()),
                 facet: None,
                 stream_id: None,
+                media_request_ids: None,
                 after_sequence: Some(0),
                 before_sequence: None,
                 limit: 100,

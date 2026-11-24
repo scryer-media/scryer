@@ -22,10 +22,12 @@ export function PreferredAudioLanguageList({
   value,
   onChange,
   disabled,
+  triggerId,
 }: {
   value: string[];
   onChange: (languages: string[]) => void;
   disabled: boolean;
+  triggerId?: string;
 }) {
   const t = useTranslate();
   const originalLabel = t("title.originalAudioLanguagePerTitle");
@@ -35,6 +37,7 @@ export function PreferredAudioLanguageList({
         value={value}
         onChange={onChange}
         disabled={disabled}
+        triggerId={triggerId}
         ariaLabel={t("settings.audioPreferredLanguages")}
       />
       {value.length > 1 ? (

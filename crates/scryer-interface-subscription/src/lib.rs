@@ -8,9 +8,11 @@ use async_graphql::{
 use scryer_application::live_feed_domain_event_types;
 use scryer_domain::{AppPermission, DomainEvent, DomainEventPayload, DownloadQueueItem};
 use std::collections::{HashSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
-use scryer_interface_core::LogBuffer;
+use scryer_interface_core::{ConnectionUserRevocation, LogBuffer};
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, auth_runtime_from_ctx};
 use scryer_interface_media::mappers::{
     from_activity_event, from_domain_event, from_download_queue_item,
@@ -97,14 +99,23 @@ fn guard_subscription_stream<T: Send + 'static>(
     let auth_runtime = auth_runtime_from_ctx(ctx);
     let expected_epoch = auth_runtime.snapshot().epoch;
     let epoch_rx = auth_runtime.subscribe_epoch();
+    // A revocation of this connection's user ends the stream as well.
+    let user_revoked: Pin<Box<dyn Future<Output = ()> + Send>> =
+        match ctx.data_opt::<ConnectionUserRevocation>() {
+            Some(revocation) if revocation.0.is_revoked() => return empty_box_stream(),
+            Some(revocation) => Box::pin(revocation.0.clone().until_revoked()),
+            None => Box::pin(std::future::pending()),
+        };
 
     Box::pin(unfold(
-        (stream, epoch_rx, expected_epoch),
-        move |(mut stream, mut epoch_rx, expected_epoch)| async move {
+        (stream, epoch_rx, expected_epoch, user_revoked),
+        move |(mut stream, mut epoch_rx, expected_epoch, mut user_revoked)| async move {
             loop {
                 tokio::select! {
                     next = stream.next() => {
-                        return next.map(|item| (item, (stream, epoch_rx, expected_epoch)));
+                        return next.map(|item| {
+                            (item, (stream, epoch_rx, expected_epoch, user_revoked))
+                        });
                     }
                     changed = epoch_rx.changed() => {
                         match changed {
@@ -112,6 +123,7 @@ fn guard_subscription_stream<T: Send + 'static>(
                             Ok(()) | Err(_) => return None,
                         }
                     }
+                    () = &mut user_revoked => return None,
                 }
             }
         },
@@ -463,8 +475,13 @@ impl SubscriptionRoot {
         };
         let event_types = live_feed_domain_event_types();
         let stream = unfold(
-            (receiver, initial_after, VecDeque::<DomainEvent>::new()),
-            move |(mut receiver, mut cursor, mut pending)| {
+            (
+                receiver,
+                initial_after,
+                VecDeque::<DomainEvent>::new(),
+                None::<i64>,
+            ),
+            move |(mut receiver, mut cursor, mut pending, mut resume)| {
                 let app = app.clone();
                 let actor = actor.clone();
                 let event_types = event_types.clone();
@@ -472,11 +489,19 @@ impl SubscriptionRoot {
                     loop {
                         if let Some(event) = pending.pop_front() {
                             cursor = event.sequence;
-                            return Some((from_domain_event(event), (receiver, cursor, pending)));
+                            return Some((
+                                from_domain_event(event),
+                                (receiver, cursor, pending, resume),
+                            ));
+                        }
+                        // A read that stopped at its page budget examined
+                        // events past the last one it returned.
+                        if let Some(resume_after) = resume.take() {
+                            cursor = cursor.max(resume_after);
                         }
 
                         let events = match app
-                            .list_domain_events(
+                            .list_domain_events_within_budget(
                                 &actor,
                                 &scryer_domain::DomainEventFilter {
                                     after_sequence: Some(cursor),
@@ -487,7 +512,19 @@ impl SubscriptionRoot {
                             )
                             .await
                         {
-                            Ok(events) if !events.is_empty() => events,
+                            Ok(page) if !page.events.is_empty() => {
+                                resume = page.resume_after_sequence;
+                                page.events
+                            }
+                            // Nothing visible yet within the budget: carry on
+                            // from where the read stopped, without waiting.
+                            Ok(scryer_application::DomainEventFeedPage {
+                                resume_after_sequence: Some(resume_after),
+                                ..
+                            }) => {
+                                cursor = resume_after;
+                                continue;
+                            }
                             Ok(_) => match receiver.recv().await {
                                 Ok(sequence) => {
                                     let mut earliest_sequence_after_cursor =

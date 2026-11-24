@@ -481,25 +481,35 @@ async fn pending_request_writes_carry_the_verdict_and_the_edited_lease() {
             "1080P".to_string(),
             None,
             None,
+            Some(Vec::new()),
+            Some(vec!["original".to_string(), "deu".to_string()]),
             Some(7),
             request_event("request-1"),
         )
         .await
         .expect("edit preferences");
+    let edited = store
+        .get("request-1")
+        .await
+        .unwrap()
+        .expect("request exists");
+    assert_eq!(edited.requested_lease_days, Some(7));
     assert_eq!(
-        store
-            .get("request-1")
-            .await
-            .unwrap()
-            .expect("request exists")
-            .requested_lease_days,
-        Some(7)
+        edited.requested_required_audio_languages,
+        Some(Vec::new()),
+        "an empty required list survives the store, distinct from inherit"
+    );
+    assert_eq!(
+        edited.requested_preferred_audio_languages,
+        Some(vec!["original".to_string(), "deu".to_string()])
     );
     store
         .update_pending_request_preferences(
             "request-1",
             "1080p".to_string(),
             "1080P".to_string(),
+            None,
+            None,
             None,
             None,
             None,
@@ -706,6 +716,172 @@ async fn media_request_history_reads_answer_the_fact_builder() {
             .unwrap()
             .is_none()
     );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn the_requester_history_summary_answers_what_the_separate_reads_answer() {
+    let (services, db) = temp_services("scryer_media_request_history_summary").await;
+    seed_library(&services, "library-1").await;
+    for id in ["requester-1", "requester-2", "resolver-1"] {
+        seed_user(&services, id).await;
+    }
+    let store = request_store(&services);
+
+    // (id, submitter, final status, age in days)
+    let seeded: [(&str, &str, Option<MediaRequestStatus>, i64); 12] = [
+        ("summary-1", "requester-1", None, 0),
+        (
+            "summary-2",
+            "requester-1",
+            Some(MediaRequestStatus::Approved),
+            2,
+        ),
+        (
+            "summary-3",
+            "requester-1",
+            Some(MediaRequestStatus::Approved),
+            29,
+        ),
+        (
+            "summary-4",
+            "requester-1",
+            Some(MediaRequestStatus::Approved),
+            31,
+        ),
+        (
+            "summary-5",
+            "requester-1",
+            Some(MediaRequestStatus::Rejected),
+            5,
+        ),
+        (
+            "summary-6",
+            "requester-1",
+            Some(MediaRequestStatus::Rejected),
+            60,
+        ),
+        ("summary-7", "requester-1", None, 40),
+        (
+            "summary-8",
+            "requester-1",
+            Some(MediaRequestStatus::Approved),
+            400,
+        ),
+        ("summary-9", "requester-2", None, 1),
+        (
+            "summary-10",
+            "requester-2",
+            Some(MediaRequestStatus::Rejected),
+            10,
+        ),
+        (
+            "summary-11",
+            "requester-2",
+            Some(MediaRequestStatus::Approved),
+            90,
+        ),
+        (
+            "summary-12",
+            "requester-2",
+            Some(MediaRequestStatus::Approved),
+            3,
+        ),
+    ];
+    let now = Utc::now();
+    for (id, submitter, status, age_days) in seeded {
+        store
+            .submit(
+                new_request(id, "library-1", submitter),
+                &user(submitter),
+                request_event(id),
+            )
+            .await
+            .expect("submit request");
+        if let Some(status) = status {
+            store
+                .resolve_pending(
+                    id,
+                    MediaRequestResolution {
+                        status,
+                        resolved_by_user_id: Some("resolver-1".to_string()),
+                        resolved_at: now,
+                        created_title_id: None,
+                        approved_quality_profile_id: None,
+                        approved_quality_profile_name: None,
+                        approved_lease_days: None,
+                        decision_id: None,
+                        decided_by_rule_set_ids: Vec::new(),
+                        policy_tags: Vec::new(),
+                        event: request_event(id),
+                    },
+                )
+                .await
+                .expect("resolve request");
+        }
+        sqlx::query("UPDATE media_requests SET created_at = ? WHERE id = ?")
+            .bind((now - chrono::Duration::days(age_days)).to_rfc3339())
+            .bind(id)
+            .execute(services.pool())
+            .await
+            .expect("age the request");
+    }
+
+    let mut checked = 0;
+    for user_id in ["requester-1", "requester-2", "nobody"] {
+        for since in [
+            now - chrono::Duration::days(30),
+            now - chrono::Duration::days(365),
+            now + chrono::Duration::days(1),
+        ] {
+            let excluded = std::iter::once(None)
+                .chain(seeded.iter().map(|(id, ..)| Some(*id)))
+                .collect::<Vec<_>>();
+            for excluding in excluded {
+                let summary = store
+                    .requester_history_summary(user_id, since, excluding)
+                    .await
+                    .expect("summary");
+                let count = |status, since| {
+                    let store = &store;
+                    async move {
+                        store
+                            .count_for_requester(user_id, Some(status), since, excluding)
+                            .await
+                            .expect("count")
+                    }
+                };
+                let separate = scryer_application::MediaRequestRequesterSummary {
+                    pending_count: count(MediaRequestStatus::Pending, None).await,
+                    approved_since_count: count(MediaRequestStatus::Approved, Some(since)).await,
+                    rejected_since_count: count(MediaRequestStatus::Rejected, Some(since)).await,
+                    approved_count: count(MediaRequestStatus::Approved, None).await,
+                    latest_request_at: store
+                        .latest_request_at_for_user(user_id, excluding)
+                        .await
+                        .expect("latest"),
+                };
+                assert_eq!(
+                    summary, separate,
+                    "{user_id} since {since} excluding {excluding:?}"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 3 * 3 * 13);
+
+    // The seeding gives the comparison something to tell apart.
+    let summary = store
+        .requester_history_summary("requester-1", now - chrono::Duration::days(30), None)
+        .await
+        .unwrap();
+    assert_eq!(summary.pending_count, 2);
+    assert_eq!(summary.approved_since_count, 2);
+    assert_eq!(summary.rejected_since_count, 1);
+    assert_eq!(summary.approved_count, 4);
+    assert!(summary.latest_request_at.is_some());
 
     let _ = std::fs::remove_file(db);
 }

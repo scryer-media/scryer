@@ -1,4 +1,5 @@
 use super::*;
+use crate::library_scan_titles::MetadataMatchNameFallback;
 use crate::library_scan_titles::find_existing_movie_title_index_for_metadata_match;
 use crate::library_scan_titles::find_existing_series_title_index_for_metadata_match;
 use crate::library_scan_unmatched::{
@@ -103,12 +104,31 @@ async fn claim_series_candidate_folder(
     title: &mut Title,
     candidate: &PreparedSeriesLibraryScanCandidate,
 ) -> AppResult<()> {
-    crate::folder_ownership::claim_title_folder_for_scan_if_missing(
-        app,
-        title,
-        &candidate.folder_path,
-    )
-    .await
+    let folder_path = series_title_folder_for_candidate(title, &candidate.folder_path);
+    crate::folder_ownership::claim_title_folder_for_scan_if_missing(app, title, &folder_path).await
+}
+
+/// The folder the scan works in for a title that
+/// [`prepare_series_title_for_candidate`] accepted for `candidate_folder`.
+///
+/// A scanned folder that differs from the recorded one only by letter case
+/// got past preparation only because both spellings are one directory, so
+/// the title keeps the spelling its media rows are stored under. Claims,
+/// walks and probes use that spelling; the scanned spelling would be refused
+/// by the case-sensitive ownership checks and would read every stored file as
+/// new.
+fn series_title_folder_for_candidate(title: &Title, candidate_folder: &Path) -> std::path::PathBuf {
+    match crate::folder_ownership::title_folder_path(title) {
+        Some(recorded)
+            if crate::stored_paths::paths_match_ignoring_case(
+                recorded,
+                &path_to_stored_string(candidate_folder),
+            ) =>
+        {
+            stored_path_to_path_buf(recorded)
+        }
+        _ => candidate_folder.to_path_buf(),
+    }
 }
 
 #[expect(
@@ -126,6 +146,8 @@ async fn prepare_series_title_for_candidate(
     candidate: &PreparedSeriesLibraryScanCandidate,
 ) -> AppResult<Option<LibraryScanUnmatchedItem>> {
     if crate::folder_ownership::title_owns_another_folder(title, &candidate.folder_path)
+        && !crate::folder_ownership::title_folder_is_case_variant_of(title, &candidate.folder_path)
+            .await
         && !reclaim_stale_title_folder_for_scan(app, title, &candidate.folder_path).await?
     {
         crate::folder_ownership::unlink_title_media_in_folder(app, title, &candidate.folder_path)
@@ -447,6 +469,34 @@ fn find_existing_movie_title_index(
         return Some(index);
     }
 
+    // An entry that names an external id binds only through that id. A file
+    // inside a tagged folder carries the folder's id on its hint alone.
+    if let Some(identity_hint) = candidate
+        .identity_hint
+        .as_ref()
+        .filter(|hint| hint.has_external_ids())
+    {
+        if let Some(tmdb_id) = identity_hint.tmdb_id.as_deref()
+            && let Some(&index) = existing_titles_by_tmdb_id.get(tmdb_id)
+        {
+            return Some(index);
+        }
+        if let Some(imdb_id) = identity_hint
+            .imdb_id
+            .as_deref()
+            .and_then(crate::normalize::normalize_imdb_id)
+            && let Some(&index) = existing_titles_by_imdb_id.get(&imdb_id)
+        {
+            return Some(index);
+        }
+        if let Some(tvdb_id) = identity_hint.tvdb_id.as_deref()
+            && let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id)
+        {
+            return Some(index);
+        }
+        return None;
+    }
+
     candidate.query_variants.iter().find_map(|query_variant| {
         let normalized = crate::title_matching::canonical_lookup_key(query_variant);
         pick_same_name_title_index(
@@ -584,6 +634,33 @@ fn find_existing_series_title_index(
         && let Some(&index) = existing_titles_by_tmdb_id.get(&nfo_tmdb_id)
     {
         return Some(index);
+    }
+
+    // An entry that names an external id binds only through that id.
+    if let Some(identity_hint) = candidate
+        .identity_hint
+        .as_ref()
+        .filter(|hint| hint.has_external_ids())
+    {
+        if let Some(tvdb_id) = identity_hint.tvdb_id.as_deref()
+            && let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id)
+        {
+            return Some(index);
+        }
+        if let Some(imdb_id) = identity_hint
+            .imdb_id
+            .as_deref()
+            .and_then(crate::normalize::normalize_imdb_id)
+            && let Some(&index) = existing_titles_by_imdb_id.get(&imdb_id)
+        {
+            return Some(index);
+        }
+        if let Some(tmdb_id) = identity_hint.tmdb_id.as_deref()
+            && let Some(&index) = existing_titles_by_tmdb_id.get(tmdb_id)
+        {
+            return Some(index);
+        }
+        return None;
     }
 
     candidate
@@ -827,10 +904,11 @@ async fn merge_series_title_work_for_index(
     mode: LibraryScanTitleWalkMode,
     created_in_scan: bool,
 ) -> AppResult<()> {
+    let folder_path = series_title_folder_for_candidate(&existing_titles[index], folder_path);
     crate::folder_ownership::claim_title_folder_for_scan_if_missing(
         app,
         &mut existing_titles[index],
-        folder_path,
+        &folder_path,
     )
     .await?;
     heal_scanned_title_root_folder_id(app, library, &mut existing_titles[index]).await?;
@@ -943,6 +1021,10 @@ async fn resolve_movie_metadata_match(
         existing_titles_by_tvdb_id,
         existing_titles_by_imdb_id,
         existing_titles_by_tmdb_id,
+        MetadataMatchNameFallback::for_candidate(
+            candidate.identity_hint.as_ref(),
+            candidate.year_hint,
+        ),
     ) {
         return Ok(MovieMetadataResolution::Ready(
             existing_titles[index].clone(),
@@ -1712,6 +1794,10 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
         existing_titles,
         existing_titles_by_name,
         existing_titles_by_tvdb_id,
+        MetadataMatchNameFallback::for_candidate(
+            candidate.identity_hint.as_ref(),
+            candidate.year_hint,
+        ),
     ) {
         timing.existing_match = true;
         let stage = std::time::Instant::now();
@@ -1930,10 +2016,11 @@ async fn refresh_existing_series_title_match(
         return Ok(());
     }
     update_series_title_folder_path_index(existing_titles_by_folder_path, title, index);
+    let folder_path = series_title_folder_for_candidate(title, &candidate.folder_path);
     maybe_probe_existing_series_title_for_background_refresh(
         app,
         title,
-        &candidate.folder_path,
+        &folder_path,
         executor,
         summary,
     )
@@ -2041,6 +2128,10 @@ pub(super) async fn process_resolved_series_refresh_candidate(
         existing_titles,
         existing_titles_by_name,
         existing_titles_by_tvdb_id,
+        MetadataMatchNameFallback::for_candidate(
+            candidate.identity_hint.as_ref(),
+            candidate.year_hint,
+        ),
     ) {
         timing.existing_match = true;
         let stage = std::time::Instant::now();
@@ -2990,6 +3081,7 @@ mod tests {
                 &existing_titles,
                 &by_name,
                 &by_tvdb,
+                TEXT_MATCH,
             ),
             None,
             "a different year is a different film"
@@ -3000,6 +3092,7 @@ mod tests {
                 &existing_titles,
                 &by_name,
                 &by_tvdb,
+                TEXT_MATCH,
             ),
             Some(0),
             "same name, same year"
@@ -3010,6 +3103,7 @@ mod tests {
                 &existing_titles,
                 &by_name,
                 &by_tvdb,
+                TEXT_MATCH,
             ),
             Some(0),
             "the canonical id always wins"
@@ -3020,9 +3114,298 @@ mod tests {
                 &existing_titles,
                 &by_name,
                 &by_tvdb,
+                TEXT_MATCH,
             ),
             Some(0),
             "an unknown year cannot contradict"
+        );
+    }
+
+    const TEXT_MATCH: MetadataMatchNameFallback =
+        MetadataMatchNameFallback::ByName { year_hint: None };
+
+    fn yearless_metadata_item(name: &str, tmdb_id: &str) -> MetadataSearchItem {
+        MetadataSearchItem {
+            tvdb_id: String::new(),
+            smg_id: Some(990_001),
+            primary_source: Some("tmdb".to_string()),
+            external_ids: vec![scryer_domain::ExternalId::new(
+                "tmdb".to_string(),
+                tmdb_id.to_string(),
+            )],
+            name: name.to_string(),
+            year: None,
+            auto_match_safe: true,
+            auto_match_signals: Vec::new(),
+        }
+    }
+
+    fn filename_id_hint(
+        tmdb_id: &str,
+        year: Option<u32>,
+    ) -> crate::library_scan_metadata::MetadataIdentityHint {
+        crate::library_scan_metadata::MetadataIdentityHint {
+            source: crate::library_scan_metadata::MetadataIdentitySource::Filename,
+            imdb_id: None,
+            tmdb_id: Some(tmdb_id.to_string()),
+            tvdb_id: None,
+            title: Some("Quiet Meridian".to_string()),
+            year,
+        }
+    }
+
+    #[test]
+    fn id_tagged_movie_never_binds_a_same_name_title_by_name() {
+        // `Quiet Meridian (2023) {tmdb-900777}/Quiet.Meridian.2023.mkv` while the
+        // catalog holds only the 1960 film of the same name, and SMG answers the
+        // id lookup with the right film but no year.
+        let mut older = build_movie_title_named("meridian-1960", "Quiet Meridian", Some(1960));
+        older.external_ids = vec![scryer_domain::ExternalId::new("tmdb", "900111")];
+        older.folder_path = Some("/library/Quiet Meridian (1960)".to_string());
+        let existing_titles = vec![older];
+        let (by_name, by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&existing_titles);
+
+        // A file inside the tagged folder: the id is on the hint only.
+        let mut candidate = movie_candidate("Quiet Meridian", Some(2023));
+        candidate.file.path =
+            "/library/Quiet Meridian (2023) {tmdb-900777}/Quiet.Meridian.2023.mkv".to_string();
+        candidate.query_variants = vec![String::new()];
+        candidate.identity_hint = Some(filename_id_hint("900777", Some(2023)));
+        assert_eq!(candidate.parsed_release.tmdb_id, None);
+        assert_eq!(
+            find_existing_movie_title_index(
+                &candidate,
+                &existing_titles,
+                &by_name,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            None,
+            "an unmatched id goes to the metadata lookup"
+        );
+
+        // Even a name query variant cannot bind the id-tagged entry by name.
+        candidate.query_variants = vec!["Quiet Meridian".to_string()];
+        candidate.year_hint = None;
+        assert_eq!(
+            find_existing_movie_title_index(
+                &candidate,
+                &existing_titles,
+                &by_name,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            None,
+            "the name pass is closed to an id-tagged entry"
+        );
+
+        let fallback =
+            MetadataMatchNameFallback::for_candidate(candidate.identity_hint.as_ref(), Some(2023));
+        assert_eq!(fallback, MetadataMatchNameFallback::IdOnly);
+        assert_eq!(
+            find_existing_movie_title_index_for_metadata_match(
+                &yearless_metadata_item("Quiet Meridian", "900777"),
+                &existing_titles,
+                &by_name,
+                &by_smg,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+                fallback,
+            ),
+            None,
+            "a yearless match with unrelated ids creates a new title"
+        );
+    }
+
+    #[test]
+    fn id_tagged_movie_still_binds_by_its_id() {
+        let mut owner = build_movie_title_named("meridian-2023", "Quiet Meridian", Some(2023));
+        owner.external_ids = vec![
+            scryer_domain::ExternalId::new("tmdb", "900777"),
+            scryer_domain::ExternalId::new("imdb", "tt9007770"),
+        ];
+        let decoy = build_movie_title_named("meridian-1960", "Quiet Meridian", Some(1960));
+        let existing_titles = vec![decoy, owner];
+        let (by_name, by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&existing_titles);
+
+        let mut candidate = movie_candidate("Quiet Meridian", Some(2023));
+        candidate.identity_hint = Some(filename_id_hint("900777", Some(2023)));
+        assert_eq!(
+            find_existing_movie_title_index(
+                &candidate,
+                &existing_titles,
+                &by_name,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            Some(1),
+            "the hint's tmdb id binds in the first pass"
+        );
+
+        let mut imdb_only = movie_candidate("Quiet Meridian", None);
+        imdb_only.identity_hint = Some(crate::library_scan_metadata::MetadataIdentityHint {
+            source: crate::library_scan_metadata::MetadataIdentitySource::Nfo,
+            imdb_id: Some("tt9007770".to_string()),
+            tmdb_id: None,
+            tvdb_id: None,
+            title: None,
+            year: None,
+        });
+        assert_eq!(
+            find_existing_movie_title_index(
+                &imdb_only,
+                &existing_titles,
+                &by_name,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            Some(1),
+            "the hint's imdb id binds in the first pass"
+        );
+
+        assert_eq!(
+            find_existing_movie_title_index_for_metadata_match(
+                &yearless_metadata_item("Quiet Meridian", "900777"),
+                &existing_titles,
+                &by_name,
+                &by_smg,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+                MetadataMatchNameFallback::IdOnly,
+            ),
+            Some(1),
+            "the match's tmdb id binds in the metadata pass"
+        );
+    }
+
+    #[test]
+    fn text_matched_movie_uses_its_own_year_when_the_match_has_none() {
+        let existing_titles = vec![build_movie_title_named(
+            "meridian-1960",
+            "Quiet Meridian",
+            Some(1960),
+        )];
+        let (by_name, by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&existing_titles);
+        let selected = yearless_metadata_item("Quiet Meridian", "900777");
+        let bind = |year_hint: Option<u32>| {
+            let candidate = movie_candidate("Quiet Meridian", year_hint);
+            find_existing_movie_title_index_for_metadata_match(
+                &selected,
+                &existing_titles,
+                &by_name,
+                &by_smg,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+                MetadataMatchNameFallback::for_candidate(
+                    candidate.identity_hint.as_ref(),
+                    candidate.year_hint,
+                ),
+            )
+        };
+
+        assert_eq!(bind(Some(2023)), None, "two known years never bind");
+        assert_eq!(bind(Some(1960)), Some(0), "the same year binds");
+        assert_eq!(bind(None), Some(0), "both years unknown still binds");
+
+        let mut yearless_title = existing_titles.clone();
+        yearless_title[0].year = None;
+        let (by_name, by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&yearless_title);
+        assert_eq!(
+            find_existing_movie_title_index_for_metadata_match(
+                &selected,
+                &yearless_title,
+                &by_name,
+                &by_smg,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+                MetadataMatchNameFallback::ByName {
+                    year_hint: Some(2023)
+                },
+            ),
+            Some(0),
+            "a catalog title with no year cannot contradict"
+        );
+    }
+
+    #[test]
+    fn id_tagged_series_never_binds_a_same_name_series_by_name() {
+        let mut older = build_series_title("meridian-show-1998");
+        older.name = "Quiet Meridian".to_string();
+        older.year = Some(1998);
+        older.external_ids = vec![scryer_domain::ExternalId::new("tvdb", "700111")];
+        let existing_series = vec![older];
+        let (by_name, by_tvdb, by_imdb, by_tmdb) = build_series_title_indexes(&existing_series);
+
+        let mut candidate = series_candidate("Quiet Meridian", None);
+        candidate.identity_hint = Some(crate::library_scan_metadata::MetadataIdentityHint {
+            source: crate::library_scan_metadata::MetadataIdentitySource::Filename,
+            imdb_id: None,
+            tmdb_id: None,
+            tvdb_id: Some("700999".to_string()),
+            title: Some("Quiet Meridian".to_string()),
+            year: None,
+        });
+        assert_eq!(
+            find_existing_series_title_index(
+                &candidate,
+                &existing_series,
+                &by_name,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            None,
+            "an unmatched tvdb tag goes to the metadata lookup"
+        );
+        let selected = MetadataSearchItem {
+            tvdb_id: "700999".to_string(),
+            smg_id: None,
+            primary_source: Some("tvdb".to_string()),
+            external_ids: vec![],
+            name: "Quiet Meridian".to_string(),
+            year: None,
+            auto_match_safe: true,
+            auto_match_signals: Vec::new(),
+        };
+        assert_eq!(
+            find_existing_series_title_index_for_metadata_match(
+                &selected,
+                &existing_series,
+                &by_name,
+                &by_tvdb,
+                MetadataMatchNameFallback::for_candidate(
+                    candidate.identity_hint.as_ref(),
+                    candidate.year_hint,
+                ),
+            ),
+            None,
+            "a yearless match with an unrelated id creates a new series"
+        );
+
+        candidate.identity_hint.as_mut().unwrap().tvdb_id = Some("700111".to_string());
+        assert_eq!(
+            find_existing_series_title_index(
+                &candidate,
+                &existing_series,
+                &by_name,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            Some(0),
+            "the hint's tvdb id still binds"
         );
     }
 
@@ -3061,6 +3444,7 @@ mod tests {
                 &by_tvdb,
                 &by_imdb,
                 &by_tmdb,
+                TEXT_MATCH,
             ),
             Some(0)
         );
@@ -3105,6 +3489,7 @@ mod tests {
                 &existing_titles,
                 &by_name,
                 &by_tvdb,
+                TEXT_MATCH,
             ),
             Some(1),
             "the series-kinded TMDB id binds, the movie-kinded one does not"
@@ -3118,6 +3503,7 @@ mod tests {
                 &only_the_anime,
                 &by_name,
                 &by_tvdb,
+                TEXT_MATCH,
             ),
             None,
             "a movie-kinded TMDB id alone never binds a series result"

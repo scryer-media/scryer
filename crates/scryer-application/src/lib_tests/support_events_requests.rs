@@ -19,9 +19,30 @@ pub(crate) struct MockDomainEventRepo {
     /// One per append transaction: `append` and `append_once` count one, and
     /// `append_many` counts one for the whole batch.
     pub(crate) append_commits: AtomicUsize,
+    /// The catalog a library-scoped history page read resolves its titles
+    /// from, as the store resolves them in SQL.
+    pub(super) titles: Option<Arc<MockTitleRepo>>,
 }
 
 impl MockDomainEventRepo {
+    /// The title ids a history page read is scoped to.
+    async fn history_scope_title_ids(
+        &self,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(match title_scope {
+            None => None,
+            Some(crate::TitleHistoryTitleScope::Titles(title_ids)) => Some(title_ids.to_vec()),
+            Some(crate::TitleHistoryTitleScope::Libraries(library_ids)) => Some(
+                self.titles
+                    .as_ref()
+                    .expect("a library-scoped history read needs the title repo")
+                    .list_title_ids_for_libraries(library_ids, None)
+                    .await?,
+            ),
+        })
+    }
+
     async fn store_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
         if self.fail_append.load(Ordering::SeqCst) {
             return Err(AppError::Repository(
@@ -374,6 +395,14 @@ impl DomainEventRepository for MockDomainEventRepo {
                             .iter()
                             .any(|event_type| &event.payload.event_type() == event_type)
                     })
+                    // Every request this fake knows is still stored.
+                    && filter.media_request_ids.as_ref().is_none_or(|keys| {
+                        matches!(
+                            &event.payload,
+                            DomainEventPayload::MediaRequestSubmitted(data)
+                                if keys.request_ids.contains(&data.request_id)
+                        )
+                    })
             })
             .take(limit)
             .cloned()
@@ -390,41 +419,18 @@ impl DomainEventRepository for MockDomainEventRepo {
         Ok(crate::DashboardActivityStats::default())
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
-        _include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64> {
-        let events = self.events.lock().await;
-        Ok(events
-            .iter()
-            .rev()
-            .filter_map(crate::event_views::title_history_record_from_domain_event)
-            .filter(|record| {
-                event_types.is_none_or(|values| values.contains(&record.event_type))
-                    && title_ids.is_none_or(|values| {
-                        record
-                            .title_id
-                            .as_ref()
-                            .is_some_and(|title_id| values.contains(title_id))
-                    })
-                    && download_id.is_none_or(|value| record.download_id.as_deref() == Some(value))
-            })
-            .count() as i64)
-    }
-
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let page_size = if limit == 0 { usize::MAX } else { limit };
+        let title_ids = self.history_scope_title_ids(title_scope).await?;
+        let title_ids = title_ids.as_deref();
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -506,6 +512,9 @@ pub(super) struct MockMediaRequestRepo {
     pub(super) fail_approvals: AtomicBool,
     pub(super) requests: Arc<Mutex<Vec<MediaRequest>>>,
     pub(super) domain_events: Option<Arc<MockDomainEventRepo>>,
+    /// The staged request metadata, by staging key.
+    pub(super) staged_metadata:
+        Arc<std::sync::Mutex<HashMap<String, crate::StagedMediaRequestMetadata>>>,
 }
 
 impl MockMediaRequestRepo {
@@ -514,6 +523,7 @@ impl MockMediaRequestRepo {
             titles: None,
             requests: Arc::new(Mutex::new(Vec::new())),
             domain_events: Some(domain_events),
+            staged_metadata: Arc::default(),
             fail_policy_tag_rewrites: AtomicBool::new(false),
             fail_approvals: AtomicBool::new(false),
         }
@@ -547,6 +557,36 @@ pub(super) async fn append_mock_media_request_event(
 
 #[async_trait]
 impl MediaRequestRepository for MockMediaRequestRepo {
+    /// Every request is stored with the ids its submission carries, so the
+    /// requests sharing an id with a title are those of the submissions that
+    /// share one.
+    async fn request_ids_for_title_identity(
+        &self,
+        library_id: &str,
+        external_ids: &[ExternalId],
+    ) -> AppResult<Option<Vec<String>>> {
+        let Some(domain_events) = &self.domain_events else {
+            return Ok(None);
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        for event in domain_events.events.lock().await.iter() {
+            let DomainEventPayload::MediaRequestSubmitted(data) = &event.payload else {
+                continue;
+            };
+            let shares_an_id = data.external_ids.iter().any(|request_id| {
+                external_ids.iter().any(|title_id| {
+                    title_id.source.eq_ignore_ascii_case(&request_id.source)
+                        && title_id.value == request_id.value
+                })
+            });
+            if data.library_id == library_id && shares_an_id {
+                ids.insert(data.request_id.clone());
+            }
+        }
+        Ok((ids.len() <= crate::MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS)
+            .then(|| ids.into_iter().collect()))
+    }
+
     async fn approve_with_title(
         &self,
         request: &MediaRequest,
@@ -613,6 +653,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             requested_quality_profile_name: request.requested_quality_profile_name,
             requested_monitor_type: request.requested_monitor_type,
             requested_monitor_selection: request.requested_monitor_selection,
+            requested_required_audio_languages: request.requested_required_audio_languages,
+            requested_preferred_audio_languages: request.requested_preferred_audio_languages,
             requested_lease_days: request.requested_lease_days,
             approved_lease_days: None,
             decision_id: None,
@@ -749,6 +791,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
@@ -765,6 +809,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         request.requested_quality_profile_name = Some(requested_quality_profile_name);
         request.requested_monitor_type = requested_monitor_type;
         request.requested_monitor_selection = requested_monitor_selection;
+        request.requested_required_audio_languages = requested_required_audio_languages;
+        request.requested_preferred_audio_languages = requested_preferred_audio_languages;
         request.requested_lease_days = requested_lease_days;
         request.updated_at = now;
         let updated = request.clone();
@@ -845,7 +891,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<HashMap<String, Vec<String>>> {
+    ) -> AppResult<HashMap<String, crate::TitleRequesters>> {
         let wanted: HashSet<&String> = title_ids.iter().collect();
         let mut requests: Vec<MediaRequest> = self
             .requests
@@ -866,13 +912,19 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 .then_with(|| left.id.cmp(&right.id))
         });
 
-        let mut by_title: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_title: HashMap<String, crate::TitleRequesters> = HashMap::new();
         for request in requests {
             let title_id = request
                 .created_title_id
                 .clone()
                 .expect("filtered to requests with a created title");
-            let entry = by_title.entry(title_id).or_default();
+            let entry = &mut by_title
+                .entry(title_id)
+                .or_insert_with(|| crate::TitleRequesters {
+                    user_ids: Vec::new(),
+                    first_requested_at: request.created_at,
+                })
+                .user_ids;
             let mut requesters = request.requesters.clone();
             requesters.sort_by(|left, right| {
                 left.requested_at
@@ -892,8 +944,14 @@ impl MediaRequestRepository for MockMediaRequestRepo {
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
         let requests = self.requests.lock().await;
-        Ok(requests
-            .iter()
+        let mut ordered = requests.iter().collect::<Vec<_>>();
+        if query.order == crate::MediaRequestOrder::OldestCreated {
+            ordered.sort_by(|left, right| {
+                (left.created_at, &left.id).cmp(&(right.created_at, &right.id))
+            });
+        }
+        Ok(ordered
+            .into_iter()
             .filter(|request| {
                 query
                     .facet
@@ -910,6 +968,12 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                             .any(|requester| &requester.user_id == user_id)
                     })
             })
+            .skip(if query.limit.is_some() {
+                query.offset
+            } else {
+                0
+            })
+            .take(query.limit.unwrap_or(usize::MAX))
             .cloned()
             .collect())
     }
@@ -952,6 +1016,44 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 .then_with(|| right.id.cmp(&left.id))
         });
         Ok(history)
+    }
+
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<crate::StagedMediaRequestMetadata>> {
+        Ok(self
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .get(staging_key)
+            .cloned())
+    }
+
+    async fn stage_metadata(&self, record: &crate::StagedMediaRequestMetadata) -> AppResult<()> {
+        self.staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .insert(record.staging_key.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: chrono::DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize> {
+        let mut staged = self.staged_metadata.lock().expect("staged metadata lock");
+        let stale: Vec<String> = staged
+            .values()
+            .filter(|record| record.staged_at < cutoff)
+            .take(limit)
+            .map(|record| record.staging_key.clone())
+            .collect();
+        for key in &stale {
+            staged.remove(key);
+        }
+        Ok(stale.len())
     }
 
     async fn latest_request_at_for_user(

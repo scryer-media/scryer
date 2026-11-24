@@ -126,10 +126,13 @@ while IFS="$tab" read -r name size ext season episode arr_score arr_formats; do
         ([$r.ruleSets[] | select(.isDraft) | .entries[] | "\(.code):\(.delta)"] | join(";")),
         ([$r.errors[] | .code] | join(";")) ]
     | @tsv' "$tmp/out.json")
-  status=$(printf '%s' "$line" | cut -f1)
-  draft_score=$(printf '%s' "$line" | cut -f2)
-  entries=$(printf '%s' "$line" | cut -f3)
-  errors=$(printf '%s' "$line" | cut -f4)
+  # Split the four @tsv fields; jq escapes tabs inside a field.
+  status=${line%%"$tab"*}
+  rest=${line#*"$tab"}
+  draft_score=${rest%%"$tab"*}
+  rest=${rest#*"$tab"}
+  entries=${rest%%"$tab"*}
+  errors=${rest#*"$tab"}
   if [ "$status" = match ]; then n_match=$((n_match + 1)); else n_mismatch=$((n_mismatch + 1)); fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$status" "$name" "$arr_score" "$draft_score" \
     "$arr_formats" "$entries" "$errors"

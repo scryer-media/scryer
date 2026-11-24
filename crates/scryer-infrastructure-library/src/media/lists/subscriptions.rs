@@ -27,7 +27,7 @@ const SUBSCRIPTION_COLUMNS: &str = "id, scope, owner_user_id, provider, source_t
 
 const ROUTE_COLUMNS: &str = "subscription_id, kind, library_id, quality_profile_id,
     root_folder_id, monitor_type, min_availability, use_season_folders, release_numbering,
-    tags_json";
+    tags_json, required_audio_languages_json, preferred_audio_languages_json";
 
 const RUN_COLUMNS: &str =
     "id, subscription_id, job_run_id, started_at, finished_at, outcome, counts_json, error_message";
@@ -193,6 +193,27 @@ impl ListSubscriptionRepository for ListStore {
         .await?;
         let mut subscriptions = self.hydrate_subscriptions(rows).await?;
         Ok(subscriptions.pop())
+    }
+
+    async fn get_by_ids(&self, ids: &[String]) -> AppResult<Vec<ListSubscription>> {
+        let mut subscriptions = Vec::with_capacity(ids.len());
+        // One statement for a page of ids; a longer list is split to stay
+        // under the bind limits.
+        for chunk in ids.chunks(SUBSCRIPTION_ID_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT {SUBSCRIPTION_COLUMNS} FROM list_subscriptions WHERE id IN ({placeholders})"
+                ),
+                &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+            )
+            .await?;
+            subscriptions.extend(self.hydrate_subscriptions(rows).await?);
+        }
+        Ok(subscriptions)
     }
 
     async fn list(&self, query: ListSubscriptionQuery) -> AppResult<Vec<ListSubscription>> {
@@ -464,6 +485,9 @@ impl ListStore {
     }
 }
 
+/// Subscription ids bound per statement of a read by ids.
+const SUBSCRIPTION_ID_CHUNK: usize = 10_000;
+
 const SUBSCRIPTION_WIDTH: usize = 36;
 
 fn count_arg(value: u64) -> SqlArg {
@@ -601,6 +625,8 @@ fn route_rows(subscription: &ListSubscription) -> AppResult<Vec<Vec<SqlArg>>> {
                 SqlArg::OptBool(route.use_season_folders),
                 SqlArg::OptText(route.release_numbering.clone()),
                 json_arg(&route.tags)?,
+                optional_json_arg(route.required_audio_languages.as_ref())?,
+                optional_json_arg(route.preferred_audio_languages.as_ref())?,
             ])
         })
         .collect()
@@ -623,7 +649,7 @@ async fn replace_routes_tx(
     SqlRuntime::execute_batch_insert(
         tx,
         &format!("INSERT INTO list_subscription_routes ({ROUTE_COLUMNS})"),
-        10,
+        12,
         rows,
         "",
     )
@@ -729,7 +755,17 @@ fn row_to_route(row: &SqlRow) -> AppResult<ListRoute> {
         use_season_folders: row.opt_bool("use_season_folders")?,
         release_numbering: row.opt_text("release_numbering")?,
         tags: json_column(row, "tags_json", "[]")?,
+        required_audio_languages: json_column(row, "required_audio_languages_json", "null")?,
+        preferred_audio_languages: json_column(row, "preferred_audio_languages_json", "null")?,
     })
+}
+
+/// A JSON column that is NULL when the route leaves the setting to inherit.
+fn optional_json_arg<T: serde::Serialize>(value: Option<&T>) -> AppResult<SqlArg> {
+    match value {
+        Some(value) => json_arg(value),
+        None => Ok(SqlArg::OptText(None)),
+    }
 }
 
 fn row_to_run(row: &SqlRow) -> AppResult<ListSyncRun> {

@@ -13,6 +13,9 @@ pub const OPTIONAL_AUDIO_LANGUAGES_KEY: &str = "audio.optional_languages";
 pub const OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY: &str =
     "audio.optional_languages_keep_searching";
 pub const TITLE_REQUIRED_AUDIO_OVERRIDE_KEY: &str = "audio.required_languages.title_override";
+/// A title's own preferred audio languages, in order. Absent means the title
+/// inherits its library's, then its facet's.
+pub const TITLE_PREFERRED_AUDIO_OVERRIDE_KEY: &str = "audio.preferred_languages.title_override";
 pub const AUDIO_PERSONA_MIGRATION_SENTINEL_KEY: &str = "audio_persona_settings_migrated";
 
 pub const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
@@ -41,6 +44,13 @@ pub(crate) const INDEXER_ROUTING_SERIES_DEFAULT_CATEGORIES: &[&str] = &["5000"];
 pub(crate) const INDEXER_ROUTING_ANIME_DEFAULT_CATEGORIES: &[&str] = &["5070"];
 pub const METADATA_LANGUAGE_KEY: &str = "metadata_language";
 pub const TITLE_METADATA_LANGUAGE_OVERRIDE_KEY: &str = "metadata_language.title_override";
+/// Every setting stored per title, under [`SETTINGS_SCOPE_SYSTEM`] with the
+/// title id as its scope id. A title delete prunes these rows.
+pub const TITLE_SCOPED_SETTING_KEYS: &[&str] = &[
+    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+    TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+    TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
+];
 pub const USE_SEASON_FOLDERS_KEY: &str = "rename.use_season_folders";
 /// Per-library initial monitoring choice in the Add and Request dialogs.
 pub const DEFAULT_MONITOR_TYPE_KEY: &str = "catalog.default_monitor_type";
@@ -106,26 +116,30 @@ pub const SKIP_LOGIN_FOR_LOCAL_IPS_KEY: &str = "auth.skip_login_for_local_ips";
 pub const MFA_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.mfa.require_config_step_up";
 pub const API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY: &str =
     "auth.api_keys.restrict_to_system_settings_users";
+/// Whether the built-in MCP endpoint answers. On by default.
+pub const MCP_ENABLED_KEY: &str = "auth.mcp.enabled";
+/// Overrides [`MCP_ENABLED_KEY`] while set.
+pub const MCP_ENABLED_ENV: &str = "SCRYER_MCP_ENABLED";
 pub const MFA_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.mfa.require_password_login";
 pub const LEGACY_TOTP_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.totp.require_config_step_up";
 pub const LEGACY_TOTP_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.totp.require_local_login";
 pub const TOTP_REQUIRE_JELLYFIN_LOGIN_KEY: &str = "auth.totp.require_jellyfin_login";
 pub const TOTP_REQUIRE_EMBY_LOGIN_KEY: &str = "auth.totp.require_emby_login";
-// ── Maintenance instance gates ──────────────────────────────────────────────
+// ── Lifecycle instance gates ──────────────────────────────────────────────
 // Instance-wide switches, every one of them off unless a row says otherwise.
 // They are deliberately not one JSON blob: each gate authorizes a different
 // blast radius, and a partially-written blob must never be able to turn a
 // stronger one on. A missing row reads as off, so losing the settings table
-// disarms maintenance rather than arming it.
+// disarms lifecycle rather than arming it.
 /// Lets the scheduled evaluator run at all. Off means no rule is evaluated and
 /// nothing is recorded.
-pub const MAINTENANCE_GATE_EVALUATION_KEY: &str = "maintenance.gate.evaluation";
+pub const LIFECYCLE_GATE_EVALUATION_KEY: &str = "lifecycle.gate.evaluation";
 /// Lets candidate results reach the API.
-pub const MAINTENANCE_GATE_RESULT_DISPLAY_KEY: &str = "maintenance.gate.result_display";
+pub const LIFECYCLE_GATE_RESULT_DISPLAY_KEY: &str = "lifecycle.gate.result_display";
 /// Low and medium risk actions.
-pub const MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY: &str = "maintenance.gate.reversible_effects";
+pub const LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY: &str = "lifecycle.gate.reversible_effects";
 /// High risk actions.
-pub const MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY: &str = "maintenance.gate.destructive_effects";
+pub const LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY: &str = "lifecycle.gate.destructive_effects";
 
 pub const RECYCLE_BIN_ENABLED_KEY: &str = "recycle_bin.enabled";
 pub const RECYCLE_BIN_PATH_KEY: &str = "recycle_bin.path";

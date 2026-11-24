@@ -46,7 +46,7 @@ use crate::queries::{
     title::TITLE_COLUMNS,
     title_search::{
         build_title_search_plan, delete_title_search_projection_tx, normalize_title_search_text,
-        push_ranked_title_matches_cte, replace_title_search_projection_pg_tx,
+        push_title_match_ranks_cte, replace_title_search_projection_pg_tx,
         replace_title_search_projection_tx,
     },
 };
@@ -136,10 +136,10 @@ ON CONFLICT (id) DO UPDATE SET
         ELSE titles.smg_identity_backfill_attempt_count
     END";
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
-/// See `media::search::media_file_store::STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT`:
-/// a same-path upgrade's staged replacement row is not a library file until the
-/// rename and the DB swap commit, so the title catalog must not count it either.
-const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
+// See `media::search::media_file_store::live_media_file_predicate`: a
+// same-path upgrade's staged replacement row is not a library file until the
+// rename and the DB swap commit, so the title catalog must not count it either.
+use scryer_application::{LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX};
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
 /// Advances once after every transaction that wrote a title's folder, gave a
@@ -418,11 +418,10 @@ impl TitleStore {
                         return Ok(titles);
                     }
                     _ => {
-                        // Same lane, same index, same ranks: the typo
-                        // tolerance is not a SQLite-only feature any more.
-                        let typo_ranks = match build_title_search_plan(facet.clone(), query) {
+                        // Same lanes, same index, same ranks as SQLite.
+                        let match_ranks = match build_title_search_plan(facet.clone(), query) {
                             Some(plan) => {
-                                scryer_infrastructure_library_search::resolve_typo_title_ranks(
+                                scryer_infrastructure_library_search::resolve_title_match_ranks(
                                     self.fuzzy.as_deref(),
                                     &plan,
                                 )
@@ -430,8 +429,11 @@ impl TitleStore {
                             }
                             None => Vec::new(),
                         };
-                        let (sql, args) =
-                            build_ranked_title_list_sql(facet, library_ids, query, &typo_ranks);
+                        let (sql, args) = build_ranked_title_list_sql(
+                            library_ids,
+                            &match_ranks,
+                            matches!(self.datastore, StoreDatastore::Postgres { .. }),
+                        );
                         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?
                     }
                 }
@@ -495,7 +497,7 @@ const TITLE_ID_LIST_BIND_CHUNK: usize = 900;
 /// superset. On Windows the matcher lowercases and treats `/` and `\` as one
 /// separator, so a stored `C:\Media\Show` has to be reachable from a scanned
 /// `c:/media/show`; both sides go through
-/// [`scryer_application::stored_paths::folder_path_lookup_key`] — in SQL,
+/// [`scryer_application::stored_paths::folder_path_lookup_key_for_platform`] — in SQL,
 /// `lower(replace(folder_path, '/', '\'))`, which sqlite and postgres both
 /// understand and which migration 0253 indexes.
 ///
@@ -688,11 +690,35 @@ fn title_name_equality_lanes(
                     .join(", ")
             ),
         };
+        // A rule set may read a catalog name in another script than the
+        // observed name's, so this lane alone can span scripts. The script
+        // stays an expression filter on the rows the key index returns.
+        let (lane_bucket, lane_args) = match query.romanization_scripts {
+            [] => (bucket.clone(), bucket_args.clone()),
+            [script] if *script == query.script => (bucket.clone(), bucket_args.clone()),
+            scripts => {
+                let mut lane_bucket = format!(
+                    "t.term_kind IN ('name', 'alias', 'tagged_alias') \
+                     AND (t.script || '') IN ({}) AND (t.numbers_key || '') = {{}}",
+                    sql_placeholders(scripts.len())
+                );
+                let mut lane_args = scripts
+                    .iter()
+                    .map(|script| SqlArg::Text((*script).to_string()))
+                    .collect::<Vec<_>>();
+                lane_args.push(SqlArg::Text(query.numbers_key.to_string()));
+                if let Some(facet) = query.facet {
+                    lane_bucket.push_str(" AND t.facet = {}");
+                    lane_args.push(SqlArg::Text(facet.to_string()));
+                }
+                (lane_bucket, lane_args)
+            }
+        };
         lanes.push(format!(
             "SELECT {lane_columns} FROM title_search_terms t \
-             WHERE {bucket} AND t.romanization_key {keys}"
+             WHERE {lane_bucket} AND t.romanization_key {keys}"
         ));
-        args.extend(bucket_args.iter().cloned());
+        args.extend(lane_args);
         args.extend(
             query
                 .romanization_keys
@@ -873,11 +899,19 @@ impl TitleRepository for TitleStore {
                 .entry(row.text("id")?)
                 .or_insert(row.text("facet")?);
         }
-        let ids = identities.keys().cloned().collect::<Vec<_>>();
+        if identities.is_empty() {
+            return Ok(Vec::new());
+        }
+        // The tag reads restate the selection instead of binding its ids, so
+        // the read is at most four statements at any catalog size.
         let mut tags =
-            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+            crate::media::canonical_tags::load_selected_title_metadata_tags_in_lowered_categories(
                 self.datastore.read_exec(),
-                &ids,
+                crate::media::canonical_tags::OwnerSelection {
+                    with_clause: &scope,
+                    cte: "selected",
+                    args: &args,
+                },
                 &["genre", "theme"],
             )
             .await?;
@@ -1510,6 +1544,36 @@ impl TitleRepository for TitleStore {
             .collect::<Vec<_>>();
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
         catalog_owned_title_records_from_rows(rows)
+    }
+
+    /// Served by `idx_titles_library_name` (`library_id, lower(name), id`),
+    /// which covers the filter, the order and the id.
+    async fn list_title_ids_for_libraries(
+        &self,
+        library_ids: &[String],
+        limit: Option<usize>,
+    ) -> AppResult<Vec<String>> {
+        if library_ids.is_empty() || limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let mut sql = format!(
+            "SELECT id FROM titles WHERE library_id IN ({}) ORDER BY LOWER(name), id",
+            vec!["{}"; library_ids.len()].join(", ")
+        );
+        let mut args = library_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        if let Some(limit) = limit {
+            sql.push_str(" LIMIT {}");
+            args.push(SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)));
+        }
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| row.text("id"))
+            .collect()
     }
 
     async fn list_for_libraries_without_external_ids(
@@ -2390,6 +2454,56 @@ impl TitleRepository for TitleStore {
         Ok(titles)
     }
 
+    async fn get_by_ids_with_projection(
+        &self,
+        ids: &[String],
+        projection: TitleListProjection,
+    ) -> AppResult<Vec<Title>> {
+        if projection.include_external_ids
+            || projection.row == scryer_application::TitleRowProjection::ALL
+        {
+            return self.get_by_ids(ids).await;
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let columns = TITLE_COLUMNS
+            .split(',')
+            .map(str::trim)
+            .filter(|column| title_column_selected(column, projection))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (ids, per_statement) = id_list_statements(
+            ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            TITLE_ID_LIST_BIND_CHUNK,
+        );
+        let base_path = normalized_base_path();
+        let mut titles = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("SELECT {columns} FROM titles WHERE id IN ({placeholders})");
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            for row in &rows {
+                titles.push(title_from_projection_row(
+                    &SelectedTitleRow { row, projection },
+                    PersistedTitleReadMode::Presentation,
+                    false,
+                    &base_path,
+                )?);
+            }
+        }
+        if projection.include_canonical_tags {
+            attach_metadata_tags_to_titles(self.datastore.read_exec(), &mut titles).await?;
+        }
+        Ok(titles)
+    }
+
     async fn list_library_ids_for_titles(
         &self,
         ids: &[String],
@@ -2433,6 +2547,70 @@ impl TitleRepository for TitleStore {
         title_ids: &[String],
     ) -> AppResult<Vec<(String, TitleRatingSummary)>> {
         load_title_ratings_batch(&self.datastore, title_ids).await
+    }
+
+    async fn list_title_content_ratings(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Option<Vec<scryer_application::ContentRating>>)>> {
+        let mut by_title = crate::media::title_content_ratings::load_title_content_ratings(
+            self.datastore.read_exec(),
+            title_ids,
+        )
+        .await?;
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), by_title.remove(id)))
+            .collect())
+    }
+
+    async fn list_title_awards(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Option<Vec<scryer_application::TitleAward>>)>> {
+        let mut by_title =
+            crate::media::title_awards::load_title_awards(self.datastore.read_exec(), title_ids)
+                .await?;
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), by_title.remove(id)))
+            .collect())
+    }
+
+    async fn list_title_episode_shapes(
+        &self,
+        title_ids: &[String],
+        today: chrono::NaiveDate,
+    ) -> AppResult<Vec<(String, scryer_application::TitleEpisodeShape)>> {
+        load_title_episode_shapes(&self.datastore, title_ids, today).await
+    }
+
+    async fn list_title_genres(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Vec<String>)>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut by_id =
+            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+                self.datastore.read_exec(),
+                title_ids,
+                &["genre"],
+            )
+            .await?;
+        Ok(title_ids
+            .iter()
+            .map(|id| {
+                let genres = by_id
+                    .remove(id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|tag| tag.name)
+                    .collect();
+                (id.clone(), genres)
+            })
+            .collect())
     }
 
     async fn get_title_credits(&self, title_id: &str) -> AppResult<Vec<TitleCredit>> {
@@ -3429,6 +3607,8 @@ impl TitleRepository for TitleStore {
                 let metadata = metadata.clone();
                 Box::pin(async move {
                     let ratings = metadata.ratings.clone();
+                    let content_ratings = metadata.content_ratings.clone();
+                    let awards = metadata.awards.clone();
                     let credits = metadata.credits.clone();
                     let canonical_tags = metadata.canonical_tags.clone();
                     let mut title = load_title_canonical_tx_or_not_found(tx, &id, true).await?;
@@ -3456,6 +3636,19 @@ impl TitleRepository for TitleStore {
                     // None and keep the cached rows.
                     if let Some(credits) = credits {
                         replace_title_credits_tx(tx, &title.id, &credits).await?;
+                    }
+                    // Same Some/None contract again: hydration replaces the set.
+                    if let Some(content_ratings) = content_ratings {
+                        crate::media::title_content_ratings::replace_title_content_ratings_tx(
+                            tx,
+                            &title.id,
+                            &content_ratings,
+                        )
+                        .await?;
+                    }
+                    if let Some(awards) = awards {
+                        crate::media::title_awards::replace_title_awards_tx(tx, &title.id, &awards)
+                            .await?;
                     }
                     load_title_tx_or_not_found(tx, &id, true).await
                 })
@@ -3521,6 +3714,11 @@ impl TitleRepository for TitleStore {
                 replace_title_metadata_ratings_tx(tx, &title.id, &TitleRatingSummary::default())
                     .await?;
                 replace_title_credits_tx(tx, &title.id, &[]).await?;
+                // A rematch leaves both sets not stored, so rules read them as
+                // unknown until the new match is hydrated.
+                crate::media::title_content_ratings::clear_title_content_ratings_tx(tx, &title.id)
+                    .await?;
+                crate::media::title_awards::clear_title_awards_tx(tx, &title.id).await?;
                 load_title_tx_or_not_found(tx, &id, true).await
             })
         })
@@ -3959,10 +4157,11 @@ async fn list_titles_via_sqlite_title_search_query(
         return Ok(Vec::new());
     };
 
-    let typo_ranks =
-        scryer_infrastructure_library_search::resolve_typo_title_ranks(fuzzy, &search_plan).await?;
+    let match_ranks =
+        scryer_infrastructure_library_search::resolve_title_match_ranks(fuzzy, &search_plan)
+            .await?;
     let mut builder = QueryBuilder::<Sqlite>::new("");
-    push_ranked_title_matches_cte(&mut builder, &search_plan, &typo_ranks);
+    push_title_match_ranks_cte(&mut builder, &match_ranks);
     builder.push(format!(
         "SELECT {TITLE_COLUMNS} FROM ranked_title_matches
          JOIN titles ON titles.id = ranked_title_matches.title_id
@@ -5721,7 +5920,7 @@ fn build_title_catalog_where_sql(
     }
 
     if let Some(window) = filter.release_date_window.as_ref()
-        && let Some(clause) = title_catalog_release_date_window_clause(dialect, window, &mut args)
+        && let Some(clause) = title_catalog_release_date_window_clause(window, &mut args)
     {
         clauses.push(clause);
     }
@@ -5729,82 +5928,38 @@ fn build_title_catalog_where_sql(
     (clauses.join(" AND "), args)
 }
 
-/// The movie release date lists a title's availability is read from.
-const TITLE_RELEASE_DATE_LISTS: &str = "'theatrical_dates', 'digital_dates', 'physical_dates', \
-     'any_market_theatrical_dates', 'any_market_digital_dates', 'any_market_physical_dates'";
-
 /// Titles holding a stored release date that may fall inside `window`. See
 /// [`scryer_application::TitleReleaseDateWindow`] for what "may" admits.
 ///
-/// Nothing here is indexed: the dates live in two text columns and a JSON
-/// document. What it saves is decoding every title row in the application to
-/// throw nearly all of them away.
+/// Reads `title_release_days`, which triggers on `titles` derive from the two
+/// date columns and the movie release date lists: one row per distinct day,
+/// and `release_day = ''` for a title holding a value the store cannot judge,
+/// which every window keeps. Both arms are range reads of the
+/// `(release_day, title_id)` index.
 fn title_catalog_release_date_window_clause(
-    dialect: TitleCatalogSqlDialect,
     window: &scryer_application::TitleReleaseDateWindow,
     args: &mut Vec<SqlArg>,
 ) -> Option<String> {
     if window.earliest.is_none() && window.latest.is_none() {
         return None;
     }
-    let mut date_may_fall_inside = |value: &str| -> String {
-        let leading_date = match dialect {
-            TitleCatalogSqlDialect::Sqlite => {
-                format!("{value} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'")
-            }
-            TitleCatalogSqlDialect::Postgres => {
-                format!("{value} ~ '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'")
-            }
-        };
-        let mut bounds = Vec::new();
-        if let Some(earliest) = window.earliest.as_ref() {
-            bounds.push(format!("SUBSTR({value}, 1, 10) >= {{}}"));
-            args.push(SqlArg::Text(earliest.clone()));
-        }
-        if let Some(latest) = window.latest.as_ref() {
-            bounds.push(format!("SUBSTR({value}, 1, 10) <= {{}}"));
-            args.push(SqlArg::Text(latest.clone()));
-        }
-        let bounds = bounds.join(" AND ");
-        // A NULL value takes the ELSE branch, where TRIM(NULL) keeps it out.
-        format!("(CASE WHEN {leading_date} THEN {bounds} ELSE TRIM({value}) <> '' END)")
-    };
-    let first_aired = date_may_fall_inside("titles.first_aired");
-    let digital = date_may_fall_inside("titles.digital_release_date");
-    let listed = date_may_fall_inside("release_date.value");
-    let listed = match dialect {
-        // Only an array is walked: `json_each` over anything else would read
-        // a scalar such as the market code as JSON. A document SQLite cannot
-        // parse is kept; decoding it in the application reports the error.
-        TitleCatalogSqlDialect::Sqlite => format!(
-            "(CASE WHEN json_valid(titles.movie_release_dates_json) THEN EXISTS (
-                SELECT 1
-                  FROM json_each(titles.movie_release_dates_json) AS release_list,
-                       json_each(CASE WHEN release_list.type = 'array'
-                                      THEN release_list.value ELSE '[]' END) AS release_date
-                 WHERE release_list.key IN ({TITLE_RELEASE_DATE_LISTS})
-                   AND {listed}
-            ) ELSE titles.movie_release_dates_json IS NOT NULL END)"
-        ),
-        TitleCatalogSqlDialect::Postgres => format!(
-            "EXISTS (
-                SELECT 1
-                  FROM jsonb_each(
-                           CASE WHEN jsonb_typeof(titles.movie_release_dates_json::jsonb) = 'object'
-                                THEN titles.movie_release_dates_json::jsonb
-                                ELSE jsonb_build_object() END
-                       ) AS release_list(key, value)
-                 CROSS JOIN LATERAL jsonb_array_elements_text(
-                           CASE WHEN jsonb_typeof(release_list.value) = 'array'
-                                THEN release_list.value
-                                ELSE jsonb_build_array() END
-                       ) AS release_date(value)
-                 WHERE release_list.key IN ({TITLE_RELEASE_DATE_LISTS})
-                   AND {listed}
-            )"
-        ),
-    };
-    Some(format!("({first_aired} OR {digital} OR {listed})"))
+    let mut bounds = Vec::new();
+    if let Some(earliest) = window.earliest.as_ref() {
+        bounds.push("release_day >= {}");
+        args.push(SqlArg::Text(earliest.clone()));
+    }
+    if let Some(latest) = window.latest.as_ref() {
+        bounds.push("release_day <= {}");
+        args.push(SqlArg::Text(latest.clone()));
+    }
+    let bounds = bounds.join(" AND ");
+    Some(format!(
+        "titles.id IN (
+            SELECT title_id FROM title_release_days WHERE {bounds}
+            UNION ALL
+            SELECT title_id FROM title_release_days WHERE release_day = ''
+        )"
+    ))
 }
 
 fn title_catalog_tag_filter_clause(
@@ -5885,17 +6040,25 @@ fn title_catalog_content_status_values(statuses: &[TitleCatalogContentStatus]) -
     normalized
 }
 
-/// Sorts whose join aggregates per-title rows. Their join reads `scoped_titles`,
-/// which [`build_title_catalog_page_sql`] defines from the page's own scope, so
-/// the aggregate covers only the titles the page can show instead of the whole
-/// database. Each aggregate is per title, so a title in scope gets the same value
-/// either way.
+/// Sorts whose join aggregates or ranks per-title rows. Their join reads
+/// `scoped_titles`, which [`build_title_catalog_page_sql`] defines from the page's
+/// own scope, so the join covers only the titles the page can show instead of the
+/// whole database. Each value is per title, so a title in scope gets the same
+/// value either way.
 fn title_catalog_sort_join_is_scoped(key: TitleCatalogSortKey) -> bool {
     matches!(
         key,
-        TitleCatalogSortKey::Size | TitleCatalogSortKey::Episodes | TitleCatalogSortKey::Quality
-    )
+        TitleCatalogSortKey::Size
+            | TitleCatalogSortKey::Episodes
+            | TitleCatalogSortKey::Quality
+            | TitleCatalogSortKey::MediaResolution
+            | TitleCatalogSortKey::MediaHdr
+            | TitleCatalogSortKey::MediaAudioCodec
+    ) || title_catalog_rating_sources_for_sort_key(key).is_some()
 }
+
+const TITLE_CATALOG_SCOPED_EXTERNAL_RATING_JOIN: &str =
+    "JOIN scoped_titles ON scoped_titles.id = ter.title_id";
 
 const TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN: &str =
     "JOIN scoped_titles ON scoped_titles.id = mf.title_id";
@@ -5936,7 +6099,10 @@ fn build_title_catalog_sort_join_sql(
         | TitleCatalogSortKey::MediaHdr
         | TitleCatalogSortKey::MediaAudioCodec => format!(
             " LEFT JOIN ({}) catalog_movie_media ON catalog_movie_media.title_id = titles.id",
-            title_catalog_movie_media_subquery(dialect)
+            title_catalog_movie_media_subquery_scoped(
+                dialect,
+                TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN
+            )
         ),
         // A title has at most one summary (unique on `title_id`), so this is a plain
         // join. The two columns are projected rather than the table joined bare
@@ -5962,7 +6128,10 @@ fn build_title_catalog_sort_join_sql(
             let sources = title_catalog_rating_sources_for_sort_key(key).unwrap_or(&[]);
             format!(
                 " LEFT JOIN ({}) catalog_external_rating ON catalog_external_rating.title_id = titles.id",
-                title_catalog_external_rating_subquery(sources)
+                title_catalog_external_rating_subquery_scoped(
+                    sources,
+                    TITLE_CATALOG_SCOPED_EXTERNAL_RATING_JOIN
+                )
             )
         }
         TitleCatalogSortKey::Title
@@ -6044,9 +6213,12 @@ fn build_title_catalog_order_sql(
             "ORDER BY created_at {direction}, {}",
             title_catalog_ascending_tie_order_sql(dialect)
         ),
+        // Rows that tie on the two leading terms hold the same year, so the title
+        // order's own year terms could never break a tie here and are left out:
+        // the terms are then exactly the keys of `idx_titles_library_year_order_*`.
         TitleCatalogSortKey::Year => format!(
             "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, year {direction}, {}",
-            title_catalog_ascending_tie_order_sql(dialect)
+            title_catalog_ascending_name_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Runtime => format!(
             "ORDER BY CASE WHEN runtime_minutes IS NULL THEN 1 ELSE 0 END ASC, runtime_minutes {direction}, {}",
@@ -6131,6 +6303,20 @@ fn title_catalog_ascending_tie_order_sql(dialect: TitleCatalogSqlDialect) -> Str
     title_catalog_title_order_sql(dialect, "ASC")
 }
 
+/// [`title_catalog_ascending_tie_order_sql`] without its year terms, for an
+/// order whose leading terms already fix the year.
+fn title_catalog_ascending_name_tie_order_sql(dialect: TitleCatalogSqlDialect) -> String {
+    let collation = match dialect {
+        TitleCatalogSqlDialect::Sqlite => "BINARY",
+        TitleCatalogSqlDialect::Postgres => "\"C\"",
+    };
+    format!(
+        "catalog_sort_key COLLATE {collation} ASC, \
+         catalog_name_tie_key COLLATE {collation} ASC, \
+         titles.id COLLATE {collation} ASC"
+    )
+}
+
 fn nullable_text_missing_direction(direction: SortDirection) -> &'static str {
     match direction {
         SortDirection::Asc => "ASC",
@@ -6150,13 +6336,15 @@ fn title_catalog_live_media_file_predicate(dialect: TitleCatalogSqlDialect, alia
         TitleCatalogSqlDialect::Sqlite => {
             format!(
                 "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
-                  AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0)"
+                  AND instr({alias}.file_path, '/{UPGRADE_REPLACEMENT_PREFIX}') = 0
+                  AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0)"
             )
         }
         TitleCatalogSqlDialect::Postgres => {
             format!(
                 "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
-                  AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0)"
+                  AND POSITION('/{UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
+                  AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0)"
             )
         }
     }
@@ -6273,7 +6461,13 @@ fn title_catalog_normalized_rating_source_expression(alias: &str) -> String {
     format!("LOWER(REPLACE(REPLACE(REPLACE(TRIM({alias}.source), ' ', ''), '_', ''), '-', ''))")
 }
 
-fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
+/// A title's best rating from the given sources, on the 0-10 scale.
+///
+/// The source test is the expression `idx_title_metadata_external_ratings_title_source_key`
+/// is built on, so it must stay spelled exactly as that index spells it.
+/// `scope_join` narrows the ratings read to whole titles; the value is per title,
+/// so a title it keeps gets the same one it would unscoped.
+fn title_catalog_external_rating_subquery_scoped(sources: &[&str], scope_join: &str) -> String {
     let source_list = sources
         .iter()
         .map(|source| sql_string_literal(source))
@@ -6287,6 +6481,7 @@ fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
                     ELSE ter.normalized
                 END) AS normalized
            FROM title_metadata_external_ratings ter
+           {scope_join}
           WHERE {source_expression} IN ({source_list})
           GROUP BY ter.title_id"
     )
@@ -6418,7 +6613,14 @@ fn title_catalog_media_quality_subquery_scoped(
     )
 }
 
-fn title_catalog_movie_media_subquery(dialect: TitleCatalogSqlDialect) -> String {
+/// The file a movie's media columns describe: its largest live primary file.
+///
+/// `scope_join` narrows the files read to whole titles; every window partition is
+/// one title, so a title it keeps picks the same file it would unscoped.
+fn title_catalog_movie_media_subquery_scoped(
+    dialect: TitleCatalogSqlDialect,
+    scope_join: &str,
+) -> String {
     let resolution = title_catalog_movie_media_resolution_expression("mf");
     let resolution_rank = title_catalog_movie_media_resolution_rank_expression("mf");
     let hdr_rank = title_catalog_movie_media_hdr_rank_expression("mf");
@@ -6438,6 +6640,7 @@ fn title_catalog_movie_media_subquery(dialect: TitleCatalogSqlDialect) -> String
                                    mf.id DESC
                        ) AS media_row
                   FROM media_files mf
+                  {scope_join}
                   JOIN titles t ON t.id = mf.title_id
                  WHERE t.facet = 'movie'
                    AND {}
@@ -6559,57 +6762,22 @@ fn build_title_page_after_id_sql(
     (sql, args)
 }
 
+/// The ranked search page. The facet is already in `match_ranks`: the lanes
+/// that produced them were asked for it.
 fn build_ranked_title_list_sql(
-    facet: Option<MediaFacet>,
     library_ids: Option<&[String]>,
-    query: &str,
-    typo_ranks: &[(String, i64)],
+    match_ranks: &[(String, i64)],
+    postgres: bool,
 ) -> (String, Vec<SqlArg>) {
-    let normalized = normalize_title_search_text(query);
     let mut sql = format!(
         "SELECT {TITLE_COLUMNS}
            FROM titles
-           JOIN (
-                SELECT title_id, MIN(rank) AS rank FROM (
-                SELECT title_id,
-                       MIN(
-                           CASE
-                               WHEN normalized_term = {{}} THEN 0
-                               WHEN normalized_term LIKE {{}} THEN 1000
-                               WHEN normalized_term LIKE {{}} THEN 2000
-                               ELSE 3000
-                           END + weight
-                       ) AS rank
-                  FROM title_search_terms"
+           JOIN ({ranks}) ranked_titles ON ranked_titles.title_id = titles.id",
+        ranks = scryer_infrastructure_library_search::title_match_ranks_rows_sql(postgres),
     );
-    let mut where_clauses = Vec::new();
-    let mut args = vec![
-        SqlArg::Text(normalized.clone()),
-        SqlArg::Text(format!("{normalized}%")),
-        SqlArg::Text(format!("%{normalized}%")),
-    ];
-
-    if let Some(facet) = facet {
-        where_clauses.push("facet = {}");
-        args.push(SqlArg::Text(facet.as_str().to_string()));
-    }
-    where_clauses.push("term_kind NOT LIKE '%_token'");
-    where_clauses.push("normalized_term LIKE {}");
-    args.push(SqlArg::Text(format!("%{normalized}%")));
-
-    sql.push_str(" WHERE ");
-    sql.push_str(&where_clauses.join(" AND "));
-    sql.push_str(" GROUP BY title_id");
-    for (title_id, rank) in typo_ranks {
-        sql.push_str(" UNION ALL SELECT {} AS title_id, {} AS rank");
-        args.push(SqlArg::Text(title_id.clone()));
-        args.push(SqlArg::I64(*rank));
-    }
-    sql.push_str(
-        " ) combined_title_matches
-           GROUP BY title_id
-           ) ranked_titles ON ranked_titles.title_id = titles.id",
-    );
+    let mut args = vec![SqlArg::Text(
+        scryer_infrastructure_library_search::title_match_ranks_json(match_ranks),
+    )];
 
     if let Some(library_ids) = library_ids {
         if library_ids.is_empty() {
@@ -7111,17 +7279,21 @@ async fn resolve_pending_import_for_created_title_tx(
     title: &Title,
 ) -> AppResult<()> {
     if title.facet == MediaFacet::Movie {
+        // A folder ownership conflict row is bound to the title that already
+        // owns another folder; matching it to a new title replaces that
+        // binding, and the other title is not touched.
         let rows = SqlRuntime::execute(
             SqlExec::Tx(tx),
             "DELETE FROM library_scan_unmatched_items
               WHERE id = {}
                 AND library_id = {}
                 AND facet = {}
-                AND title_id IS NULL",
+                AND (title_id IS NULL OR reason_code = {})",
             &[
                 SqlArg::Text(pending_import_id.to_string()),
                 SqlArg::Text(title.library_id.clone()),
                 SqlArg::Text(title.facet.as_str().to_string()),
+                SqlArg::Text(scryer_application::location::conflicts::PENDING_REASON.to_string()),
             ],
         )
         .await?;
@@ -7138,10 +7310,7 @@ async fn resolve_pending_import_for_created_title_tx(
     }
 
     let now = Utc::now();
-    let updated_at = match &*tx {
-        SqlTx::Sqlite(_) => SqlArg::Text(now.to_rfc3339()),
-        SqlTx::Postgres(_) => SqlArg::Timestamp(now),
-    };
+    let updated_at = SqlArg::Timestamp(now);
     let rows = SqlRuntime::execute(
         SqlExec::Tx(tx),
         "UPDATE library_scan_unmatched_items
@@ -7448,6 +7617,114 @@ async fn load_title_ratings(
     Ok(ratings.remove(title_id).unwrap_or_default())
 }
 
+/// The grouped read behind [`TitleRepository::list_title_episode_shapes`].
+///
+/// One statement per bounded chunk of title ids, grouped by title. The id
+/// filter is served by `idx_episodes_title (title_id, season_number)`, the
+/// season join by the `collections` key, and the file probe by
+/// `idx_file_episode_map_episode` and the `media_files` key. Episodes count the
+/// way the catalog's episode progress counts them: regular seasons only, and a
+/// file only when it is a live primary file not awaiting review.
+async fn load_title_episode_shapes(
+    datastore: &StoreDatastore,
+    title_ids: &[String],
+    today: chrono::NaiveDate,
+) -> AppResult<Vec<(String, scryer_application::TitleEpisodeShape)>> {
+    if title_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dialect = title_catalog_dialect_for_datastore(datastore);
+    let today = today.format("%Y-%m-%d").to_string();
+    // Today is bound twice per statement, ahead of the ids.
+    let (ids, per_statement) = id_list_statements(
+        title_ids,
+        1,
+        2,
+        max_binds(&datastore.read_exec()),
+        TITLE_ID_LIST_BIND_CHUNK,
+    );
+    let season_number = match dialect {
+        TitleCatalogSqlDialect::Sqlite => {
+            "CASE WHEN trim(e.season_number) <> ''
+                  AND trim(e.season_number) NOT GLOB '*[^0-9]*'
+                 THEN CAST(trim(e.season_number) AS INTEGER) END"
+        }
+        TitleCatalogSqlDialect::Postgres => {
+            "CASE WHEN trim(e.season_number) ~ '^[0-9]+$'
+                 THEN CAST(trim(e.season_number) AS BIGINT) END"
+        }
+    };
+    let monitored = title_catalog_bool_column_is_true(dialect, "e.monitored");
+    let live_file = title_catalog_live_media_file_predicate(dialect, "mf");
+    let mut shapes = Vec::new();
+    for chunk in ids.chunks(per_statement) {
+        let placeholders = std::iter::repeat_n("{}", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT episode.title_id,
+                    COUNT(DISTINCT episode.collection_id) AS season_count,
+                    COALESCE(SUM(episode.aired), 0) AS aired_episode_count,
+                    COALESCE(SUM(1 - episode.aired), 0) AS unaired_episode_count,
+                    COALESCE(SUM(episode.aired * episode.has_file), 0) AS aired_episode_file_count,
+                    COALESCE(SUM(episode.aired * episode.monitored * (1 - episode.has_file)), 0)
+                        AS missing_episode_count,
+                    MAX(episode.season_number) AS latest_season_number,
+                    MAX(CASE WHEN episode.aired = 1 THEN episode.air_day END)
+                        AS latest_aired_episode_date,
+                    MIN(CASE WHEN episode.upcoming = 1 THEN episode.air_day END)
+                        AS next_episode_air_date
+               FROM (
+                    SELECT e.title_id,
+                           e.collection_id,
+                           {season_number} AS season_number,
+                           CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
+                           substr(trim(e.air_date), 1, 10) AS air_day,
+                           CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                                 AND substr(trim(e.air_date), 1, 10) <= {{}}
+                                THEN 1 ELSE 0 END AS aired,
+                           CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                                 AND substr(trim(e.air_date), 1, 10) > {{}}
+                                THEN 1 ELSE 0 END AS upcoming,
+                           CASE WHEN EXISTS (
+                                SELECT 1
+                                  FROM file_episode_map fem
+                                  JOIN media_files mf ON mf.id = fem.file_id
+                                 WHERE fem.episode_id = e.id
+                                   AND fem.role = 'primary'
+                                   AND mf.scan_status <> 'review_required'
+                                   AND {live_file}
+                           ) THEN 1 ELSE 0 END AS has_file
+                      FROM episodes e
+                     INNER JOIN collections c ON c.id = e.collection_id
+                     WHERE e.title_id IN ({placeholders})
+                       AND c.collection_type <> 'specials'
+                       AND c.collection_index <> '0'
+               ) episode
+              GROUP BY episode.title_id"
+        );
+        let mut args = vec![SqlArg::Text(today.clone()), SqlArg::Text(today.clone())];
+        args.extend(chunk.iter().cloned().map(SqlArg::Text));
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await?;
+        for row in &rows {
+            shapes.push((
+                row.text("title_id")?,
+                scryer_application::TitleEpisodeShape {
+                    season_count: row.i64("season_count")?,
+                    aired_episode_count: row.i64("aired_episode_count")?,
+                    unaired_episode_count: row.i64("unaired_episode_count")?,
+                    aired_episode_file_count: row.i64("aired_episode_file_count")?,
+                    missing_episode_count: row.i64("missing_episode_count")?,
+                    latest_season_number: row.opt_i64("latest_season_number")?,
+                    latest_aired_episode_date: row.opt_text("latest_aired_episode_date")?,
+                    next_episode_air_date: row.opt_text("next_episode_air_date")?,
+                },
+            ));
+        }
+    }
+    Ok(shapes)
+}
+
 async fn load_title_ratings_batch(
     datastore: &StoreDatastore,
     title_ids: &[String],
@@ -7689,6 +7966,14 @@ mod external_id_presence_tests;
 
 #[cfg(test)]
 mod catalog_order_tests;
+#[cfg(test)]
+mod catalog_sort_scope_tests;
+#[cfg(test)]
+mod release_day_tests;
+#[cfg(test)]
+mod search_lane_tests;
+#[cfg(test)]
+mod wanted_list_tests;
 
 #[cfg(test)]
 mod affinity_revision_tests;
@@ -7767,139 +8052,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[tokio::test]
-    async fn release_date_window_keeps_every_title_that_may_fall_inside() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT NOT NULL, facet TEXT NOT NULL, \
-             first_aired TEXT, digital_release_date TEXT, movie_release_dates_json TEXT)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        for (id, facet, first_aired, digital, listed) in [
-            (
-                "listed-theatrical-inside",
-                "movie",
-                None,
-                None,
-                Some(r#"{"market":"US","theatrical_dates":["2031-03-15"]}"#),
-            ),
-            (
-                "listed-any-market-digital-on-latest",
-                "movie",
-                None,
-                None,
-                Some(r#"{"any_market_digital_dates":["2031-04-30T22:00:00Z"]}"#),
-            ),
-            (
-                "first-aired-on-earliest",
-                "movie",
-                Some("2031-03-01"),
-                None,
-                None,
-            ),
-            ("digital-inside", "movie", None, Some("2031-04-02"), None),
-            (
-                "every-date-outside",
-                "movie",
-                Some("2030-12-31"),
-                Some("2031-05-01"),
-                Some(r#"{"physical_dates":["2031-02-28","2032-01-01"]}"#),
-            ),
-            (
-                "non-canonical-date",
-                "movie",
-                Some("Spring 2031"),
-                None,
-                None,
-            ),
-            ("blank-dates", "movie", Some("  "), Some(""), None),
-            (
-                "date-only-outside-the-lists",
-                "movie",
-                None,
-                None,
-                Some(r#"{"market":"2031-03-15","theatrical_dates":"2031-03-15"}"#),
-            ),
-            ("unparseable-json", "movie", None, None, Some("{not json")),
-            ("series-inside", "series", Some("2031-03-15"), None, None),
-        ] {
-            sqlx::query("INSERT INTO titles VALUES (?, 'library-movies', ?, ?, ?, ?)")
-                .bind(id)
-                .bind(facet)
-                .bind(first_aired)
-                .bind(digital)
-                .bind(listed)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-
-        let filter = TitleCatalogFilter {
-            release_date_window: Some(scryer_application::TitleReleaseDateWindow {
-                earliest: Some("2031-03-01".to_string()),
-                latest: Some("2031-04-30".to_string()),
-            }),
-            ..Default::default()
-        };
-        let (predicate, args) = build_title_catalog_where_sql(
-            Some(MediaFacet::Movie),
-            &["library-movies".to_string()],
-            None,
-            &filter,
-            TitleCatalogSqlDialect::Sqlite,
-        );
-        let datastore =
-            StoreDatastore::sqlite(pool, std::sync::Arc::new(tokio::sync::Mutex::new(())));
-        let rows = SqlRuntime::fetch_all(
-            datastore.read_exec(),
-            &format!("SELECT id FROM titles WHERE {predicate} ORDER BY id"),
-            &args,
-        )
-        .await
-        .unwrap();
-        let found = rows
-            .iter()
-            .map(|row| row.text("id").unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            found,
-            vec![
-                "digital-inside".to_string(),
-                "first-aired-on-earliest".to_string(),
-                "listed-any-market-digital-on-latest".to_string(),
-                "listed-theatrical-inside".to_string(),
-                "non-canonical-date".to_string(),
-                "unparseable-json".to_string(),
-            ]
-        );
-
-        let unbounded = TitleCatalogFilter {
-            release_date_window: Some(scryer_application::TitleReleaseDateWindow::default()),
-            ..Default::default()
-        };
-        let (unbounded_predicate, _) = build_title_catalog_where_sql(
-            Some(MediaFacet::Movie),
-            &["library-movies".to_string()],
-            None,
-            &unbounded,
-            TitleCatalogSqlDialect::Sqlite,
-        );
-        let (no_window_predicate, _) = build_title_catalog_where_sql(
-            Some(MediaFacet::Movie),
-            &["library-movies".to_string()],
-            None,
-            &TitleCatalogFilter::default(),
-            TitleCatalogSqlDialect::Sqlite,
-        );
-        assert_eq!(unbounded_predicate, no_window_predicate);
     }
 
     #[test]
@@ -8303,6 +8455,43 @@ mod tests {
             .collect()
     }
 
+    /// The batched genre read returns each title's genre names in tag order,
+    /// an empty list for a title with none, and reads past one id chunk.
+    #[tokio::test]
+    async fn title_genres_are_read_in_one_batch_per_chunk() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        let tags = "title_metadata_tags";
+        insert_tag_row(&pool, tags, &["emberfall", "drama", "Genre", "Drama"], 1).await;
+        insert_tag_row(&pool, tags, &["emberfall", "action", "genre", "Action"], 0).await;
+        insert_tag_row(&pool, tags, &["emberfall", "heist", "theme", "Heist"], 0).await;
+        insert_tag_row(&pool, tags, &["ashgrove", "studio", "studio", "Studio"], 0).await;
+        let mut ids = vec!["emberfall".to_string(), "ashgrove".to_string()];
+        ids.extend((0..2_100).map(|index| format!("fixture-title-{index}")));
+        insert_tag_row(
+            &pool,
+            tags,
+            &["fixture-title-2099", "mystery", "genre", "Mystery"],
+            0,
+        )
+        .await;
+
+        let store = TitleStore::new(datastore);
+        let genres: std::collections::HashMap<_, _> = store
+            .list_title_genres(&ids)
+            .await
+            .expect("genres load")
+            .into_iter()
+            .collect();
+
+        assert_eq!(genres.len(), ids.len());
+        assert_eq!(
+            genres["emberfall"],
+            vec!["Action".to_string(), "Drama".to_string()]
+        );
+        assert!(genres["ashgrove"].is_empty());
+        assert_eq!(genres["fixture-title-2099"], vec!["Mystery".to_string()]);
+    }
+
     #[tokio::test]
     async fn discovery_affinity_split_tag_read_matches_the_joined_read() {
         let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
@@ -8398,6 +8587,153 @@ mod tests {
                 expected_tag("action", "genre", "Action", &[], &[]),
             ]
         );
+    }
+
+    /// The affinity read as it was when its tag reads bound the selected ids,
+    /// in chunks of owner ids.
+    async fn id_list_reference_affinity_titles(
+        datastore: &StoreDatastore,
+        library_ids: &[String],
+        run_id: Option<&str>,
+    ) -> Vec<(String, MediaFacet, Vec<CanonicalMediaTag>)> {
+        let libraries = std::iter::repeat_n("{}", library_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args = library_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        args.push(SqlArg::OptText(run_id.map(str::to_owned)));
+        args.extend(library_ids.iter().cloned().map(SqlArg::Text));
+        let sql = format!(
+            "WITH scoped AS (SELECT id, facet FROM titles WHERE library_id IN ({libraries})),
+             submitted AS (SELECT DISTINCT t.id, t.facet FROM scoped t
+                 JOIN discovery_submitted_subjects s ON s.title_id = t.id
+                 WHERE s.run_id = {{}} AND s.library_id IN ({libraries})),
+             selected AS (SELECT * FROM submitted UNION ALL
+                 SELECT * FROM scoped WHERE NOT EXISTS (SELECT 1 FROM submitted))
+             SELECT s.id, s.facet FROM selected s"
+        );
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+            .await
+            .unwrap();
+        let mut identities = BTreeMap::new();
+        for row in &rows {
+            identities
+                .entry(row.text("id").unwrap())
+                .or_insert(row.text("facet").unwrap());
+        }
+        let ids = identities.keys().cloned().collect::<Vec<_>>();
+        let mut tags =
+            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+                datastore.read_exec(),
+                &ids,
+                &["genre", "theme"],
+            )
+            .await
+            .unwrap();
+        identities
+            .into_iter()
+            .map(|(id, facet)| {
+                let canonical_tags = tags.remove(&id).unwrap_or_default();
+                (id, parse_facet(&facet), canonical_tags)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn discovery_affinity_selection_tag_read_matches_the_id_list_read() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        // 1,950 titles: every fifth in the private library, every seventh
+        // without tags. The run submits about 1,200 visible titles (some twice)
+        // and a few private ones, so every selection spans several id chunks.
+        sqlx::raw_sql(
+            "CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT, facet TEXT);
+             CREATE TABLE discovery_submitted_subjects (run_id TEXT, title_id TEXT, library_id TEXT);
+             INSERT INTO titles (id, library_id, facet)
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1950)
+                 SELECT printf('emberfall-%04d', i),
+                        CASE WHEN i % 5 = 0 THEN 'private' ELSE 'visible' END,
+                        CASE i % 3 WHEN 0 THEN 'movie' WHEN 1 THEN 'series' ELSE 'anime' END
+                 FROM n;
+             INSERT INTO discovery_submitted_subjects (run_id, title_id, library_id)
+                 SELECT 'run', id, library_id FROM titles
+                 WHERE CAST(substr(id, 11) AS INTEGER) <= 1500
+                   AND (library_id = 'visible' OR CAST(substr(id, 11) AS INTEGER) % 50 = 0);
+             INSERT INTO discovery_submitted_subjects (run_id, title_id, library_id)
+                 SELECT 'run', id, library_id FROM titles
+                 WHERE CAST(substr(id, 11) AS INTEGER) % 11 = 0 AND library_id = 'visible';
+             CREATE TABLE tagged AS
+                 SELECT id, CAST(substr(id, 11) AS INTEGER) AS i FROM titles
+                 WHERE CAST(substr(id, 11) AS INTEGER) % 7 <> 0;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'drama',
+                        CASE i % 4 WHEN 0 THEN 'Genre' WHEN 1 THEN 'genre' WHEN 2 THEN 'THEME' ELSE 'studio' END,
+                        'Drama', i % 3 FROM tagged;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'action', 'genre', 'Action', i % 2 FROM tagged;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'heist', 'theme', 'Heist', 0 FROM tagged WHERE i % 2 = 0;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'padded', ' genre', 'Padded', 0 FROM tagged;
+             INSERT INTO title_metadata_tags (title_id, tag_key, category, name, sort_index)
+                 SELECT id, 'cinderwake', 'studio', 'Cinderwake', 0 FROM tagged WHERE i % 3 = 0;
+             INSERT INTO title_metadata_tag_sources (title_id, tag_key, source, sort_index)
+                 SELECT id, 'drama', 'tmdb', 1 FROM tagged
+                 UNION ALL SELECT id, 'drama', 'anilist', i % 2 FROM tagged
+                 UNION ALL SELECT id, 'drama', ' tmdb ', 2 FROM tagged
+                 UNION ALL SELECT id, 'drama', ' ', 3 FROM tagged
+                 UNION ALL SELECT id, 'heist', 'tvdb', 0 FROM tagged WHERE i % 2 = 0
+                 UNION ALL SELECT id, 'padded', 'tmdb', 0 FROM tagged
+                 UNION ALL SELECT id, 'cinderwake', 'tmdb', 0 FROM tagged WHERE i % 3 = 0
+                 UNION ALL SELECT id, 'ashgrove', 'tmdb', 0 FROM tagged WHERE i % 4 = 0;
+             INSERT INTO title_metadata_tag_source_keys (title_id, tag_key, source_tag_key, sort_index)
+                 SELECT id, 'drama', 'kb', 0 FROM tagged
+                 UNION ALL SELECT id, 'drama', 'ka', 0 FROM tagged
+                 UNION ALL SELECT id, 'drama', ' ka', 1 FROM tagged
+                 UNION ALL SELECT id, 'action', 'tmdb', i % 2 FROM tagged
+                 UNION ALL SELECT id, 'action', '', 0 FROM tagged WHERE i % 5 = 1
+                 UNION ALL SELECT id, 'cinderwake', 'kc', 0 FROM tagged WHERE i % 3 = 0;
+             DROP TABLE tagged;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let visible = vec!["visible".to_string()];
+        let both = vec!["visible".to_string(), "private".to_string()];
+        let nowhere = vec!["ashgrove".to_string()];
+        let store = TitleStore::new(datastore.clone());
+        for (libraries, run_id, min_titles) in [
+            (&visible, Some("run"), 1_000),
+            (&visible, Some("missing"), 1_500),
+            (&visible, None, 1_500),
+            (&both, Some("run"), 1_000),
+            (&both, Some("missing"), 1_900),
+            (&nowhere, Some("run"), 0),
+        ] {
+            let loaded = store
+                .list_discovery_affinity_titles(libraries, run_id, &[])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|title| (title.id, title.facet, title.canonical_tags))
+                .collect::<Vec<_>>();
+            let reference = id_list_reference_affinity_titles(&datastore, libraries, run_id).await;
+            assert!(
+                loaded.len() >= min_titles,
+                "{libraries:?} {run_id:?} selected {}",
+                loaded.len()
+            );
+            assert!(
+                min_titles == 0
+                    || loaded.iter().any(|(_, _, tags)| tags.is_empty())
+                        && loaded.iter().any(|(_, _, tags)| tags.len() == 3),
+                "{libraries:?} {run_id:?} covers titles with and without tags"
+            );
+            assert_eq!(loaded, reference, "{libraries:?} {run_id:?}");
+        }
     }
 
     /// Tag tables for each `(prefix, owner column)` pair, without foreign keys
@@ -9325,6 +9661,115 @@ mod tests {
         (store, pool)
     }
 
+    #[tokio::test]
+    async fn episode_shapes_are_one_grouped_read_per_chunk() {
+        let (store, pool) = migrated_test_store().await;
+        // Episode rows only; the shape read never touches the titles table.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let recycled = format!("/library/Ember Shore{RECYCLE_BIN_PATH_SEGMENT}e5.mkv");
+        sqlx::raw_sql(
+            "INSERT INTO collections (id, title_id, collection_type, collection_index, created_at) VALUES
+                 ('ember-s1', 'show-ember', 'season', '1', '2024-01-01'),
+                 ('ember-s2', 'show-ember', 'season', '2', '2024-01-01'),
+                 ('ember-sp', 'show-ember', 'specials', '0', '2024-01-01'),
+                 ('ash-s1', 'show-ash', 'season', '1', '2024-01-01'),
+                 ('cinder-sp', 'show-cinder', 'specials', '0', '2024-01-01');
+             INSERT INTO episodes
+                 (id, title_id, collection_id, episode_type, season_number, air_date, monitored, created_at)
+             VALUES
+                 ('e1', 'show-ember', 'ember-s1', 'standard', '1', '2024-01-01', 1, '2024-01-01'),
+                 ('e2', 'show-ember', 'ember-s1', 'standard', '1', '2024-01-08', 1, '2024-01-01'),
+                 ('e3', 'show-ember', 'ember-s1', 'standard', '1', '2024-01-15', 0, '2024-01-01'),
+                 ('e4', 'show-ember', 'ember-s2', 'standard', '2', '2024-02-01T20:00:00Z', 1, '2024-01-01'),
+                 ('e5', 'show-ember', 'ember-s2', 'standard', '2', '2024-02-05', 1, '2024-01-01'),
+                 ('e6', 'show-ember', 'ember-s2', 'standard', '2', '2024-02-12', 1, '2024-01-01'),
+                 ('e7', 'show-ember', 'ember-s2', 'standard', '2', '2024-03-01', 1, '2024-01-01'),
+                 ('e8', 'show-ember', 'ember-s2', 'standard', '2', NULL, 1, '2024-01-01'),
+                 ('sp1', 'show-ember', 'ember-sp', 'special', '0', '2024-01-20', 1, '2024-01-01'),
+                 ('a1', 'show-ash', 'ash-s1', 'standard', '1', '2023-06-01', 1, '2024-01-01'),
+                 ('c1', 'show-cinder', 'cinder-sp', 'special', '0', '2023-06-01', 1, '2024-01-01');
+             INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, created_at) VALUES
+                 ('f1', 'show-ember', '/library/Ember Shore/e1.mkv', 1, 'scanned', '2024-01-01'),
+                 ('f4', 'show-ember', '/library/Ember Shore/e4.mkv', 1, 'review_required', '2024-01-01'),
+                 ('f6', 'show-ember', '/library/Ember Shore/e2-extra.mkv', 1, 'scanned', '2024-01-01'),
+                 ('fsp', 'show-ember', '/library/Ember Shore/sp1.mkv', 1, 'scanned', '2024-01-01'),
+                 ('fa1', 'show-ash', '/library/Ash Grove/a1.mkv', 1, 'scanned', '2024-01-01');
+             INSERT INTO file_episode_map (file_id, episode_id, role) VALUES
+                 ('f1', 'e1', 'primary'),
+                 ('f4', 'e4', 'primary'),
+                 ('f5', 'e5', 'primary'),
+                 ('f6', 'e2', 'additional'),
+                 ('fsp', 'sp1', 'primary'),
+                 ('fa1', 'a1', 'primary');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, created_at)
+             VALUES ('f5', 'show-ember', ?, 1, 'scanned', '2024-01-01')",
+        )
+        .bind(&recycled)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // More ids than one statement binds, with shows on both sides of the cut.
+        let mut ids: Vec<String> = (0..2_100)
+            .map(|index| format!("fixture-title-{index}"))
+            .collect();
+        ids.insert(0, "show-ember".to_string());
+        ids.push("show-ash".to_string());
+        ids.push("show-cinder".to_string());
+        let today = chrono::NaiveDate::from_ymd_opt(2024, 2, 5).unwrap();
+        let shapes: std::collections::HashMap<_, _> = store
+            .list_title_episode_shapes(&ids, today)
+            .await
+            .expect("episode shapes load")
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            shapes.len(),
+            2,
+            "only shows with regular episodes have a row"
+        );
+        assert_eq!(
+            shapes["show-ember"],
+            scryer_application::TitleEpisodeShape {
+                season_count: 2,
+                // e1–e5; an episode airing today has aired.
+                aired_episode_count: 5,
+                // Two scheduled and one with no air date.
+                unaired_episode_count: 3,
+                // Only e1: e4 awaits review, e5's file is recycled, e2's is
+                // not its primary.
+                aired_episode_file_count: 1,
+                // e2, e4 and e5; e3 is not monitored.
+                missing_episode_count: 3,
+                latest_season_number: Some(2),
+                latest_aired_episode_date: Some("2024-02-05".to_string()),
+                next_episode_air_date: Some("2024-02-12".to_string()),
+            }
+        );
+        assert_eq!(
+            shapes["show-ash"],
+            scryer_application::TitleEpisodeShape {
+                season_count: 1,
+                aired_episode_count: 1,
+                unaired_episode_count: 0,
+                aired_episode_file_count: 1,
+                missing_episode_count: 0,
+                latest_season_number: Some(1),
+                latest_aired_episode_date: Some("2023-06-01".to_string()),
+                next_episode_air_date: None,
+            }
+        );
+    }
+
     fn external_id(source: &str, value: &str) -> ExternalId {
         ExternalId::new(source, value)
     }
@@ -9850,7 +10295,7 @@ mod tests {
 
     #[test]
     fn title_catalog_rating_sort_scales_fractional_normalized_scores() {
-        let sql = title_catalog_external_rating_subquery(&["imdb"]);
+        let sql = title_catalog_external_rating_subquery_scoped(&["imdb"], "");
 
         assert!(
             sql.contains("WHEN ter.normalized <= 1.0 THEN ter.normalized * 10.0"),
@@ -9908,10 +10353,11 @@ mod tests {
             2
         );
         assert!(sql.contains("FROM title_metadata_rating_summaries catalog_rating"));
-        assert!(sql.contains("FROM title_search_terms search_term"));
+        // The store holds no title, so the search matched none and binds nothing.
+        assert!(sql.contains("1 = 0"));
         assert!(sql.contains("monitored = {}"));
         assert!(sql.contains("LOWER(TRIM(COALESCE(content_status, ''))) IN"));
-        assert_eq!(args.len(), 15);
+        assert_eq!(args.len(), 14);
     }
 
     /// Presence is a fact about `media_files`, so it is a predicate in the same

@@ -344,13 +344,25 @@ mod tests {
             ..Default::default()
         };
         let (english_only, german_only) = (held(english_rank), held(german_rank));
+        // The language steps are opt-in, so the order that runs both is a
+        // chosen one: tier and revision first, then the languages.
+        let both_languages = crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap();
+        assert!(both_languages.still_wants(&english_only));
+        assert!(both_languages.still_wants(&german_only));
+        // The default order runs neither language step, so it wants nothing.
         let default_order = crate::DecisionPipeline::default_order();
-        assert!(default_order.still_wants(&english_only));
-        assert!(default_order.still_wants(&german_only));
-        let without_preferred = default_order.without(crate::DecisionGate::PreferredLanguage);
+        assert!(!default_order.still_wants(&english_only));
+        assert!(!default_order.still_wants(&german_only));
+        let without_preferred = both_languages.without(crate::DecisionGate::PreferredLanguage);
         assert!(!without_preferred.still_wants(&english_only));
         assert!(without_preferred.still_wants(&german_only));
-        let without_optional = default_order.without(crate::DecisionGate::OptionalLanguages);
+        let without_optional = both_languages.without(crate::DecisionGate::OptionalLanguages);
         assert!(without_optional.still_wants(&english_only));
         assert!(!without_optional.still_wants(&german_only));
         assert!(!crate::DecisionPipeline::score_only().still_wants(&english_only));

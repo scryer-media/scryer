@@ -277,6 +277,8 @@ pub fn redact_hidden_routes(
         route.use_season_folders = None;
         route.release_numbering = None;
         route.tags = Vec::new();
+        route.required_audio_languages = None;
+        route.preferred_audio_languages = None;
     }
     subscription
 }
@@ -557,6 +559,8 @@ pub(super) fn preview_routes(kinds: &[MediaFacet]) -> Vec<ListRoute> {
             use_season_folders: None,
             release_numbering: None,
             tags: Vec::new(),
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         })
         .collect()
 }
@@ -1379,6 +1383,29 @@ impl AppUseCase {
         })
     }
 
+    /// Keep a title a lifecycle rule is deleting from coming straight back:
+    /// each public list that added it gets an exclusion for it, with no
+    /// expiry, written as one batch. Removing an exclusion lets that list add
+    /// the title once more.
+    pub(crate) async fn exclude_title_from_lists_that_added_it(
+        &self,
+        title: &scryer_domain::Title,
+    ) -> AppResult<()> {
+        let lists = &self.services.lists;
+        let exclusions = lifecycle_delete_exclusions(
+            lists.subscriptions.as_ref(),
+            lists.memberships.as_ref(),
+            LifecycleDeletedTitle {
+                id: &title.id,
+                name: &title.name,
+                year: title.year,
+                external_ids: &title.external_ids,
+            },
+        )
+        .await?;
+        lists.exclusions.create_many(exclusions).await
+    }
+
     pub async fn remove_list_exclusion(&self, actor: &User, id: &str) -> AppResult<String> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
@@ -1430,6 +1457,19 @@ impl AppUseCase {
                 .await?;
         }
         Ok(())
+    }
+
+    /// The actor's own list policy, or the default when an admin has never
+    /// set one.
+    pub async fn my_list_policy(&self, actor: &User) -> AppResult<ListPolicy> {
+        Ok(self
+            .services
+            .lists
+            .policies
+            .get(&actor.id)
+            .await?
+            .map(|policy| policy.policy)
+            .unwrap_or_default())
     }
 
     /// Every member's list policy, with how many list requests they made in
@@ -1549,6 +1589,76 @@ impl AppUseCase {
             list_requests_last_30d,
         })
     }
+}
+
+/// A title a lifecycle rule is deleting, as its list exclusions name it.
+pub(crate) struct LifecycleDeletedTitle<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub year: Option<i32>,
+    /// Used when a list's row carries no ids of its own.
+    pub external_ids: &'a [ExternalId],
+}
+
+/// The exclusions a lifecycle delete of `title` writes: one per public list
+/// that added the title and still holds it, scoped to that list.
+///
+/// Only rows the list added count: a list that found the title already in
+/// the library keeps its row after a delete and does not add it again. A
+/// sync weighs a deleted addition against the exclusions even when the list
+/// is unchanged, so no fingerprint needs clearing.
+pub(crate) async fn lifecycle_delete_exclusions(
+    subscriptions: &dyn super::ports::ListSubscriptionRepository,
+    memberships: &dyn super::ports::ListMembershipRepository,
+    title: LifecycleDeletedTitle<'_>,
+) -> AppResult<Vec<ListExclusion>> {
+    let rows = memberships
+        .list_by_title(title.id)
+        .await?
+        .into_iter()
+        .filter(|row| row.left_at.is_none() && row.state == ListMembershipState::Added)
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let public = subscriptions
+        .list(ListSubscriptionQuery::public())
+        .await?
+        .into_iter()
+        .map(|subscription| subscription.id)
+        .collect::<HashSet<_>>();
+    let now = Utc::now();
+    let mut seen = HashSet::new();
+    Ok(rows
+        .into_iter()
+        .filter(|row| public.contains(&row.subscription_id))
+        .filter(|row| seen.insert(row.subscription_id.clone()))
+        .filter_map(|row| {
+            let external_ids = if row.external_ids.is_empty() {
+                title.external_ids.to_vec()
+            } else {
+                row.external_ids
+            };
+            (!external_ids.is_empty()).then(|| ListExclusion {
+                id: Id::new().0,
+                // A list's movie that lands inside a series is matched as a
+                // movie, as the sync weighs it.
+                kind: if row.series_movie.is_some() {
+                    MediaFacet::Movie
+                } else {
+                    row.kind
+                },
+                external_ids,
+                display_title: title.name.to_string(),
+                year: title.year,
+                scope: ListExclusionScope::List {
+                    subscription_id: row.subscription_id,
+                },
+                created_by_user_id: None,
+                created_at: now,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]

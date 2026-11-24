@@ -18,6 +18,7 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "adopt_existing_title_tag_definitions" => true,
         "compress_post_processing_output" => true,
         "backfill_import_skip_reason_projection" => true,
+        "backfill_media_request_id_projection" => true,
         "scrub_stored_release_url_credentials" => true,
         "import_delay_profile_catalog" => true,
         "repair_title_folder_keys" => true,

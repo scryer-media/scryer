@@ -97,6 +97,7 @@ async fn check_emits_manual_interaction_notification_once() {
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,

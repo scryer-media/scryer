@@ -2429,6 +2429,32 @@ fn plain_rate_limit_cooldown(error: &AppError) -> Option<Option<std::time::Durat
         .map(|signal| signal.retry_after)
 }
 
+/// The answer of an indexer whose search or poll was not run because a local
+/// monthly limit refused it. Nothing was sent, so it carries no results and
+/// reports the refusal's code as the indexer's outcome.
+fn local_limit_response(indexer_id: &str, reason: Option<&'static str>) -> IndexerSearchResponse {
+    IndexerSearchResponse {
+        next_cursor: None,
+        results: Vec::new(),
+        indexer_outcomes: reason
+            .map(|reason| IndexerQueryOutcome {
+                page: None,
+                indexer_id: indexer_id.to_string(),
+                outcome: IndexerSearchOutcome::LocalLimit { reason },
+            })
+            .into_iter()
+            .collect(),
+        completion: IndexerSearchCompletion::Partial {
+            reason: None,
+            retry_after: None,
+        },
+        api_current: None,
+        api_max: None,
+        grab_current: None,
+        grab_max: None,
+    }
+}
+
 #[derive(Default)]
 struct StrategyBatchHealth {
     any_success: bool,
@@ -3437,7 +3463,37 @@ impl StrategyLearningBatch {
             .collect()
     }
 
-    async fn flush(self, search_learning: &Arc<dyn IndexerSearchLearningRepository>) {
+    /// Writes the batch when the indexer's part of the search ends. A usable
+    /// facet answer lands now and tells `evidence` the facet is carried for
+    /// this title; an all-empty facet answer waits in `evidence` until the
+    /// whole search is known (see [`FacetSearchEvidence`]).
+    async fn flush(
+        mut self,
+        search_learning: &Arc<dyn IndexerSearchLearningRepository>,
+        evidence: &FacetSearchEvidence,
+    ) {
+        if self.learnable_context().is_some() {
+            if self
+                .facet_outcomes
+                .contains(&IndexerFacetSearchOutcome::Usable)
+            {
+                evidence.note_usable();
+            } else if !self.facet_outcomes.is_empty() {
+                evidence.hold_empty(StrategyLearningBatch {
+                    indexer_id: self.indexer_id.clone(),
+                    indexer_name: self.indexer_name.clone(),
+                    learning_context: self.learning_context.clone(),
+                    mode: self.mode,
+                    start_records: None,
+                    strategy_outcomes: Vec::new(),
+                    facet_outcomes: std::mem::take(&mut self.facet_outcomes),
+                });
+            }
+        }
+        self.write(search_learning).await;
+    }
+
+    async fn write(self, search_learning: &Arc<dyn IndexerSearchLearningRepository>) {
         let Some(context) = self.learnable_context() else {
             return;
         };
@@ -3535,7 +3591,52 @@ async fn record_strategy_learning_outcome(
         start_records,
     );
     batch.observe(strategy_label, usable_hits);
-    batch.flush(search_learning).await;
+    let evidence = FacetSearchEvidence::default();
+    batch.flush(search_learning, &evidence).await;
+    evidence.settle(search_learning).await;
+}
+
+/// What every indexer of one search found for the title's facet.
+///
+/// An empty background answer counts toward an indexer's facet streak only
+/// when another indexer of the same search found something usable for the
+/// title. When none did, the release is missing everywhere, which says
+/// nothing about what any one indexer carries: a long-missing episode
+/// searched again and again must not hold every indexer out of the facet.
+#[derive(Default)]
+struct FacetSearchEvidence {
+    usable: AtomicBool,
+    held_empty: std::sync::Mutex<Vec<StrategyLearningBatch>>,
+}
+
+impl FacetSearchEvidence {
+    fn note_usable(&self) {
+        self.usable.store(true, Ordering::Release);
+    }
+
+    fn hold_empty(&self, batch: StrategyLearningBatch) {
+        self.held_empty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(batch);
+    }
+
+    /// Lands the held empty answers once every indexer's part has ended,
+    /// or drops them when no indexer found anything usable.
+    async fn settle(&self, search_learning: &Arc<dyn IndexerSearchLearningRepository>) {
+        let held = std::mem::take(
+            &mut *self
+                .held_empty
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if held.is_empty() || !self.usable.load(Ordering::Acquire) {
+            return;
+        }
+        for batch in held {
+            batch.write(search_learning).await;
+        }
+    }
 }
 
 /// Whether a background pass leaves this indexer out of the facet. A
@@ -4602,6 +4703,11 @@ struct RssFeedCacheEntry {
         tokio::sync::OnceCell<Result<(Vec<IndexerSearchResult>, IndexerSearchCompletion), String>>,
     initialization_lock: Arc<Mutex<()>>,
     feedback_claimed: AtomicBool,
+    /// Set when the feed was not fetched because a local monthly limit refused
+    /// the request: the stable code of the refusal. The cell then holds an
+    /// error only so waiting callers share the answer; nothing was sent, so it
+    /// is not a failed poll.
+    local_limit: std::sync::OnceLock<&'static str>,
 }
 
 impl RssFeedCacheEntry {
@@ -4610,6 +4716,7 @@ impl RssFeedCacheEntry {
             cell: tokio::sync::OnceCell::new(),
             initialization_lock: Arc::new(Mutex::new(())),
             feedback_claimed: AtomicBool::new(false),
+            local_limit: std::sync::OnceLock::new(),
         }
     }
 
@@ -5320,7 +5427,8 @@ impl MultiIndexerSearchClient {
                 // Transport and tunnel proxies only carry bytes, so they stay.
                 (None, None)
             } else {
-                let proxy_cache_key = format!("{}:{}", proxy_config.id, proxy_config.updated_at);
+                let proxy_cache_key =
+                    scryer_application::transport_proxy::transport_proxy_revision(&proxy_config);
                 (Some(proxy_config), Some(proxy_cache_key))
             }
         } else {
@@ -6708,6 +6816,39 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
             None => HashMap::new(),
         };
+        // Learned emptiness only prefers some indexers over others. When it
+        // holds every indexer this search may ask out of the facet, nothing is
+        // left to prefer, and the search asks them all rather than nothing.
+        let facet_learning = if !facet_learning.is_empty()
+            && enabled
+                .iter()
+                .map(|(config, _)| config)
+                .filter(|config| {
+                    matches!(
+                        indexer_search_eligibility(
+                            indexer_routing.as_ref(),
+                            page_sink.indexer_restriction(),
+                            &config.id,
+                        ),
+                        IndexerSearchEligibility::Eligible
+                    )
+                })
+                .all(|config| {
+                    facet_learning
+                        .get(&config.id)
+                        .is_some_and(|state| state.suppressed_until.is_some())
+                }) {
+            info!(
+                facet = background_facet_context
+                    .map(|context| context.facet.as_str())
+                    .unwrap_or_default(),
+                indexers = facet_learning.len(),
+                "every indexer is learned to carry nothing for this facet; asking them all"
+            );
+            HashMap::new()
+        } else {
+            facet_learning
+        };
         // One read of the title's learned strategy state across every
         // indexer. The scheduler hint, strategy suppression and each
         // indexer's end-of-search learning batch all work from it.
@@ -7029,6 +7170,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             tokio::time::Instant::now() + crate::upstream_scheduler::rss_target_interval()
         });
         let mut rss_pending_ids = HashSet::new();
+        let facet_evidence = Arc::new(FacetSearchEvidence::default());
         let mut set = tokio::task::JoinSet::<(
             String,
             String,
@@ -7557,6 +7699,24 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         if err.is_canceled() {
                                             return Err("RSS indexer search canceled".to_string());
                                         }
+                                        // A local monthly limit refused the
+                                        // request before it left the process.
+                                        // The indexer did not fail: no failed
+                                        // query, backoff or last error.
+                                        if let Some(reason) =
+                                            err.indexer_monthly_limit_refusal_reason()
+                                        {
+                                            info!(
+                                                indexer = indexer_name.as_str(),
+                                                reason,
+                                                "RSS poll not run: local monthly limit"
+                                            );
+                                            let _ = cache_entry.local_limit.set(reason);
+                                            return Err(
+                                                "RSS poll not run because of a local monthly limit"
+                                                    .to_string(),
+                                            );
+                                        }
                                         let cooldown = plain_rate_limit_cooldown(&err);
                                         match cooldown {
                                             Some(retry_after) => info!(
@@ -7638,6 +7798,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             );
                         }
                         let should_record_feedback = cache_entry.claim_feedback();
+                        let local_limit_reason = cache_entry.local_limit.get().copied();
                         // An RSS cycle asks each (indexer, categories) feed
                         // once, so once this caller holds its copy the map
                         // has nothing left to share it with. Callers already
@@ -7660,6 +7821,18 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     result.indexer_id.get_or_insert_with(|| indexer_id.clone());
                                 }
                                 (results, completion)
+                            }
+                            Err(_) if local_limit_reason.is_some() => {
+                                return (
+                                    indexer_id.clone(),
+                                    indexer_name,
+                                    scheduler_lease_for_task.clone(),
+                                    Ok((
+                                        local_limit_response(&indexer_id, local_limit_reason),
+                                        None,
+                                    )),
+                                    false,
+                                );
                             }
                             Err(error) => {
                                 return (
@@ -7871,6 +8044,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let known_ids_for_indexer = available_ids.clone();
             let stats_tracker = self.stats_tracker.clone();
             let search_learning = self.search_learning.clone();
+            let facet_evidence = facet_evidence.clone();
             let learning_context = learning_context.clone();
             let backoff_tracker = self.backoff_tracker.clone();
             let indexer_configs = self.indexer_configs.clone();
@@ -7983,6 +8157,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                     .or(rss_poll_page_budget);
                 let mut page_chains: HashMap<String, PageChain> = HashMap::new();
                 let mut any_strategy_fired = false;
+                // Set when a local monthly limit refused a strategy's request
+                // before it left the process.
+                let mut local_limit_reason: Option<&'static str> = None;
                 let mut all_strategies_complete = true;
                 let mut only_unattested_incompleteness = true;
                 let mut primary_attempted;
@@ -8151,6 +8328,20 @@ impl IndexerClient for MultiIndexerSearchClient {
                             strategy = outcome.label.as_str(),
                             "skipping strategy: request was not dispatched"
                         );
+                        continue;
+                    }
+                    if let Some(reason) = outcome
+                        .response
+                        .as_ref()
+                        .err()
+                        .and_then(AppError::indexer_monthly_limit_refusal_reason)
+                    {
+                        // Refused locally, so nothing was sent: the strategy
+                        // did not run and the indexer did not fail.
+                        local_limit_reason.get_or_insert(reason);
+                        all_strategies_complete = false;
+                        only_unattested_incompleteness = false;
+                        contained.note_open();
                         continue;
                     }
                     any_strategy_fired = true;
@@ -8423,9 +8614,11 @@ impl IndexerClient for MultiIndexerSearchClient {
                         primary_usable_result_count.saturating_add(probe.take_follower_replayed());
                 }
 
-                // An indexer over its query budget is skipped for the rest of
-                // this search: its fallback would be refused the same way.
+                // An indexer over its query budget or at a local monthly
+                // limit is skipped for the rest of this search: its fallback
+                // would be refused the same way.
                 if query_budget_wait.is_none()
+                    && local_limit_reason.is_none()
                     && !primary_unreplayed_complete
                     && should_run_fallback_tier(
                         mode,
@@ -8580,6 +8773,18 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 strategy = outcome.label.as_str(),
                                 "skipping fallback strategy: request was not dispatched"
                             );
+                            continue;
+                        }
+                        if let Some(reason) = outcome
+                            .response
+                            .as_ref()
+                            .err()
+                            .and_then(AppError::indexer_monthly_limit_refusal_reason)
+                        {
+                            local_limit_reason.get_or_insert(reason);
+                            all_strategies_complete = false;
+                            only_unattested_incompleteness = false;
+                            contained.note_open();
                             continue;
                         }
                         any_strategy_fired = true;
@@ -8906,8 +9111,22 @@ impl IndexerClient for MultiIndexerSearchClient {
                     );
                 }
 
-                let task_indexer_outcomes = scheduler_blocked_outcome
-                    .filter(|_| !all_strategies_complete)
+                // An indexer that answered nothing because a local monthly
+                // limit refused it reports that, not an empty partial answer.
+                let local_limit_outcome = local_limit_reason
+                    .filter(|_| {
+                        !any_strategy_fired && !batch_had_success && collected_results.is_empty()
+                    })
+                    .map(|reason| IndexerSearchOutcome::LocalLimit { reason });
+                if let Some(reason) = local_limit_reason {
+                    info!(
+                        indexer = indexer_name.as_str(),
+                        reason,
+                        "indexer search not run: local monthly limit"
+                    );
+                }
+                let task_indexer_outcomes = local_limit_outcome
+                    .or(scheduler_blocked_outcome.filter(|_| !all_strategies_complete))
                     .map(|outcome| IndexerQueryOutcome {
                         page: None,
                         indexer_id: indexer_id.clone(),
@@ -8957,7 +9176,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
             }
             .await;
-            learning_batch.flush(&search_learning).await;
+            learning_batch.flush(&search_learning, &facet_evidence).await;
             task_result
             });
         }
@@ -9189,6 +9408,10 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
         }
 
+        // Every task has ended, so whether any indexer found the title is
+        // known; the held empty facet answers land or drop on it.
+        facet_evidence.settle(&self.search_learning).await;
+
         // A panicked task has no returned indexer id. Its snapshotted member
         // still needs an explicit terminal outcome instead of disappearing.
         for id in rss_pending_ids.drain() {
@@ -9370,6 +9593,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 outcome,
                 IndexerSearchOutcome::BackedOff { .. }
                     | IndexerSearchOutcome::ClientUnavailable { .. }
+                    | IndexerSearchOutcome::LocalLimit { .. }
                     | IndexerSearchOutcome::Errored
             );
             let completion = match outcome {
@@ -9393,6 +9617,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 }
                 IndexerSearchOutcome::BackedOff { .. }
                 | IndexerSearchOutcome::ClientUnavailable { .. }
+                | IndexerSearchOutcome::LocalLimit { .. }
                 | IndexerSearchOutcome::Errored => IndexerSearchCompletion::Partial {
                     reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
                     retry_after: None,
@@ -9665,6 +9890,16 @@ impl MultiIndexerSearchClient {
                 (Some(response), outcome)
             }
             Err(error) if error.is_canceled() => return Err(error),
+            // Refused by a local monthly limit before anything was sent: the
+            // indexer did not fail, so its health and stats are left alone.
+            Err(error) if error.is_indexer_monthly_limit_refusal() => {
+                let outcome = match error.indexer_monthly_limit_refusal_reason() {
+                    Some(reason) => IndexerSearchOutcome::LocalLimit { reason },
+                    None => IndexerSearchOutcome::Errored,
+                };
+                debug!(indexer = name, error = %error, "raw text search not run: local monthly limit");
+                return Ok((None, outcome, Some(caps_diagnostic)));
+            }
             Err(error) => {
                 let signal = rate_limit_signal_from_error(&error);
                 let retry_after = strategy_retry_after(&error, signal.as_ref());
@@ -11253,6 +11488,8 @@ mod tests {
             rate_limit_seconds: Some(0),
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -11322,6 +11559,14 @@ mod tests {
             unreachable!()
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+
+        async fn count_solvers_reaching_through(
+            &self,
+            _id: &str,
+            _enabled_only: bool,
+        ) -> AppResult<u64> {
             unreachable!()
         }
     }
@@ -14406,6 +14651,305 @@ mod tests {
             vec![Some("repository: upstream status 503".to_string())]
         );
         assert!(cleared_ids.lock().expect("cleared ids mutex").is_empty());
+    }
+
+    /// Records every write the search client makes for an indexer, by id.
+    struct WriteLoggingIndexerConfigRepository {
+        configs: Vec<IndexerConfig>,
+        writes: StdArc<StdMutex<Vec<(String, &'static str)>>>,
+    }
+
+    impl WriteLoggingIndexerConfigRepository {
+        fn log(&self, id: &str, write: &'static str) {
+            self.writes
+                .lock()
+                .expect("write log mutex")
+                .push((id.to_string(), write));
+        }
+    }
+
+    #[async_trait]
+    impl IndexerConfigRepository for WriteLoggingIndexerConfigRepository {
+        async fn list(&self, _provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>> {
+            Ok(self.configs.clone())
+        }
+
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<IndexerConfig>> {
+            Ok(None)
+        }
+
+        async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig> {
+            Ok(config)
+        }
+
+        async fn touch_last_error(&self, id: &str) -> AppResult<()> {
+            self.log(id, "touch_last_error");
+            Ok(())
+        }
+
+        async fn record_last_error(
+            &self,
+            id: &str,
+            _message: Option<String>,
+            _code: Option<String>,
+        ) -> AppResult<()> {
+            self.log(id, "record_last_error");
+            Ok(())
+        }
+
+        async fn clear_last_error(&self, id: &str) -> AppResult<()> {
+            self.log(id, "clear_last_error");
+            Ok(())
+        }
+
+        async fn set_system_backoff(
+            &self,
+            id: &str,
+            _backoff: IndexerSystemBackoff,
+        ) -> AppResult<()> {
+            self.log(id, "set_system_backoff");
+            Ok(())
+        }
+
+        async fn clear_system_backoff(&self, id: &str) -> AppResult<()> {
+            self.log(id, "clear_system_backoff");
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            _update: scryer_application::IndexerConfigUpdate,
+        ) -> AppResult<IndexerConfig> {
+            Err(AppError::Validation("not implemented in test".into()))
+        }
+
+        async fn delete(&self, _id: &str) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct PerIndexerStatsTracker {
+        queries: StdArc<StdMutex<Vec<(String, bool)>>>,
+    }
+
+    impl IndexerStatsTracker for PerIndexerStatsTracker {
+        fn record_query(&self, indexer_id: &str, _indexer_name: &str, success: bool) {
+            self.queries
+                .lock()
+                .expect("stats log mutex")
+                .push((indexer_id.to_string(), success));
+        }
+
+        fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+
+        fn all_stats(&self) -> Vec<IndexerQueryStats> {
+            vec![]
+        }
+    }
+
+    struct PerIndexerPluginProvider {
+        clients: HashMap<String, Arc<dyn IndexerClient>>,
+        caps: IndexerProviderCapabilities,
+    }
+
+    impl IndexerPluginProvider for PerIndexerPluginProvider {
+        fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            self.clients.get(&config.id).cloned()
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["mock".into()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+
+        fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
+            self.caps.clone()
+        }
+    }
+
+    struct MonthlyLimitFixture {
+        multi: MultiIndexerSearchClient,
+        writes: StdArc<StdMutex<Vec<(String, &'static str)>>>,
+        queries: StdArc<StdMutex<Vec<(String, bool)>>>,
+        capped_calls: StdArc<StdMutex<Vec<RecordedCall>>>,
+    }
+
+    /// Two indexers: `idx-0` is refused by its monthly request limit before
+    /// anything is sent, `idx-1` answers with `title`.
+    fn monthly_limit_fixture(
+        caps: IndexerProviderCapabilities,
+        title: &'static str,
+    ) -> MonthlyLimitFixture {
+        let writes = StdArc::new(StdMutex::new(Vec::new()));
+        let stats = PerIndexerStatsTracker::default();
+        let queries = stats.queries.clone();
+        let capped_calls = StdArc::new(StdMutex::new(Vec::new()));
+        let capped: Arc<dyn IndexerClient> = Arc::new(ScriptedIndexerClient {
+            calls: capped_calls.clone(),
+            responder: StdArc::new(|_| {
+                Err(AppError::validation_refused(
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                    "the monthly request limit for this indexer is reached",
+                ))
+            }),
+        });
+        let open: Arc<dyn IndexerClient> = Arc::new(ScriptedIndexerClient {
+            calls: StdArc::new(StdMutex::new(Vec::new())),
+            responder: StdArc::new(move |_| response_with_titles(&[title])),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(WriteLoggingIndexerConfigRepository {
+                configs: indexed_mock_configs(2),
+                writes: writes.clone(),
+            }),
+            Arc::new(stats),
+            Arc::new(PerIndexerPluginProvider {
+                clients: HashMap::from([
+                    ("idx-0".to_string(), capped),
+                    ("idx-1".to_string(), open),
+                ]),
+                caps,
+            }),
+        );
+        MonthlyLimitFixture {
+            multi,
+            writes,
+            queries,
+            capped_calls,
+        }
+    }
+
+    async fn assert_monthly_limit_left_no_failure(
+        fixture: &MonthlyLimitFixture,
+        response: &IndexerSearchResponse,
+    ) {
+        assert!(
+            !fixture
+                .capped_calls
+                .lock()
+                .expect("call log mutex")
+                .is_empty(),
+            "the refusal comes from the capped indexer's own call"
+        );
+        assert_eq!(
+            response.results.len(),
+            1,
+            "the other indexer still returns its result"
+        );
+        let capped_outcome = response
+            .indexer_outcomes
+            .iter()
+            .find(|outcome| outcome.indexer_id == "idx-0")
+            .expect("the capped indexer reports an outcome");
+        assert_eq!(
+            capped_outcome.outcome,
+            IndexerSearchOutcome::LocalLimit {
+                reason:
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+            }
+        );
+        let capped_queries: Vec<bool> = fixture
+            .queries
+            .lock()
+            .expect("stats log mutex")
+            .iter()
+            .filter(|(id, _)| id == "idx-0")
+            .map(|(_, success)| *success)
+            .collect();
+        assert!(
+            capped_queries.is_empty(),
+            "a refused request is not a query: {capped_queries:?}"
+        );
+        assert!(
+            fixture
+                .queries
+                .lock()
+                .expect("stats log mutex")
+                .contains(&("idx-1".to_string(), true)),
+            "the other indexer's query is counted"
+        );
+        assert!(
+            backoff_state(&fixture.multi, "idx-0").await.is_none(),
+            "a refused request starts no backoff"
+        );
+        let capped_writes: Vec<&'static str> = fixture
+            .writes
+            .lock()
+            .expect("write log mutex")
+            .iter()
+            .filter(|(id, _)| id == "idx-0")
+            .map(|(_, write)| *write)
+            .collect();
+        assert!(
+            capped_writes.is_empty(),
+            "a refused request writes nothing for the indexer: {capped_writes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rss_poll_refused_by_a_monthly_limit_records_no_indexer_failure() {
+        let fixture = monthly_limit_fixture(rss_only_caps(), "Lantern.Harbor.S01E02.1080p.WEB-DL");
+
+        let response = fixture
+            .multi
+            .search(
+                String::new(),
+                HashMap::new(),
+                None,
+                Some("series".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a refused indexer does not fail the poll");
+
+        assert_monthly_limit_left_no_failure(&fixture, &response).await;
+    }
+
+    #[tokio::test]
+    async fn title_search_refused_by_a_monthly_limit_records_no_indexer_failure() {
+        let fixture = monthly_limit_fixture(movie_caps(), "12.Lanterns.of.Winter.2013");
+
+        let response = fixture
+            .multi
+            .search(
+                "12 Lanterns of Winter".to_string(),
+                HashMap::from([("imdb_id".to_string(), "tt12004567".to_string())]),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a refused indexer does not fail the search");
+
+        assert_monthly_limit_left_no_failure(&fixture, &response).await;
     }
 
     #[tokio::test]
@@ -20899,53 +21443,78 @@ mod tests {
         .expect("anime search should succeed")
     }
 
+    /// One search across indexers: each indexer's answer lands through its
+    /// own batch, and the held empty answers settle once every one has.
+    async fn record_facet_search(
+        repo: &StdArc<dyn IndexerSearchLearningRepository>,
+        context: &IndexerSearchLearningContext,
+        mode: SearchMode,
+        answers: &[(&str, usize)],
+    ) {
+        let evidence = FacetSearchEvidence::default();
+        for (indexer_id, usable_hits) in answers {
+            let mut batch = StrategyLearningBatch::new(
+                indexer_id.to_string(),
+                indexer_id.to_string(),
+                Some(context.clone()),
+                mode,
+                None,
+            );
+            batch.observe("ids_abs", *usable_hits);
+            batch.flush(repo, &evidence).await;
+        }
+        evidence.settle(repo).await;
+    }
+
+    fn facet_state(
+        facets: &StdArc<StdMutex<HashMap<(String, String), IndexerFacetLearningState>>>,
+        indexer_id: &str,
+    ) -> Option<IndexerFacetLearningState> {
+        facets
+            .lock()
+            .expect("facet learning mutex")
+            .get(&(indexer_id.to_string(), "anime".to_string()))
+            .cloned()
+    }
+
     #[tokio::test]
     async fn facet_learning_suppresses_after_distinct_empty_background_titles() {
         let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
         let facets = repo_impl.facets.clone();
         let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
-        let record = |title: String, background: bool, mode: SearchMode, hits: usize| {
+        let carried = |title: &str, background: bool| {
             let repo = repo.clone();
+            let context = facet_context(title, background);
             async move {
-                record_strategy_learning_outcome(
+                record_facet_search(
                     &repo,
-                    Some(&facet_context(&title, background)),
-                    mode,
-                    "idx-general",
-                    "General Tracker",
-                    "ids_abs",
-                    hits,
+                    &context,
+                    SearchMode::Auto,
+                    &[("idx-general", 0), ("idx-anime", 3)],
                 )
                 .await;
             }
         };
-        let state = || {
-            facets
-                .lock()
-                .expect("facet learning mutex")
-                .get(&("idx-general".to_string(), "anime".to_string()))
-                .cloned()
-        };
 
         // An operator's empty searches never count.
         for index in 0..FACET_EMPTY_TITLE_THRESHOLD {
-            record(format!("operator-{index}"), false, SearchMode::Auto, 0).await;
+            carried(&format!("operator-{index}"), false).await;
         }
-        assert_eq!(state(), None);
+        assert_eq!(facet_state(&facets, "idx-general"), None);
 
         for index in 0..FACET_EMPTY_TITLE_THRESHOLD - 1 {
             let title = format!("title-{index}");
-            record(title.clone(), true, SearchMode::Auto, 0).await;
+            carried(&title, true).await;
             // A second empty strategy or episode of the same title is not
             // another title.
-            record(title, true, SearchMode::Auto, 0).await;
+            carried(&title, true).await;
         }
-        let pending = state().expect("streak is tracked");
+        let pending = facet_state(&facets, "idx-general").expect("streak is tracked");
         assert_eq!(pending.streak(), FACET_EMPTY_TITLE_THRESHOLD - 1);
         assert_eq!(pending.suppressed_until, None);
 
-        record("title-last".to_string(), true, SearchMode::Auto, 0).await;
-        let suppressed = state().expect("streak is tracked");
+        carried("title-last", true).await;
+        let suppressed = facet_state(&facets, "idx-general").expect("streak is tracked");
         assert_eq!(suppressed.streak(), FACET_EMPTY_TITLE_THRESHOLD);
         assert!(
             suppressed
@@ -20953,39 +21522,150 @@ mod tests {
                 .is_some(),
             "the indexer is out of the facet for background searches"
         );
+        assert_eq!(
+            facet_state(&facets, "idx-anime"),
+            None,
+            "the indexer that found the titles learns nothing against itself"
+        );
 
         // A usable hit from any search, interactive included, clears both.
-        record("title-hit".to_string(), false, SearchMode::Interactive, 2).await;
-        let cleared = state().expect("row stays");
+        record_facet_search(
+            &repo,
+            &facet_context("title-hit", false),
+            SearchMode::Interactive,
+            &[("idx-general", 2)],
+        )
+        .await;
+        let cleared = facet_state(&facets, "idx-general").expect("row stays");
         assert_eq!(cleared.streak(), 0);
         assert_eq!(cleared.suppressed_until, None);
     }
 
     #[tokio::test]
-    async fn facet_learning_ignores_errored_background_searches() {
+    async fn facet_learning_ignores_titles_no_indexer_found() {
         let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
         let facets = repo_impl.facets.clone();
         let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
-        let (client, calls) = scripted_search_client(anime_caps(), |_call| {
-            Err(AppError::Repository("upstream unavailable".into()))
-        });
-        let client = client.with_search_learning_repository(repo);
 
-        for index in 0..=FACET_EMPTY_TITLE_THRESHOLD {
-            anime_facet_search(
-                &client,
+        // A release missing everywhere, searched title after title, says
+        // nothing about what either indexer carries.
+        for index in 0..FACET_EMPTY_TITLE_THRESHOLD * 3 {
+            record_facet_search(
+                &repo,
+                &facet_context(&format!("missing-{index}"), true),
                 SearchMode::Auto,
-                facet_context(&format!("title-{index}"), true),
-                index as u32 + 1,
+                &[("idx-1", 0), ("idx-2", 0)],
+            )
+            .await;
+            // Nor does a search only one indexer answered.
+            record_facet_search(
+                &repo,
+                &facet_context(&format!("alone-{index}"), true),
+                SearchMode::Auto,
+                &[("idx-1", 0)],
             )
             .await;
         }
 
-        assert!(!calls.lock().expect("call log mutex").is_empty());
+        assert!(facets.lock().expect("facet learning mutex").is_empty());
+    }
+
+    type CallLog = StdArc<StdMutex<Vec<RecordedCall>>>;
+
+    /// `idx-1` and `idx-2`, each answering through its own responder.
+    fn two_indexer_search_client(
+        caps: IndexerProviderCapabilities,
+        first: StdArc<ResponseFn>,
+        second: StdArc<ResponseFn>,
+    ) -> (MultiIndexerSearchClient, CallLog, CallLog) {
+        let first_calls: CallLog = StdArc::new(StdMutex::new(Vec::new()));
+        let second_calls: CallLog = StdArc::new(StdMutex::new(Vec::new()));
+        let second_config = IndexerConfig {
+            id: "idx-2".into(),
+            name: "Second Indexer".into(),
+            base_url: "https://second.example.test".into(),
+            ..mock_indexer_config()
+        };
+        let clients: HashMap<String, Arc<dyn IndexerClient>> = HashMap::from([
+            (
+                "idx-1".to_string(),
+                Arc::new(ScriptedIndexerClient {
+                    calls: first_calls.clone(),
+                    responder: first,
+                }) as Arc<dyn IndexerClient>,
+            ),
+            (
+                "idx-2".to_string(),
+                Arc::new(ScriptedIndexerClient {
+                    calls: second_calls.clone(),
+                    responder: second,
+                }) as Arc<dyn IndexerClient>,
+            ),
+        ]);
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config(), second_config],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(PerIndexerPluginProvider { clients, caps }),
+        );
+        (multi, first_calls, second_calls)
+    }
+
+    fn empty_answers() -> StdArc<ResponseFn> {
+        StdArc::new(|_call: &RecordedCall| response_with_titles(&[]))
+    }
+
+    fn matching_answers() -> StdArc<ResponseFn> {
+        StdArc::new(|call: &RecordedCall| {
+            let episode = call.episode.or(call.absolute_episode).unwrap_or(1);
+            response_with_titles(&[&format!("Quiet.Lantern.S01E{episode:02}.1080p.WEB-DL")])
+        })
+    }
+
+    fn was_called(calls: &CallLog) -> bool {
+        !calls.lock().expect("call log mutex").is_empty()
+    }
+
+    #[tokio::test]
+    async fn background_search_learns_nothing_when_no_indexer_finds_the_title() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, first_calls, second_calls) =
+            two_indexer_search_client(anime_caps(), empty_answers(), empty_answers());
+        let client = client.with_search_learning_repository(repo);
+
+        anime_facet_search(
+            &client,
+            SearchMode::Auto,
+            facet_context("title-missing", true),
+            1,
+        )
+        .await;
+
+        assert!(was_called(&first_calls) && was_called(&second_calls));
         assert!(
             facets.lock().expect("facet learning mutex").is_empty(),
-            "an error is neither empty nor usable"
+            "a title missing everywhere starts no streak on either indexer"
         );
+    }
+
+    #[tokio::test]
+    async fn background_search_counts_an_empty_answer_when_another_indexer_found_the_title() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, _first_calls, _second_calls) =
+            two_indexer_search_client(anime_caps(), empty_answers(), matching_answers());
+        let client = client.with_search_learning_repository(repo);
+
+        anime_facet_search(&client, SearchMode::Auto, facet_context("title-a", true), 1).await;
+
+        let general = facet_state(&facets, "idx-1").expect("the empty indexer is tracked");
+        assert_eq!(general.empty_title_ids, vec!["title-a".to_string()]);
+        assert_eq!(general.suppressed_until, None);
+        assert_eq!(facet_state(&facets, "idx-2"), None);
     }
 
     #[tokio::test]
@@ -21001,8 +21681,8 @@ mod tests {
                 suppressed_facet_state(until),
             );
         let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
-        let (client, calls) =
-            scripted_search_client(anime_caps(), |_call| response_with_titles(&[]));
+        let (client, calls, second_calls) =
+            two_indexer_search_client(anime_caps(), empty_answers(), empty_answers());
         let client = client.with_search_learning_repository(repo);
 
         anime_facet_search(
@@ -21013,8 +21693,12 @@ mod tests {
         )
         .await;
         assert!(
-            calls.lock().expect("call log mutex").is_empty(),
+            !was_called(&calls),
             "a background search does not call a facet-suppressed indexer"
+        );
+        assert!(
+            was_called(&second_calls),
+            "the other indexer is still asked"
         );
 
         // The walk sees the same indexer as held until the window ends.
@@ -21048,7 +21732,7 @@ mod tests {
         )
         .await;
         assert!(
-            !calls.lock().expect("call log mutex").is_empty(),
+            was_called(&calls),
             "an operator's automatic search still asks the indexer"
         );
         calls.lock().expect("call log mutex").clear();
@@ -21060,8 +21744,41 @@ mod tests {
         )
         .await;
         assert!(
-            !calls.lock().expect("call log mutex").is_empty(),
+            was_called(&calls),
             "an interactive search still asks the indexer"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_search_asks_every_indexer_when_all_are_facet_suppressed() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let until = Utc::now() + Duration::hours(FACET_SUPPRESSION_HOURS);
+        for indexer_id in ["idx-1", "idx-2"] {
+            repo_impl
+                .facets
+                .lock()
+                .expect("facet learning mutex")
+                .insert(
+                    (indexer_id.to_string(), "anime".to_string()),
+                    suppressed_facet_state(until),
+                );
+        }
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, first_calls, second_calls) =
+            two_indexer_search_client(anime_caps(), empty_answers(), empty_answers());
+        let client = client.with_search_learning_repository(repo);
+
+        anime_facet_search(
+            &client,
+            SearchMode::Auto,
+            facet_context("title-new", true),
+            1,
+        )
+        .await;
+
+        assert!(
+            was_called(&first_calls) && was_called(&second_calls),
+            "with nothing left to prefer, a background search asks every indexer"
         );
     }
 
@@ -21075,8 +21792,8 @@ mod tests {
             suppressed_facet_state(expired),
         );
         let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
-        let (client, calls) =
-            scripted_search_client(anime_caps(), |_call| response_with_titles(&[]));
+        let (client, calls, _second_calls) =
+            two_indexer_search_client(anime_caps(), empty_answers(), matching_answers());
         let client = client.with_search_learning_repository(repo.clone());
 
         // A claim taken by another search holds this one off.
@@ -21086,10 +21803,7 @@ mod tests {
                 .expect("claim")
         );
         anime_facet_search(&client, SearchMode::Auto, facet_context("title-a", true), 1).await;
-        assert!(
-            calls.lock().expect("call log mutex").is_empty(),
-            "only the claiming search re-probes"
-        );
+        assert!(!was_called(&calls), "only the claiming search re-probes");
 
         // Once that claim lapses, the next background search is the re-probe.
         facets
@@ -21100,26 +21814,69 @@ mod tests {
             .reprobe_claimed_at =
             Some(Utc::now() - Duration::minutes(FACET_REPROBE_CLAIM_MINUTES + 1));
         anime_facet_search(&client, SearchMode::Auto, facet_context("title-b", true), 2).await;
-        assert!(
-            !calls.lock().expect("call log mutex").is_empty(),
-            "the re-probe asks the indexer"
-        );
-        let resuppressed = facets
-            .lock()
-            .expect("facet learning mutex")
-            .get(&("idx-1".to_string(), "anime".to_string()))
-            .cloned()
-            .expect("state");
+        assert!(was_called(&calls), "the re-probe asks the indexer");
+        let resuppressed = facet_state(&facets, "idx-1").expect("state");
         assert!(
             resuppressed.suppressed_until.is_some_and(
                 |until| until > Utc::now() + Duration::hours(FACET_SUPPRESSION_HOURS - 1)
             ),
-            "an empty re-probe suppresses for another full window"
+            "an empty re-probe of a title another indexer found suppresses for another full window"
         );
 
         calls.lock().expect("call log mutex").clear();
         anime_facet_search(&client, SearchMode::Auto, facet_context("title-c", true), 3).await;
-        assert!(calls.lock().expect("call log mutex").is_empty());
+        assert!(!was_called(&calls));
+    }
+
+    #[tokio::test]
+    async fn facet_reprobe_of_a_title_no_indexer_found_does_not_renew_the_suppression() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let expired = Utc::now() - Duration::minutes(1);
+        facets.lock().expect("facet learning mutex").insert(
+            ("idx-1".to_string(), "anime".to_string()),
+            suppressed_facet_state(expired),
+        );
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, calls, _second_calls) =
+            two_indexer_search_client(anime_caps(), empty_answers(), empty_answers());
+        let client = client.with_search_learning_repository(repo);
+
+        anime_facet_search(&client, SearchMode::Auto, facet_context("title-a", true), 1).await;
+
+        assert!(was_called(&calls), "the re-probe asks the indexer");
+        assert_eq!(
+            facet_state(&facets, "idx-1").and_then(|state| state.suppressed_until),
+            Some(expired),
+            "an answer no indexer could beat leaves the lapsed window as it was"
+        );
+    }
+
+    #[tokio::test]
+    async fn facet_learning_ignores_errored_background_searches() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, calls) = scripted_search_client(anime_caps(), |_call| {
+            Err(AppError::Repository("upstream unavailable".into()))
+        });
+        let client = client.with_search_learning_repository(repo);
+
+        for index in 0..=FACET_EMPTY_TITLE_THRESHOLD {
+            anime_facet_search(
+                &client,
+                SearchMode::Auto,
+                facet_context(&format!("title-{index}"), true),
+                index as u32 + 1,
+            )
+            .await;
+        }
+
+        assert!(!calls.lock().expect("call log mutex").is_empty());
+        assert!(
+            facets.lock().expect("facet learning mutex").is_empty(),
+            "an error is neither empty nor usable"
+        );
     }
 
     #[tokio::test]

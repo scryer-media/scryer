@@ -19,6 +19,19 @@ fn language_ahead_of_tier() -> DecisionPipeline {
     .unwrap()
 }
 
+/// The order that compares the quality tier and revision first, then the
+/// languages. The language steps are opt-in, so a test about language
+/// behaviour under a tier-first order chooses this one explicitly.
+fn tier_then_languages() -> DecisionPipeline {
+    DecisionPipeline::try_from_gates([
+        DecisionGate::QualityTier,
+        DecisionGate::Revision,
+        DecisionGate::PreferredLanguage,
+        DecisionGate::OptionalLanguages,
+    ])
+    .unwrap()
+}
+
 fn incumbent(id: &str, score: i32, covers: &[&str]) -> (Incumbent, bool) {
     (
         Incumbent {
@@ -1014,6 +1027,7 @@ fn a_manual_pack_grab_still_cannot_fetch_an_unaired_season() {
 fn queued(title: &str, tier_index: Option<usize>, revision: i32, score: i32) -> QueuedRelease {
     QueuedRelease {
         missing_history: false,
+        blocks_submission: false,
         history_cutoff_reached: false,
         release_group: Some("group".into()),
         title: title.to_string(),
@@ -1072,12 +1086,25 @@ fn missing_grab_history_at_cutoff_still_yields_to_a_language_step() {
             false,
             true,
         ),
+        // More optional languages pass only while the grab still wants them,
+        // as they do over a file on disk.
+        (
+            AudioLanguageRank {
+                wanted: true,
+                optional_wanted: true,
+                ..AudioLanguageRank::for_test(0, 0)
+            },
+            AudioLanguageRank::for_test(0, 1),
+            1,
+            false,
+            true,
+        ),
         (
             AudioLanguageRank::for_test(0, 0),
             AudioLanguageRank::for_test(0, 1),
             1,
             false,
-            true,
+            false,
         ),
         (
             AudioLanguageRank::for_test(1, 0),
@@ -1120,7 +1147,7 @@ fn missing_grab_history_at_cutoff_still_yields_to_a_language_step() {
             .with_pipeline(if language_ahead {
                 language_ahead_of_tier()
             } else {
-                DecisionPipeline::default_order()
+                tier_then_languages()
             });
         assert_eq!(
             evaluate_admission(&subject, candidate, &grab_policy_with_queue(10))
@@ -1368,6 +1395,69 @@ fn a_better_candidate_is_admitted_over_a_queued_release() {
     );
 }
 
+/// While the queued release is still live on its client, submission refuses
+/// any second grab for the scope. Admission refuses the same upgrades the
+/// test above admits, with a code, so a lane does not keep a pending row that
+/// submission would turn away on every pass.
+#[test]
+fn a_better_candidate_waits_while_the_queued_release_blocks_submission() {
+    let mut live = queued("Show.S01E01.1080p.WEB-DL-GRP", Some(1), 0, 900);
+    live.blocks_submission = true;
+    let subject = AdmissionSubject::new(episodes(&["ep-01"]), []).with_queued(vec![live]);
+    let policy = grab_policy_with_queue(200);
+
+    for candidate in [
+        CandidateFacts::new(Some(0), 0, 100),
+        CandidateFacts::new(Some(1), 1, 100).with_revision_policy(Some("group"), false),
+        CandidateFacts::new(Some(1), 0, 1_100),
+    ] {
+        let verdict = evaluate_admission(&subject, candidate, &policy);
+        let rejection = verdict
+            .rejection()
+            .unwrap_or_else(|| panic!("an upgrade beside a live download must wait: {verdict:?}"));
+        assert!(
+            matches!(
+                &rejection.reason,
+                AdmissionRejectionReason::QueuedItemBlocksUpgrade { queued_title }
+                    if queued_title == "Show.S01E01.1080p.WEB-DL-GRP"
+            ),
+            "{verdict:?}"
+        );
+        assert_eq!(
+            rejection.reason.reason_code(),
+            Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
+        );
+        assert_eq!(rejection.reason.deciding_step(), None);
+    }
+
+    // A worse or equal candidate keeps its own, more specific reason.
+    let verdict = evaluate_admission(&subject, CandidateFacts::new(Some(1), 0, 900), &policy);
+    assert!(
+        matches!(
+            verdict.rejection().map(|rejection| &rejection.reason),
+            Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+        ),
+        "{verdict:?}"
+    );
+
+    // An operator's grab and an import still ignore the queue.
+    let manual = AdmissionPolicy {
+        applies_to_queue: true,
+        ..AdmissionPolicy::manual()
+    };
+    assert!(
+        evaluate_admission(&subject, CandidateFacts::new(Some(0), 0, 100), &manual).is_admitted()
+    );
+    assert!(
+        evaluate_admission(
+            &subject,
+            CandidateFacts::new(Some(0), 0, 100),
+            &AdmissionPolicy::not_a_downgrade()
+        )
+        .is_admitted()
+    );
+}
+
 /// **I4.** Import never re-litigates the queue: the bytes are already on disk,
 /// and refusing them because something else is still downloading would discard
 /// a finished download for one that may never finish. Both import policies leave
@@ -1484,6 +1574,78 @@ fn a_queued_single_episode_does_not_refuse_a_pack_that_fills_other_missing_membe
     assert!(
         verdict.is_admitted(),
         "the pack still fills ep-02, so it must be admitted: {verdict:?}"
+    );
+}
+
+/// The same pack, while the queued episode is still live on its client.
+/// Submission refuses any grab whose scope overlaps that job, whichever members
+/// the pack would fill, so admission refuses it first with a code instead of
+/// admitting a grab that is deferred on every pass.
+#[test]
+fn a_pack_overlapping_a_live_queued_episode_waits_for_it() {
+    let mut live_episode = queued("Show.S01E01.720p.WEB-DL-GRP", Some(2), 0, 500);
+    live_episode.covers = vec!["ep-01".to_string()];
+    live_episode.blocks_submission = true;
+    let subject = AdmissionSubject::new(episodes(&["ep-01", "ep-02"]), [])
+        .per_member()
+        .with_queued(vec![live_episode]);
+
+    // A pack that fills the missing ep-02 and one that also beats the live job.
+    for candidate in [
+        CandidateFacts::new(Some(1), 0, 900),
+        CandidateFacts::new(Some(0), 0, 2_000),
+    ] {
+        let verdict = evaluate_admission(&subject, candidate, &grab_policy_with_queue(200));
+        let rejection = verdict
+            .rejection()
+            .unwrap_or_else(|| panic!("a pack beside a live download must wait: {verdict:?}"));
+        assert!(
+            matches!(
+                &rejection.reason,
+                AdmissionRejectionReason::QueuedItemBlocksUpgrade { queued_title }
+                    if queued_title == "Show.S01E01.720p.WEB-DL-GRP"
+            ),
+            "{verdict:?}"
+        );
+        assert_eq!(
+            rejection.reason.reason_code(),
+            Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
+        );
+    }
+
+    // A refusal the members reach on their own keeps its more specific reason.
+    let mut live_pack = queued("Show.S01.1080p.WEB-DL-GRP", Some(1), 0, 900);
+    live_pack.covers = vec!["ep-01".to_string(), "ep-02".to_string()];
+    live_pack.blocks_submission = true;
+    let covered = AdmissionSubject::new(episodes(&["ep-01", "ep-02"]), [])
+        .per_member()
+        .with_queued(vec![live_pack]);
+    assert!(matches!(
+        evaluate_admission(
+            &covered,
+            CandidateFacts::new(Some(1), 0, 900),
+            &grab_policy_with_queue(200)
+        )
+        .rejection()
+        .map(|rejection| &rejection.reason),
+        Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+    ));
+
+    // An operator's pack grab and an import still ignore the queue.
+    let manual = AdmissionPolicy {
+        applies_to_queue: true,
+        ..AdmissionPolicy::manual()
+    };
+    assert!(
+        evaluate_admission(&subject, CandidateFacts::new(Some(1), 0, 900), &manual).is_admitted()
+    );
+    assert!(
+        evaluate_admission(
+            &subject,
+            CandidateFacts::new(Some(1), 0, 900),
+            &AdmissionPolicy::not_a_downgrade()
+        )
+        .is_admitted()
     );
 }
 
@@ -1613,7 +1775,7 @@ fn the_default_order_keeps_the_tier_ahead_of_the_preferred_language() {
 }
 
 #[test]
-fn the_default_order_upgrades_to_the_preferred_language_within_a_tier() {
+fn a_tier_first_order_upgrades_to_the_preferred_language_within_a_tier() {
     // Same tier and revision: the preferred language wins over any score.
     let subject = title_scope(spoken(
         "english-1080p",
@@ -1621,8 +1783,9 @@ fn the_default_order_upgrades_to_the_preferred_language_within_a_tier() {
         9_000,
         AudioLanguageRank::for_test(1, 0),
     ));
-    let candidate =
-        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(tier_then_languages());
     assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
 }
 
@@ -1638,8 +1801,9 @@ fn a_language_upgrade_ignores_the_format_cutoff_and_the_churn_threshold() {
         cutoff_score: Some(500),
         ..auto(5_000)
     };
-    let candidate =
-        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(tier_then_languages());
     assert!(evaluate_admission(&subject, candidate, &policy).is_admitted());
 }
 
@@ -2296,12 +2460,12 @@ fn frozen_ladder(
     (score.saturating_sub(incumbent.score) < policy.min_delta).then_some("not_an_upgrade")
 }
 
-/// The default order is the old quality-first ladder, and the preferred
-/// language moved ahead of the tier is the old language-first one, verdict
-/// for verdict, over every combination of tier, group, revision, language and
-/// score the two sides can differ in.
+/// Tier, revision, then the languages is the old quality-first ladder, and
+/// the preferred language moved ahead of the tier is the old language-first
+/// one, verdict for verdict, over every combination of tier, group, revision,
+/// language and score the two sides can differ in.
 #[test]
-fn the_default_and_language_ahead_orders_reproduce_the_old_ladder() {
+fn the_tier_first_and_language_ahead_orders_reproduce_the_old_ladder() {
     let tiers = [Some(0), Some(1), None];
     let languages = [
         AudioLanguageRank::for_test(0, 0),
@@ -2323,7 +2487,7 @@ fn the_default_and_language_ahead_orders_reproduce_the_old_ladder() {
     ];
     let mut compared = 0;
     for (language_first, pipeline) in [
-        (false, DecisionPipeline::default_order()),
+        (false, tier_then_languages()),
         (true, language_ahead_of_tier()),
     ] {
         for held_tier in tiers {

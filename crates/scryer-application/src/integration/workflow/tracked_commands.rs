@@ -379,10 +379,22 @@ fn apply_tracked_download_activity_projection(
             // never learns of it. Clearing it was what left a failed manual
             // import invisible everywhere: the row went back to the original
             // block message with `importStatus: null`.
-            let keep_import_status = matches!(
+            //
+            // An automatic import left pending by a block is not waiting on
+            // anything: a retry moves the download out of the block first,
+            // and nothing else picks it up again on its own. Showing it as
+            // pending hid the block and its reason, so the row shows the
+            // block instead, whatever status the block carries: a block
+            // restored after a restart reads as a warning.
+            let stopped_automatic_import = item.import_status == Some(ImportStatus::Pending)
+                && item
+                    .import_type
+                    .is_some_and(|import_type| import_type != ImportType::ManualImport);
+            let keep_import_status = (matches!(
                 item.import_status,
                 Some(ImportStatus::Pending | ImportStatus::Running | ImportStatus::Processing)
-            ) || (item.import_type == Some(ImportType::ManualImport)
+            ) && !stopped_automatic_import)
+                || (item.import_type == Some(ImportType::ManualImport)
                 && matches!(
                     item.import_status,
                     Some(ImportStatus::Failed | ImportStatus::Skipped)
@@ -489,6 +501,7 @@ impl AppUseCase {
         .await?;
         let source_identity =
             ClientJobLocator::new(client_id, client_type, download_client_item_id);
+        self.require_ignorable_source(&source_identity).await?;
         let tracked_id = crate::tracked_downloads::tracked_download_id(
             client_id,
             client_type,
@@ -885,7 +898,7 @@ async fn reopen_scopes_released_by_ignored_submission(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await
     {
         Ok(rows) => rows,
@@ -1164,7 +1177,11 @@ async fn process_tracked_download_snapshot(
         let id = tracked_download_id_for_item(item);
         seen_ids.insert(id.clone());
 
-        let Some(outcome) = runtime.tracker.track(app, item.clone()).await else {
+        let Some(outcome) = runtime
+            .tracker
+            .track_with_origin(app, item.clone(), enrichment.origin_is_unknown(item))
+            .await
+        else {
             continue;
         };
         let download_id = outcome.download_id;
@@ -1283,8 +1300,15 @@ async fn process_tracked_download_snapshot(
     } else {
         first_tracked_download_id_by_source(runtime.tracker.get_all())
     };
+    let mut left_client = Vec::new();
     for source_identity in unavailable_sources {
         let recorded = drop_source_removed_from_client(app, &source_identity).await;
+        if recorded
+            && let Some(key) =
+                crate::import::archive_extraction::DownloadExtractionKey::for_source(&source_identity)
+        {
+            left_client.push(key);
+        }
         let cached_id = cached_ids_by_source.get(&source_identity).copied();
         if let Some(tracked) = cached_id.and_then(|id| runtime.tracker.get_mut_by_download_id(id)) {
             if !recorded {
@@ -1295,6 +1319,9 @@ async fn process_tracked_download_snapshot(
             }
         }
     }
+    // A download gone from its client has ended: its archive workspace goes a
+    // day later.
+    crate::import::archive_extraction::settle_download_extractions(app, &left_client).await;
 
     if full_authoritative_listing && let Some(authoritative_client_ids) = authoritative_client_ids {
         drop_submissions_never_listed_by_client(
@@ -1615,10 +1642,23 @@ async fn record_missing_client_download(
             Some(locator),
         )
         .await?;
+    // An `import_pending` row that only carries the stalled-pass count records
+    // a counter, not an import outcome: the dropped job still goes missing.
+    let existing_counts_stalled_passes = existing.as_deref()
+        == Some(TrackedDownloadState::ImportPending.as_str())
+        && repository
+            .get_identity_tracked_state_reason_for_download(
+                Some(&binding.download_id),
+                &identity,
+                Some(locator),
+            )
+            .await?
+            .as_deref()
+            == Some(crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
     let submission_state = repository.get_tracked_state(locator).await?;
     if existing
         .as_deref()
-        .is_some_and(|state| preserved.contains(&state))
+        .is_some_and(|state| preserved.contains(&state) && !existing_counts_stalled_passes)
         || submission_state
             .as_deref()
             .is_some_and(|state| preserved.contains(&state))
@@ -1689,7 +1729,7 @@ async fn record_missing_client_download(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await?;
     let episodes = if rows.iter().any(|row| row.episode_id.is_some()) {
         app.services
@@ -1967,6 +2007,29 @@ async fn await_snapshot_servicing_commands<T>(
     }
 }
 
+/// One provider-catalog notice: when archive extractors may have changed, the
+/// downloads waiting for one go back to the ordinary import. False once the
+/// channel has closed.
+pub(crate) async fn handle_provider_catalog_change(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    changed: Result<Vec<crate::ProviderCatalogFamily>, tokio::sync::broadcast::error::RecvError>,
+) -> bool {
+    use tokio::sync::broadcast::error::RecvError;
+    let archive_extractors_changed = match changed {
+        Ok(families) => families.contains(&crate::ProviderCatalogFamily::ArchiveExtractor),
+        // A missed change may have been an extractor.
+        Err(RecvError::Lagged(_)) => true,
+        Err(RecvError::Closed) => return false,
+    };
+    if archive_extractors_changed && tracker.reopen_downloads_awaiting_archive_extractor() > 0 {
+        tracing::info!("archive extractors changed; reopened downloads waiting for one");
+        crate::tracked_downloads::publish_runtime_tracked_download_snapshot_cache(app, tracker)
+            .await;
+    }
+    true
+}
+
 pub async fn start_download_queue_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -2015,11 +2078,21 @@ pub async fn start_download_queue_poller_with_options(
     let mut interval = tokio::time::interval(options.interval);
     let mut commands_open = true;
     let mut snapshots_open = true;
+    let mut provider_catalog_rx = app
+        .runtime
+        .events
+        .provider_catalog_changed_broadcast
+        .subscribe();
+    let mut provider_catalog_open = true;
     loop {
         tokio::select! {
             _ = token.cancelled() => {
                 tracing::info!("download queue poller shutting down");
                 break;
+            }
+            changed = provider_catalog_rx.recv(), if provider_catalog_open => {
+                provider_catalog_open =
+                    handle_provider_catalog_change(&app, &mut runtime.tracker, changed).await;
             }
             maybe_command = command_rx.recv(), if commands_open => {
                 match maybe_command {
@@ -3030,38 +3103,63 @@ async fn handle_tracked_download_command(
             if let Some((id, _)) = &target
                 && tracked_work_in_flight.contains(id)
             {
-                let _ = reply.send(Err(AppError::validation_refused(crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING, format!(
-                    "tracked download {requested_id} is busy processing"
-                ))));
+                let _ = reply.send(Err(AppError::validation_refused(
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING,
+                    format!("tracked download {requested_id} is busy processing"),
+                )));
                 return;
             }
             let Some(tracked) = target
                 .and_then(|(_, download_id)| tracker.get_by_download_id(download_id))
                 .cloned()
             else {
-                let _ = reply.send(Err(AppError::not_found_reason(crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND, format!(
-                    "tracked download {requested_id}"
-                ))));
+                let _ = reply.send(Err(AppError::not_found_reason(
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND,
+                    format!("tracked download {requested_id}"),
+                )));
                 return;
             };
+            // A grab history that could not be read is not a missing one: the
+            // refusal below tells the operator the history does not exist.
             let has_grabbed_submission =
-                crate::failed_download_handler::tracked_download_has_grabbed_submission(
+                match crate::failed_download_handler::tracked_download_grabbed_submission_lookup(
                     app, &tracked,
                 )
-                .await;
-            if has_grabbed_submission
-                && !crate::tracked_downloads::persist_tracked_download_state_marker(
-                    app,
-                    &tracked,
-                    TrackedDownloadState::FailedPending,
-                    Some(if skip_reacquire {
-                        crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON
-                    } else {
-                        crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
-                    }),
-                    None,
-                )
                 .await
+                {
+                    Ok(found) => found,
+                    Err(error) => {
+                        tracing::warn!(
+                            download_id = %tracked.download_id,
+                            error = %error,
+                            "could not read grab history for a manual failure request"
+                        );
+                        let _ = reply.send(Err(AppError::Repository(
+                            "could not read this download's grab history; download preserved"
+                                .into(),
+                        )));
+                        return;
+                    }
+                };
+            if !has_grabbed_submission {
+                let _ = reply.send(Err(AppError::validation_refused(
+                    crate::error_reasons::integration::DOWNLOAD_NOT_GRABBED,
+                    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
+                )));
+                return;
+            }
+            if !crate::tracked_downloads::persist_tracked_download_state_marker(
+                app,
+                &tracked,
+                TrackedDownloadState::FailedPending,
+                Some(if skip_reacquire {
+                    crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON
+                } else {
+                    crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
+                }),
+                None,
+            )
+            .await
             {
                 let _ = reply.send(Err(AppError::Repository(
                     "could not persist manual blocklist request; download preserved".into(),
@@ -3069,38 +3167,29 @@ async fn handle_tracked_download_command(
                 return;
             }
             let result = if let Some(td) = tracker.get_mut_by_download_id(tracked.download_id) {
-                if !has_grabbed_submission {
-                    crate::failed_download_handler::warn_download_not_grabbed(td);
-                    if td.state == TrackedDownloadState::FailedPending {
-                        td.state = TrackedDownloadState::Downloading;
-                    }
-                    td.skip_reacquire_on_failure = false;
-                    td.manual_failure_cleanup = false;
-                    Ok(())
-                } else {
-                    td.state = TrackedDownloadState::FailedPending;
-                    td.status = TrackedDownloadStatus::Error;
-                    td.status_messages.clear();
-                    td.skip_reacquire_on_failure = skip_reacquire;
-                    td.manual_failure_cleanup = true;
-                    td.blocklist_confirmation_failed = false;
-                    let completed_lookup =
-                        crate::completed_download_handler::CompletedDownloadLookup::default();
-                    let _ = try_dispatch_tracked_download_background_work(
-                        app,
-                        actor,
-                        tracker,
-                        tracked_work_in_flight,
-                        tracked_work_result_tx,
-                        tracked.download_id,
-                        &completed_lookup,
-                    );
-                    Ok(())
-                }
+                td.state = TrackedDownloadState::FailedPending;
+                td.status = TrackedDownloadStatus::Error;
+                td.status_messages.clear();
+                td.skip_reacquire_on_failure = skip_reacquire;
+                td.manual_failure_cleanup = true;
+                td.blocklist_confirmation_failed = false;
+                let completed_lookup =
+                    crate::completed_download_handler::CompletedDownloadLookup::default();
+                let _ = try_dispatch_tracked_download_background_work(
+                    app,
+                    actor,
+                    tracker,
+                    tracked_work_in_flight,
+                    tracked_work_result_tx,
+                    tracked.download_id,
+                    &completed_lookup,
+                );
+                Ok(())
             } else {
-                Err(AppError::not_found_reason(crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND, format!(
-                    "tracked download {requested_id}"
-                )))
+                Err(AppError::not_found_reason(
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND,
+                    format!("tracked download {requested_id}"),
+                ))
             };
             if result.is_ok() {
                 let activity_item = tracker
@@ -3172,6 +3261,9 @@ async fn handle_tracked_download_command(
                 })
                 .collect();
             let _ = reply.send(snapshot);
+        }
+        TrackedDownloadCommand::UntrackedExtractions { keys, reply } => {
+            let _ = reply.send(tracker.untracked_extraction_keys(keys));
         }
     }
 }
@@ -3852,6 +3944,7 @@ async fn handle_tracked_download_background_work_result(
         return None;
     };
 
+    let stalled_passes_before = tracked.stalled_import_passes;
     let state = match result.outcome {
         Ok(finished) => {
             merge_tracked_download_background_work_state(tracked, finished);
@@ -3905,10 +3998,18 @@ async fn handle_tracked_download_background_work_result(
         crate::tracked_downloads::persist_import_blocked_state_marker(
             app,
             td,
-            crate::tracked_downloads::ImportBlockedReason::AfterImport,
+            crate::tracked_downloads::ImportBlockedReason::after_import(td),
             td.status_messages.first().map(|message| message.text.as_str()),
         )
         .await;
+    } else if state == TrackedDownloadState::ImportPending
+        && result.kind == TrackedDownloadBackgroundWorkKind::Import
+        && let Some(td) = tracker.get_by_download_id(download_id)
+        && td.stalled_import_passes != stalled_passes_before
+    {
+        // Only a pass that changed the count writes, so the limit holds
+        // across a restart without an idle write per poll.
+        crate::tracked_downloads::persist_stalled_import_passes(app, td).await;
     }
 
     publish_runtime_tracked_download_and_activity_item(app, tracker, Some(activity_item)).await;

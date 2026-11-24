@@ -648,6 +648,8 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     requiredAudioLanguagesOverride
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     rootFolderPath
     renameEnabled
@@ -667,6 +669,7 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
       items {${WANTED_ITEM_FIELDS}
       }
     }
+    certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
     }${TITLE_CAST_CREDIT_SELECTION}
     mediaFiles {${TITLE_MEDIA_FILE_FIELDS}${TITLE_MEDIA_FILE_SCORE_FIELDS}
@@ -710,6 +713,8 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     qualityTier
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     useSeasonFolders
     useSeasonFoldersOverride
@@ -726,6 +731,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     }
     seriesMovieLinks {${SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS}
     }
+    certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
     }${TITLE_CAST_CREDIT_SELECTION}`;
 
@@ -1435,7 +1441,26 @@ export const searchForSeriesMovieQuery = `query SearchReleasesForSeriesMovie($ti
 
 // Hotfix 0.17.1: server-side interactive release-search job; results stream in
 // as each indexer completes and are polled via this query.
-export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id: ID!) {
+export const interactiveReleaseSearchQuery =
+  interactiveReleaseSearchQueryWith();
+
+/**
+ * Parsed facts only the Indexers › Search refine rail reads. GraphQL merges
+ * this second `parsedRelease` selection into the shared one, so title searches
+ * keep their leaner documents.
+ */
+export const INDEXER_SEARCH_EXTRA_RESULT_FIELDS = `
+    parsedRelease {
+      audioChannels
+      audioLanguages
+    }`;
+
+/** The poll document for the Indexers › Search pane. */
+export const indexerSearchInteractiveReleaseSearchQuery =
+  interactiveReleaseSearchQueryWith(INDEXER_SEARCH_EXTRA_RESULT_FIELDS);
+
+function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
+  return `query InteractiveReleaseSearch($id: ID!) {
   interactiveReleaseSearch(id: $id) {
     id
     state
@@ -1443,7 +1468,7 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
     deadlineReached
     failureReason
     failureReasonCode
-    results {${RELEASE_SEARCH_RESULT_FIELDS}
+    results {${RELEASE_SEARCH_RESULT_FIELDS}${extraResultFields}
     }
     indexers {
       indexerId
@@ -1469,6 +1494,7 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
     completedAt
   }
 }`;
+}
 
 export const TITLE_LIST_FIELDS = `
     id
@@ -1700,6 +1726,14 @@ export const librariesQuery = `query Libraries($facet: MediaFacetValue, $permiss
   }
 }`;
 
+/** The quality profile and scoring persona a library uses now, which the import wizard starts on. */
+export const externalImportLibraryChoicesQuery = `query ExternalImportLibraryChoices($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    qualityProfileId
+    scoringPersona
+  }
+}`;
+
 /** Every library's stored roots plus the server path style, read before an import updates a library. */
 export const externalImportLibraryRootsQuery = `query ExternalImportLibraryRoots {
   libraries {
@@ -1738,6 +1772,8 @@ export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries
     qualityProfileId
     requestQualityProfileIds
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -1779,7 +1815,6 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     useSeasonFoldersOverride
     useSeasonFolders
     defaultMonitorTypeOverride
-    defaultMonitorType
     qualityProfileIdOverride
     qualityProfileId
     requestQualityProfileIdsOverride
@@ -2543,6 +2578,8 @@ export const indexersQuery = `query Indexers($providerType: String) {
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     rateLimitedUntil
     isEnabled
@@ -2607,6 +2644,7 @@ const proxyConfigFieldSelection = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled
@@ -2800,6 +2838,8 @@ const indexerFieldSelection = `
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     rateLimitedUntil
     isEnabled
@@ -2848,6 +2888,8 @@ const qualityProfileCriteriaFields = `
       minScoreToGrab
       cutoffScore
       minUpgradeScoreDelta
+      minMissingEpisodesForPack
+      minMissingPercentForSeriesPack
       decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
@@ -3083,6 +3125,9 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     slug
     isDefault
     qualityProfileId
+    defaultMonitorType
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3098,6 +3143,8 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3124,6 +3171,8 @@ export const globalSearchRequesterInitQuery = `query GlobalSearchRequesterInit {
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3142,6 +3191,8 @@ export const requestableLibrariesQuery = `query RequestableLibraries {
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3261,6 +3312,10 @@ export const myUiSettingsQuery = `query MyUiSettings {
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -3270,6 +3325,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
         y
         w
         h
+        settings
       }
     }
   }
@@ -3282,10 +3338,14 @@ export const securitySettingsQuery = `query SecuritySettings {
     sessionDurationDays
     skipLoginForLocalIps
     apiKeysRestrictToSystemSettingsUsers
+    mcpEnabled
+    mcpEnabledEnvOverride
     mfaRequireConfigStepUp
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin
     mfaRequireEmbyLogin
+    localTrustAllowedHosts
+    restrictLocalTrustToTrustedProxies
     effectiveFormLoginEnabled
     envOverrideActive
     envOverrideDescription
@@ -3501,6 +3561,11 @@ export const indexerRoutingAllScopesQuery = `query IndexerRoutingAllScopes {
   }
 }`;
 
+/** The signed-in member's own list policy; NONE hides the Lists page. */
+export const myListPolicyQuery = `query MyListPolicy {
+  myListPolicy
+}`;
+
 export const meQuery = `query Me {
   me {
     id
@@ -3688,6 +3753,42 @@ export const externalImportSetupSecretDraftStatusQuery = `query ExternalImportSe
     hasDraft
     ownedByCurrentUser
     updatedAt
+  }
+}`;
+
+const EXTERNAL_RULE_IMPORT_FACT_FIELDS = `code message details`;
+export const externalRuleImportStatusQuery = `query ExternalRuleImportStatus($runId: ID!) {
+  externalRuleImportStatus(runId: $runId) {
+    runId
+    status
+    active
+    revision
+    updatedAt
+    source
+    baseUrl
+    phase
+    reason
+    message
+    counts {
+      total
+      pending
+      saved
+      savedNeedsReview
+      savedFailedTranslation
+      skippedExists
+      failed
+    }
+    items {
+      key
+      sourceName
+      savedName
+      ruleSetId
+      state
+      reason
+      message
+      facts { ${EXTERNAL_RULE_IMPORT_FACT_FIELDS} }
+    }
+    facts { ${EXTERNAL_RULE_IMPORT_FACT_FIELDS} }
   }
 }`;
 
@@ -3991,6 +4092,27 @@ export const dashboardRecycleBinQuery = `query DashboardRecycleBin {
   }
 }`;
 
+/** One upcoming lifecycle actions panel: only what its rows show. */
+export const dashboardLifecycleUpcomingQuery = `query DashboardLifecycleUpcoming($states: [LifecycleCandidateState!], $ruleStates: [LifecycleRuleState!], $actions: [LifecycleActionHead!], $limit: Int) {
+  lifecycleInstanceGates {
+    enabled
+    actionsPaused
+  }
+  lifecycleCandidates(states: $states, ruleStates: $ruleStates, actions: $actions, limit: $limit) {
+    id
+    ruleName
+    subjectKind
+    subjectLabel
+    titleName
+    state
+    actions {
+      heads
+    }
+    dueAt
+    heldSince
+  }
+}`;
+
 export const recycledItemHistoryQuery = `query RecycledItemHistory($id: ID!) {
   recycledItemHistory(id: $id) {
     items {
@@ -4075,214 +4197,234 @@ export const ruleSetQuery = `query RuleSet($id: ID!) {
     managedTagFilter
     createdAt
     updatedAt
+    builderModel
   }
 }`;
 
-// ── Maintenance Rules ─────────────────────────────────────────────────
+// ── Lifecycle Rules ─────────────────────────────────────────────────
 
-export const MAINTENANCE_RULE_SET_FIELDS = `
+/// Everything a rule's source declares it can do. Shared by the rule list, the
+/// rule detail and validation, which all render the same summary.
+export const LIFECYCLE_DECLARED_ACTIONS_FIELDS = `
+      heads
+      destructive
+      qualityProfiles
+      addTags
+      removeTags
+      libraries
+      roots
+      notifications`;
+
+/// What a rule decided for one subject, on preview rows and candidates.
+export const LIFECYCLE_DECIDED_ACTIONS_FIELDS = `
+      heads
+      qualityProfile
+      addTags
+      removeTags
+      library
+      root
+      notification`;
+
+export const LIFECYCLE_RULE_SET_FIELDS = `
     id
     name
     description
     state
-    enabledArming
     editedSinceEnabled
     systemOwned
     libraryIds
-    subjectKind
     currentRevisionNumber
     graceDays
-    actionSpec {
+    declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
+    }
+    schedule {
       kind
-      schemaVersion
-      targetQualityProfileId
-      tags
+      everySeconds
+      timeLocal
+      days
+      expression
     }
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
-    }
+    nextRunAt
+    maxTitlesPerRun
+    loadRefusal
     createdAt
     updatedAt`;
 
-const maintenanceRuleRevisionFieldSelection = `
+const lifecycleRuleRevisionFieldSelection = `
     id
     ruleSetId
     revisionNumber
     regoSource
     graceDays
-    storageRootId
-    matcherContentHash
+    sourceContentHash
     createdBy
     createdAt`;
 
-export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
-  maintenanceRuleSets {${MAINTENANCE_RULE_SET_FIELDS}
+export const lifecycleRuleSetsQuery = `query LifecycleRuleSets {
+  lifecycleRuleSets {${LIFECYCLE_RULE_SET_FIELDS}
   }
 }`;
 
 /// Detail payload shared by the rule-set query and every mutation that returns
-/// a rule set with its current revision and action.
-export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
-    ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
+/// a rule set with its current revision and declared actions.
+export const LIFECYCLE_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${LIFECYCLE_RULE_SET_FIELDS}
     }
-    revision {${maintenanceRuleRevisionFieldSelection}
+    revision {${lifecycleRuleRevisionFieldSelection}
     }
-    actionSpec {
-      kind
-      schemaVersion
-      targetQualityProfileId
-      tags
-    }
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
+    declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
     }`;
 
-export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
-  maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+/// Opening the editor is the one reader of the builder model, so it is
+/// selected here and not on the mutation payloads that share the detail fields.
+export const lifecycleRuleSetQuery = `query LifecycleRuleSet($id: ID!) {
+  lifecycleRuleSet(id: $id) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
+    builderModel
   }
 }`;
 
-export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
-  maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
-  }
-}`;
-
-export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
-  maintenanceActionDescriptors {
-    kind
-    supportedRuleScopes
-    supportedSubjects
-    riskClass
-    effectClasses
-    timingMode
-    allowedRepeatModes
-    requiresTargetQualityProfile
-    requiresTags
-    supportsStorageScope
-  }
-}`;
-
-export const maintenanceActionStepDescriptorsQuery = `query MaintenanceActionStepDescriptors {
-  maintenanceActionStepDescriptors {
-    id
-    kind
+/// Tag names for the rule builder's tag pickers; nothing else about a tag
+/// shows there.
+export const ruleBuilderTagLabelsQuery = `query RuleBuilderTagLabels {
+  titleTagDefinitions {
     label
-    supportedSubjects
-    parameterSchema
-    effectClasses
-    riskClass
-    requires
-    terminal
-    completionPolicy
-    storageRootAllowed
   }
 }`;
 
-/// Candidates, soonest due first. The server returns none while maintenance
-/// is switched off for the instance.
-export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetId: ID, $states: [MaintenanceCandidateState!], $libraryId: ID, $limit: Int) {
-  maintenanceCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, limit: $limit) {
+/// Users a condition on a user-id fact picks from. Needs user management.
+export const ruleBuilderUserOptionsQuery = `query RuleBuilderUserOptions {
+  users {
     id
-    ruleSetId
-    ruleName
-      fileCount
-      totalSizeBytes
-      storageRootFileCount
-      storageRootTotalSizeBytes
-    revisionNumber
-    subjectKind
-    subjectId
-    subjectLabel
-    titleId
-    titleName
-    libraryId
-    facet
-    state
-    stateReason
-    reasonCodes
-    actionKind
+    username
+  }
+}`;
+
+/// Lists a condition on a list-id fact picks from.
+/** Libraries by id, for a rule condition on a fact that holds a library id. */
+export const ruleBuilderLibraryOptionsQuery = `query RuleBuilderLibraryOptions {
+  libraries {
+    id
+    name
+  }
+}`;
+
+export const ruleBuilderListOptionsQuery = `query RuleBuilderListOptions {
+  listSubscriptions {
+    id
+    name
+  }
+}`;
+
+/// The outputs one rule family's builder offers, read once per page.
+export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!) {
+  ruleBuilderSchema(family: $family) {
+    family
+    outputs {
+      id
+      head
+      labelKey
+      helpKey
+      valueKind
+      options
+      min
+      max
+      maxItems
+      maxBytes
+      pattern
+      template
+      perItem
+      destructive
+      variants
+      conflictsWith
+      actionLabelKey
+    }
+    outputRules {
+      rule
+      of
+    }
+    subjects {
+      id
+      labelKey
+      inputPath
+      outputs
+    }
+  }
+}`;
+
+/// A sequence's steps and each step's latest checkpoint, reduced to what the
+/// step-progress list shows. Shared by candidates and action runs.
+const LIFECYCLE_SEQUENCE_FIELDS = `
     actionSequence {
-      schemaVersion
       steps {
         id
         kind
         parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
+          targetLibrary
+          targetRoot
         }
       }
     }
     sequenceSteps {
       step {
         id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
       }
       run {
-        stepId
-        stepKind
         state
-        attempt
         holdReason
         error
-        createdAt
-        updatedAt
-        finishedAt
+        causeCode
       }
       receipts {
-        dispatchAttempt
-        logicalRequestKey
         jobRunId
         state
-        createdAt
-        updatedAt
       }
-    }
-    graceDays
-    matchGeneration
+    }`;
+
+/// Candidates, soonest due first. The server returns none while lifecycle
+/// is switched off for the instance.
+export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: ID, $states: [LifecycleCandidateState!], $libraryId: ID, $limit: Int) {
+  lifecycleCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, limit: $limit) {
+    id
+    ruleSetId
+    ruleName
+    fileCount
+    totalSizeBytes
+    subjectKind
+    subjectId
+    subjectLabel
+    titleId
+    titleName
+    state
+    stateReason
+    stateCauseCode
+    reasonCodes
+    actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
+    }${LIFECYCLE_SEQUENCE_FIELDS}
     firstMatchedAt
-    lastMatchedAt
     dueAt
     heldSince
-    updatedAt
   }
 }`;
 
-export const maintenanceEvaluationRunsQuery = `query MaintenanceEvaluationRuns($ruleSetId: ID, $limit: Int) {
-  maintenanceEvaluationRuns(ruleSetId: $ruleSetId, limit: $limit) {
+/// What enabling a destructive rule asks the operator to acknowledge: the same
+/// candidates as the table, reduced to the fields the confirmation lists.
+export const lifecycleArmingCandidatesQuery = `query LifecycleArmingCandidates($ruleSetId: ID, $limit: Int) {
+  lifecycleCandidates(ruleSetId: $ruleSetId, limit: $limit) {
+    id
+    state
+    subjectKind
+    subjectLabel
+    titleName
+  }
+}`;
+
+export const lifecycleEvaluationRunsQuery = `query LifecycleEvaluationRuns($ruleSetId: ID, $limit: Int) {
+  lifecycleEvaluationRuns(ruleSetId: $ruleSetId, limit: $limit) {
     id
     ruleSetId
     revisionNumber
     status
     startedAt
-    finishedAt
     evaluatedCount
     matchedCount
     noMatchCount
@@ -4293,96 +4435,44 @@ export const maintenanceEvaluationRunsQuery = `query MaintenanceEvaluationRuns($
   }
 }`;
 
-export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
-  maintenanceActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
+export const lifecycleActionRunsQuery = `query LifecycleActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
+  lifecycleActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
     id
-    ruleSetId
-    candidateId
     detail
     subjectKind
-    subjectId
     subjectLabel
-    titleId
     titleName
-    actionKind
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
-    }
-    sequenceSteps {
-      step {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
-      run {
-        stepId
-        stepKind
-        state
-        attempt
-        holdReason
-        error
-        createdAt
-        updatedAt
-        finishedAt
-      }
-      receipts {
-        dispatchAttempt
-        logicalRequestKey
-        jobRunId
-        state
-        createdAt
-        updatedAt
-      }
-    }
-    matchGeneration
+    actionKind${LIFECYCLE_SEQUENCE_FIELDS}
     attempt
     status
     holdReason
     error
+    causeCode
     startedAt
-    finishedAt
   }
 }`;
 
 /// Reading the gates requires system-settings management. A reader without it
 /// gets a GraphQL error rather than a partial answer, so the caller catches it
 /// and renders the panel read-locked instead of failing the whole section.
-export const maintenanceInstanceGatesQuery = `query MaintenanceInstanceGates {
-  maintenanceInstanceGates {
+export const lifecycleInstanceGatesQuery = `query LifecycleInstanceGates {
+  lifecycleInstanceGates {
     enabled
     actionsPaused
   }
 }`;
 
-export const MAINTENANCE_EXCLUSION_FIELDS = `
+export const LIFECYCLE_EXCLUSION_FIELDS = `
     id
     ruleSetId
     subjectKind
-    subjectId
     subjectLabel
-    titleId
     titleName
     reason
-    createdBy
     createdAt`;
 
-export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetId: ID) {
-  maintenanceExclusions(ruleSetId: $ruleSetId) {${MAINTENANCE_EXCLUSION_FIELDS}
+export const lifecycleExclusionsQuery = `query LifecycleExclusions($ruleSetId: ID) {
+  lifecycleExclusions(ruleSetId: $ruleSetId) {${LIFECYCLE_EXCLUSION_FIELDS}
   }
 }`;
 
@@ -4391,23 +4481,46 @@ export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetI
 // Request rules are saved disabled. An enabled rule covering the library
 // decides a request; with none, the requester's library permission does.
 
+/// Every head a request rule's source defines and the literals they carry.
+export const REQUEST_DECLARED_ACTIONS_FIELDS = `
+      heads
+      qualityProfiles
+      leaseDays
+      monitors
+      requiredAudioLanguages
+      preferredAudioLanguages
+      addTags
+      notifications`;
+
 export const REQUEST_RULE_SET_FIELDS = `
     id
     name
     description
     enabled
     libraryIds
-    currentRevisionNumber
-    decisionCount
+    declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
+    }
     createdAt
     updatedAt`;
+
+/// What an approval would be changed to, with the rule set that set each
+/// value, for the surfaces that show it to a manager: the author preview and
+/// the approver's queue.
+export const REQUEST_SHAPING_FIELDS = `
+      qualityProfile { value ruleSetName }
+      leaseDays { value ruleSetName }
+      monitor { value ruleSetName }
+      requiredAudioLanguages { value ruleSetName }
+      preferredAudioLanguages { value ruleSetName }
+      notifications { value ruleSetName }
+      conflicts`;
 
 const requestRuleRevisionFieldSelection = `
     id
     ruleSetId
     revisionNumber
     regoSource
-    matcherContentHash
+    sourceContentHash
     createdBy
     createdAt`;
 
@@ -4428,7 +4541,6 @@ export const REQUEST_RULE_DECISION_FIELDS = `
     id
     requestId
     evaluatedAt
-    mode
     effectiveOutcome
     policyOutcome
     fallbackReason
@@ -4456,6 +4568,7 @@ export const requestRuleSetsQuery = `query RequestRuleSets {
 
 export const requestRuleSetQuery = `query RequestRuleSet($id: ID!) {
   requestRuleSet(id: $id) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+    builderModel
   }
 }`;
 
@@ -4476,12 +4589,19 @@ export const previewMyRequestDecisionQuery = `query PreviewMyRequestDecision($in
   previewMyRequestDecision(input: $input) {
     outcome
     metadataPartial
-    evaluationMode
     fallbackReason
     tags
     reasons {
       code
       ruleName
+    }
+    shaping {
+      qualityProfile { value }
+      leaseDays { value }
+      monitor { value }
+      requiredAudioLanguages { value }
+      preferredAudioLanguages { value }
+      conflicts
     }
   }
 }`;
@@ -5072,12 +5192,12 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
       occurredAt
       createdAt
     }
-    totalCount
+    hasMore
   }
 }`;
 
-export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $requesterUserId: ID) {
-  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, requesterUserId: $requesterUserId) {
+export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $requesterUserId: ID, $limit: Int, $offset: Int) {
+  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, requesterUserId: $requesterUserId, limit: $limit, offset: $offset) {
     id
     libraryId
     facet
@@ -5135,6 +5255,8 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     createdAt
     updatedAt
     requestedLeaseDays
+    requestedRequiredAudioLanguages
+    requestedPreferredAudioLanguages
     approvedLeaseDays
     policyTags
     lease {
@@ -5145,12 +5267,14 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
       expiresAt
     }
     decision {${REQUEST_RULE_DECISION_FIELDS}
+      shaping {${REQUEST_SHAPING_FIELDS}
+      }
     }
   }
 }`;
 
-export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue) {
-  myMediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status) {
+export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $limit: Int, $offset: Int) {
+  myMediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, limit: $limit, offset: $offset) {
     id
     libraryId
     facet
@@ -5208,6 +5332,8 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     createdAt
     updatedAt
     requestedLeaseDays
+    requestedRequiredAudioLanguages
+    requestedPreferredAudioLanguages
     approvedLeaseDays
     policyTags
     lease {
@@ -5300,8 +5426,8 @@ export const dashboardStorageQuery = `query DashboardStorage {
   }
 }`;
 
-export const dashboardPendingRequestsQuery = `query DashboardPendingRequests {
-  mediaRequests(status: PENDING) {
+export const dashboardPendingRequestsQuery = `query DashboardPendingRequests($limit: Int) {
+  mediaRequests(status: PENDING, order: OLDEST_CREATED, limit: $limit) {
     id
     libraryId
     facet
@@ -5591,8 +5717,12 @@ export const locationTransferFilesQuery = `query LocationTransferFiles($id: ID!,
 export const locationTransferFilesSubscription = `subscription LocationTransferFilesLive($id: ID!, $titleId: ID!, $offset: Int!) {
   locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}
 }`;
-export const locationTransferTitleDetailQuery = `query LocationTransferTitleDetail($id: ID!, $titleId: ID!) {
-  locationTransferTitleDetail(id: $id, titleId: $titleId)
+export const locationTransferTitleOutcomeQuery = `query LocationTransferTitleOutcome($id: ID!, $titleId: ID!) {
+  locationTransferTitleOutcome(id: $id, titleId: $titleId) {
+    detail
+    refusalReason
+    refusalFacts
+  }
 }`;
 
 /**
@@ -5881,6 +6011,8 @@ export const LIST_SUBSCRIPTION_FIELDS = `
       useSeasonFolders
       releaseNumbering
       tags
+      requiredAudioLanguages
+      preferredAudioLanguages
     }
     filters {
       facet
@@ -6165,11 +6297,88 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     name
     slug
     isDefault
+    defaultMonitorType
     qualityProfileId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
       isDefault
     }
+  }
+}`;
+
+const GRAB_CONFLICT_FIELDS = `
+        titleId
+        titleName
+        downloadClientId
+        downloadClientType
+        downloadClientItemId
+        sourceTitle
+        sourceKind
+        state
+        replaceable`;
+
+// The outcome of a finished background grab: what the matching synchronous
+// mutation would have returned, or that mutation's error.
+export const grabJobResultQuery = `query GrabJobResult($id: ID!) {
+  grabJobResult(id: $id) {
+    queued {
+      status
+      jobId
+      titleId
+      titleName
+      sourceTitle
+      sourceKind
+      conflict {${GRAB_CONFLICT_FIELDS}
+        scope {
+          __typename
+          ... on EpisodeScopePayload {
+            episodeId
+          }
+          ... on EpisodeSetScopePayload {
+            episodeIds
+          }
+          ... on SeriesMovieScopePayload {
+            seriesMovieLinkId
+          }
+          ... on CollectionScopePayload {
+            collectionId
+          }
+          ... on TitleScopePayload {
+            wholeTitle
+          }
+          ... on OrphanScopePayload {
+            orphaned
+          }
+        }
+      }
+    }
+    unlinked {
+      downloadId
+      clientName
+      sourceTitle
+    }
+    standby {
+      grabbed
+      conflicts {${GRAB_CONFLICT_FIELDS}
+      }
+      cancelled {${GRAB_CONFLICT_FIELDS}
+      }
+      cancelFailed {${GRAB_CONFLICT_FIELDS}
+      }
+    }
+    pending {
+      id
+      grabbed
+    }
+  }
+}`;
+
+export const libraryFullHashBackfillQuery = `query LibraryFullHashBackfill {
+  libraries(permission: MANAGE_LIBRARY) {
+    id
+    fullHashBackfillEnabled
   }
 }`;

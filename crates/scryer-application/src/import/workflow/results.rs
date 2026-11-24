@@ -111,7 +111,7 @@ pub async fn retry_failed_import(
     {
         return Err(AppError::validation_refused(crate::error_reasons::import::CHANGED_WHILE_RETRY_REQUESTED, "the import changed while retry was requested; refresh its history"));
     }
-    if !std::path::Path::new(&completed.dest_dir).exists() {
+    if Disk::process().follow(&completed.dest_dir).await.exists() != Some(true) {
         return Err(AppError::validation_refused(crate::error_reasons::import::SOURCE_UNAVAILABLE, "the import source is no longer available; restore the download or correct its path before retrying"));
     }
 
@@ -135,6 +135,15 @@ pub async fn retry_failed_import(
         repository
             .set_password_candidates(&download_id, &candidates)
             .await?;
+    }
+    // An operator retry gives the download's archive extraction its attempts
+    // back, and a password it was waiting for lets it run again.
+    if let Some(key) =
+        crate::import::archive_extraction::DownloadExtractionKey::for_completed(&completed)
+    {
+        crate::import::archive_extraction::reset_download_extraction(app, &key).await;
+    } else {
+        crate::import::archive_extraction::reset_keyless_reextraction(app, &completed);
     }
 
     // Finish reconciliation even if the requesting browser disconnects.
@@ -284,7 +293,16 @@ async fn execute_history_retry(
                 decision: ImportDecision::Failed,
                 skip_reason,
                 error_message: Some(error.to_string()),
+                reason_code: error.reason().map(str::to_string),
+                // A failure the operator must settle, such as a source cleanup
+                // that found the library file is the source's own entry, is
+                // never taken for an import however much this attempt placed.
+                needs_reconciliation: error.requires_manual_reconciliation(),
                 release_burned: false,
+                title_id: release_evidence
+                    .title_id()
+                    .map(str::to_string)
+                    .or_else(|| target_title_id.map(str::to_string)),
                 ..base_completed_import_result(import_id, completed, release_evidence, started_at)
             };
             let result_json = serde_json::to_string(&result).ok();
@@ -394,6 +412,37 @@ async fn compute_history_retry_state(
         && let Some(title) = app.services.catalog.titles.get_by_id(title_id).await?
     {
         td.facet = Some(title.facet.as_str().to_string());
+    }
+    // Blocked the way the automatic import blocks the same refusal.
+    if result.needs_reconciliation {
+        td.clear_import_execution_retry();
+        td.state = TrackedDownloadState::ImportBlocked;
+        td.status = scryer_domain::TrackedDownloadStatus::Error;
+        let message = result
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "Import needs manual reconciliation".into());
+        td.client_item.attention_reason = Some(message.clone());
+        td.client_item.attention_reason_code = result.reason_code.clone();
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(message)];
+        return Ok(());
+    }
+    // Placed and cataloged, with the removal of its sources unfinished: never
+    // a success, since nothing has settled whether the download's file is the
+    // library file and an imported download may be removed with its data. It
+    // waits as the retry the automatic import schedules for the same result,
+    // and that pass settles it.
+    if result.source_cleanup_failed {
+        crate::completed_download_handler::apply_import_result_with_completed(
+            app,
+            td,
+            result.clone(),
+            count,
+            Some(completed),
+            Some(release_evidence),
+        )
+        .await;
+        return Ok(());
     }
     let success = result.decision == ImportDecision::Imported
         || (result.decision == ImportDecision::Skipped
@@ -531,7 +580,8 @@ pub(crate) async fn should_remove_terminal_download(
             }
             None => false,
         },
-        TrackedDownloadState::Ignored => true,
+        // Ignoring a download only stops Scryer tracking it: its client entry
+        // and its data stay exactly as the client has them.
         _ => false,
     }
 }
@@ -543,8 +593,8 @@ pub(crate) async fn should_remove_terminal_download(
 /// so for torrent-protocol items an `Imported` state is no longer sufficient
 /// on its own — the gate has to agree that the seeding obligation is
 /// discharged. Automatic failed-torrent cleanup also honors frozen profile
-/// obligations and requires the client's removal verdict. Operator Ignore is
-/// an explicit entry-only override; blocklisting remains independent.
+/// obligations and requires the client's removal verdict. An ignored download
+/// is never removed; blocklisting remains independent.
 ///
 /// Once a removal is agreed, the payload goes with the entry (`remove_data`,
 /// Sonarr's `deleteData: true`) the same way for completed and failed
@@ -575,6 +625,13 @@ async fn reconcile_terminal_download_cleanup(
     // (manual import), which take the per-row path.
     cache: Option<&TerminalCleanupTickCache>,
     record: Option<&crate::DownloadCleanupRecord>,
+    // An import of the download found its file is the library file, so the
+    // entry may go but never its data. The hold read below adds to it.
+    library_holds_payload: bool,
+    // Download files an import left on library files without telling
+    // whether each is the library file itself. The hold read below adds to
+    // them; they are settled before any data is removed.
+    library_file_unsettled: &[crate::UnsettledLibraryFile],
 ) -> TerminalDownloadCleanup {
     let client_id = client_id.trim();
     let manual_cleanup = state == TrackedDownloadState::Failed
@@ -748,8 +805,8 @@ async fn reconcile_terminal_download_cleanup(
     //   the client's `can_remove` verdict and the seeding gate above: failure
     //   cannot erase a frozen profile obligation, private rail, or
     //   `never_remove` policy.
-    // - `Ignored` removes only the entry: the operator told Scryer to stop
-    //   tracking the download, not to delete what it downloaded.
+    // - `Ignored` never reaches here: ignoring stops tracking and leaves the
+    //   client entry and its data alone.
     //
     // `torrent-blackhole` never removes data. Its "remove" is a
     // `remove_dir_all` on a watch folder some *other* client is seeding from.
@@ -757,7 +814,7 @@ async fn reconcile_terminal_download_cleanup(
         && !client_type
             .trim()
             .eq_ignore_ascii_case(crate::seeding_gate::TORRENT_BLACKHOLE_CLIENT_TYPE);
-    let remove_data = match state {
+    let remove_data_by_state = match state {
         TrackedDownloadState::Failed if manual_cleanup => true,
         TrackedDownloadState::Imported | TrackedDownloadState::ImportedSeeding => {
             !is_torrent || torrent_data_removal_allowed
@@ -771,21 +828,88 @@ async fn reconcile_terminal_download_cleanup(
         }
         _ => false,
     };
-
     // Under that one "remove files" decision, a client that can delete its
     // own files is always asked to, and the host deletion follows as the
     // backup for whatever it left. A client that cannot (NZBGet, entry-only
     // torrent plugins) gets the host deletion before its entry is removed
     // instead: NZBGet's history removal deletes DestDir on its own.
-    let client_deletes_payload =
-        remove_data && client_deletes_its_payload(app, client_id, client_type).await;
+    let client_can_delete_payload =
+        remove_data_by_state && client_deletes_its_payload(app, client_id, client_type).await;
+
+    // A claimed cleanup waits while an archive or subtitle delivery of the
+    // download still holds its sources. A cleanup without a claim of its own
+    // waits here the same way before anything is removed, on a read of this
+    // download made now. It is the last read before the removal that can use
+    // its answer: after it run only the "remove files" decision, the NZBGet
+    // history-state read (NZBGet only), the NZBGet entry check, and, when the
+    // client deletes its own files, the host backup's plan and the intent
+    // checkpoint; then the host payload removal or the client's delete.
+    // The read writes nothing, so a tick that finds every download held does
+    // no write.
+    let mut library_holds_payload = library_holds_payload;
+    let mut library_file_unsettled = library_file_unsettled.to_vec();
+    if record.is_none()
+        && let Some(download_id) = canonical_download_id
+    {
+        match sources_held_by_import(app, download_id).await {
+            Ok(sources) if sources.held => {
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+            Ok(sources) => {
+                library_holds_payload |= sources.library_holds_payload;
+                library_file_unsettled.extend(sources.library_file_unsettled);
+            }
+            Err(error) => {
+                tracing::warn!(%download_id, error = %error,
+                    "could not tell whether the download's sources are still held; cleanup deferred until they read");
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+        }
+    }
+
+    // An import that kept the download's file left open whether a library
+    // file is that file itself, rather than set it aside while it seeded.
+    // Only now, with the seeding gate agreed and the data about to go, and
+    // before the client or the host removes anything, is the question
+    // settled: one entry removes the client entry only, separate entries go
+    // on as before, and a test that cannot tell keeps everything and retries.
+    if remove_data_by_state && !library_holds_payload && !library_file_unsettled.is_empty() {
+        match settle_unsettled_library_files(app, canonical_download_id, &library_file_unsettled)
+            .await
+        {
+            Some(same) => library_holds_payload = same,
+            None => {
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+        }
+    }
+
+    // - A download whose file is the library file removes only the entry,
+    //   whatever its state: its data is the library's.
+    if library_holds_payload {
+        tracing::info!(
+            client_id,
+            download_client_item_id,
+            "the download's file is the library file; removing the client entry without its data"
+        );
+    }
+    let remove_data = !library_holds_payload && remove_data_by_state;
+    let client_deletes_payload = remove_data && client_can_delete_payload;
     let mut payload_disposition = None;
     // A retained, unreadable or unavailable NZBGet state is not a host
     // payload failure. It retries without spending the give-up budget below,
     // so it can never fall through to entry removal (a HistoryDelete) with
     // the payload unverified. This is the attempt's only NZBGet cleanup
     // read: payload removal and the native-deletion check both use it.
-    let nzbget_payload = if client_type == "nzbget" && remove_data {
+    // An entry-only removal of a payload the library holds reads it too, so
+    // a history state NZBGet would delete DestDir for is refused below.
+    let nzbget_payload = if client_type == "nzbget" && (remove_data || library_holds_payload) {
         match revalidate_nzbget_cleanup_state(
             app,
             canonical_download_id,
@@ -1460,7 +1584,7 @@ fn file_device_and_inode(_metadata: &std::fs::Metadata) -> (Option<u64>, Option<
 
 fn sample_file_proof(path: &std::path::Path, len: u64) -> std::io::Result<(u64, String)> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path)?;
+    let mut file = Disk::process().open_blocking(path, crate::disk::Open::read())?;
     let mut hasher = blake3::Hasher::new();
     let head = len.min(PAYLOAD_SAMPLE_BYTES);
     let mut buffer = vec![0u8; head as usize];
@@ -1482,6 +1606,9 @@ fn sample_file_proof(path: &std::path::Path, len: u64) -> std::io::Result<(u64, 
     Ok((sampled, hasher.finalize().to_hex().to_string()))
 }
 
+// disk-guard: the inventory records each file's raw device and inode numbers
+// on the cleanup row, and the owner's file identity is opaque.
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn inventory_payload_directory_blocking(
     target: &std::path::Path,
 ) -> AppResult<PayloadInventory> {
@@ -1570,6 +1697,9 @@ fn relative_payload_path_is_safe(relative: &str) -> bool {
 /// and the file's real parent is still inside the job directory and outside
 /// every library and recycle root. An inode-and-hash match alone would follow
 /// a moved directory into a library.
+// disk-guard: these checks gate a deletion and must see a symlink planted a
+// moment ago; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 fn payload_file_location_is_verified(
     target: &std::path::Path,
     canonical_target: &std::path::Path,
@@ -1606,6 +1736,9 @@ fn payload_file_location_is_verified(
         .any(|root| crate::catalog_workflow::library_root_paths_overlap(&canonical_parent, root))
 }
 
+// disk-guard: this check gates a deletion and must see a symlink planted a
+// moment ago; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path::PathBuf> {
     match std::fs::symlink_metadata(target) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
@@ -1634,11 +1767,15 @@ fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path:
 /// identity and content sample, then removes directories only once they are
 /// empty. Never a recursive delete: an unknown, changed, or symlinked entry
 /// keeps itself and every directory above it.
+// disk-guard: the identity check before each removal compares the raw device
+// and inode numbers the inventory recorded, from a current lstat.
+#[allow(clippy::disallowed_methods)]
 fn remove_inventoried_payload_blocking(
     target: &std::path::Path,
     inventory: &PayloadInventory,
     protected_roots: &[String],
 ) -> AppResult<PayloadRemovalResult> {
+    let disk = Disk::process();
     let canonical_target = canonical_payload_directory(target)?;
     let mut removed = 0usize;
     let mut retained = Vec::new();
@@ -1685,19 +1822,10 @@ fn remove_inventoried_payload_blocking(
             retained.push(entry.path.clone());
             continue;
         }
-        #[cfg(windows)]
-        {
-            let mut permissions = metadata.permissions();
-            if permissions.readonly() {
-                // Windows read-only attributes do not alter Unix permission bits.
-                #[allow(clippy::permissions_set_readonly_false)]
-                permissions.set_readonly(false);
-                let _ = std::fs::set_permissions(&path, permissions);
-            }
-        }
-        match std::fs::remove_file(&path) {
-            Ok(()) => removed += 1,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // A Windows read-only attribute was always cleared for payload files.
+        match disk.remove_blocking(&path, Remove::FileEvenReadOnly) {
+            Ok(Removal::Removed) => removed += 1,
+            Ok(Removal::AlreadyAbsent) => {}
             Err(error) => {
                 return Err(AppError::Repository(format!(
                     "failed to remove download payload file {}: {error}",
@@ -1718,34 +1846,28 @@ fn remove_inventoried_payload_blocking(
         std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count())
     });
     for directory in directories {
-        let _ = std::fs::remove_dir(target.join(directory));
+        let _ = disk.remove_blocking(&target.join(directory), Remove::EmptyDir);
     }
-    let directory_removed = match std::fs::remove_dir(target) {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(_) => false,
-    };
+    let directory_removed = disk.remove_blocking(target, Remove::EmptyDir).is_ok();
     if !directory_removed {
         // Report what is still there, bounded, so the outcome explains itself.
         let mut leftovers = Vec::new();
         let mut stack = vec![target.to_path_buf()];
         while let Some(directory) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&directory) else {
+            let Ok(entries) = disk.list_blocking(&directory) else {
                 continue;
             };
-            for entry in entries.flatten() {
-                let path = entry.path();
+            for entry in entries {
                 if leftovers.len() >= 50 {
                     break;
                 }
-                let relative = path
+                let relative = entry
+                    .path
                     .strip_prefix(target)
                     .map(|relative| relative.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-                match std::fs::symlink_metadata(&path) {
-                    Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                        stack.push(path);
-                    }
+                    .unwrap_or_else(|_| entry.path.to_string_lossy().into_owned());
+                match entry.reading.kind() {
+                    Some(EntryKind::Directory) => stack.push(entry.path),
                     _ => leftovers.push(relative),
                 }
             }
@@ -1821,6 +1943,9 @@ fn cleanup_retry_log_due(record: Option<&crate::DownloadCleanupRecord>) -> bool 
 // (identity already checked there), even on checkpoint recovery, and the
 // filesystem is inspected now: a recreated directory must never be deleted by
 // an otherwise entry-only retry.
+// disk-guard: a directory recreated a moment ago must be seen before NZBGet is
+// allowed to delete; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn verify_nzbget_entry_cleanup(payload: &crate::DownloadCleanupPayload) -> AppResult<()> {
     for path in &payload.native_delete_paths {
         let path = std::path::Path::new(path);
@@ -1948,6 +2073,10 @@ enum HostPayloadStep {
     clippy::too_many_arguments,
     reason = "host payload deletion carries client identity, the cleanup row, NZBGet's revalidated state, a stored plan, and the plan-only mode"
 )]
+// disk-guard: the payload's kind and size, and each imported source's, decide
+// what is deleted and whether the payload is recorded as gone, so they come
+// from a current lstat; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn run_host_payload_cleanup(
     app: &AppUseCase,
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
@@ -2143,7 +2272,8 @@ async fn run_host_payload_cleanup(
     // The path as reported and, when it resolves differently, the path as it
     // actually lands on disk: a symlinked job folder must not reach a library.
     let mut protected_candidates = vec![target.to_string_lossy().into_owned()];
-    if let Ok(canonical) = tokio::fs::canonicalize(&target).await
+    let disk = Disk::process();
+    if let Ok(canonical) = disk.canonicalize(&target).await
         && canonical != target
     {
         protected_candidates.push(canonical.to_string_lossy().into_owned());
@@ -2463,14 +2593,20 @@ async fn run_host_payload_cleanup(
                             ) {
                                 break;
                             }
-                            if tokio::fs::remove_dir(directory).await.is_err() {
+                            if !matches!(
+                                disk.remove(directory, Remove::EmptyDir).await,
+                                Ok(Removal::Removed)
+                            ) {
                                 break;
                             }
                         }
                     }
                 }
                 // Only ever an empty-directory removal; anything left keeps it.
-                let directory_removed = tokio::fs::remove_dir(&target).await.is_ok();
+                let directory_removed = matches!(
+                    disk.remove(&target, Remove::EmptyDir).await,
+                    Ok(Removal::Removed)
+                );
                 tracing::warn!(client_id, client_type, download_client_item_id,
                     path = %target.display(), removed, directory_removed,
                     "payload directory is not provably this job's; removed only Scryer's own imported files");
@@ -2548,6 +2684,10 @@ async fn run_host_payload_cleanup(
     })))
 }
 
+// disk-guard: the ancestor and symlink checks gate each removal and must see a
+// symlink planted a moment ago; the owner's readings may be reused for up to a
+// second.
+#[allow(clippy::disallowed_methods)]
 fn remove_empty_sab_job_parents(
     target: &std::path::Path,
     source_title: &str,
@@ -2603,10 +2743,9 @@ fn remove_empty_sab_job_parents(
         {
             return Ok(Some(false));
         }
-        match std::fs::remove_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+        match Disk::process().remove_blocking(directory, Remove::EmptyDir) {
+            Ok(_) => {}
+            Err(error) if error.reason() == reason::DISK_DIRECTORY_NOT_EMPTY => {
                 return Ok(Some(false));
             }
             Err(error) => {
@@ -2644,18 +2783,24 @@ fn host_payload_cleanup_checkpoint(
 }
 
 async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> AppResult<()> {
-    match tokio::fs::create_dir(checkpoint).await {
+    let disk = Disk::process();
+    match disk
+        .create_dir(checkpoint, crate::disk::Parents::MustExist)
+        .await
+    {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = tokio::fs::symlink_metadata(checkpoint)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to inspect download client payload cleanup checkpoint {}: {error}",
-                        checkpoint.display()
-                    ))
-                })?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            let reading = disk.uncached(checkpoint).await;
+            let Some(kind) = reading.kind() else {
+                return Err(AppError::Repository(format!(
+                    "failed to inspect download client payload cleanup checkpoint {}: {}",
+                    checkpoint.display(),
+                    reading
+                        .unknown_reason()
+                        .unwrap_or(reason::DISK_PATH_MISSING)
+                )));
+            };
+            if kind != EntryKind::Directory {
                 return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY, format!(
                     "download client payload cleanup checkpoint {} is not a directory",
                     checkpoint.display()
@@ -2671,9 +2816,8 @@ async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) ->
 }
 
 async fn clear_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> AppResult<()> {
-    match tokio::fs::remove_dir(checkpoint).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    match Disk::process().remove(checkpoint, Remove::EmptyDir).await {
+        Ok(_) => Ok(()),
         Err(error) => Err(AppError::Repository(format!(
             "failed to remove download client payload cleanup checkpoint {}: {error}",
             checkpoint.display()
@@ -2681,6 +2825,9 @@ async fn clear_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> 
     }
 }
 
+// disk-guard: this check gates a deletion and must see a symlink planted a
+// moment ago; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn ensure_payload_target_parents_are_not_symlinks(
     root: &std::path::Path,
     target: &std::path::Path,
@@ -2792,9 +2939,70 @@ fn skip_reason_for_import_check_code(
     }
 }
 
+/// Whether any of the download files an import left unsettled is the
+/// library file itself, told by the file importer's set-aside test in each
+/// source's turn, stopping at the first that is. With the download's id, the
+/// answer is written once for all of its imports. `None` when a test or the
+/// write fails, so the cleanup keeps everything and tries again.
+///
+/// Probes: per file, those of the set-aside test (two renames of the
+/// download's file, reads of each file, and a listing of the library file's
+/// folder where file numbers cannot tell), and only on the cleanup that is
+/// about to remove the download's data.
+async fn settle_unsettled_library_files(
+    app: &AppUseCase,
+    download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    files: &[crate::UnsettledLibraryFile],
+) -> Option<bool> {
+    let mut same = false;
+    for file in files {
+        let source = file.source();
+        let library_path = file.library();
+        match app
+            .services
+            .workflow
+            .file_importer
+            .library_file_is_import_source(&source, &library_path)
+            .await
+        {
+            Ok(true) => {
+                same = true;
+                break;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(source = %source.display(), library_path = %library_path.display(),
+                    error = %error,
+                    "could not tell whether a library file is the download's file; cleanup deferred and nothing removed");
+                return None;
+            }
+        }
+    }
+    if let Some(download_id) = download_id
+        && let Err(error) = app
+            .services
+            .workflow
+            .imports
+            .settle_library_files_unsettled(download_id, same)
+            .await
+    {
+        tracing::warn!(%download_id, error = %error,
+            "could not record whether the download's file is the library file; cleanup deferred and nothing removed");
+        return None;
+    }
+    Some(same)
+}
+
+/// The skip reason for a refused check. A duplicate of a cataloged library
+/// file is already imported, and this run placed nothing: for a download, so
+/// whether its file is that library file itself is settled before anything
+/// records the skip, and before its client may remove it with its data.
 async fn skip_reason_for_import_check_rejection(
     app: &AppUseCase,
+    import_id: &str,
+    completed: Option<&CompletedDownload>,
     code: crate::import_checks::ImportCheckCode,
+    source_path: &Path,
     dest_path: &Path,
 ) -> AppResult<ImportSkipReason> {
     if code.is_duplicate_file() {
@@ -2809,15 +3017,39 @@ async fn skip_reason_for_import_check_rejection(
         if !cataloged {
             return Ok(ImportSkipReason::DuplicateFile);
         }
+        if completed.is_some()
+            && settle_already_imported_source(app, import_id, source_path, dest_path).await?
+                == crate::LibraryFileSameness::Unsettled
+        {
+            record_library_files_unsettled(
+                app,
+                import_id,
+                &[crate::UnsettledLibraryFile::new(source_path, dest_path)],
+            )
+            .await?;
+        }
     }
     Ok(skip_reason_for_import_check_code(code))
 }
 
 /// The guard a move import must hand to source removal, or `None` when the
-/// source was renamed into place and nothing is left at its path.
+/// source was renamed into place and nothing is left at its path, or when the
+/// source is the library file and nothing may be removed.
 fn move_import_source_cleanup_guard(
     file_result: &scryer_domain::ImportFileResult,
 ) -> AppResult<Option<scryer_domain::ImportSourceCleanupGuard>> {
+    // The destination is the source's own entry: nothing was placed and
+    // nothing is removed. That answer never comes with a guard or a copy.
+    if file_result.source_disposition == scryer_domain::ImportSourceDisposition::IsLibraryFile {
+        if file_result.source_cleanup.is_some() || file_result.verification.is_some() {
+            return Err(AppError::Repository(format!(
+                "move import of {} reported the library file together with a source cleanup or copy verification",
+                file_result.source_path.display()
+            )));
+        }
+        return Ok(None);
+    }
+
     // Archive extraction output renamed into place: the move already happened.
     // Only that rename sets this disposition, and it never comes with a guard
     // or a copy to verify, so either one means the result cannot be trusted.
@@ -2892,18 +3124,111 @@ pub(crate) fn defer_import_source_cleanup(
         .is_ok()
 }
 
+/// The failure of a deferred source cleanup that must reach the operator
+/// as an import needing reconciliation, with its reason, rather than as a
+/// hold an operator may release: a source set aside that could not be put
+/// back, or, where the import holds its sources (`holds_sources`), a cleanup
+/// that could not tell whether the destination names the source. Releasing
+/// such a hold would let the download client's removal take the library
+/// file with the download. `None` for any other failure.
+fn deferred_cleanup_needing_reconciliation(
+    error: &AppError,
+    holds_sources: bool,
+) -> Option<AppError> {
+    if error.requires_manual_reconciliation() {
+        return Some(error.clone());
+    }
+    let reason = error.reason()?;
+    (holds_sources && reason == crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN).then(
+        || AppError::ManualReconciliationRefused {
+            message: error.to_string(),
+            reason,
+            facts: error.refusal_facts().to_vec(),
+        },
+    )
+}
+
+/// The deferred source cleanups of one import, in order. A failure that
+/// needs reconciliation ([`deferred_cleanup_needing_reconciliation`]) comes
+/// back as [`DeferredCleanupFailure::NeedsReconciliation`], to be raised.
+/// Any other is [`DeferredCleanupFailure::Held`] where the import holds its
+/// sources (`holds_sources`), which leaves them held, and
+/// [`DeferredCleanupFailure::Failed`] where it does not.
 async fn complete_deferred_import_source_cleanup(
     app: &AppUseCase,
+    import_id: &str,
+    pending: Vec<DeferredImportSourceCleanup>,
+    holds_sources: bool,
+) -> Result<(), DeferredCleanupFailure> {
+    run_deferred_import_source_cleanups(app, import_id, pending)
+        .await
+        .map_err(
+            |error| match deferred_cleanup_needing_reconciliation(&error, holds_sources) {
+                Some(escalated) => DeferredCleanupFailure::NeedsReconciliation(escalated),
+                None if holds_sources => DeferredCleanupFailure::Held(error),
+                None => DeferredCleanupFailure::Failed(error),
+            },
+        )
+}
+
+/// How a deferred source cleanup failed.
+#[derive(Debug)]
+enum DeferredCleanupFailure {
+    /// The import must end needing reconciliation with this error; no hold
+    /// is recorded for it.
+    NeedsReconciliation(AppError),
+    /// The sources stay held, and the hold may be released.
+    Held(AppError),
+    /// The import holds no sources, so nothing is held: the attempt ends
+    /// failed with this error and is retried as any failed import is, but it
+    /// is recorded pending, never as a failed import, since its files are
+    /// placed and cataloged. A re-run finds the placed file already imported
+    /// and, before the download may be removed with its data, settles
+    /// whether its file is that file.
+    Failed(AppError),
+}
+
+async fn run_deferred_import_source_cleanups(
+    app: &AppUseCase,
+    import_id: &str,
     pending: Vec<DeferredImportSourceCleanup>,
 ) -> AppResult<()> {
     for cleanup in pending {
-        finalize_deferred_import_source_cleanup(
+        let source = cleanup.guard.source_path.clone();
+        let removed = finalize_deferred_import_source_cleanup(
             app,
             Some(cleanup.guard),
             &cleanup.destination,
             cleanup.completed.as_ref(),
         )
-        .await?;
+        .await;
+        match removed {
+            Ok(()) => {}
+            // The cleanup found the library file is the source's own entry:
+            // the source is the library file, so nothing is removed and the
+            // import is done. A download client's removal then takes its
+            // entry only; with no client, nothing else reaches the file.
+            Err(error)
+                if error.reason() == Some(crate::error_reasons::import::DESTINATION_IS_SOURCE) =>
+            {
+                if cleanup.completed.is_some() {
+                    record_library_file_for_download(
+                        app,
+                        import_id,
+                        &source,
+                        &cleanup.destination,
+                    )
+                    .await?;
+                }
+                tracing::info!(
+                    import_id,
+                    source = %source.display(),
+                    destination = %cleanup.destination.display(),
+                    "import source is the library file; nothing removed"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -2991,6 +3316,11 @@ async fn finalize_deferred_import_source_cleanup(
 /// disk-full / permission-denied skips are environmental and clear on their own.
 /// Source-change races carry their own skip reasons, regardless of wording.
 pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> bool {
+    // Its files are placed; only the removal of their sources is left, and
+    // that is retried whatever else the attempt says.
+    if result.source_cleanup_failed {
+        return true;
+    }
     match result.decision {
         ImportDecision::Failed => !matches!(
             result.skip_reason,
@@ -2998,6 +3328,7 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
                 ImportSkipReason::PasswordRequired
                     | ImportSkipReason::ArchiveExtractionPluginRequired
                     | ImportSkipReason::ArchiveExtractionTimedOut
+                    | ImportSkipReason::ArchiveExtractionBlocked
                     | ImportSkipReason::TitleFolderConflict
             )
         ),
@@ -3165,8 +3496,67 @@ mod move_import_source_cleanup_gate_tests {
                 },
                 kind: ImportSourceIdentityKind::Regular,
             },
-            source_proof: proof(),
-            dest_proof: proof(),
+            source_proof: Some(proof()),
+            dest_proof: Some(proof()),
+            depth: None,
+            adopted_destination_mark: None,
+        }
+    }
+
+    /// A deferred cleanup refusal that waits for an operator, such as a source
+    /// left at its set-aside name, ends the import needing reconciliation
+    /// with its reason. One that could not tell whether the destination
+    /// names the source does too where the import holds its sources, since
+    /// its hold could be released; where it holds none, the import fails and
+    /// is retried, as on any other cleanup failure.
+    #[test]
+    fn a_deferred_cleanup_refusal_needs_reconciliation_and_keeps_its_reason() {
+        use crate::AppError;
+        use crate::error_reasons::import;
+
+        for refused in [
+            AppError::ManualReconciliationRefused {
+                message: "the destination is the source".into(),
+                reason: import::DESTINATION_IS_SOURCE,
+                facts: Vec::new(),
+            },
+            AppError::ManualReconciliationRefused {
+                message: "the source was left at its set-aside name".into(),
+                reason: import::DESTINATION_ALIAS_UNKNOWN,
+                facts: Vec::new(),
+            },
+        ] {
+            for holds_sources in [true, false] {
+                let raised = super::deferred_cleanup_needing_reconciliation(&refused, holds_sources)
+                    .expect("raised, not held");
+                assert!(raised.requires_manual_reconciliation());
+                assert_eq!(raised.reason(), refused.reason());
+            }
+        }
+
+        let unknown = AppError::RepositoryFailed {
+            message: "could not tell".into(),
+            reason: import::DESTINATION_ALIAS_UNKNOWN,
+        };
+        let raised = super::deferred_cleanup_needing_reconciliation(&unknown, true)
+            .expect("a hold that could be released is raised instead");
+        assert!(raised.requires_manual_reconciliation());
+        assert_eq!(raised.reason(), Some(import::DESTINATION_ALIAS_UNKNOWN));
+        assert!(super::deferred_cleanup_needing_reconciliation(&unknown, false).is_none());
+
+        for held in [
+            AppError::Repository("the source could not be removed".into()),
+            AppError::RepositoryFailed {
+                message: "the source could not be removed".into(),
+                reason: import::PERMISSION_DENIED,
+            },
+        ] {
+            for holds_sources in [true, false] {
+                assert!(
+                    super::deferred_cleanup_needing_reconciliation(&held, holds_sources).is_none(),
+                    "{held:?}"
+                );
+            }
         }
     }
 
@@ -3212,6 +3602,7 @@ mod move_import_source_cleanup_gate_tests {
             source_disposition,
             source_cleanup,
             verification: None,
+            library_file_unsettled: false,
         }
     }
 

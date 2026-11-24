@@ -26,6 +26,9 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 const DIRECT_NAB_CAPS_USER_AGENT: &str = "scryer-indexer-caps/0.1";
+/// Largest caps reply, success or error, read into memory. A caps document
+/// lists categories and search modes and runs to kilobytes.
+const MAX_CAPS_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct DirectNabConfig {
@@ -531,7 +534,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         );
         let response_result = self
             .outbound_http
-            .send_with_rate_limit_and_dispatch_observer(
+            .send_with_rate_limit_and_async_dispatch_observer(
                 RequestPolicy::safe_read(
                     format!("direct_nab_caps:{}", direct_config.base_url),
                     format!(
@@ -550,22 +553,28 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
                 },
                 |_| async {},
                 |actual_url| {
-                    let admitted = if reqwest::Url::parse(&url)
-                        .is_ok_and(|url| url.origin() == actual_url.origin())
-                    {
-                        tally.try_note_sent(actual_url.as_str())
-                    } else {
-                        tally.try_note_auxiliary_sent_call("external_redirect")
-                    };
-                    admitted
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    let is_indexer_origin = reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin());
+                    let tally = &tally;
+                    async move {
+                        let admitted = if is_indexer_origin {
+                            tally.try_note_sent_async(actual_url.as_str()).await
+                        } else {
+                            tally.try_note_auxiliary_sent_call("external_redirect")
+                        };
+                        admitted
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             )
             .await;
         let response = match response_result {
             Ok(response) => response,
             Err(error) => {
+                if let Some(quota_error) = tally.take_dispatch_error() {
+                    return Err(quota_error);
+                }
                 let (outcome, retry_after, cooldown_action) = match &error {
                     OutboundHttpError::RateLimited(rate_limited) => (
                         SchedulerFeedbackOutcome::RateLimited,
@@ -594,7 +603,10 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         };
 
         let status = response.status();
-        let body = match response.bytes().await {
+        // A reply past the cap is treated like one that could not be read.
+        let body = match scryer_outbound_http::read_body_bounded(response, MAX_CAPS_RESPONSE_BYTES)
+            .await
+        {
             Ok(body) => body,
             Err(error) => {
                 tally.note_result(IndexerRequestResult::NoResponse);
@@ -606,7 +618,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         tally.note_response(&CapturedIndexerHttpResponse {
             status: status.as_u16(),
             headers: Vec::new(),
-            body: body.to_vec(),
+            body: body.clone(),
         });
         if !status.is_success() {
             let body_snippet = String::from_utf8_lossy(&body);
@@ -1163,6 +1175,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -1215,6 +1229,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -1353,6 +1369,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -1382,6 +1400,8 @@ mod tests {
     ) -> ProxyConfig {
         let now = chrono::Utc::now();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: id.to_string(),
             name: "House Proxy".to_string(),
             provider_type,
@@ -1578,5 +1598,38 @@ mod tests {
             origin.received_requests().await.unwrap_or_default().len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_caps_reply_fails_like_an_unreadable_one() {
+        for status in [200, 500] {
+            let origin = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .respond_with(wiremock::ResponseTemplate::new(status).set_body_bytes(vec![
+                    b'x';
+                    MAX_CAPS_RESPONSE_BYTES
+                        + 1
+                ]))
+                .mount(&origin)
+                .await;
+            let config = direct_newznab_config(&origin.uri(), None);
+            let error = DirectNabCapsSnapshotRefresher::new()
+                .fetch_for_config(&config, None)
+                .await
+                .expect_err("an oversized caps reply fails the refresh");
+            assert!(
+                matches!(error, AppError::Repository(_)),
+                "status {status}: an oversized reply is a read failure, got {error:?}"
+            );
+        }
+
+        // A reply within the cap still parses.
+        let origin = caps_origin().await;
+        let config = direct_newznab_config(&origin.uri(), None);
+        DirectNabCapsSnapshotRefresher::new()
+            .fetch_for_config(&config, None)
+            .await
+            .expect("caps within the cap are read")
+            .expect("snapshot");
     }
 }

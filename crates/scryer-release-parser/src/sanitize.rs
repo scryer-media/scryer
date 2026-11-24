@@ -3,6 +3,15 @@ use unicode_normalization::UnicodeNormalization;
 
 pub(crate) const MAX_INPUT_BYTES: usize = 4096;
 
+/// The text an HTML named entity stands for, by its name without `&` and
+/// `;` (`eacute`, `nbsp`); `None` for a name HTML does not define.
+pub fn html_named_entity(name: &str) -> Option<&'static str> {
+    html_escape::NAMED_ENTITIES
+        .binary_search_by(|(known, _)| (*known).cmp(name.as_bytes()))
+        .ok()
+        .map(|index| html_escape::NAMED_ENTITIES[index].1)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SanitizedInput {
     pub(crate) value: String,

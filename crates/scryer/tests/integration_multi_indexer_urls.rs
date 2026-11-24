@@ -4,6 +4,9 @@
 //!
 //! Run with: cargo nextest run -E 'test(multi_indexer_url_trace)' --success-output immediate
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::sync::Arc;
@@ -372,6 +375,7 @@ where
         JwtAuthConfig {
             issuer: "scryer-test".into(),
             jwt_signing_salt: "test-salt".into(),
+            session_signing_salt: "test-session-salt".into(),
         },
         Arc::new(registry),
     );
@@ -453,6 +457,8 @@ fn indexer_config(
         rate_limit_seconds: Some(0),
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         last_health_status: None,
         last_error_message: None,

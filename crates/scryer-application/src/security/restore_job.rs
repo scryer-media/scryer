@@ -1,3 +1,4 @@
+use crate::disk::{Access, Disk, IfPresent, Parents, Replace};
 use crate::{
     AppError, AppResult, BackupBundleInspectSummary, RESTORE_WORK_BUDGET, RestoreDeadline,
     restore_refusal,
@@ -382,15 +383,15 @@ impl RestoreCoordinator {
 
     pub async fn admit_request(&self) -> AppResult<OwnedRwLockReadGuard<()>> {
         if self.blocks_application() {
-            return Err(Self::maintenance_error());
+            return Err(Self::lifecycle_error());
         }
         let guard = self.requests.clone().read_owned().await;
         if self.blocks_application() {
-            return Err(Self::maintenance_error());
+            return Err(Self::lifecycle_error());
         }
         Ok(guard)
     }
-    pub fn maintenance_error() -> AppError {
+    pub fn lifecycle_error() -> AppError {
         AppError::validation_refused(
             restore_refusal::RESTORE_MAINTENANCE_ACTIVE,
             "The application is unavailable while restore or recovery is in progress",
@@ -407,7 +408,7 @@ impl RestoreCoordinator {
         let (status, previous, previous_summary) = {
             let mut state = self.state.lock().expect("restore status lock");
             if self.shutting_down.load(Ordering::Acquire) {
-                return Err(Self::maintenance_error());
+                return Err(Self::lifecycle_error());
             }
             if state.as_ref().is_some_and(|status| {
                 status.reason.as_deref() == Some(restore_refusal::RESTORE_RECOVERY_REQUIRED)
@@ -421,7 +422,7 @@ impl RestoreCoordinator {
                 return if active.upload_id == upload_id && active.kind == kind {
                     Ok((active.clone(), false))
                 } else {
-                    Err(Self::maintenance_error())
+                    Err(Self::lifecycle_error())
                 };
             }
             let started_at = Utc::now();
@@ -676,21 +677,20 @@ impl RestoreCoordinator {
 
 pub fn read_restore_job(data_dir: &Path) -> AppResult<Option<RestoreJobStatus>> {
     let path = data_dir.join(RESTORE_JOB_FILENAME);
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| AppError::Repository(format!("invalid restore status record: {e}"))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(AppError::Repository(format!(
-            "could not read restore status: {e}"
-        ))),
-    }
+    let bytes = Disk::process()
+        .read_blocking(&path)
+        .if_present()
+        .map_err(|e| AppError::Repository(format!("could not read restore status: {e}")))?;
+    bytes
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()
+        .map_err(|e| AppError::Repository(format!("invalid restore status record: {e}")))
 }
 
 fn persist_status(path: &Path, status: &RestoreJobStatus) -> AppResult<()> {
     use std::io::Write;
-    let directory = path.parent().expect("restore status parent");
-    let mut file = tempfile::NamedTempFile::new_in(directory)
+    let mut file = Disk::process()
+        .stage_blocking(path, Parents::MustExist, Access::OwnerOnly)
         .map_err(|e| AppError::Repository(format!("could not create restore status: {e}")))?;
     #[cfg(windows)]
     protect_restore_record(file.path())
@@ -698,11 +698,9 @@ fn persist_status(path: &Path, status: &RestoreJobStatus) -> AppResult<()> {
     serde_json::to_writer(&mut file, status)
         .map_err(|e| AppError::Repository(format!("could not encode restore status: {e}")))?;
     file.flush()
-        .and_then(|_| file.as_file().sync_all())
         .map_err(|e| AppError::Repository(format!("could not flush restore status: {e}")))?;
-    file.persist(path).map_err(|e| {
-        AppError::Repository(format!("could not persist restore status: {}", e.error))
-    })?;
+    file.commit_durable_blocking(Replace::Allowed)
+        .map_err(|e| AppError::Repository(format!("could not persist restore status: {e}")))?;
     Ok(())
 }
 

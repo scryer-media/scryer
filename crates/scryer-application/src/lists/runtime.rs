@@ -107,8 +107,14 @@ impl<'a> AppListActions<'a> {
         Self { app }
     }
 
+    /// The subscription's owner, read fresh on every call, with the owner's
+    /// authorization attached so the permission checks of one action share a
+    /// single read instead of each loading it again. A disabled owner is
+    /// returned without it: callers stop at the disabled check, and one that
+    /// does not loads it on demand as before.
     async fn list_owner(&self, subscription: &ListSubscription) -> AppResult<User> {
-        self.app
+        let owner = self
+            .app
             .services
             .identity
             .users
@@ -119,7 +125,11 @@ impl<'a> AppListActions<'a> {
                     crate::error_reasons::lists::OWNER_NOT_FOUND,
                     "list owner".to_string(),
                 )
-            })
+            })?;
+        if !owner.authorization.login_status.is_enabled() || owner.authorization.loaded {
+            return Ok(owner);
+        }
+        self.app.attach_user_authorization(owner).await
     }
 }
 
@@ -236,6 +246,22 @@ impl ListActions for AppListActions<'_> {
                 .create_or_get_existing_preserving_options(title, series_movie_selection(item))
                 .await?;
             let reused = created.reused_existing;
+            // Before hydration or any search reads them; a parent the list
+            // reused keeps its own audio settings.
+            self.app
+                .store_new_title_audio_language_overrides(
+                    &created,
+                    &TitleOptionsPatch {
+                        required_audio_languages: route.required_audio_languages.clone().map(Some),
+                        preferred_audio_languages: route
+                            .preferred_audio_languages
+                            .clone()
+                            .map(Some),
+                        ..TitleOptionsPatch::default()
+                    },
+                    Some(actor.id.clone()),
+                )
+                .await;
             if !reused {
                 self.app.invalidate_monitored_title_matcher().await;
                 self.app
@@ -310,6 +336,9 @@ impl ListActions for AppListActions<'_> {
                 let numbering = ReleaseNumbering::from_str_or_default(value);
                 (numbering != ReleaseNumbering::Auto).then(|| numbering.as_str().to_string())
             }),
+            // An inheriting route leaves the title's audio settings alone.
+            required_audio_languages: route.required_audio_languages.clone().map(Some),
+            preferred_audio_languages: route.preferred_audio_languages.clone().map(Some),
             ..TitleOptionsPatch::default()
         };
         let outcome = self
@@ -412,6 +441,8 @@ impl ListActions for AppListActions<'_> {
                         .as_ref()
                         .map(|_| series_movie_selection(item)),
                     requested_lease_days: None,
+                    requested_required_audio_languages: route.required_audio_languages.clone(),
+                    requested_preferred_audio_languages: route.preferred_audio_languages.clone(),
                     external_ids: item
                         .series_movie
                         .as_ref()
@@ -473,6 +504,35 @@ impl ListActions for AppListActions<'_> {
                 .await;
         }
         Ok(committed.request_id)
+    }
+
+    async fn stage_requests(
+        &self,
+        subscription: &ListSubscription,
+        items: &[(&ListRoute, &ResolvedItem)],
+    ) {
+        // A disabled owner's requests are refused before any metadata is read.
+        if !matches!(self.owner_is_enabled(subscription).await, Ok(true)) {
+            return;
+        }
+        // Each subject as `submit_request`'s submit stages it: a series
+        // movie under the movie facet with the item's own ids, anything else
+        // under the route's facet with the request's normalized ids.
+        let subjects = items
+            .iter()
+            .filter_map(|(route, item)| {
+                if item.series_movie.is_some() {
+                    return Some((MediaFacet::Movie, item.external_ids.clone()));
+                }
+                crate::media_requests::normalize_media_request_external_ids(
+                    item.external_ids.clone(),
+                )
+                .ok()
+                .filter(|external_ids| !external_ids.is_empty())
+                .map(|external_ids| (route.kind.clone(), external_ids))
+            })
+            .collect();
+        self.app.stage_request_metadata_batch(subjects).await;
     }
 
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()> {

@@ -1,5 +1,6 @@
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use async_graphql::{Context, Error, ErrorExtensions, Result as GqlResult, value};
@@ -67,8 +68,75 @@ pub struct AuthRuntimeStateHandle {
         Arc<RwLock<Option<Option<scryer_application::initial_auth::SetupState>>>>,
     snapshot: Arc<RwLock<AuthRuntimeStateSnapshot>>,
     epoch_tx: watch::Sender<u64>,
+    user_revocations: Arc<Mutex<UserRevocationState>>,
     local_login_bypass_disabled: bool,
 }
+
+/// How many recent per-user revocations are remembered for connections that
+/// were still resolving their user when the revocation landed. A connection
+/// that began before the oldest remembered one is treated as revoked.
+const RECENT_USER_REVOCATIONS: usize = 256;
+
+/// Per-user counterpart of the auth epoch: revoking one user ends only that
+/// user's live connections. A user has a channel only while one of their
+/// connections holds a receiver; channels nobody holds are dropped whenever a
+/// connection subscribes or a user is revoked, so the map never outgrows the
+/// set of users with a live connection. `recent` is a fixed-size ring.
+#[derive(Default)]
+struct UserRevocationState {
+    /// Bumped once per revocation; a connection notes it before it resolves
+    /// its user.
+    sequence: u64,
+    /// Each live user's channel carries the sequence of their last revocation.
+    users: HashMap<String, watch::Sender<u64>>,
+    recent: VecDeque<(String, u64)>,
+}
+
+impl UserRevocationState {
+    fn prune_unwatched(&mut self) {
+        self.users.retain(|_, sender| sender.receiver_count() > 0);
+    }
+}
+
+/// Where the revocation sequence stood when a connection started resolving its
+/// user. Taken before the user's permissions are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UserRevocationMark(u64);
+
+/// Tells one connection whether its user has been revoked since it started.
+/// Waiting on it does no polling.
+#[derive(Clone)]
+pub struct UserRevocationWatch {
+    receiver: watch::Receiver<u64>,
+    since: u64,
+    revoked_before_watch: bool,
+}
+
+impl UserRevocationWatch {
+    pub fn is_revoked(&self) -> bool {
+        self.revoked_before_watch || *self.receiver.borrow() > self.since
+    }
+
+    /// Resolves once the user is revoked. Never resolves if the channel is gone.
+    pub async fn until_revoked(mut self) {
+        if self.revoked_before_watch {
+            return;
+        }
+        let since = self.since;
+        if self
+            .receiver
+            .wait_for(|revoked_at| *revoked_at > since)
+            .await
+            .is_err()
+        {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Attached to a WebSocket connection's data once its user is known.
+#[derive(Clone)]
+pub struct ConnectionUserRevocation(pub UserRevocationWatch);
 
 impl AuthRuntimeStateHandle {
     pub fn new(snapshot: AuthRuntimeStateSnapshot) -> Self {
@@ -86,6 +154,7 @@ impl AuthRuntimeStateHandle {
             initial_authentication: Arc::new(Default::default()),
             initial_authentication_cache: Arc::new(RwLock::new(None)),
             epoch_tx,
+            user_revocations: Arc::new(Mutex::new(UserRevocationState::default())),
             local_login_bypass_disabled,
         }
     }
@@ -144,37 +213,36 @@ impl AuthRuntimeStateHandle {
         form_login_enabled: bool,
         skip_login_for_local_ips: bool,
     ) -> AuthRuntimeStateSnapshot {
-        let next_snapshot = {
-            let mut snapshot = self
-                .snapshot
-                .write()
-                .expect("auth runtime snapshot lock poisoned");
-            let previous_policy = (
-                snapshot.effective_form_login_enabled,
-                snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
-                snapshot.passkey_enabled,
-            );
-            snapshot.form_login_enabled = form_login_enabled;
-            snapshot.skip_login_for_local_ips =
-                skip_login_for_local_ips && !self.local_login_bypass_disabled;
-            if !snapshot.env_override_active {
-                snapshot.effective_form_login_enabled = form_login_enabled;
-            }
-            snapshot.passkey_enabled =
-                snapshot.webauthn_configured && snapshot.effective_form_login_enabled;
-            let next_policy = (
-                snapshot.effective_form_login_enabled,
-                snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
-                snapshot.passkey_enabled,
-            );
-            if next_policy != previous_policy {
-                snapshot.epoch += 1;
-            }
-            snapshot.clone()
-        };
-
-        let _ = self.epoch_tx.send(next_snapshot.epoch);
-        next_snapshot
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .expect("auth runtime snapshot lock poisoned");
+        let previous_policy = (
+            snapshot.effective_form_login_enabled,
+            snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
+            snapshot.passkey_enabled,
+        );
+        snapshot.form_login_enabled = form_login_enabled;
+        snapshot.skip_login_for_local_ips =
+            skip_login_for_local_ips && !self.local_login_bypass_disabled;
+        if !snapshot.env_override_active {
+            snapshot.effective_form_login_enabled = form_login_enabled;
+        }
+        snapshot.passkey_enabled =
+            snapshot.webauthn_configured && snapshot.effective_form_login_enabled;
+        let next_policy = (
+            snapshot.effective_form_login_enabled,
+            snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
+            snapshot.passkey_enabled,
+        );
+        if next_policy != previous_policy {
+            snapshot.epoch += 1;
+        }
+        // Stored even when no connection is listening, and under the
+        // snapshot lock, so a later connection never reads an epoch the
+        // watch has not reached.
+        self.epoch_tx.send_replace(snapshot.epoch);
+        snapshot.clone()
     }
 
     pub fn subscribe_epoch(&self) -> watch::Receiver<u64> {
@@ -182,16 +250,70 @@ impl AuthRuntimeStateHandle {
     }
 
     pub fn invalidate_connections(&self) -> u64 {
-        let next_epoch = {
-            let mut snapshot = self
-                .snapshot
-                .write()
-                .expect("auth runtime snapshot lock poisoned");
-            snapshot.epoch += 1;
-            snapshot.epoch
-        };
-        let _ = self.epoch_tx.send(next_epoch);
-        next_epoch
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .expect("auth runtime snapshot lock poisoned");
+        snapshot.epoch += 1;
+        // See `apply_saved_security_settings`.
+        self.epoch_tx.send_replace(snapshot.epoch);
+        snapshot.epoch
+    }
+
+    pub fn user_revocation_mark(&self) -> UserRevocationMark {
+        UserRevocationMark(self.lock_user_revocations().sequence)
+    }
+
+    /// Watches `user_id` for revocations after `mark`, including one that
+    /// landed between the mark and this call.
+    pub fn watch_user_revocation(
+        &self,
+        user_id: &str,
+        mark: UserRevocationMark,
+    ) -> UserRevocationWatch {
+        let mut state = self.lock_user_revocations();
+        state.prune_unwatched();
+        let revoked_before_watch = state
+            .recent
+            .front()
+            .is_some_and(|(_, oldest)| mark.0 + 1 < *oldest)
+            || state
+                .recent
+                .iter()
+                .any(|(revoked, sequence)| *sequence > mark.0 && revoked == user_id);
+        let receiver = state
+            .users
+            .entry(user_id.to_string())
+            .or_insert_with(|| watch::channel(0).0)
+            .subscribe();
+        UserRevocationWatch {
+            receiver,
+            since: mark.0,
+            revoked_before_watch,
+        }
+    }
+
+    /// Ends `user_id`'s live connections and subscription streams; other
+    /// users' connections are untouched. Call it after the change is stored,
+    /// so the client's reconnect reads the new state.
+    pub fn revoke_user_connections(&self, user_id: &str) {
+        let mut state = self.lock_user_revocations();
+        state.sequence += 1;
+        let sequence = state.sequence;
+        if state.recent.len() == RECENT_USER_REVOCATIONS {
+            state.recent.pop_front();
+        }
+        state.recent.push_back((user_id.to_string(), sequence));
+        if let Some(sender) = state.users.get(user_id) {
+            sender.send_replace(sequence);
+        }
+        state.prune_unwatched();
+    }
+
+    fn lock_user_revocations(&self) -> std::sync::MutexGuard<'_, UserRevocationState> {
+        self.user_revocations
+            .lock()
+            .expect("user revocation lock poisoned")
     }
 }
 
@@ -335,6 +457,16 @@ pub fn default_persist_session_from_ctx(ctx: &Context<'_>) -> bool {
 /// rules. Absent from schema-level and WebSocket contexts.
 #[derive(Clone, Copy)]
 pub struct RequestClientIp(pub std::net::IpAddr);
+
+/// The host the HTTP request named, from `Host` or the HTTP/2 authority.
+/// Absent from schema-level and WebSocket contexts.
+#[derive(Clone)]
+pub struct RequestHost(pub Option<String>);
+
+pub fn request_host_from_ctx(ctx: &Context<'_>) -> Option<String> {
+    ctx.data_opt::<RequestHost>()
+        .and_then(|host| host.0.clone())
+}
 
 /// Where the callback origins approved for account linking come from.
 /// Transport adapters implement it from operator configuration, never from
@@ -831,6 +963,16 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::ManualReconciliationRequired(message) => {
             coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED")
         }
+        AppError::ManualReconciliationRefused {
+            message,
+            reason,
+            facts,
+        } => coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED").extend_with(
+            |_, extensions| {
+                extensions.set("reason", reason);
+                set_refusal_facts(extensions, &facts);
+            },
+        ),
         // A plugin's failure is the plugin's, not Scryer's, so it is not
         // masked: the sentence is the host's own, the reason names the
         // condition for clients that translate it, and the plugin's own public
@@ -864,6 +1006,31 @@ pub fn to_gql_error(err: AppError) -> Error {
             .extend_with(|_, extensions| {
                 extensions.set("reason", reason);
             }),
+        AppError::RepositoryFailedWithFacts {
+            message,
+            reason,
+            facts,
+        } => repository_gql_error(message).extend_with(|_, extensions| {
+            extensions.set("reason", reason);
+            set_refusal_facts(extensions, &facts);
+        }),
+    }
+}
+
+/// Each fact as its own extension, keyed by its name.
+fn set_refusal_facts(
+    extensions: &mut async_graphql::ErrorExtensionValues,
+    facts: &[scryer_application::RefusalFact],
+) {
+    for fact in facts {
+        match &fact.value {
+            scryer_application::RefusalFactValue::Text(value) => {
+                extensions.set(fact.key, value.as_str());
+            }
+            scryer_application::RefusalFactValue::List(values) => {
+                extensions.set(fact.key, values.clone());
+            }
+        }
     }
 }
 
@@ -901,6 +1068,7 @@ pub fn classify_login_error(err: &AppError) -> LoginErrorClassification {
         err,
         AppError::Repository(_)
             | AppError::RepositoryFailed { .. }
+            | AppError::RepositoryFailedWithFacts { .. }
             | AppError::RepositoryFailure { .. }
     ) {
         LoginErrorClassification::InfrastructureFailure
@@ -957,7 +1125,8 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::TotpInvalidCode(_) => "TotpInvalidCode",
         AppError::TotpRecoveryCodeUsed(_) => "TotpRecoveryCodeUsed",
         AppError::Canceled(_) => "Canceled",
-        AppError::ManualReconciliationRequired(_) => "ManualReconciliationRequired",
+        AppError::ManualReconciliationRequired(_)
+        | AppError::ManualReconciliationRefused { .. } => "ManualReconciliationRequired",
         AppError::ImportEvidenceUnavailable(_) => "ImportEvidenceUnavailable",
         AppError::ImportSourceInspection { .. } => "ImportSourceInspection",
         AppError::UnsupportedImportSource { .. } => "UnsupportedImportSource",
@@ -966,6 +1135,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::PluginFailed { .. } => "PluginFailed",
         AppError::Repository(_)
         | AppError::RepositoryFailed { .. }
+        | AppError::RepositoryFailedWithFacts { .. }
         | AppError::RepositoryFailure { .. } => "Repository",
     }
 }
@@ -978,6 +1148,7 @@ pub fn to_login_gql_error(method: &'static str, err: AppError) -> Error {
             let message = match err {
                 AppError::Repository(message)
                 | AppError::RepositoryFailed { message, .. }
+                | AppError::RepositoryFailedWithFacts { message, .. }
                 | AppError::RepositoryFailure { message, .. } => message,
                 other => return to_gql_error(other),
             };
@@ -1229,6 +1400,12 @@ fn current_user_any_scope_from_ctx(ctx: &Context<'_>) -> Option<User> {
     {
         return None;
     }
+    if ctx
+        .data_opt::<ConnectionUserRevocation>()
+        .is_some_and(|revocation| revocation.0.is_revoked())
+    {
+        return None;
+    }
 
     ctx.data_opt::<User>().cloned()
 }
@@ -1242,6 +1419,122 @@ pub fn mfa_verification_from_ctx(ctx: &Context<'_>) -> MfaVerification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn example_auth_runtime() -> AuthRuntimeStateHandle {
+        AuthRuntimeStateHandle::new(AuthRuntimeStateSnapshot {
+            form_login_enabled: true,
+            skip_login_for_local_ips: false,
+            effective_form_login_enabled: true,
+            webauthn_configured: false,
+            passkey_enabled: false,
+            env_override_active: false,
+            env_override_description: None,
+            epoch: 3,
+        })
+    }
+
+    #[test]
+    fn an_invalidation_with_no_connection_listening_still_reaches_later_connections() {
+        let auth = example_auth_runtime();
+
+        let epoch = auth.invalidate_connections();
+
+        assert_eq!(epoch, 4);
+        assert_eq!(auth.snapshot().epoch, epoch);
+        assert_eq!(*auth.subscribe_epoch().borrow(), auth.snapshot().epoch);
+    }
+
+    #[tokio::test]
+    async fn revoking_a_user_ends_only_that_users_watches() {
+        let auth = example_auth_runtime();
+        let mark = auth.user_revocation_mark();
+        let target = auth.watch_user_revocation("user-target", mark);
+        let bystander = auth.watch_user_revocation("user-bystander", mark);
+        let until_target = tokio::spawn(target.clone().until_revoked());
+
+        auth.revoke_user_connections("user-target");
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), until_target)
+            .await
+            .expect("the revoked user's watch resolves")
+            .expect("watch task completes");
+        assert!(target.is_revoked());
+        assert!(!bystander.is_revoked());
+        assert_eq!(
+            auth.snapshot().epoch,
+            3,
+            "a per-user revocation leaves the global epoch alone"
+        );
+    }
+
+    #[test]
+    fn a_revocation_while_the_user_was_resolving_still_counts() {
+        let auth = example_auth_runtime();
+        let mark = auth.user_revocation_mark();
+        auth.revoke_user_connections("user-target");
+
+        assert!(auth.watch_user_revocation("user-target", mark).is_revoked());
+        assert!(
+            !auth
+                .watch_user_revocation("user-bystander", mark)
+                .is_revoked()
+        );
+        let later = auth.user_revocation_mark();
+        assert!(
+            !auth
+                .watch_user_revocation("user-target", later)
+                .is_revoked(),
+            "a connection that starts after the revocation reads fresh permissions"
+        );
+    }
+
+    #[test]
+    fn a_connection_older_than_the_remembered_revocations_is_treated_as_revoked() {
+        let auth = example_auth_runtime();
+        let mark = auth.user_revocation_mark();
+        for index in 0..=RECENT_USER_REVOCATIONS {
+            auth.revoke_user_connections(&format!("user-{index}"));
+        }
+        assert!(
+            auth.watch_user_revocation("user-bystander", mark)
+                .is_revoked()
+        );
+        let later = auth.user_revocation_mark();
+        assert!(
+            !auth
+                .watch_user_revocation("user-bystander", later)
+                .is_revoked()
+        );
+    }
+
+    #[test]
+    fn user_revocation_state_holds_only_watched_users() {
+        let auth = example_auth_runtime();
+        let mark = auth.user_revocation_mark();
+        let watches = (0..50)
+            .map(|index| auth.watch_user_revocation(&format!("user-{index}"), mark))
+            .collect::<Vec<_>>();
+        assert_eq!(auth.lock_user_revocations().users.len(), 50);
+        drop(watches);
+
+        let _kept = auth.watch_user_revocation("user-kept", mark);
+        let state = auth.lock_user_revocations();
+        assert_eq!(state.users.len(), 1, "closed connections leave no channel");
+        assert!(state.recent.len() <= RECENT_USER_REVOCATIONS);
+    }
+
+    #[test]
+    fn a_policy_change_with_no_connection_listening_still_reaches_later_connections() {
+        let auth = example_auth_runtime();
+
+        let snapshot = auth.apply_saved_security_settings(false, false);
+
+        assert_eq!(
+            snapshot.epoch, 4,
+            "turning form login off changes the policy"
+        );
+        assert_eq!(*auth.subscribe_epoch().borrow(), auth.snapshot().epoch);
+    }
 
     #[test]
     fn save_validation_refusal_carries_structured_diagnostics() {
@@ -1293,19 +1586,19 @@ mod tests {
             ),
             (
                 AppError::validation_refused_with_count(
-                    "MAINTENANCE_ARM_COUNT_MISMATCH",
+                    "LIFECYCLE_ARM_COUNT_MISMATCH",
                     "new words",
                     17,
                 ),
                 "VALIDATION_ERROR",
-                "MAINTENANCE_ARM_COUNT_MISMATCH",
+                "LIFECYCLE_ARM_COUNT_MISMATCH",
             ),
         ] {
             assert_eq!(error.reason(), Some(reason));
             let gql = to_gql_error(error);
             assert_eq!(graphql_error_code(&gql), Some(code));
             assert_eq!(graphql_error_extension_string(&gql, "reason"), Some(reason));
-            if reason == "MAINTENANCE_ARM_COUNT_MISMATCH" {
+            if reason == "LIFECYCLE_ARM_COUNT_MISMATCH" {
                 assert!(
                     matches!(gql.extensions.as_ref().and_then(|e| e.get("currentCount")), Some(async_graphql::Value::Number(value)) if value.as_i64() == Some(17))
                 );
@@ -1810,6 +2103,48 @@ mod tests {
             Some(reason)
         );
         assert!(graphql_error_extension_string(&error, "errorId").is_some());
+    }
+
+    #[test]
+    fn repository_facts_travel_beside_the_masked_sentence() {
+        let reason = scryer_application::error_reasons::import::COPY_KEPT_SOURCE_GONE;
+        let key = scryer_application::error_reasons::import::KEPT_PATH_FACT;
+        let error = to_gql_error(AppError::RepositoryFailedWithFacts {
+            message: "copy verification failed at private path".into(),
+            reason,
+            facts: vec![scryer_application::RefusalFact::new(
+                key,
+                "/srv/fixture-media/library/Sample.Title.mkv",
+            )],
+        });
+        assert_eq!(error.message, INTERNAL_SERVER_ERROR_MESSAGE);
+        assert_eq!(graphql_error_code(&error), Some(INTERNAL_ERROR_CODE));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some(reason)
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, key),
+            Some("/srv/fixture-media/library/Sample.Title.mkv")
+        );
+    }
+
+    #[test]
+    fn a_named_manual_reconciliation_keeps_its_code_and_names_its_reason() {
+        let reason = scryer_application::error_reasons::import::DESTINATION_IS_SOURCE;
+        let error = to_gql_error(AppError::ManualReconciliationRefused {
+            message: "the destination is the source".into(),
+            reason,
+            facts: Vec::new(),
+        });
+        assert_eq!(
+            graphql_error_code(&error),
+            Some("MANUAL_RECONCILIATION_REQUIRED")
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some(reason)
+        );
     }
 
     #[test]

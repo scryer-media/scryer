@@ -308,6 +308,8 @@ const nl: LocaleDictionary = {
   "label.filters": "Filters",
   "label.enabled": "Ingeschakeld",
   "label.disabled": "Uitgeschakeld",
+  "label.createEnabled": "Ingeschakeld aanmaken",
+  "label.createDisabled": "Uitgeschakeld aanmaken",
   "unit.seconds": "seconden",
   "label.enable": "Inschakelen",
   "label.disable": "Uitschakelen",
@@ -673,7 +675,7 @@ const nl: LocaleDictionary = {
   "persona.trait.balanced.audio": "Audio: gebalanceerde codec-weging",
   "persona.trait.balanced.x265": "x265: bestraft onder 4K",
   "persona.trait.balanced.size":
-    "Bestandsgrootte: geeft de voorkeur aan grotere bestanden",
+    "Bestandsgrootte: te grote bestanden worden bestraft",
   "persona.trait.balanced.remux": "Remux: standaard niet geprioriteerd",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision en HDR10 beloond",
   "persona.trait.audiophile.source": "Bron: BluRay sterk geprefereerd",
@@ -689,14 +691,15 @@ const nl: LocaleDictionary = {
     "Audio: lossy codecs acceptabel (DDP geprefereerd)",
   "persona.trait.efficient.x265": "x265: beloond op alle resoluties",
   "persona.trait.efficient.size":
-    "Bestandsgrootte: compacte encodes geprefereerd",
+    "Bestandsgrootte: compacte encodes geprefereerd, te grote bestanden worden zwaar bestraft",
   "persona.trait.efficient.remux": "Remux: niet geprioriteerd",
   "persona.trait.efficient.hdr": "HDR: standaard",
   "persona.trait.compatible.source": "Bron: WEB-DL geprefereerd",
   "persona.trait.compatible.audio":
     "Audio: DDP en AAC geprioriteerd voor brede apparaatondersteuning",
   "persona.trait.compatible.x265": "x265: H.264 geprefereerd boven H.265",
-  "persona.trait.compatible.size": "Bestandsgrootte: standaardvoorkeuren",
+  "persona.trait.compatible.size":
+    "Bestandsgrootte: te grote bestanden worden bestraft",
   "persona.trait.compatible.remux": "Remux: niet geprioriteerd",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision bestraft (compatibiliteitsrisico)",
@@ -897,6 +900,14 @@ const nl: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Minimale scoreverschil binnen niveau",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Minimum aantal ontbrekende afleveringen voor een pakket",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Een seizoenspakket wordt alleen gezocht wanneer er minstens zoveel afleveringen van het seizoen ontbreken. Standaard 2. Bij 1 kan een automatische zoekopdracht naar één ontbrekende aflevering ook een pakket nemen, waardoor afleveringen die je al hebt opnieuw kunnen worden gedownload.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Minimum ontbrekende afleveringen voor een pakket met meerdere seizoenen (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Een pakket met meerdere seizoenen wordt alleen overwogen wanneer meer dan dit percentage van de afleveringen van de serie ontbreekt. Standaard 30. Bij 0 volstaat elke ontbrekende aflevering; bij 100 worden zulke pakketten nooit genomen.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -1746,6 +1757,18 @@ const nl: LocaleDictionary = {
   "title.monitoredSection": "Gemonitorde {{facet}}",
   "title.searchReleasesAction": "Releases zoeken",
   "title.queueLatest": "Nieuwste in wachtrij",
+  "search.addConfigRequiredAudio": "Vereiste audiotaal",
+  "search.addConfigPreferredAudio": "Voorkeursaudiotaal",
+  "search.addConfigAudioChoose": "Talen kiezen",
+  "search.addConfigAudioRequireNone": "Geen vereisen",
+  "title.preferredAudioLanguages": "Voorkeursaudiotalen",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer herkent die audiotaal niet.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer herkent de audiotaal van een route niet.",
+  "requests.requestedAudioLanguages": "Aangevraagde audiotalen",
+  "requests.requestedRequiredAudio": "Vereist: {{languages}}",
+  "requests.requestedPreferredAudio": "Voorkeur: {{languages}}",
   "title.requiredAudioLanguages": "Vereiste audiotalen",
   "title.originalAudioLanguagePerTitle": "Oorspronkelijke taal (per titel)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -2049,11 +2072,15 @@ const nl: LocaleDictionary = {
   "system.title": "Systeemstatus",
   "system.diagnosticsBundle.download": "Diagnosebundel downloaden",
   "system.diagnosticsBundle.preparing": "Diagnose voorbereiden…",
-  "system.diagnosticsBundle.helper": "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. Namen, adressen, paden en geheimen worden zo goed mogelijk verwijderd; controleer de bundel voordat je hem deelt.",
+  "system.diagnosticsBundle.helper":
+    "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. De bundel wordt zo goed mogelijk opgeschoond en kan veilig in een Discord-ticket worden gedeeld, maar delen in GitHub-issues of openbare Discord-kanalen wordt afgeraden.",
   "system.diagnosticsBundle.failed": "Kan de diagnosebundel niet downloaden.",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "Meld je opnieuw aan om de diagnose te downloaden.",
-  "system.diagnosticsBundle.refusal.permissionDenied": "Voor het downloaden van de diagnose is de machtiging voor systeeminstellingen nodig.",
-  "system.diagnosticsBundle.refusal.failed": "De diagnosebundel kon niet worden gemaakt. Zie het serverlogboek voor details.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Meld je opnieuw aan om de diagnose te downloaden.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Voor het downloaden van de diagnose is de machtiging voor systeeminstellingen nodig.",
+  "system.diagnosticsBundle.refusal.failed":
+    "De diagnosebundel kon niet worden gemaakt. Zie het serverlogboek voor details.",
   "system.jobsTitle": "Taken",
   "system.auditTitle": "Auditlog",
   "system.auditLoaded": "Auditlog geladen.",
@@ -2215,7 +2242,7 @@ const nl: LocaleDictionary = {
   "settings.ruleLibraryAll": "Alles",
   "settings.ruleLibraryCommunityEmpty":
     "Geen community-regelpakketten beschikbaar. Ververs de plugin registry om te controleren op nieuwe packs.",
-  "settings.arrImportAction": "Arr custom format importeren",
+  "settings.arrImportAction": "Importeren uit Arr",
   "settings.arrImportTitle": "Arr custom formats importeren",
   "settings.arrImportDescription":
     "Plak een Sonarr- of Radarr-custom-format-export om een nieuw Rego-regelconcept te maken.",
@@ -2271,7 +2298,7 @@ const nl: LocaleDictionary = {
   "settings.refSubtitle":
     "Klik om de volledige referentie uit te klappen voor alle velden die beschikbaar zijn voor je Rego-regels.",
   "settings.refIntro":
-    "Elke regel ontvangt een inputobject met vijf top-level documenten. Je Rego-code benadert deze via input.release, input.profile, input.context, input.builtin_score en input.file. input.file is null tijdens pre-download scoring en alleen gevuld tijdens post-download importevaluatie.",
+    "Elke regel ontvangt een inputobject met vijf top-level documenten. Je Rego-code benadert deze via input.release, input.profile, input.context, input.builtin_score en input.file. input.file is null wanneer een indexer-resultaat wordt gescoord, en is gevuld zodra het bestand zelf is geanalyseerd: bij de importcontrole na download, en wanneer een bestand dat al in de bibliotheek staat opnieuw wordt gescoord.",
   "settings.refColField": "Veld",
   "settings.refColType": "Type",
   "settings.refColDescription": "Beschrijving",
@@ -2282,22 +2309,24 @@ const nl: LocaleDictionary = {
   "settings.refReleaseRawTitle":
     "Originele ongeparseerde releasetitel van de indexer",
   "settings.refReleaseQuality":
-    "Gedetecteerd kwaliteitsniveau (bijv. 2160P, 1080P, 720P)",
-  "settings.refReleaseSource": "Mediabron (bijv. WEB-DL, BLURAY, HDTV)",
+    "Gedetecteerd kwaliteitsniveau, in kleine letters (bijv. 2160p, 1080p, 720p)",
+  "settings.refReleaseSource":
+    "Mediabron zoals uit de naam geparsed (bijv. WEB-DL, WEBRip, BluRay, HDTV). scryer.normalize_source geeft de vorm in hoofdletters (WEBDL, WEBRIP, BLURAY)",
   "settings.refReleaseVideoCodec": "Video-codec (bijv. H.265, H.264, AV1)",
-  "settings.refReleaseAudio": "Primaire audio-codec (bijv. DDP, AAC, TrueHD)",
+  "settings.refReleaseAudio":
+    "Primaire audio-codec (bijv. DDP, AAC, TRUEHD, DTSMA)",
   "settings.refReleaseAudioCodecs": "Alle gedetecteerde audio-codecs als array",
   "settings.refReleaseGuideFacts":
     "Guide facts gedetecteerd uit de release-metadata",
   "settings.refReleaseAudioChannels":
     "Audiokanaalconfiguratie (bijv. 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
-    "ISO 639-3 audiotaalcodes (bijv. eng, jpn). Bevat de talen die de indexer-listing meldde, vastgelegd toen de release werd gegrabd; bestanden die zijn ingescand, overgenomen of geïmporteerd voordat listing-snapshots werden bewaard, dragen alleen bij wat de naam en het bestand tonen",
+    "ISO 639-3 audiotaalcodes (bijv. eng, jpn). Bevat de talen die de indexer-listing meldde, vastgelegd toen de release werd gegrabd, en talen die Scryer afleidt: een dual-audio- of MULTi-markering voegt de oorspronkelijke taal van de titel toe (en eng wanneer geen taal wordt genoemd), en een release zonder label voegt de oorspronkelijke taal toe wanneer het profiel audiotalen vereist. Bestanden die zijn ingescand, overgenomen of geïmporteerd voordat listing-snapshots werden bewaard, dragen alleen bij wat de naam en het bestand tonen",
   "settings.refReleaseIndexerLanguages":
     "ISO 639-3 audiotaalcodes die de indexer-listing zelf meldde, vastgelegd toen de release werd gegrabd. Nooit afgeleid uit de naam of de titel; leeg als de indexer niets meldde",
   "settings.refReleaseLangsSub": "ISO 639-3 ondertitelingstaalcodes",
   "settings.refReleaseIsDualAudio":
-    "True wanneer meerdere audiotracks gedetecteerd zijn",
+    "True wanneer de releasenaam een dual-audio-markering bevat",
   "settings.refReleaseIsAtmos": "True wanneer Dolby Atmos-audio aanwezig is",
   "settings.refReleaseIsDV":
     "True wanneer Dolby Vision-metadata gedetecteerd is",
@@ -2402,12 +2431,13 @@ const nl: LocaleDictionary = {
     "Genormaliseerde originele audiotaal afgeleid voor releases zonder label",
   "settings.refCtxTags": "Door de gebruiker gedefinieerde tags op de titel",
   "settings.refCtxHasExisting":
-    "True wanneer er al een bestand bestaat voor deze titel",
+    "True wanneer er al een bestand in dit slot staat. Alleen gezet bij de importcontrole na download; altijd false wanneer een indexer-resultaat wordt gescoord",
   "settings.refCtxExistingScore":
-    "Ingebouwde score van het bestaande bestand (indien aanwezig)",
+    "Volledige score van het bestand dat al in het slot staat, inclusief regels. Alleen gezet bij de importcontrole na download; anders null",
   "settings.refCtxSearchMode":
-    "Evaluatiemodus. Huidige waarden zijn auto en post_download",
-  "settings.refCtxRuntimeMin": "Speelduur van de content in minuten",
+    "Waar de score wordt gebruikt: canonical (zoeken, grabben en bibliotheekscoring) of post_download (de importcontrole van het gedownloade bestand)",
+  "settings.refCtxRuntimeMin":
+    "Speelduur in minuten van wat wordt gescoord; opgeteld over de afleveringen bij een release met meerdere afleveringen of een volledig seizoen",
   "settings.refCtxIsAnime":
     "True wanneer de titel als anime is gecategoriseerd",
   "settings.refCtxIsFiller":
@@ -2415,14 +2445,15 @@ const nl: LocaleDictionary = {
 
   "settings.refSectionBuiltinScore":
     "— Resultaten van de ingebouwde scoring-engine",
-  "settings.refBuiltinTotal": "Totale score van de ingebouwde scoring-engine",
+  "settings.refBuiltinTotal":
+    "Totale score van de ingebouwde scoring-engine. Wanneer er baseline-regels zijn, zien latere regels hier in plaats daarvan het baseline-subtotaal, en een baseline-regel zelf ziet 0",
   "settings.refBuiltinBlocked":
     "True wanneer ingebouwde regels deze release hebben geblokkeerd",
   "settings.refBuiltinCodes":
-    "Lijst van toegepaste scoringcodes (bijv. quality_tier_0)",
+    "Lijst van toegepaste scoringcodes (bijv. quality_resolution_1080p). Wanneer er baseline-regels zijn, zijn hun codes inbegrepen",
 
   "settings.refSectionFile":
-    "— Geanalyseerde bestandsmetadata (null vóór download)",
+    "— Geanalyseerde bestandsmetadata (null wanneer een indexer-resultaat wordt gescoord)",
   "settings.refFileVideoCodec": "Geverifieerde video codec uit media-analyse",
   "settings.refFileVideoWidth": "Geverifieerde videobreedte in pixels",
   "settings.refFileVideoHeight": "Geverifieerde videohoogte in pixels",
@@ -2467,6 +2498,8 @@ const nl: LocaleDictionary = {
     "Geverifieerd audioprofiel of extensielabel per stroom",
   "settings.refAudioStreamChannels": "Aantal kanalen per stroom",
   "settings.refAudioStreamLanguage": "Taalcode per stroom",
+  "settings.refAudioStreamName":
+    "Titel van audiotrack per stroom, indien beschikbaar",
   "settings.refAudioStreamBitrateKbps": "Bitrate in kbps per stroom",
 
   "settings.refSectionSubtitleStreams":
@@ -2482,7 +2515,7 @@ const nl: LocaleDictionary = {
 
   "settings.refSectionBuiltins": "Aangepaste Scryer-functies",
   "settings.refBuiltinsIntro":
-    "Deze helperfuncties zijn beschikbaar in je Rego-regels naast alle standaard OPA builtins.",
+    "Deze helperfuncties zijn beschikbaar in je Rego-regels naast de kern-builtins van Rego, regex en time. Andere OPA-builtingroepen, zoals encoding, glob, semver, net en http, zijn niet beschikbaar.",
   "settings.refFnBlockScore":
     "Geeft -10000 terug, de constante om een release hard te blokkeren",
   "settings.refFnSizeGib":
@@ -2500,7 +2533,7 @@ const nl: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "Geen netwerk- of bestandssysteemtoegang — regels kunnen geen HTTP-requests doen, bestanden lezen of I/O uitvoeren. Standaard OPA builtins zoals http.send zijn niet beschikbaar.",
   "settings.refSandboxPkgIsolation":
-    "Package-isolatie — elke regel wordt automatisch in een eigen package geplaatst. Regels kunnen geen data van andere regels lezen of wijzigen.",
+    "Package-isolatie — elke regel wordt automatisch in een eigen package geplaatst en kan geen andere regel wijzigen. Een regel die geen baseline-regel is, kan de uitvoer van een andere regel lezen via data.scryer.rules.user.<id>.",
   "settings.refSandboxReadOnly":
     "Alleen-lezen input — regels kunnen alleen het inputdocument lezen. Ze kunnen geen applicatiestatus wijzigen of data bewaren tussen evaluaties.",
   "settings.refSandboxOutputRestricted":
@@ -2510,7 +2543,7 @@ const nl: LocaleDictionary = {
   "settings.refSandboxValidation":
     "Validatie vóór opslaan — regels worden gecompileerd en dry-run getest tegen synthetische input voordat ze kunnen worden opgeslagen. Ongeldige regels worden geweigerd.",
   "settings.refSandboxErrorIsolation":
-    "Foutisolatie — als één regel faalt tijdens runtime, blijven alle andere regels normaal evalueren. Fouten worden gelogd maar stoppen scoring nooit.",
+    "Foutisolatie — als één regel faalt tijdens runtime, blijven alle andere regels normaal evalueren. Tijdens scoring wordt een fout gelogd en draagt de regel 0 bij. Bij de importcontrole na download houdt een fout in je regel de import vast voor beoordeling.",
 
   "settings.refSectionOutput": "Regel-outputformaat",
   "settings.refOutputIntro":
@@ -2969,6 +3002,19 @@ const nl: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Iedereen schrijven",
   "settings.chmodPresetCustom": "Custom",
   "settings.sidecarFilesTitle": "Sidecar-bestanden",
+  "settings.libraryFullHashBackfillTitle": "Hashen op de achtergrond",
+  "settings.libraryFullHashBackfillLabel": "Bestanden 's nachts hashen",
+  "settings.libraryFullHashBackfillDescription":
+    "Leest elk bestand in deze bibliotheek één keer 's nachts om de volledige inhoudshash vast te leggen. Zet dit uit voor bibliotheken op schijven die je in slaapstand houdt; de hash van een bestand wordt dan alleen gelezen wanneer een verplaatsing, import of controle die nodig heeft.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Nachtelijk hashen uitschakelen?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Als je dit uitschakelt, kan Scryer minder goed garanderen dat bepaalde bestandsverplaatsingen 100% veilig zijn.",
+  "settings.libraryFullHashBackfillDisableConfirm": "Uitschakelen",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Nachtelijk hashen ingeschakeld voor deze bibliotheek.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Nachtelijk hashen uitgeschakeld voor deze bibliotheek.",
   "settings.identityStorageTitle": "Identiteit & opslag",
   "settings.mediaProfilesTitle": "Mediaprofielen",
   "settings.mediaProfilesHelp":
@@ -3879,6 +3925,7 @@ const nl: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} afleveringen",
   "history.unknownEvent": "Onbekend",
   "history.noMore": "Geen gebeurtenissen meer",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Meer laden",
 
   // Indexer error diagnostics
@@ -4466,29 +4513,29 @@ const nl: LocaleDictionary = {
   "lists.policy.value.auto": "Automatisch goedkeuren",
   "lists.policy.value.approval": "Goedkeuring nodig",
   "lists.policy.value.none": "Lijsten niet toegestaan",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Of een lijst, en niet een persoon, het onderwerp aan de bibliotheek heeft toegevoegd",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Of een ingeschakelde lijst, openbaar of persoonlijk, het onderwerp nog bevat",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Namen van de ingeschakelde openbare lijsten die het onderwerp nog bevatten",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Of elke lijst die het onderwerp ooit bevatte het heeft laten vallen",
-  "settings.refMaintFactsListsLeftAt":
+  "settings.refLifecycleFactsListsLeftAt":
     "Wanneer de laatste lijst het onderwerp liet vallen",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLastListName":
     "De openbare lijst die het onderwerp het laatst verliet",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "Waar wanneer een lijstsynchronisatie de titel heeft aangemaakt; onbekend met reden list_store_unreadable als de lijstopslag niet leesbaar was",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "Waar zolang ten minste één ingeschakelde lijst het onderwerp bevat",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Alleen namen van openbare lijsten, gesorteerd; de persoonlijke lijst van een lid wordt nooit genoemd",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "Waar zodra elke lijst die het onderwerp bevatte het heeft laten vallen; onwaar zolang een lijst het nog bevat of als het nooit op een lijst stond",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339-tijdstempel; ontbreekt met reden not_left_every_list zolang een lijst het onderwerp nog bevat",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Naam van die openbare lijst; ontbreekt met reden no_public_list_left als het onderwerp nooit een openbare lijst verliet",
   "lists.providerSettings.heading": "Providerinstellingen",
   "lists.providerSettings.copy":
@@ -4602,27 +4649,27 @@ const nl: LocaleDictionary = {
     "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
-  "settings.maintenanceExecutionReason.playbackHold":
-    "Aangehouden: er wordt iets afgespeeld op een mediaserver.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackHold":
+    "Aangehouden: deze titel wordt afgespeeld op een mediaserver.",
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Aangehouden: een mediaserver kon niet worden gevraagd of er iets wordt afgespeeld.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Aangehouden: de geschiedenis van de mediaserver toont een weergave door een account dat de kijkgeschiedenis niet meetelt.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Aangehouden: de mediaserver kon de kijkgeschiedenis niet bevestigen voordat er werd gehandeld.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Aangehouden: een verbonden mediaserver heeft geen overeenkomend item, dus de kijkgeschiedenis kon niet worden gecontroleerd voordat er werd gehandeld.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Of iemand met een account op een verbonden mediaserver het heeft afgespeeld, gekoppeld aan Scryer of niet; noemt niemand",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "Wanneer iemand met een account op een verbonden mediaserver het voor het laatst heeft afgespeeld",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True wanneer een willekeurig account op een ingeschakelde mediaserver het heeft afgespeeld, ongeacht of het account aan een Scryer-gebruiker is gekoppeld; bij seizoenen en series telt elke uitgezonden aflevering. Onbekend met reden audience_not_read totdat een synchronisatie in de afgelopen 48 uur elk account op elke ingeschakelde verbinding heeft gelezen, en met de gebruikelijke redenen wanneer kijkfeiten onbekend zijn.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "RFC3339-tijdstempel van de meest recente weergave door een willekeurig account; afwezig met reden never_watched wanneer niemand het heeft afgespeeld, en onbekend met reden play_time_missing (episode_play_time_missing bij seizoenen en series) wanneer een weergave geen vastgelegde tijd heeft, of audience_not_read wanneer niet alle accounts zijn gelezen",
-  "settings.maintenancePreviewFacts": "Feiten die de regel las",
+  "settings.lifecyclePreviewFacts": "Feiten die de regel las",
   "setup.sourceImportProgress": "Bronnen importeren",
   "setup.sourceImportInvalidRequest":
     "Een geselecteerde bron is niet beschikbaar. Vernieuw de bronnendetectie en selecteer de bron opnieuw.",
@@ -4661,27 +4708,18 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Beslisvolgorde",
   "qualityProfile.decisionOrderInfo":
     "Als twee releases allebei aan dit profiel voldoen, loopt Scryer deze stappen van boven af na. De eerste stap die ze onderscheidt, beslist. Score beslist altijd als laatste.",
-  "qualityProfile.decisionPresets": "Voorinstellingen",
-  "qualityProfile.decisionPresetDefault": "Standaard",
-  "qualityProfile.decisionPresetLanguageFirst": "Taal eerst",
-  "qualityProfile.decisionPresetScoreOnly": "Alleen score",
   "qualityProfile.decisionGateQualityTier": "Kwaliteitsniveau",
   "qualityProfile.decisionGateQualityTierDescription":
     "De release in het niveau dat hoger staat in de kwaliteitsvoorkeur van dit profiel wint.",
-  "qualityProfile.decisionGateQualityTierSummary": "kwaliteitsniveau",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Binnen hetzelfde niveau en dezelfde releasegroep wint een nieuwere PROPER of REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK-revisie",
   "qualityProfile.decisionGatePreferredLanguage": "Voorkeurstaal",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "De release waarvan de audio hoger staat in de voorkeursaudiotalen van de bibliotheek wint.",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "voorkeursaudiotaal",
   "qualityProfile.decisionGateOptionalLanguages": "Optionele talen",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "De release met meer optionele audiotalen van de bibliotheek wint.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "aantal optionele audiotalen",
   "qualityProfile.decisionGateUnknown": "Onbekende stap ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Deze versie van de webapp kent deze stap niet. Hij blijft op zijn plaats.",
@@ -4694,11 +4732,6 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "{{value}} aan de beslisvolgorde toevoegen",
   "qualityProfile.decisionAvailableSteps": "Ongebruikte stappen",
   "qualityProfile.decisionAllStepsInUse": "Alle stappen zijn in gebruik.",
-  "qualityProfile.decisionSummary":
-    "Releases worden vergeleken op {{steps}} en ten slotte op score.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, daarna {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Releases worden alleen op score vergeleken.",
   "qualityProfile.decisionWarningTierAbsent":
     "Zonder de stap kwaliteitsniveau kan een release van een lager niveau een bestand van een hoger niveau vervangen, en geldt het cutoff-niveau niet. Alleen de cutoff-score stopt het zoeken naar upgrades; zonder cutoff-score is het profiel tevreden zodra er een bestand is.",
   "qualityProfile.decisionNoteTierBelowLanguage":
@@ -4721,6 +4754,65 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Sleep om {{value}} te verplaatsen",
   "qualityProfile.decisionStepMoveUp": "{{value}} omhoog verplaatsen",
   "qualityProfile.decisionStepMoveDown": "{{value}} omlaag verplaatsen",
+  "settings.proxyReachThrough": "Bereiken via",
+  "settings.proxyReachThroughHelp":
+    "Scryer stuurt zijn verzoeken naar deze solver via de gekozen transportproxy of tunnel. Direct bereikt de solver vanuit het eigen netwerk van Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Een challenge-solver kan niet via een andere challenge-solver worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Een challenge-solver kan niet via zichzelf worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "De proxy of tunnel om de solver via te bereiken is niet gevonden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "De proxy of tunnel om de solver via te bereiken is uitgeschakeld.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Alleen een challenge-solver kan via een andere proxy worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Een of meer challenge-solvers worden via deze proxy bereikt. Wijzig die eerst.",
+  "tours.onboarding.welcome.title": "Welkom bij Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer zoekt, downloadt en ordent je films, series en anime. Hier volgt een korte rondleiding; je kunt die altijd overslaan.",
+  "tours.onboarding.search.title": "Alles doorzoeken",
+  "tours.onboarding.search.body":
+    "Vind een titel, instelling of actie vanaf elke plek. Druk op ⌘K of Ctrl+K om zoeken met het toetsenbord te openen.",
+  "tours.onboarding.libraries.title": "Je bibliotheken",
+  "tours.onboarding.libraries.body":
+    "Films, series en anime hebben elk een bibliotheek: wat je hebt, wat ontbreekt en wat onderweg is.",
+  "tours.onboarding.discover.title": "Ontdekken en aanvragen",
+  "tours.onboarding.discover.body":
+    "Blader door suggesties op basis van je bibliotheken, vraag een titel aan en volg elke aanvraag in Aanvragen.",
+  "tours.onboarding.lists.title": "Lijsten",
+  "tours.onboarding.lists.body":
+    "Volg lijsten van aanbieders zoals Trakt of je Plex-watchlist. Scryer houdt ze gesynchroniseerd en voegt hun titels voor je toe of vraagt ze aan.",
+  "tours.onboarding.activity.title": "Activiteit",
+  "tours.onboarding.activity.body":
+    "Downloads en imports terwijl ze gebeuren, en alles wat een beslissing van je nodig heeft.",
+  "tours.onboarding.indexers.title": "Indexers en downloadclients",
+  "tours.onboarding.indexers.body":
+    "Scryer heeft minstens één indexer nodig om releases te vinden en een downloadclient om ze op te halen. De downloadclients staan er direct onder.",
+  "tours.onboarding.indexers.action": "Indexer toevoegen",
+  "tours.onboarding.qualityProfiles.title": "Kwaliteitsprofielen",
+  "tours.onboarding.qualityProfiles.body":
+    "Een kwaliteitsprofiel bepaalt welke kwaliteiten een titel mag hebben en wanneer Scryer blijft zoeken naar een betere release.",
+  "tours.onboarding.rules.title": "Regels",
+  "tours.onboarding.rules.body":
+    "Regels geven releases een score, zodat Scryer kiest wat je wilt en overslaat wat je niet wilt.",
+  "tours.onboarding.mediaServers.title": "Mediaservers",
+  "tours.onboarding.mediaServers.body":
+    "Koppel Jellyfin, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
+  "tours.onboarding.notifications.title": "Meldingen",
+  "tours.onboarding.notifications.body":
+    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt. Diensten voeg je toe vanuit dit Plugins-paneel. Ook Jellyfin, Plex en Emby staan hier: je server vernieuwt na een import pas als je de plugin ervan uit dit paneel installeert, ook als hij al gekoppeld is onder Mediaservers.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Plugins voegen indexers, downloadclients en meldingsdiensten toe. Installeer en werk ze hier bij.",
+  "tours.stepOf": "Stap {{current}} van {{total}}",
+  "tours.skip": "Rondleiding overslaan",
+  "tours.back": "Terug",
+  "tours.next": "Volgende",
+  "tours.done": "Klaar",
+  "tours.saveFailed":
+    "De voortgang van de rondleiding kon niet worden opgeslagen, dus deze kan opnieuw verschijnen.",
 };
 
 export default nl;

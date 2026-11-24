@@ -6,10 +6,12 @@
 //! the seeding copy is orphaned at the old path, and the bytes now occupy disk
 //! twice. Recycling one of several links frees no space at all.
 //!
-//! Detection is a `st_nlink` read on unix. Other platforms do not report a
-//! portable link count through `std::fs`, so they report
-//! [`LinkCount::Unsupported`] rather than guessing "1" — an unknown link count
-//! must never be presented as "no hardlinks".
+//! Detection is the disk service's read of the name, links not followed:
+//! `st_nlink` on unix and the link count of a handle on Windows. Where the
+//! read gives no count (a Windows file the process may not open, read from
+//! its folder's listing, or another platform) it reports
+//! [`LinkCount::Unsupported`] rather than guessing "1" — an unknown link
+//! count must never be presented as "no hardlinks".
 //!
 //! Warning construction is pure so previews and the executor summary can build
 //! the same warnings from the same facts. Wiring into the preview model happens
@@ -19,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::{Disk, PathReading};
 use crate::{AppError, AppResult};
 
 /// The link count of one file, or the fact that this platform does not report
@@ -26,7 +29,8 @@ use crate::{AppError, AppResult};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkCount {
-    /// Link count read from filesystem metadata (`st_nlink` on unix).
+    /// Link count read from filesystem metadata (`st_nlink` on unix, the
+    /// handle's link count on Windows).
     Known(u64),
     /// This platform does not expose a hardlink count: not detected, and
     /// explicitly not "one".
@@ -80,18 +84,27 @@ impl HardlinkFact {
 
 /// Read the link count of `path` (blocking).
 ///
-/// On unix this is `st_nlink` from `symlink_metadata`, so a symlink reports its
-/// own link count rather than its target's. On other platforms the file is
-/// still stat'ed — so a missing or unreadable path is still an error — but the
-/// count comes back as [`LinkCount::Unsupported`].
+/// The link is not followed, so a symlink reports its own link count rather
+/// than its target's: `st_nlink` on unix, the handle's count on Windows.
+/// Where the read gives no count the file is still read — so a missing or
+/// unreadable path is still an error — but the count comes back as
+/// [`LinkCount::Unsupported`].
 pub fn link_count(path: &Path) -> AppResult<LinkCount> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to stat path for hardlink detection: {}: {error}",
-            path.display()
-        ))
-    })?;
-    Ok(link_count_from_metadata(&metadata))
+    let reading = Disk::process().uncached_blocking(path);
+    if reading.exists() != Some(true) {
+        return Err(unreadable_for_hardlinks(path, reading));
+    }
+    Ok(reading
+        .link_count()
+        .map_or(LinkCount::Unsupported, LinkCount::Known))
+}
+
+fn unreadable_for_hardlinks(path: &Path, reading: PathReading) -> AppError {
+    AppError::Repository(format!(
+        "failed to stat path for hardlink detection: {}: {}",
+        path.display(),
+        reading.absence()
+    ))
 }
 
 /// Read the link count and size of `path` (blocking).
@@ -107,32 +120,18 @@ pub fn hardlink_fact(path: &Path) -> AppResult<HardlinkFact> {
 /// Read the link count and size of `path` (blocking), returning `Ok(None)` when
 /// the path no longer exists.
 pub fn hardlink_fact_optional(path: &Path) -> AppResult<Option<HardlinkFact>> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to stat path for hardlink detection: {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    Ok(Some(HardlinkFact {
-        path: path.display().to_string(),
-        link_count: link_count_from_metadata(&metadata),
-        size_bytes: metadata.len(),
-    }))
-}
-
-#[cfg(unix)]
-pub(crate) fn link_count_from_metadata(metadata: &std::fs::Metadata) -> LinkCount {
-    use std::os::unix::fs::MetadataExt;
-    LinkCount::Known(metadata.nlink())
-}
-
-#[cfg(not(unix))]
-pub(crate) fn link_count_from_metadata(_metadata: &std::fs::Metadata) -> LinkCount {
-    LinkCount::Unsupported
+    let reading = Disk::process().uncached_blocking(path);
+    match reading.exists() {
+        Some(true) => Ok(Some(HardlinkFact {
+            path: path.display().to_string(),
+            link_count: reading
+                .link_count()
+                .map_or(LinkCount::Unsupported, LinkCount::Known),
+            size_bytes: reading.size().unwrap_or(0),
+        })),
+        Some(false) => Ok(None),
+        None => Err(unreadable_for_hardlinks(path, reading)),
+    }
 }
 
 /// Detect hardlink facts for a batch of source paths on a blocking thread, so a
@@ -305,14 +304,14 @@ mod tests {
         let detected = hardlink_fact(&path).expect("fact");
         assert!(!detected.is_hardlinked());
         assert_eq!(detected.size_bytes, 4);
-        if cfg!(unix) {
+        if cfg!(any(unix, windows)) {
             assert_eq!(detected.link_count, LinkCount::Known(1));
         } else {
             assert_eq!(detected.link_count, LinkCount::Unsupported);
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn a_hardlinked_file_is_detected() {
         let dir = tempfile::tempdir().expect("tempdir");

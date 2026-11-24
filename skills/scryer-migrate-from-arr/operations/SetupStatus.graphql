@@ -1,0 +1,9 @@
+# Whether first-run setup is complete, and whether any download client or indexer
+# is configured yet. Read-only. Variables: none.
+query SetupStatus {
+  setupStatus {
+    setupComplete
+    hasDownloadClients
+    hasIndexers
+  }
+}

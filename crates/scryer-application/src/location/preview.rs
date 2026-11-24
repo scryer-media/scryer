@@ -812,57 +812,44 @@ pub trait VolumeProbe: Send + Sync {
     fn available_bytes(&self, path: &Path) -> Option<u64>;
 }
 
-/// The real probe: `dev` identity on unix, path prefix on Windows, and the
-/// established `filesystem_space_raw` helper for free space.
+/// The real probe: the disk service's volume, with the drive or share on
+/// Windows, and the canonical [`crate::disk::capacity::StorageCapacity`] for
+/// free space. It answers for a root or folder as a whole, as the free-space
+/// estimate needs. Whether one file is linked or copied is the move's own
+/// per-file answer: a file on a volume whose reads cannot tell its files
+/// apart, or a symbolic link on Windows, is copied even where this probe
+/// names one volume for both roots.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemVolumeProbe;
 
-impl SystemVolumeProbe {
-    /// Destination directories usually do not exist yet, so both queries walk up
-    /// to the nearest ancestor that does.
-    fn existing_ancestor(path: &Path) -> Option<PathBuf> {
-        let mut current = Some(path);
-        while let Some(candidate) = current {
-            if candidate.exists() {
-                return Some(candidate.to_path_buf());
-            }
-            current = candidate.parent();
-        }
-        None
-    }
-}
-
 impl VolumeProbe for SystemVolumeProbe {
     fn volume_id(&self, path: &Path) -> Option<VolumeId> {
-        let existing = Self::existing_ancestor(path)?;
-        #[cfg(unix)]
+        // The volume a move's execution reads to choose a rename: one that
+        // names no volume is no answer, and the estimate counts a copy.
+        let volume = crate::disk::Disk::process()
+            .landing_volume_blocking(path)
+            .filter(crate::disk::Mark::names_volume)?;
+        #[cfg(windows)]
         {
-            use std::os::unix::fs::MetadataExt;
-            let metadata = std::fs::metadata(&existing).ok()?;
-            Some(VolumeId(format!("dev:{}", metadata.dev())))
+            // Two drives or shares are two volumes whatever serials they
+            // read as, compared in the form the move compares them.
+            let prefix = crate::disk::Disk::drive_or_share(path)?;
+            Some(VolumeId(format!("prefix:{prefix}|{}", volume.to_stored())))
         }
-        #[cfg(not(unix))]
-        {
-            // Windows has no cheap device id through `std`; the path prefix
-            // (drive letter or UNC share) is the volume for the purposes of
-            // "will this move be a rename or a copy".
-            let prefix = existing.components().next()?;
-            Some(VolumeId(format!(
-                "prefix:{}",
-                prefix.as_os_str().to_string_lossy().to_uppercase()
-            )))
-        }
+        #[cfg(not(windows))]
+        Some(VolumeId(volume.to_stored()))
     }
 
     fn available_bytes(&self, path: &Path) -> Option<u64> {
-        let existing = Self::existing_ancestor(path)?;
-        crate::helpers::filesystem_space_raw(&existing)
+        let existing = crate::disk::Disk::process().nearest_existing_blocking(path)?;
+        crate::disk::capacity::StorageCapacity::process()
+            .refresh_blocking(existing)
             .ok()
             .map(|space| space.available_bytes)
     }
 }
 
-/// What a free-space estimate needs to know (FR-080).
+/// What a free-space estimate needs to know.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeSpaceRequest {
     /// A path on the source volume.
@@ -879,7 +866,7 @@ pub struct FreeSpaceRequest {
     pub recycle_base_path: Option<PathBuf>,
 }
 
-/// Free-space expectation stated in the preview (FR-080).
+/// Free-space expectation stated in the preview.
 ///
 /// Recycling is the subtle part: recycling a file on the *same* volume is a
 /// rename and costs nothing, but a recycle bin configured on another volume
@@ -894,11 +881,10 @@ pub struct FreeSpaceEstimate {
     /// recycling is a same-volume rename or is unavailable.
     pub recycle_required_bytes: u64,
     pub recycle_available_bytes: Option<u64>,
-    /// The move is a same-volume rename, so it needs no destination space
-    /// (FR-032).
+    /// The move is a same-volume rename, so it needs no destination space.
     pub same_volume_move: bool,
     /// The recycle bin is on a different volume from the source, so recycling
-    /// copies bytes instead of renaming them (FR-080).
+    /// copies bytes instead of renaming them.
     pub recycle_on_other_volume: bool,
     /// The recycle bin's volume is the destination volume, so its cost adds to
     /// the destination requirement rather than standing on its own.
@@ -1010,7 +996,7 @@ where
 }
 
 /// Estimates the free space an operation needs, including the recycle-bin cost
-/// when the bin is on another volume (FR-080).
+/// when the bin is on another volume.
 pub fn estimate_free_space(
     request: &FreeSpaceRequest,
     probe: &dyn VolumeProbe,

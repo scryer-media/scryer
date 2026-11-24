@@ -1,0 +1,5 @@
+mutation CompleteSetup($sourceImportRunId: ID) {
+  completeSetup(sourceImportRunId: $sourceImportRunId) {
+    completed
+  }
+}

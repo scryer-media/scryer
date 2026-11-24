@@ -175,6 +175,23 @@ fn score_cutoff_profile(cutoff_score: Option<i32>) -> QualityProfile {
     profile
 }
 
+/// A profile without a cutoff score whose chosen order compares the tier and
+/// revision, then the languages. The language steps are opt-in, so a profile
+/// that should nominate language targets chooses them.
+fn language_order_profile() -> QualityProfile {
+    let mut profile = score_cutoff_profile(None);
+    profile.criteria.set_decision_pipeline(
+        crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap(),
+    );
+    profile
+}
+
 fn scores(bars: Vec<Option<crate::quality::landed_bar_memo::LandedBar>>) -> Vec<Option<i32>> {
     bars.into_iter()
         .map(|bar| bar.map(|bar| bar.score))
@@ -574,7 +591,7 @@ async fn a_page_of_series_scopes_reads_episodes_once_and_a_changed_span_misses()
 
 #[tokio::test]
 async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_score() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let german = fixture
         .add_movie(
             "German Cut",
@@ -612,7 +629,7 @@ async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_sc
         "the best-placed preferred language decides, not any preferred language"
     );
 
-    let mut no_upgrades = score_cutoff_profile(None);
+    let mut no_upgrades = language_order_profile();
     no_upgrades.criteria.allow_upgrades = false;
     fixture
         .quality_profiles
@@ -627,7 +644,7 @@ async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_sc
 
 #[tokio::test]
 async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let german_only = fixture
         .add_movie(
             "German Only",
@@ -654,4 +671,532 @@ async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on(
         fixture.target_titles().await,
         BTreeSet::from([german_only.id.clone()])
     );
+}
+
+#[tokio::test]
+async fn a_title_preferred_language_override_alone_makes_a_language_target() {
+    let fixture = fixture(language_order_profile()).await;
+    let english = fixture
+        .add_movie(
+            "Override Cut",
+            "Override.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    let other = fixture
+        .add_movie(
+            "Plain Cut",
+            "Plain.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &english.id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([english.id.clone()]),
+        "only the title that prefers German is a target, with no library or facet preference"
+    );
+
+    // A facet preference the title's own ladder already satisfies leaves it alone.
+    fixture
+        .set_movie_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, "[\"de\"]")
+        .await;
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &english.id,
+            "[\"en\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([other.id.clone()]),
+        "the title override wins over the facet's preference"
+    );
+}
+
+#[tokio::test]
+async fn without_a_cutoff_score_only_titles_with_their_own_preference_are_targets() {
+    let fixture = fixture(language_order_profile()).await;
+    let mut titles = Vec::new();
+    for index in 0..6 {
+        let name = format!("Fixture Reel {index}");
+        let release = format!("Fixture.Reel.{index}.2024.ENGLISH.1080p.BluRay.x264-GRP");
+        titles.push(fixture.add_movie(&name, &release, 8_000_000_000).await);
+    }
+
+    // An override whose title is gone matches nothing.
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            "title-that-was-deleted",
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &titles[3].id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([titles[3].id.clone()])
+    );
+}
+
+#[tokio::test]
+async fn the_override_only_targets_pass_matches_the_library_wide_pass() {
+    let fixture = fixture(language_order_profile()).await;
+    let mut second_library = mock_default_library(MediaFacet::Movie);
+    second_library.id = "library-movie-second".to_string();
+    second_library.slug = "movies-second".to_string();
+    second_library.is_default = false;
+    fixture
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(second_library);
+
+    let mut titles = Vec::new();
+    for index in 0..7 {
+        let name = format!("Parity Reel {index}");
+        let release = format!("Parity.Reel.{index}.2024.ENGLISH.1080p.BluRay.x264-GRP");
+        titles.push(fixture.add_movie(&name, &release, 8_000_000_000).await);
+    }
+    // 0: default library, override. 1: second library, override.
+    // 2: second library, no override. 3: unmonitored, override.
+    // 4: in neither library, override. 5: default library, no override.
+    // 6: default library, an override its file already satisfies.
+    for index in [1, 2] {
+        fixture
+            .edit_title(&titles[index].id, |title| {
+                title.library_id = "library-movie-second".to_string();
+            })
+            .await;
+    }
+    fixture
+        .edit_title(&titles[3].id, |title| title.monitored = false)
+        .await;
+    fixture
+        .edit_title(&titles[4].id, |title| {
+            title.library_id = "library-that-is-not-listed".to_string();
+        })
+        .await;
+    let overrides = [
+        (titles[0].id.as_str(), "[\"de\"]"),
+        (titles[1].id.as_str(), "[\"fr\"]"),
+        (titles[3].id.as_str(), "[\"de\"]"),
+        (titles[4].id.as_str(), "[\"de\"]"),
+        (titles[6].id.as_str(), "[\"en\"]"),
+        ("title-that-was-deleted", "[\"de\"]"),
+    ];
+    for (title_id, value) in overrides {
+        fixture
+            .settings
+            .set_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                title_id,
+                value,
+            )
+            .await;
+    }
+
+    let derive = |title_id: Option<String>, respect_title_monitoring: bool| {
+        let app = &fixture.app;
+        async move {
+            app.derive_format_cutoff_targets_for_search(
+                &Utc::now(),
+                title_id.as_deref(),
+                respect_title_monitoring,
+                &[],
+            )
+            .await
+            .expect("derive format targets")
+            .into_iter()
+            .map(|target| (target.title_id, target.scope_key))
+            .collect::<BTreeSet<_>>()
+        }
+    };
+    let cases = [
+        (None, true),
+        (Some(titles[0].id.clone()), true),
+        (Some(titles[3].id.clone()), true),
+        (Some(titles[3].id.clone()), false),
+        (Some(titles[5].id.clone()), false),
+    ];
+    let mut listed = Vec::new();
+    for (title_id, respect) in cases.clone() {
+        listed.push(derive(title_id, respect).await);
+    }
+    // The store can no longer list the overrides: every case takes the
+    // library-wide path and batch-loads the overrides of the titles it found.
+    fixture
+        .settings
+        .cannot_list_explicit_values
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for ((title_id, respect), listed) in cases.into_iter().zip(listed) {
+        assert_eq!(
+            derive(title_id.clone(), respect).await,
+            listed,
+            "title {title_id:?}, respecting monitoring {respect}"
+        );
+    }
+
+    fixture
+        .settings
+        .cannot_list_explicit_values
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let titles_of = |targets: BTreeSet<(String, String)>| {
+        targets
+            .into_iter()
+            .map(|(title_id, _)| title_id)
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(
+        titles_of(derive(None, true).await),
+        BTreeSet::from([titles[0].id.clone(), titles[1].id.clone()]),
+        "only monitored, listed titles whose override their file misses"
+    );
+    assert_eq!(
+        titles_of(derive(Some(titles[3].id.clone()), false).await),
+        BTreeSet::from([titles[3].id.clone()]),
+        "an explicit title search reaches an unmonitored title"
+    );
+    assert!(derive(Some(titles[3].id.clone()), true).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_malformed_title_override_reads_as_inheriting_and_keeps_the_pass_going() {
+    let fixture = fixture(language_order_profile()).await;
+    let wanted = fixture
+        .add_movie(
+            "Sound Reel",
+            "Sound.Reel.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    let broken = fixture
+        .add_movie(
+            "Broken Reel",
+            "Broken.Reel.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    for (title_id, value) in [
+        (wanted.id.as_str(), "[\"de\"]"),
+        (broken.id.as_str(), "{not json"),
+    ] {
+        fixture
+            .settings
+            .set_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                title_id,
+                value,
+            )
+            .await;
+    }
+
+    let ids = vec![wanted.id.clone(), broken.id.clone()];
+    let loaded = fixture
+        .app
+        .load_title_preferred_audio_overrides(&ids)
+        .await
+        .expect("a bad row does not fail the batch");
+    assert_eq!(loaded.keys().collect::<Vec<_>>(), vec![&wanted.id]);
+    let listed = fixture
+        .app
+        .list_title_preferred_audio_overrides()
+        .await
+        .expect("a bad row does not fail the listing")
+        .expect("the store lists");
+    assert_eq!(listed, loaded);
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([wanted.id.clone()])
+    );
+}
+
+/// A rule that scores by the library a title sits in, so a library name read
+/// for the wrong title, or not read at all, moves the bar.
+fn library_named_rule_engine() -> scryer_rules::UserRulesEngine {
+    let policy = scryer_rules::UserPolicy {
+        id: "library_named".to_string(),
+        name: "Library named".to_string(),
+        rego_source: scryer_rules::rewrite_package_declaration(
+            "score_entry[\"second_library\"] := 400 if {\n    input.context.library_name == \"Second Shelf\"\n}\nscore_entry[\"any_library\"] := 25 if {\n    input.context.library_name != null\n}\n",
+            "library_named",
+        ),
+        origin: scryer_rules::PolicyOrigin::User,
+        applied_facets: vec![],
+    };
+    scryer_rules::UserRulesEngine::build(&[policy]).expect("library rule compiles")
+}
+
+#[tokio::test]
+async fn a_page_of_titles_reads_each_library_once_and_scores_as_one_title_at_a_time() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    fixture
+        .app
+        .swap_user_rules_engine(library_named_rule_engine());
+    let mut second_library = mock_default_library(MediaFacet::Movie);
+    second_library.id = "library-movie-second".to_string();
+    second_library.slug = "movies-second".to_string();
+    second_library.name = "Second Shelf".to_string();
+    second_library.is_default = false;
+    fixture
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(second_library);
+
+    let mut scopes = Vec::new();
+    for index in 0..5 {
+        let name = format!("Shelf Reel {index}");
+        let release = format!("Shelf.Reel.{index}.2024.1080p.WEB-DL.H.264-GRP");
+        let title = fixture.add_movie(&name, &release, 6_000_000_000).await;
+        if index >= 3 {
+            fixture
+                .edit_title(&title.id, |title| {
+                    title.library_id = "library-movie-second".to_string();
+                })
+                .await;
+        }
+        scopes.push(movie_scope(&title));
+    }
+
+    // One title per call is what every title paid before: its own library read.
+    let mut one_at_a_time = Vec::new();
+    for scope in &scopes {
+        one_at_a_time.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    let reads = || fixture.libraries.get_by_id_reads.load(Ordering::SeqCst);
+    let before = reads();
+    let page = fixture.app.landed_bars_for_scopes(&scopes).await;
+    assert_eq!(page, one_at_a_time);
+    assert_eq!(reads() - before, 2, "two libraries on the page, two reads");
+    let (Some(first), Some(second)) = (page[0], page[3]) else {
+        panic!("every scope is occupied: {page:?}");
+    };
+    assert_eq!(second - first, 400, "the library name reached the rules");
+
+    // A failed read is never remembered: every title asks again, and scores
+    // as a title whose library could not be read always has.
+    fixture
+        .libraries
+        .get_by_id_fails
+        .store(true, Ordering::SeqCst);
+    let before = reads();
+    let unreadable = fixture.app.landed_bars_for_scopes(&scopes).await;
+    assert_eq!(reads() - before, scopes.len());
+    let mut unreadable_one_at_a_time = Vec::new();
+    for scope in &scopes {
+        unreadable_one_at_a_time.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    assert_eq!(unreadable, unreadable_one_at_a_time);
+    assert_eq!(
+        unreadable[0],
+        Some(first - 25),
+        "no library name, no library rule"
+    );
+}
+
+#[tokio::test]
+async fn a_mixed_page_scores_every_scope_as_it_scores_alone() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    fixture.app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
+    let mut scopes = Vec::new();
+    for (series, name) in ["Lantern Row", "Copper Vale", "Mist Annex"]
+        .iter()
+        .enumerate()
+    {
+        let title = fixture
+            .app
+            .add_title(
+                &fixture.user,
+                NewTitle {
+                    name: (*name).into(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+        let mut collections = Vec::new();
+        let mut episode_ids = Vec::new();
+        for season in 1..=2 {
+            let collection = fixture
+                .app
+                .create_collection(
+                    &fixture.user,
+                    title.id.clone(),
+                    "season".into(),
+                    season.to_string(),
+                    Some(format!("Season {season}")),
+                    None,
+                    Some("1".into()),
+                    Some("3".into()),
+                )
+                .await
+                .expect("create collection");
+            for number in 1..=3 {
+                let episode = fixture
+                    .app
+                    .create_episode(
+                        &fixture.user,
+                        title.id.clone(),
+                        Some(collection.id.clone()),
+                        "standard".into(),
+                        Some(number.to_string()),
+                        Some(season.to_string()),
+                        None,
+                        Some(format!("Episode {number}")),
+                        Some((Utc::now() - chrono::Duration::days(60)).to_rfc3339()),
+                        Some(1_200 + 60 * number as i64 + 300 * series as i64),
+                        false,
+                        false,
+                    )
+                    .await
+                    .expect("create episode");
+                episode_ids.push((season, episode.id));
+            }
+            collections.push(collection.id);
+        }
+        let dotted = name.replace(' ', ".");
+        // Season one: a single-episode file and a two-episode file. Season two
+        // holds one file, so its other members are empty.
+        let layout: [(&[usize], &str, i64); 3] = [
+            (&[0], "S01E01.1080p.WEB-DL.H.264-GRP", 1_300_000_000),
+            (
+                &[1, 2],
+                "S01E02E03.720p.HDTV.x264-GRP",
+                1_900_000_000 + series as i64,
+            ),
+            (&[3], "S02E01.2160p.WEB-DL.H.265-GRP", 5_000_000_000),
+        ];
+        for (members, suffix, size) in layout {
+            let file_id = fixture
+                .media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/library/{name}/{dotted}.{suffix}.mkv"),
+                    size_bytes: size,
+                    quality_label: Some(
+                        if suffix.contains("720p") {
+                            "720P"
+                        } else {
+                            "1080P"
+                        }
+                        .into(),
+                    ),
+                    scene_name: Some(format!("{dotted}.{suffix}")),
+                    ..Default::default()
+                })
+                .await
+                .expect("insert media file");
+            for member in members {
+                let episode_id = &episode_ids[*member].1;
+                fixture
+                    .media_files
+                    .link_file_to_episode(&file_id, episode_id)
+                    .await
+                    .expect("link episode");
+                fixture
+                    .media_files
+                    .set_media_file_roles_for_episode(&title.id, episode_id, &file_id, &[])
+                    .await
+                    .expect("make the file the episode's primary");
+            }
+        }
+        for (_, episode_id) in &episode_ids {
+            scopes.push(LandedBarScope {
+                title_id: title.id.clone(),
+                episode_id: Some(episode_id.clone()),
+                collection_id: None,
+                series_movie_link_id: None,
+            });
+        }
+        for collection_id in collections {
+            scopes.push(LandedBarScope {
+                title_id: title.id.clone(),
+                episode_id: None,
+                collection_id: Some(collection_id),
+                series_movie_link_id: None,
+            });
+        }
+        scopes.push(movie_scope(&title));
+    }
+    let movie = fixture
+        .add_movie(
+            "Harbor Lamp",
+            "Harbor.Lamp.2024.1080p.BluRay.x264-GRP",
+            9_000_000_000,
+        )
+        .await;
+    scopes.push(movie_scope(&movie));
+    // Interleave the titles so no title's scopes sit together on the page.
+    let mut page = Vec::new();
+    let per_series = scopes.len() / 3;
+    for offset in 0..per_series {
+        for series in 0..3 {
+            page.push(scopes[series * per_series + offset].clone());
+        }
+    }
+    page.extend(scopes[3 * per_series..].iter().cloned());
+
+    let mut alone = Vec::new();
+    for scope in &page {
+        alone.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    let together = fixture.app.landed_bars_for_scopes(&page).await;
+    assert_eq!(together, alone);
+    let occupied = together.iter().filter(|bar| bar.is_some()).count();
+    // Per series: four occupied episodes (E01, E02, E03, S02E01) and two
+    // occupied seasons; plus the movie.
+    assert_eq!(occupied, 3 * 6 + 1, "{together:?}");
 }

@@ -560,10 +560,14 @@ async fn form_login_prevents_disabling_last_usable_full_admin() {
             password_min_length: 8,
             skip_login_for_local_ips: false,
             api_keys_restrict_to_system_settings_users: Some(false),
+            mcp_enabled: None,
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(false),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -588,10 +592,14 @@ async fn form_login_transition_requires_usable_admin_and_repairs_default_identit
         password_min_length: 8,
         skip_login_for_local_ips: false,
         api_keys_restrict_to_system_settings_users: Some(false),
+        mcp_enabled: None,
         mfa_require_config_step_up: false,
         mfa_require_password_login: false,
         totp_require_jellyfin_login: false,
         totp_require_emby_login: Some(false),
+        local_trust_allowed_hosts: None,
+        restrict_local_trust_to_trusted_proxies: None,
+        request_host: None,
     };
 
     assert!(
@@ -709,10 +717,14 @@ async fn update_security_settings_preserves_api_key_policy_when_omitted() {
             password_min_length: 8,
             skip_login_for_local_ips: false,
             api_keys_restrict_to_system_settings_users: Some(true),
+            mcp_enabled: None,
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(false),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -742,10 +754,14 @@ async fn update_security_settings_preserves_api_key_policy_when_omitted() {
                 password_min_length: 8,
                 skip_login_for_local_ips: false,
                 api_keys_restrict_to_system_settings_users: None,
+                mcp_enabled: None,
                 mfa_require_config_step_up: false,
                 mfa_require_password_login: false,
                 totp_require_jellyfin_login: false,
                 totp_require_emby_login: Some(false),
+                local_trust_allowed_hosts: None,
+                restrict_local_trust_to_trusted_proxies: None,
+                request_host: None,
             },
         )
         .await

@@ -557,10 +557,12 @@ impl AppUseCase {
     }
 
     /// Derive a per-user JWT signing key:
-    /// HMAC-SHA256(key=salt, msg="{password_hash}\n{authorization_and_session_fingerprint}").
+    /// HMAC-SHA256(key=session_signing_salt, msg="{password_hash}\n{authorization_and_session_fingerprint}").
     ///
-    /// The salt is the registration secret baked into the binary, so an offline
-    /// DB dump alone cannot forge tokens.
+    /// The session signing salt is `SCRYER_JWT_SIGNING_SECRET` when the
+    /// operator sets it, and otherwise is derived from the instance's
+    /// encryption master key (see [`JwtAuthConfig::derive_session_signing_salt`]). A database
+    /// dump alone, or the binary, therefore cannot forge tokens.
     // HMAC-SHA256 JWT and session key derivation is a documented signing contract; see helpers.rs.
     #[allow(clippy::disallowed_methods)]
     pub(crate) fn derive_jwt_key(
@@ -569,7 +571,7 @@ impl AppUseCase {
         authorization_fingerprint: &str,
     ) -> Vec<u8> {
         let signing_material = format!("{password_hash}\n{authorization_fingerprint}");
-        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.session_signing_salt.as_bytes());
         hmac::sign(&hmac_key, signing_material.as_bytes())
             .as_ref()
             .to_vec()
@@ -717,6 +719,26 @@ impl AppUseCase {
     /// Freshness window required for self-service authentication-factor changes.
     pub fn security_action_verified_until(&self) -> chrono::DateTime<Utc> {
         Utc::now() + Duration::minutes(5)
+    }
+
+    /// Records that `user_id` just finished an interactive sign-in.
+    ///
+    /// Call this once, when a sign-in establishes the full session: after a
+    /// password, passkey or media-server login, after the second factor that
+    /// completes one, or after the enrollment or password change that a login
+    /// required. Never call it for an authenticated request, a step-up that
+    /// re-issues an existing session, an OAuth client's token or API-key use.
+    /// A failed write is logged and does not fail the sign-in it describes.
+    pub async fn record_interactive_sign_in(&self, user_id: &str) {
+        if let Err(error) = self
+            .services
+            .identity
+            .users
+            .record_sign_in(user_id, Utc::now())
+            .await
+        {
+            tracing::warn!(user_id, error = %error, "could not record the sign-in time");
+        }
     }
 
     pub async fn issue_access_token(&self, actor: &User) -> AppResult<String> {

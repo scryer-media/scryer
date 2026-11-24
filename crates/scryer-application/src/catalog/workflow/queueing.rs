@@ -692,6 +692,13 @@ impl AppUseCase {
                 grab
             }
             Err(error) => {
+                if error.is_indexer_monthly_limit_refusal() {
+                    // The indexer's monthly limit refused the grab before
+                    // anything was sent. That is not a verdict on the release:
+                    // no failed attempt, no blocklist entry, only the coded
+                    // refusal for the caller.
+                    return Err(error);
+                }
                 let source_gone = error.is_download_source_gone();
                 let submit_unavailable = is_download_submit_unavailable_error(&error)
                     || error.is_download_submit_ambiguous()
@@ -1737,6 +1744,21 @@ mod grab_time_release_title_tests {
                 .await
                 .iter()
                 .filter(|row| client_items.contains(&ClientJobLocator::from_submission(row)))
+                .cloned()
+                .collect())
+        }
+
+        async fn list_for_client_item_ids(
+            &self,
+            item_ids: &[String],
+        ) -> AppResult<Vec<DownloadSubmission>> {
+            Ok(self
+                .rows
+                .lock()
+                .await
+                .iter()
+                .rev()
+                .filter(|row| item_ids.contains(&row.download_client_item_id))
                 .cloned()
                 .collect())
         }

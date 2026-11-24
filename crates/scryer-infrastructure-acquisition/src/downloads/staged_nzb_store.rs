@@ -4,8 +4,17 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use filetime::{FileTime, set_file_mtime};
+use scryer_application::disk::{
+    Access, Disk, DiskError, EntryKind, IfPresent, Listed, Parents, PathReading, Removal, Remove,
+    Replace,
+};
 use scryer_application::{AppError, AppResult, PendingStagedNzb, StagedNzbRef, StagedNzbStore};
+
+/// A failure to `what` at `path`, in the platform's own words.
+fn failed(what: &str, path: &Path, error: DiskError) -> AppError {
+    let (path, words) = (path.display(), error.words());
+    AppError::Repository(format!("failed to {what} {path}: {words}"))
+}
 
 #[derive(Clone)]
 pub struct FileSystemStagedNzbStore {
@@ -24,18 +33,54 @@ impl FileSystemStagedNzbStore {
     ) -> AppResult<Self> {
         let root_dir = path.as_ref().to_path_buf();
         if purge_existing {
-            Self::purge_cache_dir(&root_dir)?;
+            Self::purge_cache_dir(&root_dir).await?;
         }
-        std::fs::create_dir_all(&root_dir).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create staged nzb directory {}: {error}",
-                root_dir.display()
-            ))
-        })?;
-        Ok(Self {
+        let store = Self {
             root_dir,
             active_artifacts: Arc::new(Mutex::new(HashMap::new())),
-        })
+        };
+        store.create_root_dir().await?;
+        Ok(store)
+    }
+
+    async fn create_root_dir(&self) -> AppResult<()> {
+        Disk::process()
+            .create_dir(&self.root_dir, Parents::Create)
+            .await
+            .map_err(|error| failed("create staged nzb directory", &self.root_dir, error))
+    }
+
+    fn list_failed(&self, error: DiskError) -> AppError {
+        failed("list staged nzb directory", &self.root_dir, error)
+    }
+
+    /// Runs one pass over the directory in a single blocking task.
+    async fn blocking_pass<T: Send + 'static>(
+        &self,
+        pass: impl FnOnce(&Self) -> AppResult<T> + Send + 'static,
+    ) -> AppResult<T> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || pass(&store))
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("staged nzb listing task failed: {error}"))
+            })?
+    }
+
+    /// The entries a prune with `older_than` would remove, each judged only
+    /// when it is reached. A missing directory has none.
+    fn prunable(
+        &self,
+        older_than: DateTime<Utc>,
+    ) -> AppResult<impl Iterator<Item = AppResult<PathBuf>> + '_> {
+        let entries = Disk::process()
+            .list_blocking(&self.root_dir)
+            .if_present()
+            .map_err(|error| self.list_failed(error))?;
+        Ok(entries
+            .into_iter()
+            .flatten()
+            .filter_map(move |entry| self.prunable_entry(entry, older_than).transpose()))
     }
 
     pub fn path_for_main_db(db_path: &str) -> PathBuf {
@@ -54,23 +99,27 @@ impl FileSystemStagedNzbStore {
     }
 
     pub async fn count_staged_artifacts(&self) -> AppResult<u64> {
-        let mut count = 0u64;
-        let entries = std::fs::read_dir(&self.root_dir).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to list staged nzb directory {}: {error}",
-                self.root_dir.display()
-            ))
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                AppError::Repository(format!("failed to read staged nzb entry: {error}"))
-            })?;
-            let path = entry.path();
-            if path.is_file() && path.extension().is_some_and(|ext| ext == "zst") {
-                count += 1;
-            }
-        }
-        Ok(count)
+        self.blocking_pass(|store| {
+            let disk = Disk::process();
+            let entries = disk
+                .list_blocking(&store.root_dir)
+                .map_err(|error| store.list_failed(error))?;
+            // A file counts as the listing says; a link counts when it leads
+            // to a file.
+            let is_file = |entry: &Listed| match entry.reading.kind() {
+                Some(EntryKind::File) => true,
+                Some(EntryKind::Directory | EntryKind::Other) => false,
+                Some(EntryKind::Symlink) | None => {
+                    disk.follow_blocking(&entry.path).kind() == Some(EntryKind::File)
+                }
+            };
+            Ok(entries
+                .iter()
+                .filter(|entry| entry.path.extension().is_some_and(|ext| ext == "zst"))
+                .filter(|entry| is_file(entry))
+                .count() as u64)
+        })
+        .await
     }
 
     pub async fn stage_nzb_bytes_for_test(&self, nzb_bytes: &[u8]) -> AppResult<StagedNzbRef> {
@@ -82,12 +131,15 @@ impl FileSystemStagedNzbStore {
                 "failed to zstd-compress staged nzb fixture: {error}"
             ))
         })?;
-        std::fs::write(&pending.partial_path, compressed).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to write staged nzb fixture {}: {error}",
-                pending.partial_path.display()
-            ))
-        })?;
+        Disk::process()
+            .write(
+                &pending.partial_path,
+                compressed,
+                Replace::Allowed,
+                Access::Default,
+            )
+            .await
+            .map_err(|error| failed("write staged nzb fixture", &pending.partial_path, error))?;
         self.finalize_pending_staged_nzb(pending, nzb_bytes.len() as u64)
             .await
     }
@@ -97,31 +149,21 @@ impl FileSystemStagedNzbStore {
         staged_nzb: &StagedNzbRef,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
-        set_file_mtime(
-            &staged_nzb.compressed_path,
-            FileTime::from_unix_time(updated_at.timestamp(), 0),
-        )
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to set staged nzb mtime {}: {error}",
-                staged_nzb.compressed_path.display()
-            ))
-        })?;
-        Ok(())
+        // Whole seconds, as the modification time has always been set.
+        let at = DateTime::<Utc>::from_timestamp(updated_at.timestamp(), 0).unwrap_or(updated_at);
+        Disk::process()
+            .set_modified(&staged_nzb.compressed_path, at.into())
+            .await
+            .map_err(|error| failed("set staged nzb mtime", &staged_nzb.compressed_path, error))
     }
 
-    fn purge_cache_dir(path: &Path) -> AppResult<()> {
-        match std::fs::remove_dir_all(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "failed to purge staged nzb directory {}: {error}",
-                    path.display()
-                )));
-            }
-        }
-        Ok(())
+    /// A directory already gone is purged.
+    async fn purge_cache_dir(path: &Path) -> AppResult<()> {
+        Disk::process()
+            .remove(path, Remove::Tree)
+            .await
+            .map(|_| ())
+            .map_err(|error| failed("purge staged nzb directory", path, error))
     }
 
     fn build_pending_paths(&self, id: &str) -> PendingStagedNzb {
@@ -136,34 +178,39 @@ impl FileSystemStagedNzbStore {
 
     /// The path of one directory entry when a prune with `older_than` would
     /// remove it: a file, not in use, last written before the cutoff.
+    ///
+    /// Decided from fresh reads of the entry, never from the listing: a link
+    /// counts as a file when it leads to one, and its age is the link's own.
     fn prunable_entry(
         &self,
-        entry: std::io::Result<std::fs::DirEntry>,
+        entry: Listed,
         older_than: DateTime<Utc>,
     ) -> AppResult<Option<PathBuf>> {
-        let entry = entry.map_err(|error| {
-            AppError::Repository(format!("failed to read staged nzb entry: {error}"))
-        })?;
-        let path = entry.path();
-        if !path.is_file() {
+        let disk = Disk::process();
+        let path = entry.path;
+        let reading = disk.uncached_blocking(&path);
+        let is_file = match reading.kind() {
+            Some(EntryKind::File) => true,
+            Some(EntryKind::Symlink) => disk.follow_blocking(&path).kind() == Some(EntryKind::File),
+            _ => false,
+        };
+        if !is_file {
             return Ok(None);
         }
         if self.with_active_artifacts(|active| active.contains_key(&path))? {
             return Ok(None);
         }
 
-        let metadata = entry.metadata().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read staged nzb metadata {}: {error}",
+        let PathReading::Known {
+            modified: Some(modified),
+            ..
+        } = reading
+        else {
+            return Err(AppError::Repository(format!(
+                "failed to read staged nzb mtime {}: the platform did not report it",
                 path.display()
-            ))
-        })?;
-        let modified = metadata.modified().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read staged nzb mtime {}: {error}",
-                path.display()
-            ))
-        })?;
+            )));
+        };
         let modified = DateTime::<Utc>::from(modified);
         Ok((modified < older_than).then_some(path))
     }
@@ -186,12 +233,7 @@ impl StagedNzbStore for FileSystemStagedNzbStore {
         _source_url: &str,
         _title_id: Option<&str>,
     ) -> AppResult<PendingStagedNzb> {
-        std::fs::create_dir_all(&self.root_dir).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create staged nzb directory {}: {error}",
-                self.root_dir.display()
-            ))
-        })?;
+        self.create_root_dir().await?;
         Ok(self.build_pending_paths(&scryer_domain::Id::new().0))
     }
 
@@ -200,12 +242,23 @@ impl StagedNzbStore for FileSystemStagedNzbStore {
         pending: PendingStagedNzb,
         raw_size_bytes: u64,
     ) -> AppResult<StagedNzbRef> {
-        std::fs::rename(&pending.partial_path, &pending.compressed_path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to finalize staged nzb {}: {error}",
-                pending.compressed_path.display()
-            ))
-        })?;
+        // The destination is named by a new id, so nothing is there to keep.
+        Disk::process()
+            .move_exclusive(&pending.partial_path, &pending.compressed_path)
+            .await
+            .map_err(|error| {
+                // The disk service removes the empty name it reserved when it
+                // can tell it is its own; anything it could not is kept and
+                // named here.
+                if let Some(left) = error.left() {
+                    tracing::warn!(
+                        left = %left.at().display(),
+                        error = %error.words(),
+                        "a staged nzb whose rename failed left a file in place"
+                    );
+                }
+                failed("finalize staged nzb", &pending.compressed_path, error)
+            })?;
         Ok(StagedNzbRef {
             password_candidates: Default::default(),
             id: pending.id,
@@ -215,67 +268,34 @@ impl StagedNzbStore for FileSystemStagedNzbStore {
     }
 
     async fn delete_staged_nzb(&self, staged_nzb: &StagedNzbRef) -> AppResult<bool> {
-        match std::fs::remove_file(&staged_nzb.compressed_path) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(AppError::Repository(format!(
-                "failed to delete staged nzb {}: {error}",
-                staged_nzb.compressed_path.display()
-            ))),
-        }
+        Disk::process()
+            .remove(&staged_nzb.compressed_path, Remove::File)
+            .await
+            .map(|removal| removal == Removal::Removed)
+            .map_err(|error| failed("delete staged nzb", &staged_nzb.compressed_path, error))
     }
 
     async fn prune_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<u32> {
-        let mut pruned = 0u32;
-        let entries = match std::fs::read_dir(&self.root_dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "failed to list staged nzb directory {}: {error}",
-                    self.root_dir.display()
-                )));
+        self.blocking_pass(move |store| {
+            let mut pruned = 0u32;
+            for path in store.prunable(older_than)? {
+                let path = path?;
+                let removal = Disk::process()
+                    .remove_blocking(&path, Remove::File)
+                    .map_err(|error| failed("prune staged nzb artifact", &path, error))?;
+                // One removed by someone else since it was judged is not counted.
+                pruned += u32::from(removal == Removal::Removed);
             }
-        };
-
-        for entry in entries {
-            let Some(path) = self.prunable_entry(entry, older_than)? else {
-                continue;
-            };
-            std::fs::remove_file(&path).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to prune staged nzb artifact {}: {error}",
-                    path.display()
-                ))
-            })?;
-            pruned += 1;
-        }
-
-        Ok(pruned)
+            Ok(pruned)
+        })
+        .await
     }
 
     async fn has_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<bool> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let entries = match std::fs::read_dir(&store.root_dir) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to list staged nzb directory {}: {error}",
-                        store.root_dir.display()
-                    )));
-                }
-            };
-            for entry in entries {
-                if store.prunable_entry(entry, older_than)?.is_some() {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+        self.blocking_pass(move |store| {
+            Ok(store.prunable(older_than)?.next().transpose()?.is_some())
         })
         .await
-        .map_err(|error| AppError::Repository(format!("staged nzb listing task failed: {error}")))?
     }
 
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()> {

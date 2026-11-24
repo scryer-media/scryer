@@ -1,0 +1,8 @@
+# Check that Scryer can open a directory, as the setup wizard does for each
+# Scryer-side root path. An error means Scryer cannot read the path. Read-only.
+# Variables: {"path": "/media/series"}
+query BrowsePath($path: String!) {
+  browsePath(path: $path) {
+    path
+  }
+}

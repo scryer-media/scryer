@@ -46,6 +46,10 @@ pub const FILTER_NOT_HONOURED: &str = "WATCH_SYNC_FILTER_NOT_HONOURED";
 /// to be outside Scryer (no usable external id, or a file inside a Scryer
 /// library), so a played Scryer title may be among them.
 pub const UNMAPPED_PLAYED_MOVIES: &str = "WATCH_SYNC_UNMAPPED_PLAYED_MOVIES";
+/// An account's favourites include one that could not be placed on Scryer
+/// media and nothing showed it to be outside Scryer, so that account's
+/// favourites are not counted as known.
+pub const UNPLACED_FAVORITES: &str = "WATCH_SYNC_UNPLACED_FAVORITES";
 /// Scryer's own store could not read or write this connection's signals.
 pub const STORE_FAILED: &str = "WATCH_SYNC_STORE_FAILED";
 /// The signal source is not configured in this build.
@@ -68,6 +72,7 @@ pub const ALL: &[&str] = &[
     PAGING_NOT_HONOURED,
     FILTER_NOT_HONOURED,
     UNMAPPED_PLAYED_MOVIES,
+    UNPLACED_FAVORITES,
     STORE_FAILED,
     SOURCE_UNAVAILABLE,
 ];
@@ -98,6 +103,6 @@ mod tests {
     /// here means adding it, and its translation, there too.
     #[test]
     fn the_reason_list_is_the_one_the_web_client_mirrors() {
-        assert_eq!(ALL.len(), 17);
+        assert_eq!(ALL.len(), 18);
     }
 }

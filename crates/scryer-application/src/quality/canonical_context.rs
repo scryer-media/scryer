@@ -35,9 +35,33 @@ pub(crate) struct ResolvedScoringContext {
     title_tags: Vec<String>,
     rules: scryer_rules::UserRulesEngine,
     default_runtime_minutes: Option<i32>,
+    /// One rule evaluator over `rules`, created on first use and reused by
+    /// every score taken through this context. Building an evaluator clones
+    /// the compiled engine, so a lane that scores many files or releases
+    /// against one context pays for it once, as the search lane does.
+    rule_batch: std::sync::Mutex<Option<crate::canonical_scoring::RuleEvaluationBatch>>,
 }
 
 impl ResolvedScoringContext {
+    /// Run `score` with this context's rule batch.
+    ///
+    /// Scoring is synchronous, so the lock is held only for one score. A
+    /// context shared by tasks that score at the same moment, or one whose
+    /// batch was poisoned by a panic mid-score, scores on a fresh batch
+    /// instead: the single-shot path, never a half-used evaluator.
+    fn with_rule_batch<R>(
+        &self,
+        score: impl FnOnce(&mut crate::canonical_scoring::RuleEvaluationBatch) -> R,
+    ) -> R {
+        let fresh = || crate::canonical_scoring::RuleEvaluationBatch::from_rules(Some(&self.rules));
+        let Ok(mut slot) = self.rule_batch.try_lock() else {
+            return score(&mut fresh());
+        };
+        let batch = slot.get_or_insert_with(fresh);
+        debug_assert!(batch.carries_no_diagnostics());
+        score(batch)
+    }
+
     pub(crate) fn evaluation_reads_clock(&self) -> bool {
         self.rules.reads_clock()
     }
@@ -122,6 +146,8 @@ impl ResolvedScoringContext {
             title_tags,
             rules: _,
             default_runtime_minutes,
+            // Derived from `rules`; it carries no scoring input of its own.
+            rule_batch: _,
         } = self;
         hasher.update(&SCORER_VERSION.to_le_bytes());
         // The whole profile, ranking fields included, with the persona this
@@ -219,11 +245,12 @@ pub(crate) fn score_parked_release_title(
         parsed.quality.as_deref(),
     );
     let release_group = parsed.release_group.clone();
-    let scored = crate::canonical_scoring::score_release(
-        &crate::canonical_scoring::ReleaseEvidence::announced(parsed, size_bytes)
-            .with_listing(listing),
-        &context.view(size_basis, false),
-    );
+    let evidence = crate::canonical_scoring::ReleaseEvidence::announced(parsed, size_bytes)
+        .with_listing(listing);
+    let view = context.view(size_basis, false).without_rules();
+    let scored = context.with_rule_batch(|rules| {
+        crate::canonical_scoring::score_release_in_batch(&evidence, &view, rules)
+    });
 
     ParkedReleaseFacts {
         scoring_log: scored.announced_decision.scoring_log.clone(),
@@ -330,7 +357,22 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
     ) -> ResolvedScoringContext {
-        self.resolve_canonical_scoring_context_impl(title, profile, true)
+        self.resolve_canonical_scoring_context_impl(title, profile, true, None)
+            .await
+    }
+
+    /// [`Self::resolve_canonical_scoring_context`] for a pass over many titles:
+    /// `library_names` carries each library's name between calls, so the
+    /// library row is read once per library instead of once per title. Hold
+    /// the map for one pass only. A failed read is not recorded, so the next
+    /// title of that library reads again.
+    pub(crate) async fn resolve_canonical_scoring_context_with_library_names(
+        &self,
+        title: &Title,
+        profile: &QualityProfile,
+        library_names: &mut std::collections::HashMap<String, Option<String>>,
+    ) -> ResolvedScoringContext {
+        self.resolve_canonical_scoring_context_impl(title, profile, true, Some(library_names))
             .await
     }
 
@@ -341,8 +383,25 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
     ) -> ResolvedScoringContext {
-        self.resolve_canonical_scoring_context_impl(title, profile, false)
+        self.resolve_canonical_scoring_context_impl(title, profile, false, None)
             .await
+    }
+
+    /// The library name rules see, or `None` with a warning when it cannot be
+    /// read. `Err` marks the failed read so a caller's memo can skip it.
+    async fn scoring_library_name(&self, library_id: &str) -> Result<Option<String>, ()> {
+        match self.services.catalog.libraries.get_by_id(library_id).await {
+            Ok(Some(library)) => Ok(Some(library.name)),
+            Ok(None) => Ok(None),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    library_id = %library_id,
+                    "canonical scoring: library name unresolved; rules see no library"
+                );
+                Err(())
+            }
+        }
     }
 
     async fn resolve_canonical_scoring_context_impl(
@@ -350,6 +409,7 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
         include_rules: bool,
+        library_names: Option<&mut std::collections::HashMap<String, Option<String>>>,
     ) -> ResolvedScoringContext {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet).to_string();
 
@@ -376,23 +436,21 @@ impl AppUseCase {
         profile.criteria.scoring_persona = persona;
         profile.criteria.facet_persona_overrides.clear();
 
-        let library_name = match self
-            .services
-            .catalog
-            .libraries
-            .get_by_id(&title.library_id)
-            .await
-        {
-            Ok(Some(library)) => Some(library.name),
-            Ok(None) => None,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    library_id = %title.library_id,
-                    "canonical scoring: library name unresolved; rules see no library"
-                );
-                None
-            }
+        let library_name = match library_names {
+            Some(names) => match names.get(&title.library_id) {
+                Some(name) => name.clone(),
+                None => match self.scoring_library_name(&title.library_id).await {
+                    Ok(name) => names
+                        .entry(title.library_id.clone())
+                        .or_insert(name)
+                        .clone(),
+                    Err(()) => None,
+                },
+            },
+            None => self
+                .scoring_library_name(&title.library_id)
+                .await
+                .unwrap_or(None),
         };
 
         let rules = if include_rules {
@@ -423,6 +481,7 @@ impl AppUseCase {
             title_tags: title.tags.clone(),
             rules,
             default_runtime_minutes: title.runtime_minutes,
+            rule_batch: std::sync::Mutex::new(None),
         }
     }
 
@@ -834,6 +893,12 @@ impl AppUseCase {
                 );
                 Some(crate::admission::QueuedRelease {
                     missing_history: false,
+                    // The job is still in the client's working queue, the same
+                    // test the submission conflict check applies.
+                    blocks_submission: crate::acquisition_workflow::submission_is_active(
+                        submission,
+                        dl_snapshot,
+                    ),
                     history_cutoff_reached: false,
                     release_group: facts.release_group.clone(),
                     release_key: crate::admission::release_key(&release_title),
@@ -883,7 +948,9 @@ impl AppUseCase {
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+            .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(
+                &title.id,
+            ))
             .await?;
         let now = chrono::Utc::now();
         let mut claims = Vec::new();
@@ -936,6 +1003,9 @@ impl AppUseCase {
                         .is_none_or(|cutoff| facts.score >= cutoff);
                 crate::admission::QueuedRelease {
                     missing_history: state.status == crate::AcquisitionScopeStatus::Wanted,
+                    // The ledger's memory of a grab; a job the client is still
+                    // working appears as its own submission claim.
+                    blocks_submission: false,
                     history_cutoff_reached,
                     release_group: facts.release_group.clone(),
                     covers: match submission_scope_for_acquisition_scope_state(state) {
@@ -1011,7 +1081,9 @@ impl AppUseCase {
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+            .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(
+                &title.id,
+            ))
             .await?;
         let now = chrono::Utc::now();
         let mut recent_states = Vec::new();
@@ -1183,26 +1255,35 @@ impl AppUseCase {
         size_basis: CoverageSizeBasis,
         episode_ids: &[String],
     ) -> IncumbentFacts {
-        let view = context.view(size_basis, false);
-        let scored = if episode_ids.is_empty() {
-            crate::canonical_scoring::score_media_file(file, &view)
-        } else {
-            crate::canonical_scoring::score_media_file_for_episodes(file, episode_ids, &view)
-        };
-        let tier_index = crate::quality_profile::quality_tier_index(
-            &context.profile().criteria,
-            scored
-                .parsed_quality
-                .as_deref()
-                .or(file.resolution.as_deref())
-                .or(file.quality_label.as_deref()),
-        );
-        IncumbentFacts {
-            score: scored.total,
-            tier_index,
-            revision: scored.revision,
-            language: scored.language,
-        }
+        incumbent_facts(file, context, size_basis, episode_ids)
+    }
+}
+
+/// The body of [`AppUseCase::incumbent_bar_for_episodes`], which reads nothing
+/// but its arguments.
+fn incumbent_facts(
+    file: &crate::TitleMediaFile,
+    context: &ResolvedScoringContext,
+    size_basis: CoverageSizeBasis,
+    episode_ids: &[String],
+) -> IncumbentFacts {
+    let view = context.view(size_basis, false).without_rules();
+    let scored = context.with_rule_batch(|rules| {
+        crate::canonical_scoring::score_media_file_in_batch(file, episode_ids, &view, rules)
+    });
+    let tier_index = crate::quality_profile::quality_tier_index(
+        &context.profile().criteria,
+        scored
+            .parsed_quality
+            .as_deref()
+            .or(file.resolution.as_deref())
+            .or(file.quality_label.as_deref()),
+    );
+    IncumbentFacts {
+        score: scored.total,
+        tier_index,
+        revision: scored.revision,
+        language: scored.language,
     }
 }
 
@@ -1221,6 +1302,29 @@ pub(crate) struct IncumbentFacts {
     pub revision: i32,
     /// Standing against the title's audio language preferences.
     pub language: crate::AudioLanguageRank,
+}
+
+impl IncumbentFacts {
+    /// The stored file as the decision steps read it. The one builder for a
+    /// re-derived bar; see [`crate::decision_pipeline::SideFacts`].
+    pub(crate) fn side(&self) -> crate::decision_pipeline::SideFacts {
+        crate::decision_pipeline::SideFacts {
+            tier_sort_key: crate::admission::tier_sort_key(self.tier_index),
+            language: self.language,
+        }
+    }
+
+    /// Where the file sits on `pipeline`'s ladder before its score, lower
+    /// first: [`crate::admission::incumbent_ladder_key`] over [`Self::side`],
+    /// the same key admission ranks held files by. Choosing between files
+    /// already on disk goes through this, then the score, so no such choice
+    /// names a step.
+    pub(crate) fn ladder_key(
+        &self,
+        pipeline: &crate::DecisionPipeline,
+    ) -> crate::decision_pipeline::GateKey {
+        crate::admission::incumbent_ladder_key(pipeline, self.side())
+    }
 }
 
 /// What a scope row remembers about its last grab.
@@ -1508,5 +1612,313 @@ mod grabbed_release_claim_tests {
                 series_movie_link_id: "link-1".to_string()
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod reused_rule_batch_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Counts how many evaluators the engine hands out and how many input
+    /// documents it prepares.
+    #[derive(Default)]
+    struct Counter {
+        evaluators: AtomicUsize,
+        inputs: AtomicUsize,
+    }
+
+    impl scryer_rules::policy::telemetry::PolicyObserver for Counter {
+        fn observe(&self, observation: scryer_rules::policy::telemetry::PolicyObservation<'_>) {
+            match observation.stage {
+                "evaluator_create" => self.evaluators.fetch_add(1, Ordering::SeqCst),
+                "input_prepare" => self.inputs.fetch_add(1, Ordering::SeqCst),
+                _ => 0,
+            };
+        }
+    }
+
+    /// The bundled baseline (so evaluation runs in two phases), a rule keyed
+    /// on the release name, and one that fails at runtime on every input.
+    fn engine(counter: &Arc<Counter>) -> scryer_rules::UserRulesEngine {
+        let user = |id: &str, source: &str| scryer_rules::UserPolicy {
+            id: id.to_string(),
+            name: id.to_string(),
+            rego_source: scryer_rules::rewrite_package_declaration(source, id),
+            origin: scryer_rules::PolicyOrigin::User,
+            applied_facets: vec!["movie".to_string()],
+        };
+        let mut policies = crate::rules::builtin_trash::baseline_policies();
+        let baseline_ids = policies
+            .iter()
+            .map(|policy| policy.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        policies.push(user(
+            "marked_bonus",
+            r#"score_entry["marked"] := 300 if {
+    contains(lower(input.release.raw_title), "marked")
+}
+score_entry["seen_subtotal"] := 1 if {
+    input.builtin_score.total > 0
+}"#,
+        ));
+        policies.push(user(
+            "always_broken",
+            r#"score_entry["broken"] := lower(input.release.year)"#,
+        ));
+        let observer: Arc<dyn scryer_rules::policy::telemetry::PolicyObserver> = counter.clone();
+        scryer_rules::UserRulesEngine::build_observed(
+            &policies,
+            &baseline_ids,
+            &std::collections::HashMap::new(),
+            Some(observer),
+        )
+        .expect("rule fixture compiles")
+    }
+
+    fn title() -> Title {
+        Title {
+            id: "title-quill".to_string(),
+            name: "Quill Harbor".to_string(),
+            facet: scryer_domain::MediaFacet::Movie,
+            library_id: scryer_domain::default_library_id_for_facet(
+                &scryer_domain::MediaFacet::Movie,
+            ),
+            root_folder_id: scryer_domain::root_folder_id_for_path("/data/test"),
+            monitored: true,
+            tags: vec!["fixture".to_string()],
+            canonical_tags: vec![],
+            external_ids: vec![],
+            created_by: None,
+            created_at: chrono::Utc::now(),
+            year: Some(2024),
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: Some(110),
+            popularity: None,
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            movie_release_dates: None,
+            folder_path: None,
+        }
+    }
+
+    fn context(title: &Title, rules: scryer_rules::UserRulesEngine) -> ResolvedScoringContext {
+        ResolvedScoringContext {
+            profile: QualityProfile::parse(
+                r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P","720P"],"allow_upgrades":true}}"#,
+            )
+            .expect("profile fixture parses"),
+            required_audio_languages: Vec::new(),
+            language_preferences: crate::AudioLanguagePreferences::default(),
+            category: "movie".to_string(),
+            title_id: title.id.clone(),
+            library_name: Some("Fixture Library".to_string()),
+            original_language: None,
+            original_country: None,
+            title_tags: title.tags.clone(),
+            rules,
+            default_runtime_minutes: title.runtime_minutes,
+            rule_batch: std::sync::Mutex::new(None),
+        }
+    }
+
+    const RELEASES: &[(&str, i64)] = &[
+        ("Quill.Harbor.2024.1080p.WEB-DL.H.264-MARKED", 8_000_000_000),
+        ("Quill.Harbor.2024.2160p.WEB-DL.H.265-PLAIN", 21_000_000_000),
+        ("Quill.Harbor.2024.720p.HDTV.x264-OTHER", 2_000_000_000),
+        (
+            "Quill.Harbor.2024.PROPER.1080p.BluRay.x264-MARKED",
+            12_000_000_000,
+        ),
+        ("Quill.Harbor.2024.1080p.WEB-DL.H.264-MARKED", 8_000_000_000),
+    ];
+
+    fn file(index: usize, release: &str, size: i64) -> crate::TitleMediaFile {
+        let parsed = crate::release_parser::parse_release_metadata(release);
+        crate::TitleMediaFile {
+            id: format!("file-{index}"),
+            title_id: "title-quill".into(),
+            file_path: format!("/data/Movies/Quill Harbor (2024)/file-{index}.mkv"),
+            size_bytes: size,
+            role: crate::MediaFileRole::Primary,
+            scan_status: "imported".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            scene_name: Some(release.to_string()),
+            quality_label: parsed.quality.clone(),
+            resolution: parsed.quality.clone(),
+            release_group: parsed.release_group.clone(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_reused_rule_batch_scores_incumbents_exactly_like_fresh_evaluators() {
+        let title = title();
+        let reused_counter = Arc::new(Counter::default());
+        let reused = context(&title, engine(&reused_counter));
+        let fresh_counter = Arc::new(Counter::default());
+        let fresh_engine = engine(&fresh_counter);
+
+        let basis = CoverageSizeBasis::default();
+        for (index, (release, size)) in RELEASES.iter().enumerate() {
+            let file = file(index, release, *size);
+            for episode_ids in [Vec::new(), vec!["episode-one".to_string()]] {
+                let before = format!(
+                    "{:?}",
+                    if episode_ids.is_empty() {
+                        crate::canonical_scoring::score_media_file(
+                            &file,
+                            &context(&title, fresh_engine.clone()).view(basis, false),
+                        )
+                    } else {
+                        crate::canonical_scoring::score_media_file_for_episodes(
+                            &file,
+                            &episode_ids,
+                            &context(&title, fresh_engine.clone()).view(basis, false),
+                        )
+                    }
+                );
+                let view = reused.view(basis, false).without_rules();
+                let after = format!(
+                    "{:?}",
+                    reused.with_rule_batch(|rules| {
+                        crate::canonical_scoring::score_media_file_in_batch(
+                            &file,
+                            &episode_ids,
+                            &view,
+                            rules,
+                        )
+                    })
+                );
+                assert_eq!(after, before, "file {index} scored differently on reuse");
+                assert!(
+                    before.contains("\"marked\"") == release.contains("MARKED"),
+                    "the name-keyed rule must see each file's own input"
+                );
+                assert!(before.contains("user_rule_error"));
+
+                let fresh = format!(
+                    "{:?}",
+                    incumbent_facts(
+                        &file,
+                        &context(&title, fresh_engine.clone()),
+                        basis,
+                        &episode_ids
+                    )
+                );
+                assert_eq!(
+                    format!("{:?}", incumbent_facts(&file, &reused, basis, &episode_ids)),
+                    fresh
+                );
+            }
+        }
+
+        let scored = RELEASES.len() * 2 * 2;
+        assert_eq!(
+            reused_counter.evaluators.load(Ordering::SeqCst),
+            1,
+            "one context, one evaluator"
+        );
+        assert_eq!(fresh_counter.evaluators.load(Ordering::SeqCst), scored);
+        assert!(
+            reused
+                .rule_batch
+                .lock()
+                .expect("batch lock")
+                .as_ref()
+                .is_some_and(crate::canonical_scoring::RuleEvaluationBatch::carries_no_diagnostics)
+        );
+    }
+
+    #[test]
+    fn a_reused_rule_batch_scores_parked_releases_exactly_like_fresh_evaluators() {
+        let title = title();
+        let reused_counter = Arc::new(Counter::default());
+        let reused = context(&title, engine(&reused_counter));
+        let fresh_counter = Arc::new(Counter::default());
+        let fresh_engine = engine(&fresh_counter);
+
+        let facts = |facts: ParkedReleaseFacts| {
+            format!(
+                "{:?}",
+                (
+                    facts.scoring_log,
+                    facts.release_group,
+                    facts.size_basis,
+                    facts.score,
+                    facts.tier_index,
+                    facts.revision,
+                    facts.size_fit_penalty,
+                    facts.allowed,
+                    facts.block_codes,
+                    facts.language,
+                )
+            )
+        };
+        for (release, size) in RELEASES {
+            let fresh = facts(score_parked_release_title(
+                &title,
+                release,
+                Some(*size),
+                None,
+                &[],
+                &[],
+                &context(&title, fresh_engine.clone()),
+            ));
+            let reused = facts(score_parked_release_title(
+                &title,
+                release,
+                Some(*size),
+                None,
+                &[],
+                &[],
+                &reused,
+            ));
+            assert_eq!(reused, fresh, "{release} scored differently on reuse");
+        }
+        assert_eq!(reused_counter.evaluators.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fresh_counter.evaluators.load(Ordering::SeqCst),
+            RELEASES.len()
+        );
+    }
+
+    #[test]
+    fn a_contended_rule_batch_scores_on_a_fresh_evaluator() {
+        let title = title();
+        let counter = Arc::new(Counter::default());
+        let context = context(&title, engine(&counter));
+        let file = file(0, RELEASES[0].0, RELEASES[0].1);
+        let expected = format!(
+            "{:?}",
+            incumbent_facts(&file, &context, CoverageSizeBasis::default(), &[])
+        );
+        let held = context.rule_batch.lock().expect("batch lock");
+        let contended = format!(
+            "{:?}",
+            incumbent_facts(&file, &context, CoverageSizeBasis::default(), &[])
+        );
+        drop(held);
+        assert_eq!(contended, expected);
+        assert_eq!(counter.evaluators.load(Ordering::SeqCst), 2);
     }
 }

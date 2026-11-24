@@ -54,6 +54,5 @@ export type TitleHistoryEvent = {
 
 export type TitleHistoryPage = {
   items: TitleHistoryEvent[];
-  totalCount: number;
   hasMore: boolean;
 };

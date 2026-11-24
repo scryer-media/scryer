@@ -1,6 +1,7 @@
 import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
+import { loadAllMediaRequestPages } from "../../lib/utils/media-request-pages.ts";
 import * as React from "react";
-import { useClient } from "urql";
+import { useClient, type CombinedError } from "urql";
 
 import { RequestsView } from "@/components/views/requests-view";
 import {
@@ -72,6 +73,10 @@ type ApproveRequestValues = {
   leaseDays?: number;
   leaseForever?: boolean;
   tags?: string[];
+  audioLanguages?: {
+    requiredAudioLanguages?: string[] | null;
+    preferredAudioLanguages?: string[] | null;
+  };
 };
 
 /// A manager-queue row may stand for several overlapping requests of one
@@ -443,17 +448,32 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
           nextMode === "admin" ? mediaRequestsQuery : myMediaRequestsQuery;
         const requesterUserId =
           nextMode === "admin" ? selectedRequesterId : null;
-        const requestsResult = await client
-          .query(requestsQuery, {
-            facet: requestFacet,
-            libraryIds:
-              normalizedSelectedLibraryIds.length > 0
-                ? normalizedSelectedLibraryIds
-                : null,
-            status: null,
-            ...(nextMode === "admin" ? { requesterUserId } : {}),
-          })
-          .toPromise();
+        const requestsResult = await loadAllMediaRequestPages<
+          MediaRequestRecord,
+          CombinedError
+        >(async (limit, offset) => {
+          const page = await client
+            .query(requestsQuery, {
+              facet: requestFacet,
+              libraryIds:
+                normalizedSelectedLibraryIds.length > 0
+                  ? normalizedSelectedLibraryIds
+                  : null,
+              status: null,
+              ...(nextMode === "admin" ? { requesterUserId } : {}),
+              limit,
+              offset,
+            })
+            .toPromise();
+          const rows =
+            nextMode === "admin"
+              ? page.data?.mediaRequests
+              : page.data?.myMediaRequests;
+          return {
+            rows: (rows ?? []) as MediaRequestRecord[],
+            error: page.error,
+          };
+        });
         if (
           refreshSeq !== refreshSeqRef.current ||
           refreshContext !== refreshContextRef.current
@@ -471,12 +491,9 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
           );
           return;
         }
-        const loadedRequests =
-          nextMode === "admin"
-            ? requestsResult.data?.mediaRequests
-            : requestsResult.data?.myMediaRequests;
+        const loadedRequests = requestsResult.rows;
         if (nextMode === "admin") {
-          const adminRequests = (loadedRequests ?? []) as MediaRequestRecord[];
+          const adminRequests = loadedRequests;
           setRequesterOptions((previous) =>
             requesterFilterOptions(
               adminRequests,
@@ -486,7 +503,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
           );
           setRequests(collapseMediaRequestsPerStatus(adminRequests));
         } else {
-          setRequests((loadedRequests ?? []) as MediaRequestRecord[]);
+          setRequests(loadedRequests);
         }
       } catch (error) {
         setGlobalStatus(
@@ -624,6 +641,9 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
               leaseDays: values.leaseDays ?? null,
               leaseForever: values.leaseForever ?? null,
               tags: values.tags ?? null,
+              /// Spread, not defaulted: an omitted field grants what the
+              /// requester asked, and `null` inherits the library's.
+              ...values.audioLanguages,
             },
           })
           .toPromise();

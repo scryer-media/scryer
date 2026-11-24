@@ -14,7 +14,11 @@ import {
   uninstallPluginMutation,
 } from "@/lib/graphql/mutations";
 import { wsClient } from "@/lib/graphql/ws-client";
-import { claimPluginTerminalOperation } from "@/lib/utils/plugin-install-state";
+import { useBackoffPoller } from "@/lib/hooks/use-backoff-poller";
+import {
+  createPluginOperations,
+  PLUGIN_OPERATION_RECONCILE_DELAYS_MS,
+} from "@/lib/utils/plugin-install-state";
 import type {
   PluginInstallProgressRecord,
   RegistryPluginRecord,
@@ -109,9 +113,10 @@ export function usePluginManagement({
   const [pluginErrors, setPluginErrors] = useState<Record<string, string>>({});
   const [pluginsError, setPluginsError] = useState<string | null>(null);
   const installProgressSubscriptionsRef = useRef(new Map<string, () => void>());
-  // Whichever of `next`, `error` and `complete` reaches a plugin first owns
-  // winding its operation down; the others must not undo that work.
-  const terminalPluginOperationsRef = useRef(new Set<string>());
+  // The install and upgrade operations this hook follows, one per plugin.
+  // Their progress stream reports them; the plugin list settles any the
+  // stream leaves unfinished.
+  const [pluginOperations] = useState(createPluginOperations);
 
   const beginPluginMutation = useCallback((pluginId: string) => {
     setMutatingPluginIds((current) =>
@@ -145,14 +150,39 @@ export function usePluginManagement({
     [],
   );
 
+  // End the operations a plugin list loaded after `mark` shows finished.
+  const settlePluginOperations = useCallback(
+    (nextPlugins: RegistryPluginRecord[], mark: number) => {
+      for (const { pluginId, operation } of pluginOperations.settledBy(
+        nextPlugins,
+        mark,
+      )) {
+        if (!pluginOperations.end(pluginId, operation)) continue;
+        stopPluginInstallProgressSubscription(pluginId);
+        clearPluginProgress(pluginId);
+        endPluginMutation(pluginId);
+      }
+    },
+    [
+      clearPluginProgress,
+      endPluginMutation,
+      pluginOperations,
+      stopPluginInstallProgressSubscription,
+    ],
+  );
+
   const loadPlugins = useCallback(
     async (refreshIfEmpty = false) => {
-      const { data, error } = await client.query(pluginsQuery, {}).toPromise();
+      const mark = pluginOperations.mark();
+      const { data, error } = await client
+        .query(pluginsQuery, {}, { requestPolicy: "network-only" })
+        .toPromise();
       if (error) throw error;
 
       const nextPlugins = (data?.plugins ?? []) as RegistryPluginRecord[];
       if (nextPlugins.length > 0 || !refreshIfEmpty) {
         setPlugins(nextPlugins);
+        settlePluginOperations(nextPlugins, mark);
         return nextPlugins;
       }
 
@@ -164,9 +194,23 @@ export function usePluginManagement({
       const refreshedPlugins = (refreshData?.refreshPluginCatalog ??
         []) as RegistryPluginRecord[];
       setPlugins(refreshedPlugins);
+      settlePluginOperations(refreshedPlugins, mark);
       return refreshedPlugins;
     },
-    [client],
+    [client, pluginOperations, settlePluginOperations],
+  );
+
+  // While an operation is followed, the plugin list is loaded now and then,
+  // so progress ends even when its stream never connects, drops, or misses
+  // the last step. Stops once nothing is followed and while the tab is hidden.
+  const pollPluginOperations = useCallback(async () => {
+    if (pluginOperations.size() === 0) return false;
+    await loadPlugins(false);
+    return pluginOperations.size() > 0;
+  }, [loadPlugins, pluginOperations]);
+  const pluginOperationsPoller = useBackoffPoller(
+    PLUGIN_OPERATION_RECONCILE_DELAYS_MS,
+    pollPluginOperations,
   );
 
   // `refreshProviderOptions` and `t` are called by the reload, but they must
@@ -244,11 +288,22 @@ export function usePluginManagement({
       initialSnapshot: PluginInstallProgressRecord,
     ) => {
       stopPluginInstallProgressSubscription(plugin.id);
-      terminalPluginOperationsRef.current.delete(plugin.id);
+      const operation = pluginOperations.begin(plugin.id);
+      const isCurrent = () => pluginOperations.isCurrent(plugin.id, operation);
       setPluginProgress((current) => ({
         ...current,
         [plugin.id]: initialSnapshot,
       }));
+      pluginOperationsPoller.restart();
+      const reloadPlugins = () => {
+        void Promise.all([loadPlugins(false), refreshProviderOptions()]).catch(
+          (error) => {
+            setPluginsError(
+              userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+            );
+          },
+        );
+      };
       const unsubscribe = wsClient.subscribe(
         {
           query: pluginInstallProgressSubscription,
@@ -257,7 +312,7 @@ export function usePluginManagement({
         {
           next: (result: PluginInstallProgressSubscriptionResult) => {
             const snapshot = result.data?.pluginInstallProgress;
-            if (!snapshot) {
+            if (!snapshot || !isCurrent()) {
               return;
             }
             setPluginProgress((current) => ({
@@ -266,13 +321,11 @@ export function usePluginManagement({
             }));
 
             if (snapshot.state === "SUCCEEDED" || snapshot.state === "FAILED") {
-              if (
-                !claimPluginTerminalOperation(
-                  terminalPluginOperationsRef.current,
-                  plugin.id,
-                )
-              ) {
+              if (!pluginOperations.end(plugin.id, operation)) {
                 return;
+              }
+              if (pluginOperations.size() === 0) {
+                pluginOperationsPoller.stop();
               }
               stopPluginInstallProgressSubscription(plugin.id);
               void (async () => {
@@ -312,61 +365,39 @@ export function usePluginManagement({
               })();
             }
           },
+          // A stream that fails or ends before the last step (it could not
+          // connect, the finished snapshot aged out before it attached, an
+          // auth change closed the socket) says nothing about the operation
+          // itself: the plugin list says whether it is still running.
           error: (error) => {
-            if (
-              !claimPluginTerminalOperation(
-                terminalPluginOperationsRef.current,
-                plugin.id,
-              )
-            ) {
+            if (!isCurrent()) {
               return;
             }
-            stopPluginInstallProgressSubscription(plugin.id);
-            clearPluginProgress(plugin.id);
-            endPluginMutation(plugin.id);
-            setPluginErrors((current) => ({
-              ...current,
-              [plugin.id]: formatPluginInstallError(plugin, error, t),
-            }));
+            console.error("[plugins] install progress stream failed:", error);
+            installProgressSubscriptionsRef.current.delete(plugin.id);
+            reloadPlugins();
           },
           complete: () => {
-            installProgressSubscriptionsRef.current.delete(plugin.id);
-            // A stream that ends without a terminal snapshot — the finished
-            // snapshot aged out before this connection attached, a reconnect
-            // resubscribed too late, an auth epoch bumped the socket — used to
-            // leave the row pinned on "Installing" with nothing left to correct
-            // it. Reconcile the way reloading the page did.
-            if (
-              !claimPluginTerminalOperation(
-                terminalPluginOperationsRef.current,
-                plugin.id,
-              )
-            ) {
+            if (!isCurrent()) {
               return;
             }
-            clearPluginProgress(plugin.id);
-            endPluginMutation(plugin.id);
-            void Promise.all([
-              loadPlugins(false),
-              refreshProviderOptions(),
-            ]).catch((error) => {
-              setPluginsError(
-                userFacingGraphQlErrorMessage(
-                  error,
-                  t("status.failedToLoad"),
-                  t,
-                ),
-              );
-            });
+            installProgressSubscriptionsRef.current.delete(plugin.id);
+            reloadPlugins();
           },
         },
       );
-      installProgressSubscriptionsRef.current.set(plugin.id, unsubscribe);
+      if (isCurrent()) {
+        installProgressSubscriptionsRef.current.set(plugin.id, unsubscribe);
+      } else {
+        unsubscribe();
+      }
     },
     [
       clearPluginProgress,
       endPluginMutation,
       loadPlugins,
+      pluginOperations,
+      pluginOperationsPoller,
       refreshProviderOptions,
       stopPluginInstallProgressSubscription,
       t,

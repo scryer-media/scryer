@@ -9,8 +9,8 @@ use crate::acquisition_decision_helpers::{
     is_download_submit_unavailable_error,
 };
 use crate::acquisition_release_search::{
-    ReleaseAutoDecisionCode, annotate_auto_decision, automatic_candidate_delay_decision,
-    serialize_decision_explanation,
+    ReleaseAutoDecisionCode, automatic_candidate_delay_decision, candidate_carries_auto_decision,
+    release_decision_explanation_for, serialize_decision_explanation,
 };
 use crate::contracts::{SubmissionConflictPolicy, SubmissionScopeConflict, WantedSearchOutcome};
 use crate::domain_events::{
@@ -33,7 +33,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
 };
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 // This facade keeps the previous module scope while the former junk drawer is
 // mechanically split into functional source files.

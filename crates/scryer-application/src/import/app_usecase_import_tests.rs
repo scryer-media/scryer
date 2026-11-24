@@ -890,6 +890,68 @@ fn episode_identity_season_pack_member_uses_its_own_numbering_regardless_of_sibl
 }
 
 #[test]
+fn episode_identity_dotted_season_members_do_not_inherit_episode_set() {
+    let title = titled(MediaFacet::Series, "Зарвик", Some(2026));
+    let evidence = ReleaseEvidence::ScryerSubmission {
+        title_id: title.id.clone(),
+        facet: "series".to_string(),
+        source_title: Some("Зарвик".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+        scope: SubmissionScope::EpisodeSet {
+            episode_ids: (1..=16).map(|number| format!("ep-{number}")).collect(),
+        },
+    };
+    for number in 1..=16 {
+        let filename = format!("Zarvik.S01.E{number:02}.2026.WEB-DL.1080p.GRP.mkv");
+        let parsed = build_augmented_episode_import_metadata_for_title(
+            Path::new(&filename),
+            &evidence,
+            &title,
+            true,
+        );
+        let episode = parsed.episode.as_ref().expect("member identity");
+        assert_eq!(episode.season, Some(1), "{filename}: {episode:?}");
+        assert_eq!(
+            episode.episode_numbers,
+            vec![number],
+            "{filename}: {episode:?}"
+        );
+        assert!(!episode.full_season, "{filename}: {episode:?}");
+    }
+}
+
+#[test]
+fn episode_identity_season_only_filename_is_not_a_whole_season_video() {
+    let title = titled(MediaFacet::Series, "Зарвик", Some(2026));
+    let evidence = ReleaseEvidence::ScryerSubmission {
+        title_id: title.id.clone(),
+        facet: "series".to_string(),
+        source_title: Some("Зарвик".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+        scope: SubmissionScope::EpisodeSet {
+            episode_ids: (1..=16).map(|number| format!("ep-{number}")).collect(),
+        },
+    };
+    for filename in ["Zarvik.S01.2026.WEB-DL.1080p.GRP.mkv", "unknown.mkv"] {
+        for other_video_files in [false, true] {
+            let parsed = build_augmented_episode_import_metadata_for_title(
+                Path::new(filename),
+                &evidence,
+                &title,
+                other_video_files,
+            );
+            assert!(parsed.episode.is_none(), "{filename}: {:?}", parsed.episode);
+        }
+    }
+}
+
+#[test]
 fn episode_identity_season_pack_member_with_obfuscated_name_gets_no_episode() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file_path = write_video(dir.path(), "4f8e2c7a91b6d3e0.mkv");
@@ -947,6 +1009,34 @@ fn episode_identity_sole_scene_titled_video_identifies_itself() {
         );
         assert_release_scored_facts(&parsed, BLUEY_EPISODE_RELEASE);
     }
+}
+
+#[test]
+fn episode_identity_sole_scene_titled_season_only_video_takes_release_numbering() {
+    // A scene-styled name that carries only a season marker does not say which
+    // episode the file holds, so it cannot displace the release numbering.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file_path = write_video(dir.path(), "Show.A.S01.720p.WEB-DL.AV1.AAC2.0-GRP.mkv");
+    let evidence = bluey_submission_evidence(
+        BLUEY_EPISODE_RELEASE,
+        SubmissionScope::Episode {
+            episode_id: "ep-1".to_string(),
+        },
+    );
+
+    let parsed = build_augmented_episode_import_metadata_for_title(
+        &file_path,
+        &evidence,
+        &bluey_title(),
+        false,
+    );
+    let episode = parsed
+        .episode
+        .as_ref()
+        .expect("episode from the release title");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![1]);
+    assert!(!episode.full_season);
 }
 
 #[test]
@@ -1207,7 +1297,6 @@ fn test_rule_file_doc(
     dovi_bl_compat_id: Option<u8>,
 ) -> scryer_rules::FileDoc {
     scryer_rules::FileDoc {
-        details: Default::default(),
         video_codec: Some("hevc".to_string()),
         video_width: Some(3840),
         video_height: Some(2160),
@@ -2758,6 +2847,7 @@ fn build_manual_import_cleanup_app(
         JwtAuthConfig {
             issuer: "test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(FacetRegistry::new()),
     )
@@ -2926,6 +3016,7 @@ fn completed_manual_import_record_for(
         status: scryer_domain::ImportStatus::Completed,
         error_code: None,
         error_message: None,
+        reason_code: None,
         requires_reconciliation: false,
         retry_attempts: 0,
         next_retry_at: None,

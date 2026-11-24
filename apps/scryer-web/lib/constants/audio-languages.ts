@@ -91,6 +91,24 @@ for (const [alias, code] of Object.entries(AUDIO_CODE_ALIASES)) {
   }
 }
 
+const audioLanguageByName = new Map<string, SubtitleLanguage>(
+  AUDIO_LANGUAGES.map((language) => [language.name.toLowerCase(), language]),
+);
+
+/**
+ * The stored audio spelling for a language written as a code in either
+ * ISO 639-2 form or as its English name, as indexers report it; null when the
+ * table does not know it.
+ */
+export function canonicalAudioLanguageCode(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  return (
+    audioLanguageByCode.get(normalized)?.code ??
+    audioLanguageByName.get(normalized)?.code ??
+    null
+  );
+}
+
 export function audioLanguageOptions(
   originalLanguageLabel: string,
 ): SubtitleLanguage[] {

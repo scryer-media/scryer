@@ -104,27 +104,6 @@ impl ConflictFixture {
         }
     }
 
-    /// Completing an operation drops its plan. A test that recreates a crash
-    /// during cleanup keeps the exact bytes that write removed, so the
-    /// recreated row holds the plan a real crash would have left stored.
-    async fn keep_plans_dropped_at_completion(&self) {
-        sqlx::raw_sql(
-            "CREATE TABLE IF NOT EXISTS conflict_test_dropped_plans (
-                 operation_id TEXT PRIMARY KEY NOT NULL,
-                 plan BLOB NOT NULL
-             );
-             CREATE TRIGGER IF NOT EXISTS conflict_test_keep_dropped_plan
-             BEFORE DELETE ON location_operation_plans
-             BEGIN
-                 INSERT OR REPLACE INTO conflict_test_dropped_plans (operation_id, plan)
-                 VALUES (OLD.operation_id, OLD.plan);
-             END;",
-        )
-        .execute(self.ctx.db.pool())
-        .await
-        .unwrap();
-    }
-
     fn request(&self, policy: ConflictPolicy, leftovers: ConflictLeftovers) -> ConflictRequest {
         ConflictRequest {
             pending_import_ids: vec![self.pending_id.clone()],
@@ -1071,7 +1050,6 @@ async fn conflict_disposal_hardlinks_preserve_external_aliases_and_recover_owned
     for enabled in [false, true] {
         for shared_survivor in [false, true] {
             let fixture = ConflictFixture::new().await;
-            fixture.keep_plans_dropped_at_completion().await;
             fixture
                 .ctx
                 .app
@@ -1277,7 +1255,6 @@ async fn conflict_native_paths_preserve_distinct_names_collisions_companions_and
     use scryer_application::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
     use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
     let mut fixture = ConflictFixture::new().await;
-    fixture.keep_plans_dropped_at_completion().await;
     let folder = fixture
         .root
         .join(OsString::from_vec(b"ADEG78\xff".to_vec()));
@@ -1432,7 +1409,6 @@ async fn conflict_native_paths_recycle_and_restore_exact_catalog_paths_after_res
     use scryer_application::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     let fixture = ConflictFixture::new().await;
-    fixture.keep_plans_dropped_at_completion().await;
     let original = fixture
         .ctx
         .media_files
@@ -1521,7 +1497,6 @@ async fn conflict_native_paths_recycle_and_restore_exact_catalog_paths_after_res
 async fn conflict_keep_one_identical_collision_always_retains_the_resolved_primary() {
     for enabled in [false, true] {
         let fixture = ConflictFixture::new().await;
-        fixture.keep_plans_dropped_at_completion().await;
         fixture
             .ctx
             .app
@@ -1634,7 +1609,9 @@ async fn retry_cleanup_state(
     operation_id: &str,
 ) -> scryer_application::location::model::LocationOperationState {
     use scryer_application::LocationOperationRepository;
-    use scryer_application::location::model::TitleCheckpointState;
+    use scryer_application::location::model::{
+        LocationOperationState, LocationReasonCode, TitleCheckpointState,
+    };
     use scryer_application::location::operations::LocationResumeDecision;
     use scryer_infrastructure_library::media::libraries::location_operation_store::LocationOperationStore;
     let store = LocationOperationStore::new(fixture.ctx.db.datastore());
@@ -1650,31 +1627,25 @@ async fn retry_cleanup_state(
         .upsert_location_title_checkpoint(&checkpoint)
         .await
         .unwrap();
-    // ...and the run never reached its terminal write: the row is still
-    // cleaning up and still holds the plan the completing write dropped.
-    let restored = sqlx::query(
-        "INSERT INTO location_operation_plans (operation_id, plan)
-         SELECT operation_id, plan FROM conflict_test_dropped_plans WHERE operation_id = ?",
-    )
-    .bind(operation_id)
-    .execute(fixture.ctx.db.pool())
-    .await
-    .unwrap();
-    assert_eq!(
-        restored.rows_affected(),
-        1,
-        "the completed run's plan was kept aside"
-    );
-    let reverted = sqlx::query(
-        "UPDATE location_operations
-            SET state = 'cleaning_up', completed_at = NULL, failure_reason = NULL, reason_code = NULL
-          WHERE id = ? AND state IN ('completed', 'completed_with_warnings')",
-    )
-    .bind(operation_id)
-    .execute(fixture.ctx.db.pool())
-    .await
-    .unwrap();
-    assert_eq!(reverted.rows_affected(), 1, "the run had completed");
+    let operation = store
+        .get_location_operation(operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .update_location_operation_progress(&scryer_application::LocationOperationProgress {
+            operation_id: operation_id.into(),
+            state: LocationOperationState::Failed,
+            counters: operation.counters,
+            verification_fallback_count: operation.verification_fallback_count,
+            detail: Some("synthetic interruption after source cleanup".into()),
+            clear_detail: false,
+            reason_code: Some(LocationReasonCode::SourceCleanupFailed),
+            started_at: operation.started_at,
+            completed_at: Some(Utc::now()),
+        })
+        .await
+        .unwrap();
     let decision = fixture
         .ctx
         .app
@@ -1698,7 +1669,6 @@ async fn retry_cleanup_state(
 #[tokio::test]
 async fn conflict_adopt_hardlink_dedup_resumes_after_its_own_cleanup_changed_ctime() {
     let fixture = ConflictFixture::new().await;
-    fixture.keep_plans_dropped_at_completion().await;
     let primary = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
     std::fs::remove_file(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap();
     std::fs::hard_link(
@@ -2596,7 +2566,7 @@ async fn conflict_keep_one_moves_nothing_when_the_survivor_already_holds_the_bes
 }
 
 #[tokio::test]
-async fn a_completed_operation_drops_its_plan_and_every_reader_answers_without_it() {
+async fn a_completed_operation_keeps_its_plan_and_its_per_title_file_page() {
     use scryer_application::location::model::LocationOperationState;
     use scryer_application::location::operations::LocationResumeDecision;
     let fixture = ConflictFixture::new().await;
@@ -2629,52 +2599,163 @@ async fn a_completed_operation_drops_its_plan_and_every_reader_answers_without_i
             .fetch_one(fixture.ctx.db.pool())
             .await
             .unwrap();
-    assert_eq!(plans, 0, "completing the operation drops its plan");
+    assert_eq!(plans, 1, "the plan lives as long as the operation row");
 
-    // The operation names its source library, so it still authorizes.
     app.require_location_operation_permission(&fixture.actor, &operation)
         .await
-        .expect("a completed operation authorizes without its plan");
-    assert!(
-        app.location_operation_retry_selection(&operation_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let listing = app
-        .location_operation_asset_listing(&operation_id)
-        .await
-        .unwrap();
-    assert!(listing.titles.is_empty());
-    assert_eq!((listing.renames_total, listing.dedups_total), (0, 0));
+        .expect("a completed operation authorizes");
     let decision = app.resume_location_operation(&operation_id).await.unwrap();
     assert!(
         matches!(decision, LocationResumeDecision::NotResumable(_)),
         "{decision:?}"
     );
 
-    // The live read model was written during the run and never needs the plan.
     let snapshot = app
         .location_transfer_snapshot(&fixture.actor, &operation_id, Some(0), 50)
         .await
         .unwrap()
         .expect("the transfer snapshot reads");
     assert_eq!(snapshot.operation.state, operation.state);
-    assert_eq!(snapshot.total_count, 1);
     assert_eq!(snapshot.titles.len(), 1);
     assert_eq!(snapshot.titles[0].title_id, fixture.title.id);
-    assert!(
-        snapshot.titles[0].state.is_settled(),
-        "{:?}",
-        snapshot.titles
-    );
+    // The activity detail for a finished operation lists the title's files.
     let files = app
         .location_transfer_files_snapshot(&fixture.actor, &operation_id, &fixture.title.id, 0)
         .await
         .unwrap()
         .expect("the per-file snapshot reads");
     assert!(
-        files.files.is_empty(),
-        "the per-file listing came from the plan"
+        !files.files.is_empty(),
+        "a completed operation still lists the title's files"
     );
+    assert!(
+        files.files.iter().all(|file| !file.source_path.is_empty()),
+        "{:?}",
+        files.files
+    );
+}
+
+/// Gives the fixture title a profile with `decision_pipeline` (`None` for the
+/// default order) that lists 2160p, 1080p and 720p, and prefers French audio
+/// for movies.
+async fn order_the_fixture_title(fixture: &ConflictFixture, decision_pipeline: Option<Value>) {
+    seed_typed_settings_definitions(&fixture.ctx).await;
+    let languages = gql(
+        &fixture.ctx,
+        r#"mutation Update($input: UpdateMediaSettingsInput!) {
+              updateMediaSettings(input: $input) { preferredAudioLanguages }
+            }"#,
+        json!({"input": {"scope": "MOVIE", "preferredAudioLanguages": ["fra"]}}),
+    )
+    .await;
+    assert_no_errors(&languages);
+    let mut criteria = json!({
+        "qualityTiers": ["2160P", "1080P", "720P"],
+        "archivalQuality": "2160P",
+        "allowUnknownQuality": false,
+        "sourceAllowlist": [],
+        "sourceBlocklist": [],
+        "videoCodecAllowlist": [],
+        "videoCodecBlocklist": [],
+        "audioCodecAllowlist": [],
+        "audioCodecBlocklist": [],
+        "dolbyVisionAllowed": true,
+        "detectedHdrAllowed": true,
+        "preferRemux": false,
+        "allowBdDisk": true,
+        "allowUpgrades": true,
+        "scoringOverrides": {},
+        "cutoffTier": null,
+        "minScoreToGrab": null
+    });
+    if let Some(pipeline) = decision_pipeline {
+        criteria["decisionPipeline"] = pipeline;
+    }
+    let saved = gql(
+        &fixture.ctx,
+        r#"mutation Save($input: SaveQualityProfileSettingsInput!) {
+              saveQualityProfileSettings(input: $input) { profiles { id } }
+            }"#,
+        json!({"input": {
+            "profiles": [{ "id": "keeper-order", "name": "Keeper Order", "criteria": criteria }],
+            "categorySelections": [],
+            "categoryPersonaSelections": [],
+            "replaceExisting": false
+        }}),
+    )
+    .await;
+    assert_no_errors(&saved);
+    sqlx::query("UPDATE titles SET tags = ? WHERE id = ?")
+        .bind(r#"["scryer:quality-profile:keeper-order"]"#)
+        .bind(&fixture.title.id)
+        .execute(fixture.ctx.db.pool())
+        .await
+        .unwrap();
+}
+
+/// Keep-one keeps the file the title's profile ranks first on its decision
+/// order. With the preferred language ahead of the tier that is the French
+/// 720p file over an unlabelled 2160p one; under the default order it is the
+/// 2160p file. Either way only the conflict's other media is disposed of:
+/// files outside the conflict folders and the non-media files are preserved.
+#[tokio::test]
+async fn keep_one_keeps_the_file_the_profiles_decision_order_ranks_first() {
+    let french = "Emberfall.2024.720p.WEB-DL.FRENCH.mkv";
+    let uhd = "Emberfall.2024.2160p.BluRay.mkv";
+    for (pipeline, kept, disposed) in [
+        (
+            Some(json!(["PREFERRED_LANGUAGE", "QUALITY_TIER"])),
+            french,
+            uhd,
+        ),
+        (None, uhd, french),
+    ] {
+        let fixture = ConflictFixture::new().await;
+        order_the_fixture_title(&fixture, pipeline.clone()).await;
+        std::fs::write(fixture.junk.join(french), b"french movie").unwrap();
+        let unrelated = fixture.root.join("unrelated.mkv");
+        std::fs::write(&unrelated, b"unrelated movie").unwrap();
+
+        let task = fixture
+            .settle(
+                fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+                false,
+            )
+            .await;
+        assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+
+        let media = fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap();
+        assert_eq!(media.len(), 1, "{pipeline:?}: {media:?}");
+        assert!(
+            media[0].file_path.ends_with(kept),
+            "{pipeline:?}: kept {}",
+            media[0].file_path
+        );
+        assert!(fixture.named.join(kept).exists(), "{pipeline:?}");
+        assert!(!fixture.junk.join(disposed).exists(), "{pipeline:?}");
+        assert!(!fixture.named.join(disposed).exists(), "{pipeline:?}");
+        // Files outside the conflict folders and the conflict's non-media
+        // files are preserved.
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated movie");
+        assert_eq!(
+            std::fs::read(fixture.named.join("poster.jpg")).unwrap(),
+            b"artwork contents"
+        );
+        let recycled = fixture
+            .ctx
+            .app
+            .list_recycled_items(&fixture.actor, Some(vec![fixture.title.library_id.clone()]))
+            .await
+            .unwrap();
+        assert_eq!(
+            recycled.len(),
+            2,
+            "{pipeline:?}: disposed media is recycled, not lost"
+        );
+    }
 }

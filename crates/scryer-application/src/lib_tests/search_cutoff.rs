@@ -306,6 +306,66 @@ async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     assert_eq!(items[0].target_tier, "720P");
 }
 
+/// A profile with no cutoff tier upgrades to its top tier: a file below it
+/// is cutoff unmet with the top tier as its target, and a file at it is not.
+/// The profile here ranks 720P above 1080P, so 720P is the top.
+#[tokio::test]
+async fn list_cutoff_unmet_titles_targets_the_top_tier_without_a_cutoff() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            r#""no-cutoff""#,
+        )
+        .await;
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    let mut profile = cutoff_projection_test_profile("no-cutoff", "720P");
+    profile.criteria.cutoff_tier = None;
+    profile.criteria.quality_tiers = vec!["720P".to_string(), "1080P".to_string()];
+    quality_profiles.set_profiles(vec![profile]).await;
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (app, user, _) =
+        bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+
+    let mut title_ids = Vec::new();
+    for (name, quality) in [("Below Top", "1080p"), ("At Top", "720p")] {
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: name.into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/library/{name}.mkv"),
+                size_bytes: 1_000,
+                quality_label: Some(quality.to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        title_ids.push(title.id);
+    }
+
+    let items = app
+        .list_cutoff_unmet_titles(&user, Some(MediaFacet::Movie), None)
+        .await
+        .expect("cutoff unmet query should succeed");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title_id, title_ids[0]);
+    assert_eq!(items[0].current_tier, "1080P");
+    assert_eq!(items[0].target_tier, "720P");
+}
+
 /// A profile whose order has no quality tier step ignores its cutoff tier, so
 /// a file below that tier is not reported, or swept, as quality-cutoff unmet.
 #[tokio::test]
@@ -1148,6 +1208,198 @@ async fn list_cutoff_unmet_titles_page_bounds_and_total() {
     assert!(page.items.is_empty());
 }
 
+/// The page is served from the instance-wide item set kept per projection
+/// generation. Whatever the facet, the library filter and the slice, it must
+/// answer exactly what the per-request compute does, cold and warm, and again
+/// after an event retires the kept set.
+#[tokio::test]
+async fn cutoff_unmet_page_from_kept_items_matches_the_per_request_compute() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(SETTINGS_SCOPE_SYSTEM, QUALITY_PROFILE_ID_KEY, r#""p1080""#)
+        .await;
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    quality_profiles
+        .set_profiles(vec![cutoff_projection_test_profile("p1080", "1080P")])
+        .await;
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (app, user, _) =
+        bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+
+    async fn add_movie(app: &AppUseCase, user: &User, files: &MockMediaFileRepo, name: &str) {
+        let title = app
+            .add_title(
+                user,
+                NewTitle {
+                    name: name.into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create movie");
+        files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/fixture/movies/{name}.mkv"),
+                size_bytes: 1_000,
+                quality_label: Some("480p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("insert movie file");
+    }
+
+    for name in [
+        "Fixture Delta",
+        "fixture alpha",
+        "Fixture Charlie",
+        "Fixture Bravo",
+    ] {
+        add_movie(&app, &user, &media_files, name).await;
+    }
+    let series = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Fixture Bravo Show".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series");
+    let collection = app
+        .create_collection(
+            &user,
+            series.id.clone(),
+            "season".into(),
+            "1".into(),
+            Some("Season One".into()),
+            None,
+            Some("1".into()),
+            Some("12".into()),
+        )
+        .await
+        .expect("create collection");
+    for number in ["2", "10", "1"] {
+        let episode = app
+            .create_episode(
+                &user,
+                series.id.clone(),
+                Some(collection.id.clone()),
+                "standard".into(),
+                Some("1".into()),
+                Some(number.into()),
+                Some(format!("Fixture Episode {number}")),
+                Some(format!("Fixture Episode {number}")),
+                None,
+                Some(1_200),
+                false,
+                false,
+            )
+            .await
+            .expect("create episode");
+        let file_id = media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: series.id.clone(),
+                file_path: format!("/fixture/shows/Fixture Bravo Show - S01E{number}.mkv"),
+                size_bytes: 1_000,
+                quality_label: Some("720p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("insert episode file");
+        media_files
+            .link_file_to_episode(&file_id, &episode.id)
+            .await
+            .expect("link episode file");
+    }
+
+    let movie_library_id = app
+        .services
+        .catalog
+        .libraries
+        .list(Some(MediaFacet::Movie))
+        .await
+        .expect("libraries")
+        .first()
+        .expect("a movie library")
+        .id
+        .clone();
+
+    async fn assert_pages_match(app: &AppUseCase, user: &User, movie_library_id: &str) -> usize {
+        let mut compared_rows = 0;
+        for facet in [
+            None,
+            Some(MediaFacet::Movie),
+            Some(MediaFacet::Series),
+            Some(MediaFacet::Anime),
+        ] {
+            for libraries in [
+                None,
+                Some(vec![]),
+                Some(vec![format!(" {movie_library_id} ")]),
+                Some(vec!["fixture-absent-library".to_string()]),
+            ] {
+                let expected = app
+                    .list_cutoff_unmet_titles(user, facet.clone(), libraries.clone())
+                    .await
+                    .expect("per-request compute");
+                for (limit, offset) in [(0, 0), (1, 0), (2, 1), (3, 3), (50, 0), (50, 50)] {
+                    let page = app
+                        .list_cutoff_unmet_titles_page(
+                            user,
+                            facet.clone(),
+                            libraries.clone(),
+                            limit,
+                            offset,
+                        )
+                        .await
+                        .expect("page from kept items");
+                    let context = format!("{facet:?} {libraries:?} limit {limit} offset {offset}");
+                    assert_eq!(page.total, expected.len(), "total for {context}");
+                    let expected_page =
+                        expected.iter().skip(offset).take(limit).collect::<Vec<_>>();
+                    assert_eq!(
+                        format!("{:?}", page.items.iter().collect::<Vec<_>>()),
+                        format!("{expected_page:?}"),
+                        "items for {context}"
+                    );
+                    compared_rows += page.items.len();
+                }
+            }
+        }
+        compared_rows
+    }
+
+    // Cold, then warm: the second pass reads the kept set.
+    assert!(assert_pages_match(&app, &user, &movie_library_id).await > 0);
+    let kept = app.current_cutoff_unmet_items().await.expect("kept items");
+    assert_eq!(kept.len(), 7);
+    assert_pages_match(&app, &user, &movie_library_id).await;
+    assert!(Arc::ptr_eq(
+        &kept,
+        &app.current_cutoff_unmet_items().await.expect("kept items")
+    ));
+
+    // Two more below-cutoff movies. The fixture store writes files without
+    // the import event production appends, so the bump stands in for it.
+    add_movie(&app, &user, &media_files, "Fixture Echo").await;
+    add_movie(&app, &user, &media_files, "Fixture Foxtrot").await;
+    app.runtime.acquisition.invalidate_wanted_projection_cache();
+    assert_pages_match(&app, &user, &movie_library_id).await;
+    assert_eq!(
+        app.current_cutoff_unmet_items()
+            .await
+            .expect("kept items")
+            .len(),
+        9
+    );
+}
+
 /// The Wanted page reads `currentScore` off the state row attached to each
 /// derived view. Those rows come straight from the repository, where the bar is
 /// always unset because it is resolved on read — so the page rendered null for
@@ -1382,6 +1634,48 @@ async fn interactive_search_blocklist_is_per_title_and_removal_reallows_the_rele
 }
 
 #[tokio::test]
+async fn interactive_search_excludes_a_block_older_than_a_thousand_newer_ones() {
+    let release_title = "Lantern.Cove.2024.1080p.WEB-DL-GRP";
+    let (app, user, blocklist) = bootstrap_interactive_search_with_blocklist(release_title).await;
+    let title = add_movie_title_for_search(&app, &user, "Lantern Cove").await;
+
+    blocklist
+        .block(&blocklist_entry_for(
+            &title.id,
+            release_title,
+            "grab failed",
+        ))
+        .await
+        .expect("seed the old block");
+    for index in 0..1_100 {
+        blocklist
+            .block(&blocklist_entry_for(
+                &title.id,
+                &format!("Lantern.Cove.Other.{index}.2024.1080p"),
+                "grab failed",
+            ))
+            .await
+            .expect("seed a newer block");
+    }
+    assert!(
+        !blocklist
+            .list_for_title(&title.id, 1_000)
+            .await
+            .expect("list newest blocks")
+            .iter()
+            .any(|entry| entry.release_name == release_title),
+        "the fixture leaves the old block outside the newest thousand"
+    );
+
+    assert!(
+        interactive_search_titles(&app, &user, &title.id)
+            .await
+            .is_empty(),
+        "a blocked release stays blocked however many newer blocks follow it"
+    );
+}
+
+#[tokio::test]
 async fn interactive_search_ignores_failed_attempt_history_without_a_blocklist_entry() {
     // The failed-attempt log is history/audit only: a Failed attempt with no
     // blocklist entry (e.g. one whose entry the operator removed) must not gate.
@@ -1520,6 +1814,14 @@ impl BlocklistRepository for FailingBlocklistRepo {
     async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
         Err(AppError::Repository("blocklist unavailable".to_string()))
     }
+    async fn list_matching_for_title(
+        &self,
+        _: &str,
+        _: &[String],
+        _: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        Err(AppError::Repository("blocklist unavailable".to_string()))
+    }
     async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         Err(AppError::Repository("blocklist unavailable".to_string()))
     }
@@ -1588,14 +1890,30 @@ async fn title_release_blocklist_signatures_are_per_title_and_normalized() {
         .await
         .expect("seed other-title entry");
 
-    let signatures = app.load_title_release_blocklist_signatures(&title.id).await;
+    let signatures = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            [
+                ("Mixed.Case.Release.2024.1080p", None),
+                ("Other.Title.Release.2024.1080p", None),
+            ],
+        )
+        .await;
     assert_eq!(
         signatures.release_names,
         HashSet::from([(String::new(), "mixed.case.release.2024.1080p".to_string())])
     );
     assert!(signatures.info_hashes.is_empty());
 
-    let other_signatures = app.load_title_release_blocklist_signatures(&other.id).await;
+    let other_signatures = app
+        .load_title_release_blocklist_signatures(
+            &other.id,
+            [
+                ("Mixed.Case.Release.2024.1080p", None),
+                ("Other.Title.Release.2024.1080p", None),
+            ],
+        )
+        .await;
     assert_eq!(
         other_signatures.release_names,
         HashSet::from([(String::new(), "other.title.release.2024.1080p".to_string())])
@@ -2100,6 +2418,7 @@ async fn a_queued_releases_announced_size_affects_fit_without_creating_score_upg
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
             missing_history: false,
+            blocks_submission: false,
             history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),
@@ -2219,6 +2538,7 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
             missing_history: false,
+            blocks_submission: false,
             history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),
@@ -2479,19 +2799,19 @@ async fn a_season_with_a_missing_episode_has_not_reached_cutoff() {
         .await
         .expect("list media files");
     let cutoff_scope = app.cutoff_scope_for(&scope).await;
-    let analyzed = crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-        &existing_files,
-        &cutoff_scope,
-    );
-    assert_eq!(
-        analyzed, None,
-        "a season with an empty member has no cutoff quality"
-    );
-
     let context = app
-        .resolve_upgrade_context_for_title_with_category_and_quality(&title, None, analyzed)
+        .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
         .await
         .expect("resolve upgrade context");
+    assert_eq!(
+        crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
+            &existing_files,
+            &cutoff_scope,
+            &context.profile.criteria,
+        ),
+        None,
+        "a season with an empty member has no cutoff quality"
+    );
     assert!(
         !context.cutoff_reached,
         "the pack that would fill the missing episode must still be evaluated"
@@ -2521,12 +2841,8 @@ async fn a_season_with_a_missing_episode_has_not_reached_cutoff() {
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files");
-    let analyzed = crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-        &existing_files,
-        &cutoff_scope,
-    );
     let context = app
-        .resolve_upgrade_context_for_title_with_category_and_quality(&title, None, analyzed)
+        .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
         .await
         .expect("resolve upgrade context");
     assert!(context.cutoff_reached, "every member is at cutoff");

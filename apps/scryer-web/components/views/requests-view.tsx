@@ -6,6 +6,7 @@ import {
   Clock,
   History,
   Inbox,
+  Languages,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -31,6 +32,13 @@ import { TitleRatingsDisplay } from "@/components/common/title-ratings-display";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { MonitorSelectionPicker } from "@/components/common/monitor-selection-picker";
 import { TitleTagsPicker } from "@/components/common/title-tags-picker";
+import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
+import {
+  approvalAudioLanguageOverrides,
+  catalogAudioLanguageDraftFrom,
+  INHERIT_CATALOG_AUDIO_LANGUAGES,
+  type CatalogAudioLanguageDraft,
+} from "@/lib/utils/catalog-audio-languages";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { TitlePoster } from "@/components/title-poster";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +67,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import {
@@ -79,6 +88,8 @@ import {
   REQUEST_LEASE_DAYS_MIN,
   REQUEST_LEASE_DAY_CHOICES,
   clampRequestLeaseDays,
+  requestApprovalPrefill,
+  type RequestApprovalPrefill,
   requestDecisionOutcomeBadgeTone,
   requestDecisionOutcomeLabelKey,
   requestFallbackReasonLabelKey,
@@ -102,10 +113,12 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID,
   APPROVE_MEDIA_REQUEST_LEASE_ID,
+  APPROVE_MEDIA_REQUEST_AUDIO_PREFIX,
   APPROVE_MEDIA_REQUEST_TAGS_PREFIX,
   TITLE_CLAIM_EXTEND_DATE_ID,
   TITLE_CLAIM_RELEASE_REASON_ID,
   approveMediaRequestLeaseOptionId,
+  approveMediaRequestSuggestedId,
   mediaRequestApproveId,
   mediaRequestCancelId,
   mediaRequestClaimsPanelId,
@@ -116,6 +129,7 @@ import {
   mediaRequestDismissId,
   mediaRequestEditId,
   mediaRequestLeaseId,
+  mediaRequestAudioLanguagesId,
   mediaRequestMonitorOptionId,
   mediaRequestMonitorSelectionId,
   mediaRequestPolicyTagsId,
@@ -135,6 +149,7 @@ import {
 import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { HelpLabel, InfoHelp } from "@/components/common/info-help";
 
 type QualityProfileOption = {
   id: string;
@@ -177,6 +192,12 @@ type ApproveRequestValues = {
   /// emitted, and editable, because the approver is the one who decides what
   /// the title ends up carrying.
   tags?: string[];
+  /// The approver's audio languages. A field left out grants what the
+  /// requester asked; `null` inherits the library's.
+  audioLanguages?: {
+    requiredAudioLanguages?: string[] | null;
+    preferredAudioLanguages?: string[] | null;
+  };
 };
 
 /// What the approver does with the lease the requester asked for.
@@ -500,6 +521,30 @@ function RequestLeaseBadge({
   );
 }
 
+/// Marks an approve-dialog field whose starting value a rule's shaping
+/// suggested. The approver can still change it; the marker only says where
+/// the value came from.
+function ShapingSuggestedMarker({
+  suggested,
+  head,
+}: {
+  suggested: RequestApprovalPrefill["suggested"];
+  head: string;
+}) {
+  const t = useTranslate();
+  const ruleSetName = suggested[head];
+  if (ruleSetName === undefined) return null;
+  return (
+    <span
+      id={approveMediaRequestSuggestedId(head)}
+      data-shaping-suggested={head}
+      className="block text-xs text-[var(--scry-info-text)]"
+    >
+      {t("requests.shapingSuggested", { rule: ruleSetName })}
+    </span>
+  );
+}
+
 /// The decision, and behind a click the whole of what the reader is permitted
 /// to see of it.
 ///
@@ -527,7 +572,6 @@ function RequestDecisionChip({
           id={mediaRequestDecisionId(request.id)}
           type="button"
           data-request-decision-outcome={decision.effectiveOutcome}
-          data-request-decision-mode={decision.mode}
           className="cursor-pointer"
         >
           <Badge
@@ -803,6 +847,11 @@ export function RequestsView({
   const [approvalCustomLeaseDays, setApprovalCustomLeaseDays] =
     React.useState(30);
   const [approvalTags, setApprovalTags] = React.useState<string[]>([]);
+  const [approvalAudioLanguages, setApprovalAudioLanguages] =
+    React.useState<CatalogAudioLanguageDraft>(INHERIT_CATALOG_AUDIO_LANGUAGES);
+  const [approvalSuggested, setApprovalSuggested] = React.useState<
+    RequestApprovalPrefill["suggested"]
+  >({});
   const [openClaimsRequestId, setOpenClaimsRequestId] = React.useState<
     string | null
   >(null);
@@ -872,6 +921,55 @@ export function RequestsView({
     /// list applies, and editable: the approver is
     /// the one who decides what the created title actually carries.
     setApprovalTags([...(approvalRequest.policyTags ?? [])]);
+    /// Starts at what the requester asked for; left alone, it grants that.
+    setApprovalAudioLanguages(
+      catalogAudioLanguageDraftFrom(
+        approvalRequest.requestedRequiredAudioLanguages,
+        approvalRequest.requestedPreferredAudioLanguages,
+      ),
+    );
+    /// A request held for review starts from what its rules' shaping
+    /// suggested, over what the requester asked for. Each prefilled field is
+    /// marked with the rule set that suggested it.
+    const prefill = requestApprovalPrefill(
+      approvalRequest.decision,
+      approvalRequest.facet,
+      qualityProfileOptions,
+    );
+    if (prefill.qualityProfileId)
+      setApprovalProfileId(prefill.qualityProfileId);
+    if (prefill.monitorType && approvalRequest.facet !== "MOVIE") {
+      setApprovalMonitorType(prefill.monitorType as RequestMonitorType);
+      setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
+    }
+    if (prefill.lease) {
+      if (prefill.lease.forever) setApprovalLeaseChoice("forever");
+      else if (
+        (REQUEST_LEASE_DAY_CHOICES as readonly number[]).includes(
+          prefill.lease.days,
+        )
+      )
+        setApprovalLeaseChoice(`${prefill.lease.days}`);
+      else {
+        setApprovalLeaseChoice("custom");
+        setApprovalCustomLeaseDays(prefill.lease.days);
+      }
+    }
+    if (prefill.requiredAudioLanguages || prefill.preferredAudioLanguages) {
+      setApprovalAudioLanguages((current) =>
+        catalogAudioLanguageDraftFrom(
+          prefill.requiredAudioLanguages ??
+            (current.requiredMode === "inherit"
+              ? null
+              : current.requiredMode === "none"
+                ? []
+                : current.required),
+          prefill.preferredAudioLanguages ??
+            (current.preferredMode === "inherit" ? null : current.preferred),
+        ),
+      );
+    }
+    setApprovalSuggested(prefill.suggested);
   }, [approvalRequest, libraries, qualityProfileOptions]);
 
   React.useEffect(() => {
@@ -935,6 +1033,11 @@ export function RequestsView({
       editSelectionLoading ||
       isMonitorSelectionEmpty(editMonitorSelection));
 
+  const approvalLibrary = approvalRequest
+    ? (libraries.find((library) => library.id === approvalRequest.libraryId) ??
+      null)
+    : null;
+
   const openApprovalDialog = (request: MediaRequestRecord) => {
     onLoadQualityProfileOptions();
     setApprovalRequest(request);
@@ -948,6 +1051,8 @@ export function RequestsView({
     setApprovalSelectionLoading(false);
     setApprovalLeaseChoice("requested");
     setApprovalTags([]);
+    setApprovalAudioLanguages(INHERIT_CATALOG_AUDIO_LANGUAGES);
+    setApprovalSuggested({});
   };
 
   const confirmApproval = () => {
@@ -970,6 +1075,13 @@ export function RequestsView({
       leaseDays,
       leaseForever: approvalLeaseChoice === "forever" ? true : undefined,
       tags: approvalTags,
+      audioLanguages: approvalAudioLanguageOverrides(
+        {
+          required: approvalRequest.requestedRequiredAudioLanguages,
+          preferred: approvalRequest.requestedPreferredAudioLanguages,
+        },
+        approvalAudioLanguages,
+      ),
     });
     closeApprovalDialog();
   };
@@ -1074,6 +1186,22 @@ export function RequestsView({
       ) ?? t("requests.libraryDefaultProfile");
     const requestedMonitorType = request.requestedMonitorType
       ? monitorTypeLabel(t, request.requestedMonitorType)
+      : null;
+    // Null inherits and shows nothing; an empty required list requires none.
+    const originalAudioLabel = t("title.originalAudioLanguagePerTitle");
+    const requestedRequiredAudio =
+      request.requestedRequiredAudioLanguages == null
+        ? null
+        : formatAudioLanguageLabels(
+            request.requestedRequiredAudioLanguages,
+            originalAudioLabel,
+          ) || t("label.none");
+    const requestedPreferredAudio = request.requestedPreferredAudioLanguages
+      ?.length
+      ? formatAudioLanguageLabels(
+          request.requestedPreferredAudioLanguages,
+          originalAudioLabel,
+        )
       : null;
     const requestedSelection = monitorSelectionSummaryParts(
       request.requestedMonitorSelection,
@@ -1405,6 +1533,31 @@ export function RequestsView({
                   ) : null}
                 </div>
               ) : null}
+              {requestedRequiredAudio || requestedPreferredAudio ? (
+                <div
+                  id={mediaRequestAudioLanguagesId(request.id)}
+                  className="rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 sm:col-span-2 xl:col-span-4"
+                >
+                  <div className="mb-1 flex items-center gap-1.5 text-[var(--scry-faint)]">
+                    <Languages className="h-3.5 w-3.5" />
+                    {t("requests.requestedAudioLanguages")}
+                  </div>
+                  {requestedRequiredAudio ? (
+                    <div className="text-[var(--scry-ink2)]">
+                      {t("requests.requestedRequiredAudio", {
+                        languages: requestedRequiredAudio,
+                      })}
+                    </div>
+                  ) : null}
+                  {requestedPreferredAudio ? (
+                    <div className="text-[var(--scry-ink2)]">
+                      {t("requests.requestedPreferredAudio", {
+                        languages: requestedPreferredAudio,
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1606,6 +1759,10 @@ export function RequestsView({
                 ))}
               </SelectContent>
             </Select>
+            <ShapingSuggestedMarker
+              suggested={approvalSuggested}
+              head="SET_QUALITY_PROFILE"
+            />
           </label>
           {approvalRequest && approvalRequest.facet !== "MOVIE" ? (
             <label className="space-y-2">
@@ -1641,6 +1798,10 @@ export function RequestsView({
                   ))}
                 </SelectContent>
               </Select>
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_MONITOR"
+              />
             </label>
           ) : null}
           {approvalRequest && approvalAdvancedSelected ? (
@@ -1724,16 +1885,46 @@ export function RequestsView({
                   }
                 />
               ) : null}
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_LEASE_DAYS"
+              />
             </label>
           ) : null}
           {approvalRequest ? (
             <div className="space-y-2">
               <span className="block text-sm font-medium text-card-foreground">
-                {t("requests.approvedTags")}
+                {t("requests.approvedAudioLanguages")}
               </span>
-              <p className="text-xs text-muted-foreground">
-                {t("requests.approvedTagsHelp")}
-              </p>
+              <CatalogAudioLanguageFields
+                idPrefix={APPROVE_MEDIA_REQUEST_AUDIO_PREFIX}
+                value={approvalAudioLanguages}
+                onChange={setApprovalAudioLanguages}
+                inheritedRequired={
+                  approvalLibrary?.inheritedRequiredAudioLanguages ?? null
+                }
+                inheritedPreferred={
+                  approvalLibrary?.inheritedPreferredAudioLanguages ?? null
+                }
+                disabled={actionRequestId !== null}
+              />
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_REQUIRED_AUDIO_LANGUAGES"
+              />
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_PREFERRED_AUDIO_LANGUAGES"
+              />
+            </div>
+          ) : null}
+          {approvalRequest ? (
+            <div className="space-y-2">
+              <HelpLabel
+                className="text-sm font-medium text-card-foreground"
+                label={t("requests.approvedTags")}
+                help={t("requests.approvedTagsHelp")}
+              />
               {/* The registry is the vocabulary: an approver picks from the
                   same list the title editor offers rather than typing a label
                   the server would then refuse after they pressed approve. */}
@@ -1912,9 +2103,15 @@ export function RequestsView({
             </label>
           ) : null}
           {pendingClaimAction?.kind === "release" ? (
-            <label className="space-y-2">
-              <span className="block text-sm font-medium text-card-foreground">
-                {t("requests.claimReleaseReason")}
+            <div className="space-y-2">
+              <span className="flex items-center gap-1 text-sm font-medium text-card-foreground">
+                <label htmlFor={TITLE_CLAIM_RELEASE_REASON_ID}>
+                  {t("requests.claimReleaseReason")}
+                </label>
+                <InfoHelp
+                  text={t("requests.claimReleaseReasonHelp")}
+                  ariaLabel={t("requests.claimReleaseReason")}
+                />
               </span>
               <Input
                 id={TITLE_CLAIM_RELEASE_REASON_ID}
@@ -1928,10 +2125,7 @@ export function RequestsView({
                   )
                 }
               />
-              <span className="block text-xs text-muted-foreground">
-                {t("requests.claimReleaseReasonHelp")}
-              </span>
-            </label>
+            </div>
           ) : null}
           <DialogFooter>
             <Button

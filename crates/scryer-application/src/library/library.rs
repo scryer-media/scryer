@@ -760,6 +760,68 @@ impl AppUseCase {
         self.services.catalog.libraries.root_title_counts().await
     }
 
+    /// Whether the background full-hash backfill reads each library's files,
+    /// keyed by library id. Like [`Self::library_root_title_counts`], callers
+    /// pass libraries they already resolved for the actor.
+    pub async fn library_full_hash_backfill_enabled(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<HashMap<String, bool>> {
+        self.services
+            .catalog
+            .libraries
+            .full_hash_backfill_enabled(library_ids)
+            .await
+    }
+
+    /// Turn the background full-hash backfill on or off for one library.
+    /// Off, the job never reads that library's files; anything that needs a
+    /// file's full hash reads that one file when it needs it. A run already in
+    /// progress drops the page it holds before its next file.
+    pub async fn set_library_full_hash_backfill(
+        &self,
+        actor: &User,
+        library_id: &str,
+        enabled: bool,
+    ) -> AppResult<Library> {
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
+        self.require_library_management_permission(actor, &library.id)
+            .await?;
+        if !self
+            .services
+            .catalog
+            .libraries
+            .set_full_hash_backfill_enabled(&library.id, enabled)
+            .await?
+        {
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                format!("library {library_id}"),
+            ));
+        }
+        self.runtime
+            .jobs
+            .full_hash_library_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        tracing::info!(
+            library_id = %library.id,
+            enabled,
+            "library full-hash backfill setting changed"
+        );
+        Ok(library)
+    }
+
     pub async fn external_import_library(
         &self,
         actor: &User,
@@ -826,6 +888,7 @@ impl AppUseCase {
             .libraries
             .create(library, roots)
             .await?;
+        self.install_disk_volumes().await;
         // The badge filters pending imports by the library list it holds.
         self.refresh_navigation_badge_library_facts().await;
         if let Some(settings) = settings {
@@ -967,6 +1030,9 @@ impl AppUseCase {
             .libraries
             .update(&existing.id, name.clone(), slug, roots)
             .await?;
+        if roots_were_provided {
+            self.install_disk_volumes().await;
+        }
         if let Some(settings) = settings {
             self.update_library_settings(actor, &library.id, settings)
                 .await?;
@@ -1092,6 +1158,7 @@ impl AppUseCase {
             .delete_library(&library.id)
             .await?;
         if deleted {
+            self.install_disk_volumes().await;
             self.refresh_navigation_badge_library_facts().await;
             self.refresh_download_client_category_admission_best_effort()
                 .await;
@@ -1403,12 +1470,23 @@ impl AppUseCase {
 
         self.delete_title_history_records(&title_ids).await?;
 
+        let mut deleted = Vec::with_capacity(titles.len());
+        let mut outcome = Ok(());
         for title in titles {
-            self.delete_title_row(title, actor.clone(), true, Vec::new(), false)
-                .await?;
+            if let Err(error) = self
+                .delete_title_row_keeping_settings(title, actor.clone(), true, Vec::new(), false)
+                .await
+            {
+                outcome = Err(error);
+                break;
+            }
+            deleted.push(title.id.clone());
             self.release_lifecycle_claims_for_deleted_title(&title.id)
                 .await;
         }
+        // One prune for the titles whose rows went, failed or not.
+        self.prune_title_scoped_settings(&deleted).await;
+        outcome?;
 
         Ok(titles.len())
     }
@@ -1973,6 +2051,9 @@ impl AppUseCase {
     /// which is how a facet nobody uses looks: its default path was never
     /// created. Any other unreadable root, or a library with several roots, is
     /// `None`, so the job runs and reports the problem.
+    // disk-guard: a root under a regular file (NotADirectory) counts as
+    // missing here, and owner readings report that case only as unreachable.
+    #[allow(clippy::disallowed_methods)]
     pub(crate) async fn sole_missing_library_root(
         &self,
         facet: &MediaFacet,
@@ -2015,6 +2096,9 @@ impl AppUseCase {
         clippy::too_many_arguments,
         reason = "library scan sessions carry explicit runtime, permission, and cancellation context"
     )]
+    // disk-guard: an unreadable root is reported with the system's own error
+    // text, which owner readings do not carry.
+    #[allow(clippy::disallowed_methods)]
     async fn execute_started_library_scan_session(
         &self,
         actor: &User,

@@ -8,6 +8,7 @@ pub(super) type OneshotGate = (
 
 #[derive(Clone)]
 pub(super) struct MockReleaseAttemptRecord {
+    pub(super) id: String,
     pub(super) title_id: Option<String>,
     pub(super) source_hint: Option<String>,
     pub(super) source_title: Option<String>,
@@ -42,6 +43,7 @@ impl ReleaseAttemptRepository for MockReleaseAttemptRepo {
         source_password: Option<String>,
     ) -> AppResult<()> {
         self.attempts.lock().await.push(MockReleaseAttemptRecord {
+            id: scryer_domain::Id::new().0,
             title_id,
             source_hint,
             source_title,
@@ -50,6 +52,46 @@ impl ReleaseAttemptRepository for MockReleaseAttemptRepo {
             source_password,
             attempted_at: Utc::now().to_rfc3339(),
         });
+        Ok(())
+    }
+
+    async fn begin_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<Option<String>> {
+        let id = scryer_domain::Id::new().0;
+        self.attempts.lock().await.push(MockReleaseAttemptRecord {
+            id: id.clone(),
+            title_id,
+            source_hint: crate::url_redaction::redact_optional_url_credentials(source_hint),
+            source_title,
+            outcome: ReleaseDownloadAttemptOutcome::Pending,
+            error_message: None,
+            source_password,
+            attempted_at: Utc::now().to_rfc3339(),
+        });
+        Ok(Some(id))
+    }
+
+    async fn settle_release_attempt(
+        &self,
+        attempt_id: &str,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+    ) -> AppResult<()> {
+        if let Some(attempt) = self
+            .attempts
+            .lock()
+            .await
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id)
+        {
+            attempt.outcome = outcome;
+            attempt.error_message = error_message;
+        }
         Ok(())
     }
 
@@ -218,6 +260,35 @@ impl BlocklistRepository for MockBlocklistRepo {
         Ok(entries)
     }
 
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        self.title_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter(|entry| entry.title_id == title_id)
+            .filter(|entry| {
+                normalized_release_names.contains(&entry.normalized_release_name)
+                    || entry
+                        .info_hash
+                        .as_ref()
+                        .is_some_and(|info_hash| info_hashes.contains(info_hash))
+            })
+            .map(|entry| crate::BlocklistMatch {
+                indexer_id: entry.indexer_id.clone(),
+                normalized_release_name: entry.normalized_release_name.clone(),
+                info_hash: entry.info_hash.clone(),
+            })
+            .collect())
+    }
+
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         let mut entries = self.entries.lock().await.clone();
         entries.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -363,6 +434,7 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     /// in call order.
     pub(super) deleted_identity_state_download_ids:
         Arc<Mutex<Vec<scryer_domain::download_identity::DownloadId>>>,
+    pub(super) list_for_client_item_ids_calls: Arc<Mutex<Vec<Vec<String>>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
     pub(super) active_unbound_title_calls: Arc<Mutex<Vec<String>>>,
     /// Make `list_for_title` skip submissions with no client item id, as the
@@ -413,6 +485,13 @@ pub(super) struct TrackingAcquisitionScopeStateRepo {
     /// is not running. Set this and each of this repository's writes behaves the
     /// same way.
     pub(super) writer_gate: Option<Arc<Mutex<()>>>,
+    /// Stands in for another writer between reads: after each list read, the
+    /// next id here is updated, which moves it to the front of the list's
+    /// `updated_at` order.
+    pub(super) update_after_each_list: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// The title ids of every `list_grabbed_acquisition_scopes_for_titles`
+    /// call, in call order.
+    pub(super) grabbed_scopes_for_titles_calls: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 impl TrackingAcquisitionScopeStateRepo {
@@ -448,6 +527,18 @@ impl TrackingAcquisitionScopeStateRepo {
             .filter(|existing| existing.as_str() == id)
             .count()
     }
+}
+
+/// The SQL store's mismatch-recovery rule: a wanted scope with at least one
+/// release decision, every one of them a title mismatch.
+fn mismatch_recovery_eligible(item: &AcquisitionScopeState, decisions: &[ReleaseDecision]) -> bool {
+    let mut decisions = decisions
+        .iter()
+        .filter(|decision| decision.wanted_item_id == item.id)
+        .peekable();
+    item.status == AcquisitionScopeStatus::Wanted
+        && decisions.peek().is_some()
+        && decisions.all(|decision| decision.decision_code == "title_mismatch")
 }
 
 #[derive(Clone)]
@@ -516,12 +607,29 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
         title_id: &str,
         episode_id: Option<&str>,
     ) -> AppResult<Option<AcquisitionScopeState>> {
+        // The same arms as the SQL: an episode's row, or the title's own row
+        // with no episode, collection or series-movie link.
+        let scope = episode_id.map_or(AcquisitionScopeKey::Title, AcquisitionScopeKey::Episode);
         Ok(self
             .store
             .lock()
             .await
             .iter()
-            .find(|item| item.title_id == title_id && item.episode_id.as_deref() == episode_id)
+            .find(|item| item.title_id == title_id && scope.matches(item))
+            .cloned())
+    }
+
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .find(|item| item.title_id == title_id && scope.matches(item))
             .cloned())
     }
 
@@ -613,6 +721,38 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             .cloned())
     }
 
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        self.grabbed_scopes_for_titles_calls
+            .lock()
+            .await
+            .push(title_ids.to_vec());
+        let mut states = self
+            .store
+            .lock()
+            .await
+            .iter()
+            .filter(|state| {
+                state.status == AcquisitionScopeStatus::Grabbed
+                    && title_ids.contains(&state.title_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        // The SQL store's order: newest update first, then by id.
+        states.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for state in &mut states {
+            state.latest_release_decision = None;
+        }
+        Ok(states)
+    }
+
     async fn list_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
@@ -623,17 +763,20 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             title_id,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             limit,
             offset,
             library_ids: _,
+            skip_total: _,
         } = query;
         let latest_decisions = self.release_decisions.lock().await.clone();
         let normalized_title_search = title_search.as_deref().map(str::to_lowercase);
-        let items: Vec<AcquisitionScopeState> = self
-            .store
-            .lock()
-            .await
-            .iter()
+        let mut store = self.store.lock().await;
+        // The SQL store's order: newest update first.
+        let mut ordered = store.iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let items: Vec<AcquisitionScopeState> = ordered
+            .into_iter()
             .filter(|item| {
                 let latest_decision = latest_decisions
                     .iter()
@@ -656,11 +799,19 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
                                 .as_ref()
                                 .is_some_and(|decision| decision.decision_code == *code)
                         }))
+                    && (!mismatch_recovery_eligible_only
+                        || mismatch_recovery_eligible(item, &latest_decisions))
             })
             .skip(offset.max(0) as usize)
             .take(limit.max(0) as usize)
             .cloned()
             .collect();
+        if let Some(id) = self.update_after_each_list.lock().await.pop_front()
+            && let Some(item) = store.iter_mut().find(|item| item.id == id)
+        {
+            item.updated_at = Utc::now().to_rfc3339();
+        }
+        drop(store);
         Ok(items)
     }
 
@@ -674,6 +825,7 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             title_id,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             ..
         } = query;
         let latest_decisions = self.release_decisions.lock().await.clone();
@@ -705,6 +857,8 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
                                 .as_ref()
                                 .is_some_and(|decision| decision.decision_code == *code)
                         }))
+                    && (!mismatch_recovery_eligible_only
+                        || mismatch_recovery_eligible(item, &latest_decisions))
             })
             .count() as i64)
     }
@@ -765,6 +919,24 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             .iter()
             .filter(|decision| decision.wanted_item_id == wanted_item_id)
             .count() as i64)
+    }
+
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<crate::ReleaseDecisionCodeTally> {
+        let decisions = self.release_decisions.lock().await;
+        let mut newest = decisions.iter().collect::<Vec<_>>();
+        newest.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        let mut by_code = std::collections::BTreeMap::<String, i64>::new();
+        for decision in newest.iter().take(sample.max(0) as usize) {
+            *by_code.entry(decision.decision_code.clone()).or_default() += 1;
+        }
+        Ok(crate::ReleaseDecisionCodeTally {
+            total_rows: decisions.len() as i64,
+            sampled: by_code.values().sum(),
+            by_code: by_code.into_iter().collect(),
+        })
     }
 }
 
@@ -924,10 +1096,24 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             )
             .await?;
         let submission_state = self.get_tracked_state(&change.source).await?;
+        // Mirrors the store: a row that only counts stalled passes may go
+        // missing.
+        let counts_stalled_passes = change.state == scryer_domain::TrackedDownloadState::Missing
+            && previous.as_deref() == Some("import_pending")
+            && self
+                .get_identity_tracked_state_reason_for_download(
+                    Some(&change.download_id),
+                    &change.identity,
+                    Some(&change.source),
+                )
+                .await?
+                .as_deref()
+                == Some(crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
         if previous != change.expected_state
-            || previous
+            || (previous
                 .as_deref()
                 .is_some_and(|state| !matches!(state, "missing" | "downloading"))
+                && !counts_stalled_passes)
             || submission_state
                 .as_deref()
                 .is_some_and(|state| !matches!(state, "missing" | "downloading"))
@@ -1467,6 +1653,27 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             .await
     }
 
+    async fn get_identity_tracked_state_reason_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        identity: &DownloadSubmissionIdentity,
+        source_identity: Option<&ClientJobLocator>,
+    ) -> AppResult<Option<String>> {
+        // Keyed like the state and detail reads above, as the store is.
+        if let Some(download_id) = canonical_download_id {
+            let mut canonical_identity = identity.clone();
+            canonical_identity.download_id = Some(download_id.to_wire());
+            if let Some(reason) = self
+                .get_identity_tracked_state_reason(&canonical_identity, source_identity)
+                .await?
+            {
+                return Ok(Some(reason));
+            }
+        }
+        self.get_identity_tracked_state_reason(identity, source_identity)
+            .await
+    }
+
     async fn list_for_client_items(
         &self,
         client_items: &[ClientJobLocator],
@@ -1499,6 +1706,24 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
         Ok(result)
+    }
+
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        self.list_for_client_item_ids_calls
+            .lock()
+            .await
+            .push(item_ids.to_vec());
+        // Newest first, as the SQL store orders them.
+        let entries = self.store.lock().await;
+        Ok(entries
+            .iter()
+            .rev()
+            .filter(|entry| item_ids.contains(&entry.download_client_item_id))
+            .cloned()
+            .collect())
     }
 
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
@@ -1863,9 +2088,21 @@ pub(super) struct TrackingPendingReleaseRepo {
     /// Status writes attempted, claims included, in order: `(row id, new
     /// status)`. Shared by clones.
     status_writes: Arc<std::sync::Mutex<Vec<(String, PendingReleaseStatus)>>>,
+    /// Release title of every observation written, in order, whether it
+    /// created a row or refreshed one. Shared by clones.
+    observation_writes: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl TrackingPendingReleaseRepo {
+    pub(super) fn observation_writes_for(&self, release_title: &str) -> usize {
+        self.observation_writes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|written| written.as_str() == release_title)
+            .count()
+    }
+
     pub(super) fn status_writes(&self) -> Vec<(String, PendingReleaseStatus)> {
         self.status_writes
             .lock()
@@ -1930,6 +2167,10 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
                 *remaining -= 1;
             }
         }
+        self.observation_writes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(release.release_title.clone());
         let mut store = self.store.lock().await;
         if !observation.release_identity.is_empty()
             && let Some(existing) = store.iter_mut().find(|existing| {
@@ -2186,7 +2427,21 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
         Ok(())
     }
 
+    /// Like the SQL store, a row that has left the active set is left alone.
     async fn expire_pending_release(&self, id: &str, _: &str) -> AppResult<()> {
+        let active = self.store.lock().await.iter().any(|release| {
+            release.id == id
+                && matches!(
+                    release.status,
+                    PendingReleaseStatus::Waiting
+                        | PendingReleaseStatus::Standby
+                        | PendingReleaseStatus::Processing
+                        | PendingReleaseStatus::NeedsReview
+                )
+        });
+        if !active {
+            return Ok(());
+        }
         self.update_pending_release_status(id, PendingReleaseStatus::Expired, None)
             .await
     }
@@ -3305,9 +3560,5 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
                     .cloned()
             })
             .collect())
-    }
-
-    async fn prune_terminal_delete_commands_older_than(&self, _days: i64) -> AppResult<u32> {
-        Ok(0)
     }
 }

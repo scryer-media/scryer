@@ -634,3 +634,475 @@ async fn collection_counts_split_countable_and_record_totals() {
         "loader-backed collection counts diverged from fallback"
     );
 }
+
+/// Counts library row reads while delegating every call to the real store.
+struct CountingLibraryRepo {
+    inner: Arc<dyn LibraryRepository>,
+    list_calls: Arc<AtomicUsize>,
+    get_by_id_calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl LibraryRepository for CountingLibraryRepo {
+    async fn list(&self, facet: Option<MediaFacet>) -> AppResult<Vec<Library>> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.list(facet).await
+    }
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<Library>> {
+        self.get_by_id_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.get_by_id(id).await
+    }
+    async fn default_for_facet(&self, facet: MediaFacet) -> AppResult<Option<Library>> {
+        self.inner.default_for_facet(facet).await
+    }
+    async fn create(&self, library: Library, roots: Vec<LibraryRootDraft>) -> AppResult<Library> {
+        self.inner.create(library, roots).await
+    }
+    async fn update(
+        &self,
+        library_id: &str,
+        name: String,
+        slug: String,
+        roots: Vec<LibraryRootDraft>,
+    ) -> AppResult<Library> {
+        self.inner.update(library_id, name, slug, roots).await
+    }
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library> {
+        self.inner.set_root_path(root_id, path).await
+    }
+    async fn delete_library(&self, library_id: &str) -> AppResult<bool> {
+        self.inner.delete_library(library_id).await
+    }
+    async fn app_permission_mask_for_user(&self, user_id: &str) -> AppResult<AppPermissionMask> {
+        self.inner.app_permission_mask_for_user(user_id).await
+    }
+    async fn set_app_permission_mask_for_user(
+        &self,
+        user_id: &str,
+        permissions: AppPermissionMask,
+    ) -> AppResult<()> {
+        self.inner
+            .set_app_permission_mask_for_user(user_id, permissions)
+            .await
+    }
+    async fn permission_masks_for_user(
+        &self,
+        user_id: &str,
+    ) -> AppResult<Vec<scryer_domain::LibraryGrant>> {
+        self.inner.permission_masks_for_user(user_id).await
+    }
+    async fn set_grants_for_user(
+        &self,
+        user_id: &str,
+        grants: Vec<scryer_domain::LibraryGrant>,
+    ) -> AppResult<()> {
+        self.inner.set_grants_for_user(user_id, grants).await
+    }
+    async fn title_library_id(&self, title_id: &str) -> AppResult<Option<String>> {
+        self.inner.title_library_id(title_id).await
+    }
+    async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>> {
+        self.inner.root_title_counts().await
+    }
+}
+
+const DEFAULT_MONITOR_TYPE_KEY: &str = "catalog.default_monitor_type";
+const QUALITY_PROFILE_ID_KEY: &str = "quality.profile_id";
+const REQUEST_QUALITY_PROFILE_IDS_KEY: &str = "quality.request_profile_ids";
+
+async fn seed_request_default_definitions(ctx: &TestContext) {
+    let seed = |category: &str, key_name: &str, data_type: &str, default_value_json: &str| {
+        SettingDefinitionSeed {
+            category: category.into(),
+            scope: "system".into(),
+            key_name: key_name.into(),
+            data_type: data_type.into(),
+            default_value_json: default_value_json.into(),
+            is_sensitive: false,
+            validation_json: None,
+        }
+    };
+    ctx.settings_store
+        .batch_ensure_setting_definitions(vec![
+            seed("catalog", DEFAULT_MONITOR_TYPE_KEY, "string", "null"),
+            seed("quality", QUALITY_PROFILE_ID_KEY, "string", "null"),
+            seed("quality", REQUEST_QUALITY_PROFILE_IDS_KEY, "json", "[]"),
+        ])
+        .await
+        .expect("seed request default definitions");
+}
+
+async fn save_library_setting(ctx: &TestContext, key_name: &str, library_id: &str, value: Value) {
+    ctx.settings_store
+        .upsert_setting_json(
+            "system",
+            key_name,
+            Some(library_id.to_string()),
+            value.to_string(),
+            "test",
+            None,
+        )
+        .await
+        .expect("save library setting");
+}
+
+async fn create_request_default_library(
+    ctx: &TestContext,
+    admin: &scryer_domain::User,
+    facet: MediaFacet,
+    name: &str,
+    path: &str,
+) -> Library {
+    ctx.app
+        .create_library(
+            admin,
+            facet,
+            name.to_string(),
+            vec![LibraryRootDraft {
+                id: None,
+                path: path.to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create library")
+}
+
+/// The batched request-default readers behind the library loaders must give
+/// every library the same value or the same error as the per-library readers,
+/// for an administrator and for an actor holding different grants per library.
+#[tokio::test]
+async fn library_request_default_batches_match_per_library_reads() {
+    let ctx = TestContext::new().await;
+    seed_request_default_definitions(&ctx).await;
+    let admin = authorized_default_user(&ctx).await;
+    let movies = create_request_default_library(
+        &ctx,
+        &admin,
+        MediaFacet::Movie,
+        "Synthetic Request Movies",
+        "/request-defaults/movies",
+    )
+    .await;
+    let series = create_request_default_library(
+        &ctx,
+        &admin,
+        MediaFacet::Series,
+        "Synthetic Request Series",
+        "/request-defaults/series",
+    )
+    .await;
+    let anime = create_request_default_library(
+        &ctx,
+        &admin,
+        MediaFacet::Anime,
+        "Synthetic Request Anime",
+        "/request-defaults/anime",
+    )
+    .await;
+    let profile_id = ctx
+        .app
+        .request_quality_profile_settings_for_library(&admin, &movies.id)
+        .await
+        .expect("baseline request settings")
+        .default_profile_id;
+
+    save_library_setting(
+        &ctx,
+        DEFAULT_MONITOR_TYPE_KEY,
+        &series.id,
+        json!("ALL_EPISODES"),
+    )
+    .await;
+    // A series choice saved on a movie library falls back to the movie default.
+    save_library_setting(
+        &ctx,
+        DEFAULT_MONITOR_TYPE_KEY,
+        &movies.id,
+        json!("FUTURE_EPISODES"),
+    )
+    .await;
+    save_library_setting(&ctx, QUALITY_PROFILE_ID_KEY, &movies.id, json!(profile_id)).await;
+    save_library_setting(
+        &ctx,
+        QUALITY_PROFILE_ID_KEY,
+        &anime.id,
+        json!("synthetic-missing-profile"),
+    )
+    .await;
+    save_library_setting(
+        &ctx,
+        REQUEST_QUALITY_PROFILE_IDS_KEY,
+        &movies.id,
+        json!([profile_id, "synthetic-unknown-profile"]),
+    )
+    .await;
+    save_library_setting(&ctx, REQUEST_QUALITY_PROFILE_IDS_KEY, &series.id, json!([])).await;
+
+    let mut mixed = scryer_domain::User::new_admin("synthetic-mixed-grants");
+    mixed.authorization = UserAuthorization::default();
+    mixed.authorization.loaded = true;
+    mixed.authorization.libraries.insert(
+        movies.id.clone(),
+        LibraryPermissionMask::from_permissions([
+            LibraryPermission::View,
+            LibraryPermission::Request,
+        ]),
+    );
+    mixed.authorization.libraries.insert(
+        series.id.clone(),
+        LibraryPermissionMask::from_permissions([LibraryPermission::ManageTitles]),
+    );
+    mixed.authorization.libraries.insert(
+        anime.id.clone(),
+        LibraryPermissionMask::from_permissions([LibraryPermission::View]),
+    );
+
+    let libraries = ctx
+        .app
+        .libraries_for_request_defaults()
+        .await
+        .expect("library rows");
+    let mut ids: Vec<String> = libraries.keys().cloned().collect();
+    ids.sort();
+    ids.push("synthetic-missing-library".to_string());
+    assert!(ids.len() >= 4, "seeded libraries missing: {ids:?}");
+
+    let mut outcomes = std::collections::BTreeSet::new();
+    for actor in [&admin, &mixed] {
+        let monitor = ctx
+            .app
+            .default_monitor_types_for_libraries(actor, &ids, &libraries)
+            .await
+            .expect("batched monitor defaults");
+        let quality = ctx
+            .app
+            .title_quality_profile_ids_for_libraries(actor, &ids, &libraries)
+            .await
+            .expect("batched quality profiles");
+        let request = ctx
+            .app
+            .request_quality_profile_settings_for_libraries(actor, &ids, &libraries)
+            .await
+            .expect("batched request profiles");
+        for id in &ids {
+            let direct = ctx.app.default_monitor_type_for_library(actor, id).await;
+            assert_eq!(
+                format!("{:?}", monitor[id]),
+                format!("{direct:?}"),
+                "monitor {id}"
+            );
+            let direct = ctx
+                .app
+                .title_quality_profile_id_for_library(actor, id)
+                .await;
+            assert_eq!(
+                format!("{:?}", quality[id]),
+                format!("{direct:?}"),
+                "quality {id}"
+            );
+            let direct = ctx
+                .app
+                .request_quality_profile_settings_for_library(actor, id)
+                .await;
+            assert_eq!(
+                format!("{:?}", request[id]),
+                format!("{direct:?}"),
+                "request {id}"
+            );
+            for outcome in [
+                monitor[id].as_ref().map(|_| ()),
+                quality[id].as_ref().map(|_| ()),
+                request[id].as_ref().map(|_| ()),
+            ] {
+                outcomes.insert(match outcome {
+                    Ok(()) => "ok".to_string(),
+                    Err(error) => error.reason().unwrap_or("uncoded").to_string(),
+                });
+            }
+        }
+    }
+
+    let admin_monitor = ctx
+        .app
+        .default_monitor_types_for_libraries(&admin, &ids, &libraries)
+        .await
+        .expect("admin monitor defaults");
+    assert_eq!(
+        admin_monitor[&series.id].as_deref().ok(),
+        Some("ALL_EPISODES")
+    );
+    assert_eq!(admin_monitor[&movies.id].as_deref().ok(), Some("MONITORED"));
+    let admin_request = ctx
+        .app
+        .request_quality_profile_settings_for_libraries(&admin, &ids, &libraries)
+        .await
+        .expect("admin request profiles");
+    assert_eq!(
+        admin_request[&movies.id]
+            .as_ref()
+            .expect("movie request profiles")
+            .profile_ids,
+        vec![profile_id.clone()]
+    );
+    assert!(
+        outcomes.len() >= 3,
+        "fixture must cover values and several refusals: {outcomes:?}"
+    );
+}
+
+/// One `libraries` query selecting every request-default field reads no
+/// library row per library and batches the per-library setting reads when
+/// request loaders are present, and returns the same data as without them.
+#[tokio::test]
+async fn library_request_default_fields_are_batched_with_loaders() {
+    let ctx = TestContext::new().await;
+    seed_request_default_definitions(&ctx).await;
+    let admin = authorized_default_user(&ctx).await;
+    let mut created = Vec::new();
+    for (index, facet) in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
+        .into_iter()
+        .enumerate()
+    {
+        created.push(
+            create_request_default_library(
+                &ctx,
+                &admin,
+                facet,
+                &format!("Synthetic Batched Library {index}"),
+                &format!("/request-defaults/batched-{index}"),
+            )
+            .await,
+        );
+    }
+    save_library_setting(
+        &ctx,
+        DEFAULT_MONITOR_TYPE_KEY,
+        &created[1].id,
+        json!("ALL_EPISODES"),
+    )
+    .await;
+    save_library_setting(
+        &ctx,
+        REQUEST_QUALITY_PROFILE_IDS_KEY,
+        &created[0].id,
+        json!([]),
+    )
+    .await;
+
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let get_by_id_calls = Arc::new(AtomicUsize::new(0));
+    let direct_explicit_reads = Arc::new(AtomicUsize::new(0));
+    let batch_explicit_reads = Arc::new(AtomicUsize::new(0));
+    let with_default_reads = Arc::new(AtomicUsize::new(0));
+    let counting_app = ctx.app.with_test_overrides({
+        let libraries = Arc::new(CountingLibraryRepo {
+            inner: Arc::new(ctx.libraries.clone()),
+            list_calls: list_calls.clone(),
+            get_by_id_calls: get_by_id_calls.clone(),
+        });
+        let settings = Arc::new(CountingSettingsRepo {
+            inner: ctx.settings_store.clone(),
+            direct_explicit_reads: direct_explicit_reads.clone(),
+            batch_explicit_reads: batch_explicit_reads.clone(),
+            global_reads: with_default_reads.clone(),
+        });
+        move |builder| builder.with_libraries(libraries).with_settings(settings)
+    });
+    let schema = scryer_interface::build_schema(counting_app.clone(), ctx.auth_runtime.clone());
+    let query = "{ libraries { id defaultMonitorType qualityProfileId requestQualityProfileIds requestQualityProfileDefaultId } }";
+    let counts = || {
+        [
+            list_calls.swap(0, Ordering::SeqCst),
+            get_by_id_calls.swap(0, Ordering::SeqCst),
+            direct_explicit_reads.swap(0, Ordering::SeqCst),
+            batch_explicit_reads.swap(0, Ordering::SeqCst),
+            with_default_reads.swap(0, Ordering::SeqCst),
+        ]
+    };
+    counts();
+
+    let direct = schema
+        .execute(async_graphql::Request::new(query).data(admin.clone()))
+        .await;
+    let direct = serde_json::to_value(&direct).expect("serialize direct response");
+    assert_ok(&direct);
+    let direct_counts = counts();
+
+    let run_batched = || async {
+        let loaders = scryer_interface::RequestLoaders::new(counting_app.clone(), admin.clone());
+        let batched = schema
+            .execute(
+                async_graphql::Request::new(query)
+                    .data(admin.clone())
+                    .data(loaders),
+            )
+            .await;
+        let batched = serde_json::to_value(&batched).expect("serialize batched response");
+        assert_ok(&batched);
+        batched
+    };
+    let batched = run_batched().await;
+    let batched_counts = counts();
+
+    let library_count = batched["data"]["libraries"]
+        .as_array()
+        .expect("libraries")
+        .len();
+    eprintln!(
+        "libraries={library_count} [list, get_by_id, explicit, batched explicit, with-defaults] direct={direct_counts:?} loaders={batched_counts:?}"
+    );
+    assert_eq!(
+        batched["data"], direct["data"],
+        "loaders must not change values"
+    );
+    assert!(
+        library_count >= 6,
+        "expected default and seeded libraries: {batched}"
+    );
+    assert_eq!(
+        direct_counts[1],
+        4 * library_count,
+        "without loaders each library is read once per request-default field"
+    );
+    assert_eq!(batched_counts[1], 0, "loaders read no library row by id");
+    assert_eq!(
+        batched_counts[0],
+        direct_counts[0] + 1,
+        "loaders read every library row once for all request-default fields"
+    );
+    assert_eq!(
+        batched_counts[3], 4,
+        "one batched read each for the monitor, quality, request profile ids and request default keys"
+    );
+
+    for (index, facet) in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
+        .into_iter()
+        .enumerate()
+    {
+        create_request_default_library(
+            &ctx,
+            &admin,
+            facet,
+            &format!("Synthetic Added Library {index}"),
+            &format!("/request-defaults/added-{index}"),
+        )
+        .await;
+    }
+    counts();
+    let grown = run_batched().await;
+    let grown_counts = counts();
+    let grown_count = grown["data"]["libraries"]
+        .as_array()
+        .expect("libraries")
+        .len();
+    eprintln!("libraries={grown_count} loaders={grown_counts:?}");
+    assert_eq!(grown_count, library_count + 3, "three libraries were added");
+    for (counter, (before, after)) in batched_counts.iter().zip(grown_counts).enumerate() {
+        assert!(
+            after <= *before,
+            "loader reads must not grow with the library count: counter {counter} went from {before} to {after}"
+        );
+    }
+}

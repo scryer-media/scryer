@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
-use scryer_domain::{ExternalSubtitleSourceKind, SUBTITLE_EXTENSIONS, SubtitleDownload};
-use tokio::fs;
-
 use super::external_probe::{ExternalSubtitleProbeCacheEntry, resolve_external_subtitle};
+use crate::disk::Disk;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult, AppUseCase};
+use chrono::Utc;
+use scryer_domain::{ExternalSubtitleSourceKind, SUBTITLE_EXTENSIONS, SubtitleDownload};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DiscoveredExternalSubtitle {
@@ -149,9 +148,13 @@ pub(crate) async fn reconcile_external_subtitles_for_media_file_with_cache(
     let mut changed = false;
     let mut existing_discovered_by_path = BTreeMap::new();
     for record in &existing {
-        let exists = fs::try_exists(stored_path_to_path_buf(&record.file_path))
+        let exists = Disk::process()
+            .follow(stored_path_to_path_buf(&record.file_path))
             .await
-            .map_err(|error| AppError::Repository(error.to_string()))?;
+            .exists()
+            .ok_or_else(|| {
+                AppError::Repository("could not read the subtitle file's path".to_string())
+            })?;
         if !exists {
             app.services
                 .workflow
@@ -346,22 +349,14 @@ async fn discover_external_subtitles_for_video_with_cache(
 }
 
 async fn list_external_subtitle_paths(parent: &Path) -> AppResult<Vec<PathBuf>> {
-    let mut entries = fs::read_dir(parent)
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
-    let mut paths = Vec::new();
-
-    while let Some(entry) = entries
-        .next_entry()
+    let mut paths: Vec<PathBuf> = Disk::process()
+        .list(parent)
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?
-    {
-        let path = entry.path();
-        if path_has_subtitle_extension(&path) {
-            paths.push(path);
-        }
-    }
-
+        .into_iter()
+        .map(|entry| entry.path)
+        .filter(|path| path_has_subtitle_extension(path))
+        .collect();
     paths.sort();
     Ok(paths)
 }
@@ -681,6 +676,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             Arc::new(FacetRegistry::new()),
         )

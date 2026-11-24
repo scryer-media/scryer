@@ -299,6 +299,7 @@ fn compact_cutoff_facts_preserve_every_scope_decision() {
         .filter(|file| file.role.is_primary())
         .map(crate::MediaFileCutoffSummary::from)
         .collect();
+    let criteria = crate::QualityProfileCriteria::default();
     for scope in [
         CutoffScope::Title,
         CutoffScope::Episode("e1".into()),
@@ -309,8 +310,8 @@ fn compact_cutoff_facts_preserve_every_scope_decision() {
         CutoffScope::Episodes(vec![]),
     ] {
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&files, &scope),
-            analyzed_cutoff_quality_for_scope(&compact, &scope)
+            analyzed_cutoff_quality_for_scope(&files, &scope, &criteria),
+            analyzed_cutoff_quality_for_scope(&compact, &scope, &criteria)
         );
     }
 }

@@ -35,7 +35,11 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { DEFAULT_MIN_UPGRADE_SCORE_DELTA } from "@/lib/utils/quality-profiles";
+import {
+  DEFAULT_MIN_MISSING_EPISODES_FOR_PACK,
+  DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
+  DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+} from "@/lib/utils/quality-profiles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import type { QualityDecisionGate } from "@/lib/constants/quality-decision-gates";
 import { decisionPipelineUsesTierCutoff } from "@/lib/utils/quality-decision-pipeline";
@@ -61,6 +65,7 @@ const QUALITY_EDITOR_SECTION_BODY_CLASS =
 const QUALITY_EDITOR_LIST_CLASS =
   "max-h-60 overflow-auto rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-2";
 const QUALITY_TIER_LIST = "quality-tiers";
+const AVAILABLE_QUALITY_TIER_LIST = "quality-tiers-available";
 const QUALITY_EDITOR_LIST_ITEM_CLASS =
   "mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] px-2 py-1.5 text-[var(--scry-ink2)] hover:bg-[var(--scry-hover)]";
 
@@ -102,6 +107,8 @@ type QualityProfileCriteriaPayload = {
   min_score_to_grab: number | null;
   cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  min_missing_episodes_for_pack: number;
+  min_missing_percent_for_series_pack: number;
   decision_pipeline: QualityDecisionGate[];
 };
 
@@ -127,6 +134,8 @@ type QualityProfileDraft = {
   min_score_to_grab: number | null;
   cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  min_missing_episodes_for_pack: number;
+  min_missing_percent_for_series_pack: number;
   decision_pipeline: QualityDecisionGate[];
 };
 
@@ -184,7 +193,7 @@ type SettingsQualityProfilesSectionProps = {
     deniedField: QualityProfileListField,
     value: string,
   ) => void;
-  addQualityTier: (value: string) => void;
+  addQualityTier: (value: string, targetIndex?: number) => void;
   removeQualityTier: (value: string) => void;
   reorderQualityTier: (value: string, targetIndex: number) => void;
   qualityProfileInheritValue: string;
@@ -1055,6 +1064,13 @@ export function SettingsQualityProfilesSection({
                                     })}
                                     onDrop={(target) => {
                                       if (
+                                        target.list ===
+                                        AVAILABLE_QUALITY_TIER_LIST
+                                      ) {
+                                        removeQualityTier(qualityTier);
+                                        return;
+                                      }
+                                      if (
                                         target.list !== QUALITY_TIER_LIST ||
                                         target.item === null
                                       )
@@ -1151,7 +1167,11 @@ export function SettingsQualityProfilesSection({
                         <Label className="mb-2 block text-[var(--scry-ink2)]">
                           {t("qualityProfile.availableQualityTiers")}
                         </Label>
-                        <div className={QUALITY_EDITOR_LIST_CLASS}>
+                        <div
+                          className={QUALITY_EDITOR_LIST_CLASS}
+                          data-reorder-list={AVAILABLE_QUALITY_TIER_LIST}
+                          data-reorder-unordered
+                        >
                           {availableQualityTiers.length === 0 ? (
                             <p
                               className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
@@ -1163,8 +1183,36 @@ export function SettingsQualityProfilesSection({
                               <div
                                 key={option.value}
                                 className={QUALITY_EDITOR_LIST_ITEM_CLASS}
+                                data-reorder-item={option.value}
                               >
-                                <span className="text-xs">{option.label}</span>
+                                <PointerReorderHandle
+                                  id={selectorId(
+                                    "settings-quality-profile-tier-add-drag",
+                                    option.value,
+                                  )}
+                                  title={t("qualityProfile.addQualityTier", {
+                                    value: option.label,
+                                  })}
+                                  onDrop={(target) => {
+                                    if (target.list !== QUALITY_TIER_LIST)
+                                      return;
+                                    const targetIndex =
+                                      target.item === null
+                                        ? -1
+                                        : activeQualityProfileTierOptions.indexOf(
+                                            target.item,
+                                          );
+                                    addQualityTier(
+                                      option.value,
+                                      targetIndex >= 0
+                                        ? targetIndex
+                                        : undefined,
+                                    );
+                                  }}
+                                />
+                                <span className="flex-1 text-xs">
+                                  {option.label}
+                                </span>
                                 <Button
                                   id={selectorId(
                                     "settings-quality-profile-tier-add",
@@ -1489,6 +1537,83 @@ export function SettingsQualityProfilesSection({
                         })}
                       </div>
                     </details>
+
+                    {/* Pack thresholds */}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="space-y-2">
+                        <Label className="inline-flex items-center gap-2">
+                          {t("qualityProfile.minMissingEpisodesForPack")}
+                          <InfoHelp
+                            ariaLabel={t(
+                              "qualityProfile.minMissingEpisodesForPack",
+                            )}
+                            text={t(
+                              "qualityProfile.minMissingEpisodesForPackInfo",
+                            )}
+                          />
+                        </Label>
+                        <Input
+                          id={selectorId(
+                            "settings-quality-profile-min-missing-episodes-for-pack",
+                          )}
+                          {...signedIntegerInputProps}
+                          min={1}
+                          value={
+                            qualityProfileDraft.min_missing_episodes_for_pack
+                          }
+                          onChange={(event) => {
+                            const raw = event.target.value.trim();
+                            const parsed = Number(raw);
+                            updateQualityProfileDraft({
+                              min_missing_episodes_for_pack:
+                                raw === "" ||
+                                !Number.isInteger(parsed) ||
+                                parsed < 1
+                                  ? DEFAULT_MIN_MISSING_EPISODES_FOR_PACK
+                                  : parsed,
+                            });
+                          }}
+                        />
+                      </label>
+
+                      <label className="space-y-2">
+                        <Label className="inline-flex items-center gap-2">
+                          {t("qualityProfile.minMissingPercentForSeriesPack")}
+                          <InfoHelp
+                            ariaLabel={t(
+                              "qualityProfile.minMissingPercentForSeriesPack",
+                            )}
+                            text={t(
+                              "qualityProfile.minMissingPercentForSeriesPackInfo",
+                            )}
+                          />
+                        </Label>
+                        <Input
+                          id={selectorId(
+                            "settings-quality-profile-min-missing-percent-for-series-pack",
+                          )}
+                          {...signedIntegerInputProps}
+                          min={0}
+                          max={100}
+                          value={
+                            qualityProfileDraft.min_missing_percent_for_series_pack
+                          }
+                          onChange={(event) => {
+                            const raw = event.target.value.trim();
+                            const parsed = Number(raw);
+                            updateQualityProfileDraft({
+                              min_missing_percent_for_series_pack:
+                                raw === "" ||
+                                !Number.isInteger(parsed) ||
+                                parsed < 0 ||
+                                parsed > 100
+                                  ? DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK
+                                  : parsed,
+                            });
+                          }}
+                        />
+                      </label>
+                    </div>
 
                     {/* Upgrade behavior */}
                     <div className="space-y-3">

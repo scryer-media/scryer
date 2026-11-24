@@ -104,6 +104,8 @@ fn subscription(id: &str, scope: ListScope, owner: &str) -> ListSubscription {
             use_season_folders: None,
             release_numbering: None,
             tags: vec!["fixture".into()],
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         }],
         filters: vec![],
         max_per_sync: Some(25),
@@ -250,6 +252,8 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
         use_season_folders: Some(true),
         release_numbering: None,
         tags: vec![],
+        required_audio_languages: Some(Vec::new()),
+        preferred_audio_languages: Some(vec!["original".into(), "jpn".into()]),
     }];
     let updated = ListSubscriptionRepository::update(&store, edited)
         .await
@@ -258,6 +262,66 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
     assert_eq!(updated.routes.len(), 1);
     assert_eq!(updated.routes[0].monitor_type, "none");
     assert_eq!(updated.routes[0].use_season_folders, Some(true));
+    let reloaded = ListSubscriptionRepository::get_by_id(&store, "sub-1")
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(
+        reloaded.routes[0].required_audio_languages,
+        Some(Vec::new()),
+        "an empty required list is stored, distinct from inherit"
+    );
+    assert_eq!(
+        reloaded.routes[0].preferred_audio_languages,
+        Some(vec!["original".to_string(), "jpn".to_string()])
+    );
+    assert_eq!(
+        loaded.routes[0].required_audio_languages, None,
+        "an inheriting route reads back as inheriting"
+    );
+}
+
+#[tokio::test]
+async fn batched_subscription_read_matches_the_single_reads() {
+    let store = test_store(None).await;
+    for (id, scope, owner) in [
+        ("batch-public", ListScope::Public, OWNER),
+        ("batch-personal", ListScope::Personal, OWNER),
+        ("batch-other", ListScope::Personal, OTHER_MEMBER),
+    ] {
+        ListSubscriptionRepository::create(&store, subscription(id, scope, owner))
+            .await
+            .expect("create");
+    }
+    for asked in [
+        Vec::new(),
+        vec!["batch-personal".to_string()],
+        vec![
+            "batch-other".to_string(),
+            "batch-unknown".to_string(),
+            "batch-public".to_string(),
+            "batch-personal".to_string(),
+        ],
+    ] {
+        let mut batched = ListSubscriptionRepository::get_by_ids(&store, &asked)
+            .await
+            .expect("batched read")
+            .into_iter()
+            .map(|subscription| format!("{subscription:?}"))
+            .collect::<Vec<_>>();
+        batched.sort();
+        let mut expected = Vec::new();
+        for id in &asked {
+            if let Some(subscription) = ListSubscriptionRepository::get_by_id(&store, id)
+                .await
+                .expect("single read")
+            {
+                expected.push(format!("{subscription:?}"));
+            }
+        }
+        expected.sort();
+        assert_eq!(batched, expected);
+    }
 }
 
 #[tokio::test]
@@ -940,6 +1004,70 @@ async fn exclusions_match_by_id_kind_and_scope() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn exclusions_created_together_are_stored_whole_or_not_at_all() {
+    let store = test_store(None).await;
+    for id in ["sub-1", "sub-2"] {
+        ListSubscriptionRepository::create(&store, subscription(id, ListScope::Public, OWNER))
+            .await
+            .expect("create subscription");
+    }
+    let scoped = |id: &str, subscription_id: &str, tmdb: &str| {
+        let mut exclusion = exclusion(
+            id,
+            ListExclusionScope::List {
+                subscription_id: subscription_id.into(),
+            },
+            &[("tmdb", tmdb), ("imdb", "tt300")],
+        );
+        exclusion.created_by_user_id = None;
+        exclusion
+    };
+
+    // One names a list that does not exist, so none of the batch is kept.
+    let refused = ListExclusionRepository::create_many(
+        &store,
+        vec![
+            scoped("first", "sub-1", "300"),
+            scoped("orphan", "sub-gone", "300"),
+        ],
+    )
+    .await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        ListExclusionRepository::list(&store)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    ListExclusionRepository::create_many(
+        &store,
+        vec![
+            scoped("first", "sub-1", "300"),
+            scoped("second", "sub-2", "300"),
+        ],
+    )
+    .await
+    .expect("create both");
+    let ids = vec![ExternalId::new("tmdb", "300")];
+    for (subscription_id, expected) in [("sub-1", "first"), ("sub-2", "second")] {
+        let found = store
+            .find_matching(MediaFacet::Movie, &ids, Some(subscription_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            found.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec![expected]
+        );
+        assert_eq!(found[0].external_ids.len(), 2);
+        assert_eq!(found[0].created_by_user_id, None);
+    }
+    ListExclusionRepository::create_many(&store, Vec::new())
+        .await
+        .expect("an empty batch writes nothing");
 }
 
 #[tokio::test]

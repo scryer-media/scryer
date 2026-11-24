@@ -38,7 +38,8 @@ use crate::decision_pipeline::{CutoffEscape, DecisionGate, Facts, RankFacts, Sid
 ///    field on [`SideFacts`], filled in by its builders
 ///    ([`CandidateFacts::facts`], [`Incumbent::facts`],
 ///    [`crate::admission::QueuedRelease::facts`],
-///    [`crate::quality::landed_bar_memo::LandedBar::side`] and
+///    [`crate::quality::landed_bar_memo::LandedBar::side`],
+///    [`crate::quality::canonical_context::IncumbentFacts::side`] and
 ///    [`SideFacts::of_decision`]). A source that does not carry the property
 ///    yet has to learn it first.
 ///
@@ -83,6 +84,10 @@ pub(crate) trait PreferenceStep: Sync {
     /// this step: `Some(true)` passes, `Some(false)` does not, and `None`
     /// leaves it to the next step of the family. Only steps of a
     /// [`cutoff_escape`](Self::cutoff_escape) family are asked.
+    ///
+    /// The verdict is the whole rule: a step that only passes while the held
+    /// file still wants what it would bring checks that here, so no caller
+    /// adds a guard of its own.
     fn cutoff_verdict(&self, _candidate: &Facts<'_>, _held: &Facts<'_>) -> Option<bool> {
         None
     }
@@ -249,6 +254,12 @@ impl PreferenceStep for RevisionStep {
         CutoffEscape::Revision
     }
 
+    /// A later revision of the release held passes the cutoff; anything else
+    /// does not.
+    fn cutoff_verdict(&self, candidate: &Facts<'_>, held: &Facts<'_>) -> Option<bool> {
+        Some(self.compare(candidate, held).is_gt())
+    }
+
     /// A PROPER or REPACK repairs the release already held rather than
     /// chasing a better one.
     fn admits_despite_upgrade_guard(&self) -> bool {
@@ -312,7 +323,8 @@ impl PreferenceStep for PreferredLanguageStep {
     }
 
     /// A better preferred rank always passes the cutoff, a worse one never
-    /// does.
+    /// does. A held file something ranks better than is not at the top rank,
+    /// so it still wants a preferred language.
     fn cutoff_verdict(&self, candidate: &Facts<'_>, held: &Facts<'_>) -> Option<bool> {
         match self.compare(candidate, held) {
             Ordering::Greater => Some(true),

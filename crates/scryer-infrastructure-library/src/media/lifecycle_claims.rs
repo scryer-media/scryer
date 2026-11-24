@@ -1,7 +1,7 @@
 //! Title leases and keep claims (spec 0003 FR-041..FR-044).
 //!
 //! Every state change here is a conditional UPDATE rather than a
-//! read-modify-write: two maintenance passes and the import hook can all touch
+//! read-modify-write: two lifecycle passes and the import hook can all touch
 //! the same claim, and the predicate is what keeps a replayed import from
 //! restarting a window or a release from resurrecting a lapsed hold.
 
@@ -12,11 +12,10 @@ use scryer_domain::{
     LIFECYCLE_CLAIM_LIVE_STATES, LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer,
     LifecycleClaimState,
 };
-use sqlx::Row;
 use std::collections::HashMap;
 
+use crate::queries::sql_runtime::SqlRow;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, StoreDatastore};
-use crate::queries::sql_runtime::{SqlRow, repo_err};
 
 #[derive(Clone)]
 pub struct LifecycleClaimStore {
@@ -107,7 +106,7 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         Ok(by_title)
     }
 
-    /// Live and expired retention claims, so the maintenance facts can tell a
+    /// Live and expired retention claims, so the lifecycle facts can tell a
     /// lease that lapsed apart from a title that never had one. Released and
     /// converted rows stay out: they were withdrawn, not spent.
     async fn list_retention_history_for_titles(
@@ -461,11 +460,25 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
     }
 
     async fn count_live_for_user(&self, user_id: &str) -> AppResult<u64> {
-        let state_placeholders = std::iter::repeat_n("{}", LIFECYCLE_CLAIM_LIVE_STATES.len())
+        // The live states are written literally, and the producer is named,
+        // so the predicate implies `idx_lifecycle_claims_live_producer`'s and
+        // the join probes that partial index once per request: SQLite cannot
+        // match a partial index whose predicate value arrives as a bound
+        // parameter. Request leases are the only producer that refers to a
+        // request, so naming it keeps the count unchanged.
+        let live_states = LIFECYCLE_CLAIM_LIVE_STATES
+            .iter()
+            .map(|state| format!("'{state}'"))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut args = vec![SqlArg::Text(user_id.to_string())];
-        args.extend(live_state_args());
+        let args = vec![
+            SqlArg::Text(user_id.to_string()),
+            SqlArg::Text(
+                LifecycleClaimProducer::RequestLease
+                    .as_storage_str()
+                    .to_string(),
+            ),
+        ];
         // Joined through the producing request rather than taking a caller
         // supplied id list: the alternative asks the caller to first read every
         // request the user ever made, which is the more expensive of the two by
@@ -475,7 +488,9 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
                FROM lifecycle_claims claims
                JOIN media_requests requests ON requests.id = claims.producer_ref
               WHERE requests.created_by_user_id = {{}}
-                AND claims.state IN ({state_placeholders})"
+                AND claims.producer = {{}}
+                AND claims.producer_ref IS NOT NULL
+                AND claims.state IN ({live_states})"
         );
         let row = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?;
         let Some(row) = row else {
@@ -562,7 +577,7 @@ fn row_to_claim(row: &SqlRow) -> AppResult<LifecycleClaim> {
     let kind = LifecycleClaimKind::parse_storage(&kind_raw)
         .ok_or_else(|| AppError::Repository(format!("unknown lifecycle claim kind {kind_raw}")))?;
     // A state this build does not know cannot be assumed inert: reading it as
-    // released would drop a hold. Refusing the row makes the maintenance pass
+    // released would drop a hold. Refusing the row makes the lifecycle pass
     // fail loudly, which is what its unreadable-store hold is for.
     let state_raw = row.text("state")?;
     let state = LifecycleClaimState::parse_storage(&state_raw).ok_or_else(|| {
@@ -581,20 +596,8 @@ fn row_to_claim(row: &SqlRow) -> AppResult<LifecycleClaim> {
         starts_at: row.opt_timestamp("starts_at")?,
         expires_at: row.opt_timestamp("expires_at")?,
         created_by: row.opt_text("created_by")?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
         released_reason: row.opt_text("released_reason")?,
     })
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }

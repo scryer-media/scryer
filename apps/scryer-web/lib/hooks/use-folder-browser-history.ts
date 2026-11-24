@@ -83,6 +83,29 @@ export function useFolderBrowserHistory({
     }
   }, [initialPath, navigate, open, pushEntry]);
 
+  // A host that unmounts the browser to close it never renders it closed, so
+  // the unmount steps back over its entries instead. StrictMode's rehearsal
+  // unmount remounts within the same commit, before the microtask runs.
+  const mountedRef = React.useRef(false);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const session = sessionRef.current;
+      const depth = depthRef.current;
+      if (session === null || depth <= 0) return;
+      queueMicrotask(() => {
+        if (mountedRef.current || sessionRef.current !== session) return;
+        sessionRef.current = null;
+        depthRef.current = 0;
+        // The browser's own entry, not the last one this component saw: a
+        // route change that unmounted it has already left these entries.
+        const entry = folderBrowserHistoryEntry(window.history.state?.usr);
+        if (entry?.session === session) void navigate(-depth);
+      });
+    };
+  }, [navigate]);
+
   React.useLayoutEffect(() => {
     locationRef.current = location;
     if (location.key === seenKeyRef.current) return;

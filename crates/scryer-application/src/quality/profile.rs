@@ -68,6 +68,27 @@ pub struct QualityProfileCriteria {
     /// `Some(DEFAULT_MIN_UPGRADE_SCORE_DELTA)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// How many wanted episodes must be missing before an automatic search
+    /// reaches for a pack, or `None` for
+    /// [`DEFAULT_MIN_MISSING_EPISODES_FOR_PACK`]. Read through
+    /// [`QualityProfileCriteria::min_missing_episodes_for_pack_or_default`].
+    ///
+    /// Search shaping, not acceptance: it is deliberately absent from
+    /// [`AcceptanceCriteria`], so changing it leaves every scope's convergence
+    /// fingerprint, and the coverage already earned under it, where it was.
+    /// The default is stored as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_episodes_for_pack: Option<u32>,
+    /// The share of a multi-season pack's eligible episodes that must be
+    /// missing, in percent, before the pack is worth taking. A pack qualifies
+    /// only when strictly more than this share is missing. `None` reads as
+    /// [`DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK`] through
+    /// [`QualityProfileCriteria::min_missing_percent_for_series_pack_or_default`].
+    ///
+    /// Kept out of [`AcceptanceCriteria`] for the same reason as
+    /// `min_missing_episodes_for_pack`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_percent_for_series_pack: Option<u32>,
     /// The order this profile compares releases in; the score always follows
     /// the last gate. See [`crate::decision_pipeline`].
     ///
@@ -84,6 +105,14 @@ pub struct QualityProfileCriteria {
 
 /// Same-tier upgrade delta for a profile that does not set one.
 pub const DEFAULT_MIN_UPGRADE_SCORE_DELTA: i32 = 120;
+
+/// Missing episodes a pack needs for a profile that does not set a minimum:
+/// more than one, as in Sonarr.
+pub const DEFAULT_MIN_MISSING_EPISODES_FOR_PACK: u32 = 2;
+
+/// Missing share of a multi-season pack, in percent, for a profile that does
+/// not set one. A pack qualifies only above it.
+pub const DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK: u32 = 30;
 
 /// The acceptance-deciding subset of [`QualityProfileCriteria`], hashed by
 /// `convergence::profile_criteria_version` to version a scope's search
@@ -186,6 +215,10 @@ pub struct ScoringConfig {
     pub cutoff_score: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_episodes_for_pack: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_percent_for_series_pack: Option<u32>,
     /// Omitted unless the profile chose an order other than the one its
     /// `ignore_proper_repack` switch implies; see
     /// [`QualityProfileCriteria::stored_decision_pipeline`]. A key this build
@@ -214,6 +247,29 @@ impl QualityProfileCriteria {
             .is_some_and(|(quality, cutoff)| {
                 quality_meets_or_exceeds_cutoff(quality, cutoff, &self.quality_tiers)
             })
+    }
+
+    /// The tier a file must reach before searches stop nominating it for a
+    /// quality upgrade: the configured `cutoff_tier`, or the profile's top
+    /// tier when none is set. A profile without a cutoff still upgrades to
+    /// its best tier; past that, only same-tier upgrades remain, which
+    /// [`quality_cutoff_met`](Self::quality_cutoff_met) leaves open to the
+    /// minimum score delta. `None` when the configured cutoff is not one of
+    /// the profile's tiers, or the profile lists no tiers.
+    pub(crate) fn search_cutoff_tier(&self) -> Option<String> {
+        let tier = match self
+            .cutoff_tier
+            .as_deref()
+            .map(str::trim)
+            .filter(|cutoff| !cutoff.is_empty())
+        {
+            Some(cutoff) => normalize_quality_tier(Some(cutoff))?,
+            None => self.quality_tiers.first()?.clone(),
+        };
+        self.quality_tiers
+            .iter()
+            .any(|listed| listed == &tier)
+            .then_some(tier)
     }
 
     /// Whether the tier cutoff applies at all: only while the quality tier
@@ -274,6 +330,18 @@ impl QualityProfileCriteria {
     pub fn min_upgrade_score_delta_or_default(&self) -> i32 {
         self.min_upgrade_score_delta
             .unwrap_or(DEFAULT_MIN_UPGRADE_SCORE_DELTA)
+    }
+
+    /// The missing-episode count this profile asks of a pack.
+    pub fn min_missing_episodes_for_pack_or_default(&self) -> u32 {
+        self.min_missing_episodes_for_pack
+            .unwrap_or(DEFAULT_MIN_MISSING_EPISODES_FOR_PACK)
+    }
+
+    /// The missing share, in percent, a multi-season pack must exceed.
+    pub fn min_missing_percent_for_series_pack_or_default(&self) -> u32 {
+        self.min_missing_percent_for_series_pack
+            .unwrap_or(DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK)
     }
 
     /// Returns the scoring persona for a given media category, falling back to the
@@ -358,7 +426,8 @@ pub struct QualityProfileDecision {
     /// guarantee fallback ordering against arbitrary custom-rule contributions.
     pub tier_index: Option<usize>,
     /// Codec/source/runtime-aware size distance used only to break search ties.
-    /// Zero means plausible or unknown; this never contributes to the score.
+    /// Zero means plausible or unknown. This distance never contributes to the
+    /// score; any size points come from the bundled size rule.
     pub size_fit_penalty: i32,
     /// Context-derived revision preference; zero without related incumbents.
     pub revision_preference: i32,
@@ -496,6 +565,10 @@ struct RawQualityProfileCriteria {
     #[serde(default)]
     min_upgrade_score_delta: Option<i32>,
     #[serde(default)]
+    min_missing_episodes_for_pack: Option<u32>,
+    #[serde(default)]
+    min_missing_percent_for_series_pack: Option<u32>,
+    #[serde(default)]
     decision_pipeline: Option<DecisionPipeline>,
     #[serde(default)]
     facet_persona_overrides: HashMap<String, ScoringPersona>,
@@ -558,6 +631,8 @@ pub fn builtin_4k_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -598,6 +673,8 @@ pub fn builtin_8k_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -633,6 +710,8 @@ pub fn builtin_1080p_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -668,6 +747,8 @@ pub fn builtin_anime_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -737,6 +818,8 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
             min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+            min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack,
+            min_missing_percent_for_series_pack: criteria.min_missing_percent_for_series_pack,
             decision_pipeline: criteria.decision_pipeline.unwrap_or_default(),
             facet_persona_overrides: criteria.facet_persona_overrides,
         },
@@ -770,6 +853,8 @@ impl Default for QualityProfile {
                 allow_bd_disk: false,
                 allow_upgrades: true,
                 ignore_proper_repack: false,
+                min_missing_episodes_for_pack: None,
+                min_missing_percent_for_series_pack: None,
                 prefer_dual_audio: false,
                 required_audio_languages: vec![],
                 scoring_persona: ScoringPersona::default(),
@@ -804,6 +889,8 @@ impl Default for QualityProfileCriteria {
             allow_bd_disk: true,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -1382,7 +1469,9 @@ impl CoverageSizeBasis {
 #[cfg(test)]
 pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
 
-/// Size is an eligibility check and a search tie-breaker, never intrinsic points.
+/// The host's part of size: an eligibility check and a search tie-breaker. It
+/// adds no points; the bundled size rule penalizes oversized releases on the
+/// Balanced, Compatible and Efficient curves against its own, tighter bands.
 pub(crate) fn apply_size_requirement(
     decision: &mut QualityProfileDecision,
     profile: &QualityProfile,
@@ -2238,7 +2327,8 @@ mod tests {
 
         assert!(short.allowed);
         assert!(long.allowed);
-        assert_eq!(long.preference_score, short.preference_score);
+        // The same bytes over twice the runtime are less oversized.
+        assert!(long.preference_score > short.preference_score);
         assert!(long.size_fit_penalty < short.size_fit_penalty);
     }
 

@@ -34,6 +34,7 @@ export const LIST_REFUSAL_KEYS: Readonly<Record<string, string>> = {
   LIST_ROUTE_MISSING_FOR_KIND: "lists.refusal.routeLibraryRequired",
   LIST_ROUTE_LIBRARY_REQUIRED: "lists.refusal.routeLibraryRequired",
   LIST_ROUTE_LIBRARY_NOT_FOUND: "lists.refusal.routeLibraryNotFound",
+  LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN: "lists.refusal.routeAudioLanguageUnknown",
   LIST_SYNC_CAP_INVALID: "lists.refusal.syncCapInvalid",
   LIST_DISABLED: "lists.refusal.disabled",
   LIST_EXCLUSION_IDS_REQUIRED: "lists.refusal.exclusionIdsRequired",

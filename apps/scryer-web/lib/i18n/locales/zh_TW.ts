@@ -290,6 +290,8 @@ const zh_TW: LocaleDictionary = {
   "label.filters": "過濾器",
   "label.enabled": "已啟用",
   "label.disabled": "已停用",
+  "label.createEnabled": "建立並啟用",
+  "label.createDisabled": "建立但停用",
   "unit.seconds": "秒",
   "label.enable": "啟用",
   "label.disable": "停用",
@@ -712,7 +714,7 @@ const zh_TW: LocaleDictionary = {
   "persona.trait.balanced.source": "來源：標準偏好（BluRay > WEB-DL > WeRip）",
   "persona.trait.balanced.audio": "音訊：均衡編碼器權重",
   "persona.trait.balanced.x265": "x265：4K 以下扣分",
-  "persona.trait.balanced.size": "檔案大小：偏好較大檔案",
+  "persona.trait.balanced.size": "檔案大小：過大的檔案會被扣分",
   "persona.trait.balanced.remux": "Remux：預設不優先",
   "persona.trait.balanced.hdr": "HDR：Dolby Vision 和 HDR10 加分",
   "persona.trait.audiophile.source": "來源：強烈偏好 BluRay",
@@ -725,13 +727,14 @@ const zh_TW: LocaleDictionary = {
   "persona.trait.efficient.source": "來源：偏好 WEB-DL 和 WEB-Rip",
   "persona.trait.efficient.audio": "音訊：有損編碼器可接受（偏好 DDP）",
   "persona.trait.efficient.x265": "x265：所有解析度加分",
-  "persona.trait.efficient.size": "檔案大小：偏好緊湊編碼",
+  "persona.trait.efficient.size":
+    "檔案大小：偏好緊湊編碼，過大的檔案會被大幅扣分",
   "persona.trait.efficient.remux": "Remux：不優先",
   "persona.trait.efficient.hdr": "HDR：標準",
   "persona.trait.compatible.source": "來源：偏好 WEB-DL",
   "persona.trait.compatible.audio": "音訊：DDP 和 AAC 優先，支援廣泛裝置",
   "persona.trait.compatible.x265": "x265：H.264 優於 H.265",
-  "persona.trait.compatible.size": "檔案大小：標準偏好",
+  "persona.trait.compatible.size": "檔案大小：過大的檔案會被扣分",
   "persona.trait.compatible.remux": "Remux：不優先",
   "persona.trait.compatible.hdr": "HDR：Dolby Vision 扣分（相容性風險）",
   "settings.moviesLibrarySettings": "電影媒體設定",
@@ -920,6 +923,13 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同級最小分數差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一品質級別的資源必須比當前檔案的分數至少高出此值。",
+  "qualityProfile.minMissingEpisodesForPack": "劇集包所需的最少缺失集數",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "只有當該季缺失至少這麼多集時才搜尋季包。預設 2。設為 1 時，針對單一缺失集的自動搜尋也可以選擇劇集包，這可能會下載你已有的劇集。",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "多季劇集包所需的最少缺失比例（%）",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "只有當劇集缺失的集數超過此百分比時才考慮多季劇集包。預設 30。設為 0 時任何缺失集都符合；設為 100 時從不選擇多季劇集包。",
   "settings.acquisitionCrossTierMinDelta": "跨級最小分數差",
   "settings.acquisitionCrossTierMinDeltaHelp":
     "更高品質級別的資源必須比當前檔案的分數至少高出此值。",
@@ -1116,6 +1126,47 @@ const zh_TW: LocaleDictionary = {
   "settings.noMediaServersFound": "找不到已設定的媒體伺服器。",
   "settings.capabilities": "功能",
   "settings.credentials": "憑證",
+  "settings.watchHistory": "觀看紀錄",
+  "settings.watchHistoryNotRead": "尚未讀取",
+  "settings.watchHistoryLastFullRead": "上次完整讀取 {{time}}",
+  "settings.watchHistoryIncomplete": "上次讀取不完整",
+  "settings.watchHistoryIncompleteHelp":
+    "在每個已啟用的媒體伺服器都完整讀取之前，生命週期規則會將觀看紀錄視為未知。原因：{{reason}}",
+  "settings.watchHistorySignalCount":
+    "來自 {{accounts}} 個已連結帳號的 {{count}} 個已觀看項目",
+  "settings.watchHistoryDisabled": "停用時不讀取",
+  "settings.watchHistoryStale": "已過期",
+  "settings.watchHistoryStaleHelp":
+    "在每個已啟用的媒體伺服器近期都完整讀取之前，生命週期規則會將觀看紀錄視為未知。",
+  "settings.watchSyncReason.credentialMissing": "此連線沒有儲存 API 金鑰。",
+  "settings.watchSyncReason.providerUnsupported":
+    "此類媒體伺服器不支援讀取觀看紀錄。",
+  "settings.watchSyncReason.baseUrlInvalid":
+    "此連線的基礎 URL 不是可用的位址。",
+  "settings.watchSyncReason.plexServerNotSelected":
+    "此連線沒有選擇 Plex 伺服器。",
+  "settings.watchSyncReason.plexServerUnreachable":
+    "所選的 Plex 伺服器不在帳號清單中，或沒有列出可連線的位址。",
+  "settings.watchSyncReason.plexAccountIdInvalid":
+    "已連結的 Plex 帳號有伺服器無法查詢的 ID。",
+  "settings.watchSyncReason.participantIdMissing":
+    "已連結的帳號沒有媒體伺服器使用者 ID。",
+  "settings.watchSyncReason.accessDenied": "媒體伺服器拒絕存取。",
+  "settings.watchSyncReason.requestRejected": "媒體伺服器拒絕了請求。",
+  "settings.watchSyncReason.requestFailed": "無法連線到媒體伺服器。",
+  "settings.watchSyncReason.responseUnreadable":
+    "媒體伺服器傳回了 Scryer 無法讀取的回應。",
+  "settings.watchSyncReason.itemsUnreadable": "部分已觀看項目無法讀取。",
+  "settings.watchSyncReason.pagingNotHonoured":
+    "媒體伺服器沒有依要求分頁傳回觀看紀錄。",
+  "settings.watchSyncReason.filterNotHonoured":
+    "要求已觀看項目時，媒體伺服器傳回了未觀看的項目。",
+  "settings.watchSyncReason.unmappedPlayedMovies":
+    "部分已觀看的電影無法對應到媒體庫中的作品。",
+  "settings.watchSyncReason.unplacedFavorites":
+    "部分最愛無法對應到媒體庫中的媒體，因此該帳號的最愛不視為已知。",
+  "settings.watchSyncReason.storeFailed": "Scryer 無法儲存讀到的觀看紀錄。",
+  "settings.watchSyncReason.sourceUnavailable": "此版本無法讀取觀看紀錄。",
   "settings.apiKeyConfigured": "API 金鑰已設定",
   "settings.apiKeyMissing": "缺少 API 金鑰",
   "settings.plexServerSelected": "已選取 Plex 伺服器",
@@ -1358,7 +1409,7 @@ const zh_TW: LocaleDictionary = {
   "apiExplorer.sessionHelp": "使用您目前的登入階段。無需憑證或用戶端設定。",
   "settings.experimentalFeaturesLabel": "啟用實驗性功能",
   "settings.experimentalFeaturesHelp":
-    "顯示仍在為此例項上的所有人完善的功能：在媒體庫和根目錄之間移動條目，以及維護規則。",
+    "顯示仍在為此例項上的所有人完善的功能：在媒體庫和根目錄之間移動條目，以及生命週期規則。",
   "settings.personalizedDiscoveryLabel": "個性化發現",
   "settings.personalizedDiscoveryHelp":
     "將你的媒體庫摘要傳送到後設資料閘道器，讓發現頁可以根據你擁有的內容推薦條目。關閉後，發現頁僅使用公共資訊流。",
@@ -1772,6 +1823,17 @@ const zh_TW: LocaleDictionary = {
   "title.monitoredSection": "監控中的 {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "加入最新佇列",
+  "search.addConfigRequiredAudio": "必要音訊語言",
+  "search.addConfigPreferredAudio": "偏好音訊語言",
+  "search.addConfigAudioChoose": "選擇語言",
+  "search.addConfigAudioRequireNone": "不要求任何語言",
+  "title.preferredAudioLanguages": "偏好音訊語言",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "Scryer 無法辨識該音訊語言。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer 無法辨識某條路由的音訊語言。",
+  "requests.requestedAudioLanguages": "已請求的音訊語言",
+  "requests.requestedRequiredAudio": "必要：{{languages}}",
+  "requests.requestedPreferredAudio": "偏好：{{languages}}",
   "title.requiredAudioLanguages": "必需音訊語言",
   "title.originalAudioLanguagePerTitle": "原始語言（按標題）",
   "title.requiredAudioLanguagesFacetInfo":
@@ -2118,11 +2180,15 @@ const zh_TW: LocaleDictionary = {
   "system.title": "系統健康",
   "system.diagnosticsBundle.download": "下載診斷套件",
   "system.diagnosticsBundle.preparing": "正在準備診斷…",
-  "system.diagnosticsBundle.helper": "將記錄、指標和設定摘要打包成一個檔案給維護者。名稱、位址、路徑和密鑰會盡力移除；分享前請檢查診斷套件。",
+  "system.diagnosticsBundle.helper":
+    "將記錄、指標和設定摘要打包成一個檔案給維護者。診斷套件已盡力去識別化，可以安全地在 Discord 工單中分享，但不建議在 GitHub issue 或 Discord 公開頻道中分享。",
   "system.diagnosticsBundle.failed": "無法下載診斷套件。",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "請重新登入後下載診斷。",
-  "system.diagnosticsBundle.refusal.permissionDenied": "下載診斷需要系統設定權限。",
-  "system.diagnosticsBundle.refusal.failed": "無法建立診斷套件。詳情請查看伺服器記錄。",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "請重新登入後下載診斷。",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "下載診斷需要系統設定權限。",
+  "system.diagnosticsBundle.refusal.failed":
+    "無法建立診斷套件。詳情請查看伺服器記錄。",
   "system.jobsTitle": "工作機會",
   "system.auditTitle": "稽核",
   "system.auditLoaded": "已載入稽核記錄。",
@@ -2273,7 +2339,7 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleLibraryAll": "全部",
   "settings.ruleLibraryCommunityEmpty":
     "沒有可用的社群規則包。重新整理外掛登入檔以檢查新包。",
-  "settings.arrImportAction": "匯入 Arr 自訂格式",
+  "settings.arrImportAction": "從 Arr 匯入",
   "settings.ruleAiPrompt": "AI 提示詞",
   "settings.ruleAiPromptTitle": "使用 AI 建立規則",
   "settings.ruleAiPromptDescription":
@@ -2328,7 +2394,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refTitle": "輸入情境參考",
   "settings.refSubtitle": "點擊以展開適用於您的 Rego 規則的所有欄位完整參考。",
   "settings.refIntro":
-    "每條規則都會收到一個包含五個最上層文件的 input 物件。您的 Rego 程式碼可透過 input.release、input.profile、input.context、input.builtin_score 與 input.file 存取這些文件。input.file 在下載前評分期間為 null，僅在下載後匯入評估時填入。",
+    "每條規則都會收到一個包含五個最上層文件的 input 物件。您的 Rego 程式碼可透過 input.release、input.profile、input.context、input.builtin_score 與 input.file 存取這些文件。為索引器結果評分時 input.file 為 null；只要檔案本身經過分析就會填入：在下載後的匯入檢查時，以及重新為媒體庫中已有的檔案評分時。",
   "settings.refColField": "欄位",
   "settings.refColType": "類型",
   "settings.refColDescription": "說明",
@@ -2336,19 +2402,24 @@ const zh_TW: LocaleDictionary = {
   "settings.refColReturns": "回傳值",
   "settings.refSectionRelease": "— 已解析的發行版本中繼資料",
   "settings.refReleaseRawTitle": "來自索引器的原始未解析發行版本標題",
-  "settings.refReleaseQuality": "偵測到的品質層級（例如 2160P、1080P、720P）",
-  "settings.refReleaseSource": "媒體來源（例如 WEB-DL、BLURAY、HDTV）",
+  "settings.refReleaseQuality":
+    "偵測到的品質層級，小寫（例如 2160p、1080p、720p）",
+  "settings.refReleaseSource":
+    "從名稱解析出的媒體來源（例如 WEB-DL、WEBRip、BluRay、HDTV）。scryer.normalize_source 會提供大寫形式（WEBDL、WEBRIP、BLURAY）",
   "settings.refReleaseVideoCodec": "視訊編解碼器（例如 H.265、H.264、AV1）",
-  "settings.refReleaseAudio": "主要音訊編解碼器（例如 DDP、AAC、TrueHD）",
+  "settings.refReleaseAudio":
+    "主要音訊編解碼器（例如 DDP、AAC、TRUEHD、DTSMA）",
   "settings.refReleaseAudioCodecs": "以陣列形式列出所有偵測到的音訊編解碼器",
   "settings.refReleaseGuideFacts": "從發行版本中繼資料偵測到的指南事實",
   "settings.refReleaseNormalizedTokens": "發行版本解析器產生的已排序正規化標記",
   "settings.refReleaseAudioChannels": "聲道設定（例如 5.1、7.1、2.0）",
-  "settings.refReleaseLangsAudio": "ISO 639-3 音訊語言代碼（例如 eng、jpn）",
+  "settings.refReleaseLangsAudio":
+    "ISO 639-3 音訊語言代碼（例如 eng、jpn）。包含索引器清單回報、在抓取版本時凍結的語言，以及 Scryer 推斷的語言：dual-audio 或 MULTi 標記會加入作品的原始語言（未指明語言時另加 eng），未標示語言的版本在設定檔要求音訊語言時會加入原始語言。在保留清單快照之前掃描、採用或匯入的檔案，只提供名稱與檔案本身顯示的資訊",
   "settings.refReleaseIndexerLanguages":
     "索引器列表本身回報的 ISO 639-3 音訊語言代碼，於抓取發行時凍結；從不由名稱或作品推斷，索引器未回報時為空",
   "settings.refReleaseLangsSub": "ISO 639-3 字幕語言代碼",
-  "settings.refReleaseIsDualAudio": "偵測到多個音軌時為 true",
+  "settings.refReleaseIsDualAudio":
+    "版本名稱帶有雙音軌（dual-audio）標記時為 true",
   "settings.refReleaseIsAtmos": "存在杜比全景聲 (Dolby Atmos) 音訊時為 true",
   "settings.refReleaseIsDV": "偵測到杜比視界 (Dolby Vision) 中繼資料時為 true",
   "settings.refReleaseHasHdrFallback":
@@ -2451,17 +2522,24 @@ const zh_TW: LocaleDictionary = {
     "為未標記發行版本推斷的正規化原始音訊語言",
   "settings.refCtxTags":
     "作品上的使用者自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
-  "settings.refCtxHasExisting": "此作品已存在檔案時為 true",
-  "settings.refCtxExistingScore": "現有檔案的內建評分（若有）",
-  "settings.refCtxSearchMode": "評估模式。目前的值為 auto 與 post_download",
-  "settings.refCtxRuntimeMin": "內容播放長度（分鐘）",
+  "settings.refCtxHasExisting":
+    "已有檔案佔用此槽位時為 true。僅在下載後的匯入檢查時設定；為索引器結果評分時一律為 false",
+  "settings.refCtxExistingScore":
+    "槽位中現有檔案的完整評分（包含規則）。僅在下載後的匯入檢查時設定；其他情況為 null",
+  "settings.refCtxSearchMode":
+    "評分的使用場合：canonical（搜尋、抓取與媒體庫評分）或 post_download（對已下載檔案的匯入檢查）",
+  "settings.refCtxRuntimeMin":
+    "受評內容的播放長度（分鐘）；多集或整季版本會將各集加總",
   "settings.refCtxIsAnime": "作品分類為動漫時為 true",
   "settings.refCtxIsFiller": "單集標記為過場/動畫原創時為 true",
   "settings.refSectionBuiltinScore": "— 內建評分引擎結果",
-  "settings.refBuiltinTotal": "來自內建評分引擎的總分",
+  "settings.refBuiltinTotal":
+    "來自內建評分引擎的總分。存在基準規則（baseline）時，後續規則在此看到的是基準小計，而基準規則本身看到的是 0",
   "settings.refBuiltinBlocked": "內建規則封鎖此發行版本時為 true",
-  "settings.refBuiltinCodes": "已套用的評分代碼清單（例如 quality_tier_0）",
-  "settings.refSectionFile": "— 實際分析的檔案中繼資料（下載前為 null）",
+  "settings.refBuiltinCodes":
+    "已套用的評分代碼清單（例如 quality_resolution_1080p）。存在基準規則（baseline）時，也包含其代碼",
+  "settings.refSectionFile":
+    "— 已分析的檔案中繼資料（為索引器結果評分時為 null）",
   "settings.refFileVideoCodec": "透過媒體分析驗證的視訊編解碼器",
   "settings.refFileVideoWidth": "以像素為單位的已驗證視訊寬度",
   "settings.refFileVideoHeight": "以像素為單位的已驗證視訊高度",
@@ -2495,6 +2573,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refAudioStreamProfile": "個別串流的已驗證音訊規格或延伸標籤",
   "settings.refAudioStreamChannels": "個別串流的聲道數",
   "settings.refAudioStreamLanguage": "個別串流的語言代碼",
+  "settings.refAudioStreamName": "個別音訊軌道標題（若可用）",
   "settings.refAudioStreamBitrateKbps": "以 kbps 為單位的個別串流位元速率",
   "settings.refSectionSubtitleStreams": "— 巢狀字幕串流項目",
   "settings.refSubtitleStreamCodec": "個別串流的字幕編解碼器",
@@ -2504,7 +2583,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refSubtitleStreamDefault": "字幕串流標記為預設 (Default) 時為 true",
   "settings.refSectionBuiltins": "自訂 Scryer 函式",
   "settings.refBuiltinsIntro":
-    "除了所有標準 OPA 內建函式之外，您的 Rego 規則亦可使用這些輔助函式。",
+    "除了核心 Rego 內建函式、regex 與 time 之外，您的 Rego 規則亦可使用這些輔助函式。其他 OPA 內建函式群組，例如 encoding、glob、semver、net 與 http，則無法使用。",
   "settings.refFnBlockScore": "返回可由其他加分抵消的 -10000 分懲罰",
   "settings.refFnSizeGib":
     "將位元組數轉換為 GiB（例如 scryer.size_gib(input.release.size_bytes) > 50）",
@@ -2520,7 +2599,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "無網路或檔案系統存取權限 — 規則無法發出 HTTP 請求、讀取檔案或執行任何 I/O。如 http.send 等標準 OPA 內建函式皆無法使用。",
   "settings.refSandboxPkgIsolation":
-    "套件隔離 — 每條規則會自動命名空間隔離至其獨立的 package。規則無法讀取或修改其他規則的資料。",
+    "套件隔離 — 每條規則會自動命名空間隔離至其獨立的 package，且無法修改其他規則。非基準（baseline）規則可透過 data.scryer.rules.user.<id> 讀取其他規則的輸出。",
   "settings.refSandboxReadOnly":
     "唯讀輸入 — 規則僅能讀取輸入文件。規則無法修改應用程式狀態或在多次評估之間保留資料。",
   "settings.refSandboxOutputRestricted":
@@ -2530,7 +2609,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refSandboxValidation":
     "儲存前驗證 — 規則在儲存前會針對合成輸入進行編譯與模擬試行測試。無效的規則將被拒絕。",
   "settings.refSandboxErrorIsolation":
-    "錯誤隔離 — 若單一規則在執行階段失敗，所有其他規則仍會繼續正常評估。失敗會記錄在日誌中，但絕不會中斷評分流程。",
+    "錯誤隔離 — 若單一規則在執行階段失敗，所有其他規則仍會繼續正常評估。評分時，失敗會記錄在日誌中，且該規則貢獻 0 分。在下載後的匯入檢查時，您的規則失敗會暫緩匯入以待審查。",
   "settings.refSectionOutput": "規則輸出格式",
   "settings.refOutputIntro":
     "規則必須定義一個 score_entry 規則，回傳一個將字串索引鍵（評分代碼）對應至整數值（分數增減）的 map。正值提升發行版本，負值懲罰發行版本，而 scryer.block_score() 則提供可復原的 -10000 懲罰分。資格是在計算所有貢獻後決定的；強制的品質設定檔要求仍具阻擋性。以檔案為基礎的規則在下載前自然會成為無操作 (no-op)，因為 input.file 在下載後評估之前皆為 null。",
@@ -3063,6 +3142,17 @@ const zh_TW: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "所有人皆可寫入",
   "settings.chmodPresetCustom": "自訂",
   "settings.sidecarFilesTitle": "Sidecar 檔案",
+  "settings.libraryFullHashBackfillTitle": "背景雜湊",
+  "settings.libraryFullHashBackfillLabel": "每晚計算檔案雜湊",
+  "settings.libraryFullHashBackfillDescription":
+    "每晚讀取此媒體庫中的每個檔案一次，記錄其完整內容雜湊。對於磁碟保持休眠的媒體庫，請關閉此項；之後只會在移動、匯入或檢查需要時才讀取檔案雜湊。",
+  "settings.libraryFullHashBackfillDisableTitle": "關閉夜間雜湊？",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "停用此項會降低 Scryer 確保某些檔案移動 100% 安全的能力。",
+  "settings.libraryFullHashBackfillDisableConfirm": "關閉",
+  "settings.libraryFullHashBackfillEnabledStatus": "已為此媒體庫開啟夜間雜湊。",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "已為此媒體庫關閉夜間雜湊。",
   "settings.identityStorageTitle": "身分與儲存空間",
   "settings.mediaProfilesTitle": "媒體設定檔",
   "settings.mediaProfilesHelp":
@@ -3384,6 +3474,9 @@ const zh_TW: LocaleDictionary = {
   "requests.status.pending": "待處理",
   "requests.status.approved": "已核准",
   "requests.status.canceled": "已取消",
+  "requests.queueTitle": "請求佇列",
+  "requests.myTitle": "我的請求",
+  "requests.status.dismissed": "已駁回",
   "status.requestApproved": "已核准 {{name}}。",
   "status.requestApprovedSearchFailed":
     "已核准 {{name}}，但未能將搜尋加入佇列：{{error}}",
@@ -3917,6 +4010,7 @@ const zh_TW: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} 集",
   "history.unknownEvent": "未知事件",
   "history.noMore": "沒有更多事件",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "載入更多",
   "indexerErrors.title": "索引器錯誤記錄",
   "indexerErrors.scopedTitle": "{{indexer}} — 錯誤記錄",
@@ -4162,466 +4256,799 @@ const zh_TW: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "不受支援",
   "appUpgrade.success": "已升級到 {{version}}",
   "appUpgrade.failed": "升級失敗。",
-  "settings.maintenanceRules": "維護規則",
+  "settings.lifecycleRules": "生命週期規則",
   "nav.rules": "規則",
   "settings.rulesScoring": "評分規則",
-  "settings.maintenanceNavRules": "規則",
-  "settings.maintenanceNavHistory": "歷史",
-  "settings.maintenanceRuleAction": "操作",
-  "settings.maintenanceRuleActionHelp": "維護操作啟用後，此規則將執行的動作。",
-  "settings.maintenanceRuleActionPlaceholder": "選擇操作",
-  "settings.maintenanceRuleNoActions": "沒有可用的標題級操作。",
-  "settings.maintenanceActionSequence": "動作順序",
-  "settings.maintenanceSequenceTitle": "動作順序",
-  "settings.maintenanceSequenceSummary": "順序摘要",
-  "settings.maintenanceSequenceSummaryTarget": "目標：{{target}}",
-  "settings.maintenanceSequenceSummaryEffects": "效果：{{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "符合條件的作品",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "符合條件的作品、季與單集",
-  "settings.maintenanceSequenceTargetSeason": "符合條件的季",
-  "settings.maintenanceSequenceTargetSeasonDescendants": "符合條件的季與單集",
-  "settings.maintenanceSequenceTargetEpisode": "符合條件的單集",
-  "settings.maintenanceSequencePreviewPlan": "此預覽的已排序效果",
-  "settings.maintenanceSequencePreviewDescendants": "包含子項目",
-  "settings.maintenanceSequencePreviewMatchedScope": "僅符合的範圍",
-  "settings.maintenanceSequenceAdd": "新增步驟",
-  "settings.maintenanceSequencePreset": "順序預設集",
-  "settings.maintenanceSequencePresetApply": "替換為預設集",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "變更設定檔，若有變更則搜尋",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "取消監控子項目，然後刪除檔案",
-  "settings.maintenanceSequenceTerminal": "終止步驟",
-  "settings.maintenanceSequenceDependencies": "依賴：{{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "包含季與單集",
-  "settings.maintenanceSequenceSearchCondition": "搜尋條件",
-  "settings.maintenanceSequenceSearchUnconditional": "一律請求搜尋",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "僅在設定檔發生變更後",
-  "settings.maintenanceSequenceSearchRequested":
-    "此步驟會請求搜尋，且僅在請求被接受後才記錄為已接受。後續的抓取與下載效果仍可被暫緩。",
-  "settings.maintenanceSequenceHistoryWaiting": "正在等待較早的步驟",
-  "settings.maintenanceSequenceHistorySearchRequested": "已請求搜尋",
-  "settings.maintenanceSequenceHistorySearchAccepted": "已接受",
-  "settings.maintenanceSequenceHistoryJob": "任務 {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "接受時即完成",
-  "settings.maintenanceSequenceCompletionCompleted": "結束時才完成",
-  "settings.maintenanceSequenceStepUnavailable":
-    "目前的目錄中無法使用此已儲存的步驟。在儲存或預覽前請先將其移除或還原相容的目錄。",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "動作步驟目錄不可用。已儲存的步驟仍可見，但儲存與未儲存的預覽將暫停直至其載入完成。",
-  "settings.maintenanceSequenceStepUnmonitor": "取消監控",
-  "settings.maintenanceSequenceStepDeleteFiles": "刪除檔案",
-  "settings.maintenanceSequenceStepChangeQualityProfile": "變更品質設定檔",
-  "settings.maintenanceSequenceStepSearch": "搜尋",
-  "settings.maintenanceSequenceStepAddTags": "新增標籤",
-  "settings.maintenanceSequenceStepRemoveTags": "移除標籤",
-  "settings.maintenanceSequenceStepDeleteTitleAndFiles": "刪除作品與檔案",
-  "settings.maintenanceRuleGraceDays": "寬限天數",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleNavRules": "規則",
+  "settings.lifecycleNavTry": "試執行規則",
+  "settings.lifecycleNavHistory": "歷史",
+  "settings.lifecycleRuleAction": "操作",
+  "settings.lifecycleActionSequence": "動作順序",
+  "settings.lifecycleSequenceHistoryWaiting": "正在等待較早的步驟",
+  "settings.lifecycleSequenceHistorySearchRequested": "已請求搜尋",
+  "settings.lifecycleSequenceHistorySearchAccepted": "已接受",
+  "settings.lifecycleSequenceHistoryJob": "任務 {{id}}",
+  "settings.lifecycleSequenceStepUnmonitor": "取消監控",
+  "settings.lifecycleSequenceStepDeleteFiles": "刪除檔案",
+  "settings.lifecycleSequenceStepChangeQualityProfile": "變更品質設定檔",
+  "settings.lifecycleSequenceStepSearch": "搜尋",
+  "settings.lifecycleSequenceStepAddTags": "新增標籤",
+  "settings.lifecycleSequenceStepRemoveTags": "移除標籤",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles": "刪除作品與檔案",
+  "settings.lifecycleRuleGraceDays": "寬限天數",
+  "settings.lifecycleRuleGraceDaysHelp":
     "規則首次匹配後、操作執行前的天數（目前不會執行任何操作）。",
-  "settings.maintenanceRuleTargetProfile": "目標品質配置",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "此操作會將匹配的標題切換到的配置。",
-  "settings.maintenanceRuleTargetProfileIdHelp": "品質配置 ID。",
-  "settings.maintenanceRuleLibraries": "媒體庫範圍",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "媒體庫範圍",
+  "settings.lifecycleRuleLibrariesHelp":
     "不勾選任何媒體庫時，規則將作用於整個收藏。",
-  "settings.maintenanceRuleLibrariesAll": "所有媒體庫",
-  "settings.maintenanceRuleStorageRoot": "儲存空間根目錄",
-  "settings.maintenanceRuleStorageRootNone": "未選取儲存空間根目錄",
-  "settings.maintenanceRuleStorageRootHelp":
-    "依據儲存空間容量評估規則，並將刪除效果限制在此根目錄下的檔案。",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp":
-    "依據儲存空間容量評估規則，但將取消監控套用至整個作品，即使其包含其他根目錄上的檔案。",
-  "settings.maintenanceRuleStorageRootClear": "清除根目錄選取",
-  "settings.maintenanceStorageRootFileSummary":
-    "所選根目錄：{{count}} 個檔案 · {{size}}",
-  "settings.maintenanceRuleCreate": "建立維護規則",
-  "settings.maintenanceRuleUpdate": "更新維護規則",
-  "settings.maintenanceRuleCopy": "複製為新規則",
-  "settings.maintenanceRuleCreateNew": "新建維護規則",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "所有媒體庫",
+  "settings.lifecycleRuleCreate": "建立生命週期規則",
+  "settings.lifecycleRuleUpdate": "更新生命週期規則",
+  "settings.lifecycleRuleCopy": "複製為新規則",
+  "settings.lifecycleRuleCreateNew": "新建生命週期規則",
+  "settings.lifecycleRuleValidationRequired":
     "名稱、匹配器原始碼和操作為必填項。",
-  "settings.maintenanceRuleConfirmDiscardTitle": "放棄未儲存的更改？",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "維護規則編輯器中有未儲存的更改，將會丟失。",
-  "settings.maintenanceRuleDeleting": "刪除維護規則 {{name}}？",
-  "settings.noMaintenanceRulesFound": "暫無維護規則。",
-  "settings.maintenanceRuleRevision": "修訂版",
-  "settings.maintenanceActionDoNothing": "不執行任何操作",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
-    "取消監控該範圍，保留檔案",
-  "settings.maintenanceActionDeleteTitleAndFiles": "刪除該標題及其檔案",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleRuleConfirmDiscardTitle": "放棄未儲存的更改？",
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "生命週期規則編輯器中有未儲存的更改，將會丟失。",
+  "settings.lifecycleRuleDeleting": "刪除生命週期規則 {{name}}？",
+  "settings.noLifecycleRulesFound": "暫無生命週期規則。",
+  "settings.lifecycleActionDoNothing": "不執行任何操作",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles": "取消監控該範圍，保留檔案",
+  "settings.lifecycleActionDeleteTitleAndFiles": "刪除該標題及其檔案",
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "取消監控該標題，刪除全部檔案",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "取消監控該單集，刪除現有檔案",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "取消監控該範圍，刪除其檔案",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "取消監控該季，刪除其檔案，若單集為空則刪除該單集",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "取消監控該季，若單集為空則取消監控該單集",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "更改品質配置，若發生變化則執行搜尋",
-  "settings.maintenancePreviewTitle": "預覽",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "預覽",
+  "settings.lifecyclePreviewSubtitle":
     "針對真實標題執行匹配器。預覽為只讀：僅報告哪些內容會匹配，不做任何更改。",
-  "settings.maintenancePreviewSource": "匹配器",
-  "settings.maintenancePreviewSourceStored": "已儲存的規則",
-  "settings.maintenancePreviewSourceDraft": "編輯器草稿",
-  "settings.maintenancePreviewLibrary": "媒體庫",
-  "settings.maintenancePreviewLibraryPlaceholder": "選擇媒體庫",
-  "settings.maintenancePreviewLimit": "標題數",
-  "settings.maintenancePreviewLimitHelp": "每次執行最多 {{max}} 個標題。",
-  "settings.maintenancePreviewRun": "執行預覽",
-  "settings.maintenancePreviewRunning": "正在執行預覽...",
-  "settings.maintenancePreviewEmpty": "選擇一個媒體庫並執行預覽。",
-  "settings.maintenancePreviewNoTitles": "沒有評估任何標題。",
-  "settings.maintenancePreviewColOutcome": "結果",
-  "settings.maintenancePreviewColReasons": "原因程式碼",
-  "settings.maintenancePreviewOutcomeMatch": "匹配",
-  "settings.maintenancePreviewOutcomeNoMatch": "不匹配",
-  "settings.maintenancePreviewOutcomeUnknown": "未知",
-  "settings.maintenancePreviewOutcomeError": "錯誤",
-  "settings.maintenancePreviewMeta": "評估時間 {{time}} · 匹配器 {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "規則",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "選擇已儲存的規則",
-  "settings.maintenanceRuleUpdated": "維護規則已更新。",
-  "settings.maintenanceRuleCreated": "維護規則已建立，並以停用狀態儲存。",
-  "settings.maintenanceRuleDeleted": "維護規則 {{name}} 已刪除。",
-  "settings.maintenanceArmingNone": "無效果",
-  "settings.maintenanceArmingReversible": "可逆",
-  "settings.maintenanceArmingDestructive": "破壞性",
-  "settings.maintenanceArmDestructiveLoading": "正在統計該規則已持有的候選項…",
-  "settings.maintenanceArmDestructiveCount":
-    "有 {{count}} 個候選項可能被處理。",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecyclePreviewLibrary": "媒體庫",
+  "settings.lifecyclePreviewLibraryPlaceholder": "選擇媒體庫",
+  "settings.lifecyclePreviewLimit": "標題數",
+  "settings.lifecyclePreviewLimitHelp": "每次執行最多 {{max}} 個標題。",
+  "settings.lifecyclePreviewRun": "執行預覽",
+  "settings.lifecyclePreviewRunning": "正在執行預覽...",
+  "settings.lifecyclePreviewNoTitles": "沒有評估任何標題。",
+  "settings.lifecyclePreviewColOutcome": "結果",
+  "settings.lifecyclePreviewColReasons": "原因程式碼",
+  "settings.lifecyclePreviewOutcomeMatch": "匹配",
+  "settings.lifecyclePreviewOutcomeNoMatch": "不匹配",
+  "settings.lifecyclePreviewOutcomeUnknown": "未知",
+  "settings.lifecyclePreviewOutcomeError": "錯誤",
+  "settings.lifecyclePreviewMeta": "評估時間 {{time}} · 匹配器 {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "規則",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "選擇已儲存的規則",
+  "settings.lifecycleRuleUpdated": "生命週期規則已更新。",
+  "settings.lifecycleRuleCreated": "生命週期規則已建立，並以停用狀態儲存。",
+  "settings.lifecycleRuleDeleted": "生命週期規則 {{name}} 已刪除。",
+  "settings.lifecycleArmDestructiveLoading": "正在統計該規則已持有的候選項…",
+  "settings.lifecycleArmDestructiveCount": "有 {{count}} 個候選項可能被處理。",
+  "settings.lifecycleArmDestructiveNoCandidates":
     "該規則目前沒有可被處理的候選項。",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "你閱讀期間數量發生了變化：該規則現在持有 {{count}} 個。請核對數字並再次確認。",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "我明白該規則可能刪除 {{count}} 個標題的檔案。",
-  "settings.maintenanceCandidatesFilterRule": "規則",
-  "settings.maintenanceCandidatesFilterState": "狀態",
-  "settings.maintenanceCandidatesFilterLibrary": "媒體庫",
-  "settings.maintenanceCandidatesAllRules": "全部規則",
-  "settings.maintenanceCandidatesAllStates": "全部狀態",
-  "settings.maintenanceCandidatesAllLibraries": "全部媒體庫",
-  "settings.maintenanceCandidatesColRule": "規則",
-  "settings.maintenanceCandidatesColState": "狀態",
-  "settings.maintenanceCandidatesColFirstMatched": "首次匹配",
-  "settings.maintenanceCandidatesColDue": "到期",
-  "settings.maintenanceCandidatesHeldSince": "自 {{time}} 起掛起",
-  "settings.maintenanceCandidatesEmpty": "沒有符合這些篩選條件的候選項。",
-  "settings.maintenanceCandidateExclude": "排除此標題",
-  "settings.maintenanceCandidateStateObserving": "觀察中",
-  "settings.maintenanceCandidateStatePendingAction": "待執行",
-  "settings.maintenanceCandidateStateDue": "已到期",
-  "settings.maintenanceCandidateStateExecuting": "執行中",
-  "settings.maintenanceCandidateStateSucceeded": "成功",
-  "settings.maintenanceCandidateStateFailed": "失敗",
-  "settings.maintenanceCandidateStateCanceled": "已取消",
-  "settings.maintenanceCandidateStateExcluded": "已排除",
-  "settings.maintenanceCandidateStateBlocked": "已阻止",
-  "settings.maintenanceCountdownDueNow": "現已到期",
-  "settings.maintenanceCountdownInMinutes": "{{count}} 分鐘後",
-  "settings.maintenanceCountdownInHours": "{{count}} 小時後",
-  "settings.maintenanceCountdownInDays": "{{count}} 天后",
-  "settings.maintenanceCountdownOverdueMinutes": "已逾期 {{count}} 分鐘",
-  "settings.maintenanceCountdownOverdueHours": "已逾期 {{count}} 小時",
-  "settings.maintenanceCountdownOverdueDays": "已逾期 {{count}} 天",
-  "settings.maintenanceRunsTitle": "執行與歷史",
-  "settings.maintenanceRunsSubtitle": "最近的評估輪次與動作嘗試，最新的在前。",
-  "settings.maintenanceRunScope": "範圍",
-  "settings.maintenanceRunScopeAll": "全部規則",
-  "settings.maintenanceRunEvaluationNow": "立即評估",
-  "settings.maintenanceRunEvaluationRunning": "評估中…",
-  "settings.maintenanceRunActionsNow": "立即執行動作",
-  "settings.maintenanceRunActionsRunning": "正在執行動作…",
-  "settings.maintenanceRunStarted": "執行已啟動。",
-  "settings.maintenanceRunNotStarted": "未啟動任何內容：{{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "評估執行",
-  "settings.maintenanceEvaluationRunsEmpty": "尚未記錄任何評估執行。",
-  "settings.maintenanceActionRunsTitle": "動作執行",
-  "settings.maintenanceActionRunsEmpty": "尚未記錄任何動作執行。",
-  "settings.maintenanceRunColStarted": "開始時間",
-  "settings.maintenanceRunColStatus": "狀態",
-  "settings.maintenanceRunColCounts": "計數",
-  "settings.maintenanceRunColDuration": "耗時",
-  "settings.maintenanceRunColError": "錯誤",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleCandidatesFilterRule": "規則",
+  "settings.lifecycleCandidatesFilterState": "狀態",
+  "settings.lifecycleCandidatesFilterLibrary": "媒體庫",
+  "settings.lifecycleCandidatesAllRules": "全部規則",
+  "settings.lifecycleCandidatesAllStates": "全部狀態",
+  "settings.lifecycleCandidatesAllLibraries": "全部媒體庫",
+  "settings.lifecycleCandidatesColRule": "規則",
+  "settings.lifecycleCandidatesColState": "狀態",
+  "settings.lifecycleCandidatesColFirstMatched": "首次匹配",
+  "settings.lifecycleCandidatesColDue": "到期",
+  "settings.lifecycleCandidatesHeldSince": "自 {{time}} 起掛起",
+  "settings.lifecycleCandidatesEmpty": "沒有符合這些篩選條件的候選項。",
+  "settings.lifecycleCandidateExclude": "排除此標題",
+  "settings.lifecycleCandidateStateObserving": "觀察中",
+  "settings.lifecycleCandidateStatePendingAction": "待執行",
+  "settings.lifecycleCandidateStateDue": "已到期",
+  "settings.lifecycleCandidateStateExecuting": "執行中",
+  "settings.lifecycleCandidateStateSucceeded": "成功",
+  "settings.lifecycleCandidateStateFailed": "失敗",
+  "settings.lifecycleCandidateStateCanceled": "已取消",
+  "settings.lifecycleCandidateStateExcluded": "已排除",
+  "settings.lifecycleCandidateStateBlocked": "已阻止",
+  "settings.lifecycleCountdownDueNow": "現已到期",
+  "settings.lifecycleCountdownInMinutes": "{{count}} 分鐘後",
+  "settings.lifecycleCountdownInHours": "{{count}} 小時後",
+  "settings.lifecycleCountdownInDays": "{{count}} 天后",
+  "settings.lifecycleCountdownOverdueMinutes": "已逾期 {{count}} 分鐘",
+  "settings.lifecycleCountdownOverdueHours": "已逾期 {{count}} 小時",
+  "settings.lifecycleCountdownOverdueDays": "已逾期 {{count}} 天",
+  "settings.lifecycleRunsTitle": "執行與歷史",
+  "settings.lifecycleRunScope": "範圍",
+  "settings.lifecycleRunScopeAll": "全部規則",
+  "settings.lifecycleRunEvaluationNow": "立即評估",
+  "settings.lifecycleRunEvaluationRunning": "評估中…",
+  "settings.lifecycleRunActionsNow": "立即執行動作",
+  "settings.lifecycleRunActionsRunning": "正在執行動作…",
+  "settings.lifecycleRunActionsNeedsRule":
+    "請在上方選擇一條規則以立即執行其動作。",
+  "settings.lifecycleSequenceObserveOnly": "僅試執行",
+  "settings.lifecycleRuleScheduleHelp":
+    "每條規則依自己的排程執行。每次執行會評估規則，然後套用寬限期已結束的候選項目。變更排程會保留規則的狀態。每日、每週與 cron 時間使用伺服器的當地時間。",
+  "settings.lifecycleRuleScheduleManualHelp":
+    "此規則不會自行執行。請從「執行與紀錄」啟動。",
+  "settings.lifecycleRuleState": "狀態",
+  "settings.lifecycleRuleStateHelp":
+    "停用的規則永遠不會被評估。試執行會記錄候選項目但不採取動作。啟用的規則會在各寬限期結束後對候選項目採取動作。",
+  "settings.lifecycleRuleStateUpdated": "已更新 {{name}}。",
+  "settings.lifecycleRuleStateDisabled": "停用",
+  "settings.lifecycleRuleStateDisabledHelp": "永不評估。",
+  "settings.lifecycleRuleStateDryRun": "試執行",
+  "settings.lifecycleRuleStateDryRunHelp": "記錄候選項目；不採取動作。",
+  "settings.lifecycleRuleStateEnabled": "啟用",
+  "settings.lifecycleRuleStateEnabledHelp":
+    "在候選項目的寬限期結束時採取動作。",
+  "settings.lifecycleRuleEditedSinceEnabled":
+    "啟用後已編輯。請檢查候選項目並再次啟用。",
+  "settings.lifecycleRuleSystemOwned": "內建",
+  "settings.lifecycleSwitchEnabled": "生命週期",
+  "settings.lifecycleRuleView": "檢視",
+  "settings.lifecycleRuleViewTitle": "檢視內建規則",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "此規則隨 Scryer 提供，無法編輯。請在規則清單中變更其狀態。",
+  "settings.lifecycleSwitchEnabledHelp":
+    "在此執行個體上評估規則並顯示其候選項目。",
+  "settings.lifecycleSwitchActionsPaused": "暫停所有動作",
+  "settings.lifecycleSwitchActionsPausedHelp":
+    "暫停期間，啟用的規則仍會記錄候選項目，但不會取消監控、變更或刪除任何東西。",
+  "settings.lifecycleSwitchesLocked":
+    "讀取生命週期開關需要系統設定權限。請向管理員詢問生命週期規則是否開啟，以及動作是否已暫停。",
+  "settings.lifecycleSwitchesUpdated": "生命週期設定已更新。",
+  "settings.lifecycleUnpauseConfirmTitle": "要恢復生命週期動作嗎？",
+  "settings.lifecycleUnpauseConfirmBody":
+    "啟用的規則會在各寬限期結束時對候選項目採取動作，包括會刪除檔案的規則。",
+  "settings.lifecycleUnpauseConfirmAction": "恢復動作",
+  "settings.lifecycleCandidatesEmptyLifecycleOff":
+    "此執行個體未開啟生命週期規則，因此不顯示候選項目。",
+  "settings.lifecycleCandidatesEmptyAllDisabled":
+    "所有規則都已停用，因此沒有任何評估。請先將一條規則設為試執行。",
+  "settings.lifecycleArmDestructiveIntro":
+    "{{name}} 會刪除檔案。啟用後，除非動作已暫停，它會在各寬限期結束時對下方的候選項目採取動作。",
+  "settings.lifecycleArmDestructiveTitle": "要啟用會刪除檔案的規則嗎？",
+  "settings.lifecycleArmDestructiveConfirm": "啟用",
+  "settings.lifecycleCandidatesTitle": "即將移除",
+  "settings.lifecycleCandidatesSubtitle":
+    "規則已符合的作品，最早到期的排在最前。這裡的項目都尚未被處理。",
+  "settings.lifecycleRuleTemplate": "範本",
+  "settings.lifecycleRuleTemplatePlaceholder": "從範本開始",
+  "settings.refLifecycleFactsListsAddedByList":
+    "主體是否由清單而非人員加入媒體庫",
+  "settings.refLifecycleFactsListsOnEnabledList":
+    "是否仍有任何已啟用的清單（公開或個人）列有此主體",
+  "settings.refLifecycleFactsListsNames": "仍列有此主體的已啟用公開清單名稱",
+  "settings.refLifecycleFactsListsLeftAll":
+    "曾列有此主體的每個清單是否都已將其移除",
+  "settings.refLifecycleFactsListsLeftAt": "最後一個清單移除此主體的時間",
+  "settings.refLifecycleFactsListsLastListName": "此主體最近離開的公開清單",
+  "settings.refLifecycleFactsListsEnabledIds":
+    "仍列有此主體的已啟用清單（公開或個人）識別碼",
+  "settings.refLifecycleFactsListsPublicCount": "仍列有此主體的公開清單數量",
+  "settings.refLifecycleFactsListsPersonalCount": "仍列有此主體的個人清單數量",
+  "settings.refLifecycleFactsListsFirstSeenAt":
+    "仍持有此主體的清單首次列出它的時間",
+  "settings.refLifecycleFactsListsLastSeenAt":
+    "仍持有此主體的清單最後一次列出它的時間",
+  "settings.refLifecycleFactsListsDaysOnList":
+    "自仍持有此主體的清單首次列出它以來的完整天數",
+  "settings.refLifecycleFactsListsBestRank":
+    "仍持有此主體的清單給它的最佳（最低）排名",
+  "settings.refLifecycleFactsListsOnLeave":
+    "持有此主體的已啟用清單在移除它時會做什麼",
+  "settings.refLifecycleFactsListsLeftHandled":
+    "每次離開清單是否都已套用其離開時的動作",
+  "settings.refLifecycleFactsListsMembershipStates":
+    "此主體在仍持有它的清單上的狀態",
+  "settings.refLifecycleFactsRequestOrigin": "建立此作品的請求來自何處",
+  "settings.refLifecycleFactsRequestListName": "請求此作品的公開清單",
+  "settings.refLifecycleFactsListsAddedByListValue":
+    "清單同步建立此作品時為真；無法讀取清單儲存區時為未知，原因為 list_store_unreadable",
+  "settings.refLifecycleFactsListsOnEnabledListValue":
+    "至少有一個已啟用的清單持有此主體時為真",
+  "settings.refLifecycleFactsListsNamesValue":
+    "僅公開清單名稱，已排序；成員的個人清單從不顯示名稱",
+  "settings.refLifecycleFactsListsLeftAllValue":
+    "列過此主體的每個清單都已將其移除時為真；仍有清單持有它，或從未有清單列過它時為假",
+  "settings.refLifecycleFactsListsLeftAtValue":
+    "RFC3339 時間戳記；仍有清單持有此主體時不存在，原因為 not_left_every_list",
+  "settings.refLifecycleFactsListsLastListNameValue":
+    "該公開清單的名稱；此主體從未離開公開清單時不存在，原因為 no_public_list_left",
+  "settings.refLifecycleFactsListsEnabledIdsValue":
+    "清單識別碼，已排序；絕不是清單名稱",
+  "settings.refLifecycleFactsListsPublicCountValue":
+    "公開清單數量，包括已啟用或已暫停",
+  "settings.refLifecycleFactsListsPersonalCountValue":
+    "個人清單數量，包括已啟用或已暫停",
+  "settings.refLifecycleFactsListsFirstSeenAtValue":
+    "RFC3339 時間戳記；沒有清單持有此主體時不存在，原因為 not_on_a_list",
+  "settings.refLifecycleFactsListsLastSeenAtValue":
+    "RFC3339 時間戳記；沒有清單持有此主體時不存在，原因為 not_on_a_list",
+  "settings.refLifecycleFactsListsDaysOnListValue":
+    "到評估時間的完整天數；沒有清單持有此主體時不存在，原因為 not_on_a_list",
+  "settings.refLifecycleFactsListsBestRankValue":
+    "排名數字；持有此主體的清單都未排名時不存在，原因為 no_list_rank",
+  "settings.refLifecycleFactsListsOnLeaveValue":
+    "已排序的值，取自 keep、log、unmonitor 與 tag",
+  "settings.refLifecycleFactsListsLeftHandledValue":
+    "每次離開都已處理時為真；沒有清單移除過此主體時不存在，原因為 no_list_left",
+  "settings.refLifecycleFactsListsMembershipStatesValue":
+    "已排序的狀態，例如 in_library、added、requested 或 held",
+  "settings.refLifecycleFactsRequestOriginValue":
+    "manual、public_list 或 personal_list 之一；沒有請求建立此作品時不存在，原因為 title_not_requested",
+  "settings.refLifecycleFactsRequestListNameValue":
+    "該公開清單的名稱；手動請求與個人清單請求時不存在，原因為 no_public_request_list，因為個人清單從不顯示名稱",
+  "settings.lifecycleTemplateLeftEveryListTitle": "已離開所有清單",
+  "settings.lifecycleTemplateLeftEveryListDescription":
+    "所有清單（公開或個人）都已移除的作品，在每次離開都已處理且最後一次離開超過 30 天後。範圍內的項目會取消監控，檔案保留原位。",
+  "settings.lifecycleTemplateListAddedUnwatchedTitle": "由清單加入且從未觀看",
+  "settings.lifecycleTemplateListAddedUnwatchedDescription":
+    "為清單在 90 天前加入且無人播放過的作品加上 needs-review 標籤。只要觀看資訊不完整就暫緩。不會刪除任何東西。",
+  "settings.lifecycleRunActionsHeldHelp":
+    "立即執行動作會先評估規則，與每次排程執行相同，因此會重新檢視被暫緩的作品。評估新加入且已到期的作品（例如沒有寬限期的規則）會在同一次執行中處理，包括刪除。",
+  "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
+    "請選擇要執行動作的規則。規則只會為自己執行動作，因此立即執行需要指定一條規則。",
+  "settings.lifecycleRunStarted": "執行已啟動。",
+  "settings.lifecycleRunNotStarted": "未啟動任何內容：{{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "評估執行",
+  "settings.lifecycleEvaluationRunsEmpty": "尚未記錄任何評估執行。",
+  "settings.lifecycleActionRunsTitle": "動作執行",
+  "settings.lifecycleActionRunsEmpty": "尚未記錄任何動作執行。",
+  "settings.lifecycleRunColStarted": "開始時間",
+  "settings.lifecycleRunColStatus": "狀態",
+  "settings.lifecycleRunColCounts": "計數",
+  "settings.lifecycleRunColDuration": "耗時",
+  "settings.lifecycleRunColError": "錯誤",
+  "settings.lifecycleRunCounts":
     "已評估 {{evaluated}} · 匹配 {{matched}} · 未匹配 {{noMatch}} · 未知 {{unknown}} · 錯誤 {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}} 秒",
-  "settings.maintenanceRunRevision": "修訂 {{revision}}",
-  "settings.maintenanceRunStatusRunning": "執行中",
-  "settings.maintenanceRunStatusSucceeded": "成功",
-  "settings.maintenanceRunStatusFailed": "失敗",
-  "settings.maintenanceRunStatusHeld": "已掛起",
-  "settings.maintenanceRunStatusAlreadySatisfied": "已滿足",
-  "settings.maintenanceRunStatusSkipped": "已跳過",
-  "settings.maintenanceActionRunColAttempt": "嘗試次數",
-  "settings.maintenanceActionRunColHoldReason": "掛起原因",
-  "settings.maintenanceExclusionsTitle": "排除項",
-  "settings.maintenanceExclusionsSubtitle":
-    "維護規則絕不能處理的標題。全域性排除對所有規則生效。",
-  "settings.maintenanceExclusionsEmpty": "沒有排除項。",
-  "settings.maintenanceExclusionColScope": "範圍",
-  "settings.maintenanceExclusionColReason": "原因",
-  "settings.maintenanceExclusionColCreated": "新增時間",
-  "settings.maintenanceExclusionScopeGlobal": "全部規則",
-  "settings.maintenanceExclusionRemove": "移除排除",
-  "settings.maintenanceExclusionRemoved": "已移除 {{title}} 的排除。",
-  "settings.maintenanceExclusionRemoving": "要移除 {{title}} 的排除嗎？",
-  "settings.maintenanceExcludeTitle": "從維護中排除",
-  "settings.maintenanceExcludeBody":
+  "settings.lifecycleRunDuration": "{{seconds}} 秒",
+  "settings.lifecycleRunRevision": "修訂 {{revision}}",
+  "settings.lifecycleRunStatusRunning": "執行中",
+  "settings.lifecycleRunStatusSucceeded": "成功",
+  "settings.lifecycleRunStatusFailed": "失敗",
+  "settings.lifecycleRunStatusHeld": "已掛起",
+  "settings.lifecycleRunStatusAlreadySatisfied": "已滿足",
+  "settings.lifecycleRunStatusSkipped": "已跳過",
+  "settings.lifecycleActionRunColAttempt": "嘗試次數",
+  "settings.lifecycleActionRunColHoldReason": "掛起原因",
+  "settings.lifecycleExclusionsTitle": "排除項",
+  "settings.lifecycleExclusionsSubtitle":
+    "生命週期規則絕不能處理的標題。全域性排除對所有規則生效。",
+  "settings.lifecycleExclusionsEmpty": "沒有排除項。",
+  "settings.lifecycleExclusionColScope": "範圍",
+  "settings.lifecycleExclusionColReason": "原因",
+  "settings.lifecycleExclusionColCreated": "新增時間",
+  "settings.lifecycleExclusionScopeGlobal": "全部規則",
+  "settings.lifecycleExclusionRemove": "移除排除",
+  "settings.lifecycleExclusionRemoved": "已移除 {{title}} 的排除。",
+  "settings.lifecycleExclusionRemoving": "要移除 {{title}} 的排除嗎？",
+  "settings.lifecycleExcludeTitle": "從生命週期規則中排除",
+  "settings.lifecycleExcludeBody":
     "{{title}} 將從下一次評估起被排除，其候選項會轉為已排除。",
-  "settings.maintenanceExcludeScope": "範圍",
-  "settings.maintenanceExcludeScopeGlobal": "全部規則",
-  "settings.maintenanceExcludeReason": "原因",
-  "settings.maintenanceExcludeReasonPlaceholder": "排除此標題的原因（可選）",
-  "settings.maintenanceExcludeConfirm": "排除",
-  "settings.maintenanceExcluded": "已將 {{title}} 從維護中排除。",
-  "settings.refMaintTitle": "維護輸入參考",
-  "settings.refMaintSubtitle": "點擊以展開維護比對器可讀取的所有事實。",
-  "settings.refMaintIntro":
-    "每條維護規則每個主體會收到一個 input 物件：input.subject 識別正在評估的項目，input.library 指出其所屬媒體庫，input.facts 帶有事實快照，而評估外層環境則位於 input 本身。事實是普通的值，若沒有可回報的內容，該索引鍵就會直接缺失 — 因此請寫 input.facts.monitored，而非狀態檢查。若規則讀取了 Scryer 無法為該主體觀察到的事實，Scryer 會為您暫緩該主體；您永遠不需要自行編寫該保護機制。",
-  "settings.refMaintOutputTitle": "規則輸出",
-  "settings.refMaintOutputIntro":
-    "比對器最多定義三個名稱。套件中的其他任何內容都會被忽略，若決策不完全符合此結構，將直接拒絕而非強制轉換型別。",
-  "settings.refMaintOutputMatch":
-    "match — 布林值。保持未定義表示該主體不符合條件。",
-  "settings.refMaintOutputUnknown":
+  "settings.lifecycleExcludeScope": "範圍",
+  "settings.lifecycleExcludeScopeGlobal": "全部規則",
+  "settings.lifecycleExcludeReason": "原因",
+  "settings.lifecycleExcludeReasonPlaceholder": "排除此標題的原因（可選）",
+  "settings.lifecycleExcludeConfirm": "排除",
+  "settings.lifecycleExcluded": "已將 {{title}} 從生命週期規則中排除。",
+  "settings.refLifecycleTitle": "生命週期輸入參考",
+  "settings.refLifecycleIntro":
+    "每條生命週期規則每個主體會收到一個 input 物件：input.subject 識別正在評估的項目，input.library 指出其所屬媒體庫，input.facts 帶有事實快照，而評估外層環境則位於 input 本身。事實是普通的值，若沒有可回報的內容，該索引鍵就會直接缺失 — 因此請寫 input.facts.monitored，而非狀態檢查。若規則讀取了 Scryer 無法為該主體觀察到的事實，Scryer 會為您暫緩該主體；您永遠不需要自行編寫該保護機制。",
+  "settings.refLifecycleOutputTitle": "規則輸出",
+  "settings.refLifecycleOutputIntro":
+    "規則透過定義操作，以及選用的 unknown 與 reasons，說明要做什麼。只要至少一項操作對某對象成立，該對象即為符合。若決策不完全符合此結構，將直接拒絕而非強制轉換型別。",
+  "settings.refLifecycleOutputUnknown":
     "unknown — 布林值。當規則本身資訊不足無法決策時進行設定；unknown 永遠優先於 match。Scryer 無法觀察到的事實已為您自動處理，因此這僅用於您自己的判斷。",
-  "settings.refMaintOutputReasons":
-    "reasons — 一組用於說明決策的簡短機器代碼。它們會儲存在候選項目上並顯示在預覽中。",
-  "settings.refMaintOutputNoPackage":
+  "settings.refLifecycleOutputReasons":
+    "reasons — 由最多 32 個簡短機器代碼組成的清單或集合，每個最多 120 個字元，用於說明決策。它們會儲存在候選項目上並顯示在預覽中。",
+  "settings.refLifecycleOutputNoPackage":
     "請勿撰寫 package 或 import 行。Scryer 在儲存規則時會自動新增這兩者，並在載入編輯器時將其去除。",
-  "settings.refMaintSectionInput": "— 評估外層封裝",
-  "settings.refMaintInputSchemaVersion": "此規則所依據撰寫的維護輸入文件版本",
-  "settings.refMaintInputEvaluationTime":
+  "settings.refLifecycleSectionInput": "— 評估外層封裝",
+  "settings.refLifecycleInputSchemaVersion":
+    "此規則所依據撰寫的生命週期輸入文件版本",
+  "settings.refLifecycleInputEvaluationTime":
     "每次執行擷取一次的 RFC3339 時間戳記，讓每個主體與相同的時鐘進行比較。請將其用於日期計算 — 雖然存在 time.now_ns()，但它會讓同一主體在重試時產生不同決策。",
-  "settings.refMaintSectionSubject": "— 評估中的作品、季或單集",
-  "settings.maintenanceFileSummary": "{{count}} 個檔案 · {{size}}",
-  "settings.maintenanceTestTitle": "測試主體",
-  "settings.maintenanceNoSubjects": "在此媒體庫中找不到主體。",
-  "settings.maintenancePreviewExcluded": "排除的主體",
-  "settings.maintenancePreviewEstimatedDue": "若現在符合條件：{{time}}",
-  "settings.maintenancePreviewDue": "寬限截止時間：{{time}}",
-  "settings.maintenancePreviewSubject": "測試主體",
-  "settings.maintenancePreviewSample": "媒體庫範例",
-  "settings.maintenanceRuleScope": "規則範圍",
-  "settings.maintenanceScopeSeason": "季",
-  "settings.maintenanceScopeEpisode": "單集",
-  "settings.maintenanceFileDeleted": "已刪除",
-  "settings.maintenanceFilePending": "等待中",
-  "settings.maintenanceFileResults": "檔案結果",
-  "settings.maintenanceFileProgress":
+  "settings.refLifecycleSectionSubject": "— 評估中的作品、季或單集",
+  "settings.lifecycleFileSummary": "{{count}} 個檔案 · {{size}}",
+  "settings.lifecycleTestTitle": "測試主體",
+  "settings.lifecyclePreviewExcluded": "排除的主體",
+  "settings.lifecyclePreviewEstimatedDue": "若現在符合條件：{{time}}",
+  "settings.lifecyclePreviewDue": "寬限截止時間：{{time}}",
+  "settings.lifecyclePreviewSubject": "測試主體",
+  "settings.lifecyclePreviewSample": "媒體庫範例",
+  "settings.lifecycleFileDeleted": "已刪除",
+  "settings.lifecycleFilePending": "等待中",
+  "settings.lifecycleFileResults": "檔案結果",
+  "settings.lifecycleFileProgress":
     "已刪除 {{completed}} 個 · 剩餘 {{remaining}} 個",
-  "settings.refMaintSubjectId": "所選範圍的 Scryer 作品、合集或單集識別碼",
-  "settings.refMaintCollectionId": "季與單集主體所屬的季度合集 ID（若已知）",
-  "settings.refMaintSubjectKind":
+  "settings.refLifecycleSubjectId": "所選範圍的 Scryer 作品、合集或單集識別碼",
+  "settings.refLifecycleCollectionId":
+    "季與單集主體所屬的季度合集 ID（若已知）",
+  "settings.refLifecycleSubjectKind":
     "評估中的細微程度：title（作品）、season（季）或 episode（單集）",
-  "settings.refMaintSubjectTitleId": "主體所屬作品的 Scryer 識別碼",
-  "settings.refMaintSubjectSeasonNumber": "季與單集主體的季度編號（若已知）",
-  "settings.refMaintSubjectEpisodeId": "單集識別碼；僅存在於單集主體",
-  "settings.refMaintSubjectFacet":
+  "settings.refLifecycleSubjectTitleId": "主體所屬作品的 Scryer 識別碼",
+  "settings.refLifecycleSubjectSeasonNumber":
+    "季與單集主體的季度編號（若已知）",
+  "settings.refLifecycleSubjectEpisodeId": "單集識別碼；僅存在於單集主體",
+  "settings.refLifecycleSubjectFacet":
     "作品的媒體面向（movie 電影、series 影集、anime 動漫）",
-  "settings.refMaintSubjectName": "作品、季或單集的顯示標籤",
-  "settings.refMaintSubjectYear": "作品的發行年份（若已知）",
-  "settings.refMaintSectionLibrary": "— 主體所屬的媒體庫",
-  "settings.refMaintLibraryId": "容納該主體的媒體庫識別碼",
-  "settings.refMaintLibraryName": "該媒體庫的顯示名稱",
-  "settings.refMaintSectionFacts":
+  "settings.refLifecycleSubjectName": "作品、季或單集的顯示標籤",
+  "settings.refLifecycleSubjectYear": "作品的發行年份（若已知）",
+  "settings.refLifecycleSectionLibrary": "— 主體所屬的媒體庫",
+  "settings.refLifecycleLibraryId": "容納該主體的媒體庫識別碼",
+  "settings.refLifecycleLibraryName": "該媒體庫的顯示名稱",
+  "settings.refLifecycleSectionSeason": "季（僅限季動作）",
+  "settings.refLifecycleSeasonId": "正在判斷的季 ID。",
+  "settings.refLifecycleSeasonFacts":
+    "季本身的事實，由季動作（例如 delete_season_files）讀取。",
+  "settings.refLifecycleSeasonObservations": "季事實的觀察封套。",
+  "settings.refLifecycleSectionEpisode": "集數（僅限集數動作）",
+  "settings.refLifecycleEpisodeId": "正在判斷的集數 ID。",
+  "settings.refLifecycleEpisodeNumber": "集數在該季內的編號（若已知）。",
+  "settings.refLifecycleEpisodeFacts":
+    "集數本身的事實，由集數動作（例如 delete_episode_files）讀取。",
+  "settings.refLifecycleEpisodeObservations": "集數事實的觀察封套。",
+  "settings.refLifecycleFactsStorageRoots":
+    "主體檔案所在的每個已設定根目錄各一項，連同該根目錄的可用空間。任何一個根目錄無法讀取時為未知。",
+  "settings.refLifecycleSectionStorageRoots": "儲存空間根目錄",
+  "settings.refLifecycleStorageRootId": "已設定根目錄的 ID。",
+  "settings.refLifecycleStorageRootPath": "已設定根目錄的路徑。",
+  "settings.refLifecycleStorageRootAvailableBytes":
+    "根目錄所在磁碟區的可用位元組。",
+  "settings.refLifecycleStorageRootTotalBytes": "根目錄所在磁碟區的總位元組。",
+  "settings.refLifecycleStorageRootAvailablePercent":
+    "根目錄所在磁碟區的可用空間佔總量的百分比。",
+  "settings.refLifecycleFactsStorageRootsValue":
+    "主體檔案所在的根目錄（若已知）。",
+  "settings.refLifecycleSectionFacts":
     "— 事實快照；每個事實為純值，當事實不存在或無法觀察到時，該欄位會缺失",
-  "settings.refMaintFactsMonitored": "該主體是否受到監控",
-  "settings.refMaintFactsTags":
+  "settings.refLifecycleFactsMonitored": "該主體是否受到監控",
+  "settings.refLifecycleFactsTags":
     "繼承自主作品的使用者自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
-  "settings.refMaintFactsQualityProfileId": "繼承自主作品的品質設定檔",
-  "settings.refMaintFactsAddedAt": "主體加入媒體庫的時間",
-  "settings.refMaintFactsAddedByUserId":
+  "settings.refLifecycleFactsQualityProfileId": "繼承自主作品的品質設定檔",
+  "settings.refLifecycleFactsAddedAt": "主體加入媒體庫的時間",
+  "settings.refLifecycleFactsAddedByUserId":
     "新增該主體的使用者；若由掃描或探索建立則缺失",
-  "settings.refMaintFactsAddedByUsername": "新增該主體的使用者名稱",
-  "settings.refMaintFactsRequested": "媒體請求是否建立了該主體",
-  "settings.refMaintFactsRequestedByUserIds":
+  "settings.refLifecycleFactsAddedByUsername": "新增該主體的使用者名稱",
+  "settings.refLifecycleFactsRequested": "媒體請求是否建立了該主體",
+  "settings.refLifecycleFactsRequestedByUserIds":
     "請求該主體的使用者：提交者加上任何其他請求者",
-  "settings.refMaintFactsRequestedByUsernames": "這些請求者的使用者名稱",
-  "settings.refMaintFactsFirstImportedAt": "主體首次匯入檔案的時間",
-  "settings.refMaintFactsLastUpgradedAt": "主體上次升級的時間",
-  "settings.refMaintFactsHasFile": "主體在硬碟上是否至少有一個檔案",
-  "settings.refMaintFactsFileCount": "主體在硬碟上有多少個檔案",
-  "settings.refMaintFactsTotalFileSizeBytes": "主體檔案在硬碟上的總大小",
-  "settings.refMaintFactsFiles": "主體的檔案，包含各檔案媒體詳細資訊",
-  "settings.refMaintFactsEpisodeCount": "主體涵蓋多少單集",
-  "settings.refMaintFactsEpisodeFileCount": "這些單集中有多少個具備檔案",
-  "settings.refMaintFactsMonitoredEpisodeCount": "這些單集中有多少個受到監控",
-  "settings.refMaintFactsEpisodePositionByAirDate":
+  "settings.refLifecycleFactsRequestedByUsernames": "這些請求者的使用者名稱",
+  "settings.refLifecycleFactsFirstImportedAt": "主體首次匯入檔案的時間",
+  "settings.refLifecycleFactsLastUpgradedAt":
+    "主體上次升級的時間。目前尚未收集，因此一律為 unknown。",
+  "settings.refLifecycleFactsHasFile": "主體在硬碟上是否至少有一個檔案",
+  "settings.refLifecycleFactsFileCount": "主體在硬碟上有多少個檔案",
+  "settings.refLifecycleFactsTotalFileSizeBytes": "主體檔案在硬碟上的總大小",
+  "settings.refLifecycleFactsFiles": "主體的檔案，包含各檔案媒體詳細資訊",
+  "settings.refLifecycleFactsEpisodeCount": "主體涵蓋多少單集",
+  "settings.refLifecycleFactsEpisodeFileCount": "這些單集中有多少個具備檔案",
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
+    "這些單集中有多少個受到監控",
+  "settings.refLifecycleFactsEpisodePositionByAirDate":
     "單集在其節目中按播出日期的排名",
-  "settings.refMaintFactsSeasonPositionByAirDate":
+  "settings.refLifecycleFactsSeasonPositionByAirDate":
     "依最新符合資格的已下載單集排名的季度順序",
-  "settings.refMaintFactsStorageRootId":
-    "針對儲存容量與檔案刪除所選取的設定根目錄",
-  "settings.refMaintFactsStorageAvailableBytes":
-    "所選根目錄上目前可用的位元組數",
-  "settings.refMaintFactsStorageTotalBytes": "所選根目錄的總容量位元組數",
-  "settings.refMaintFactsStorageAvailablePercent":
-    "所選根目錄目前可用容量的百分比",
-  "settings.refMaintFactsActiveDownloads": "主體是否有正在進行中的下載",
-  "settings.refMaintFactsWatchedByUserIds":
-    "觀看過此單集的使用者；對於季，相同使用者必須觀看過每一集已播出的單集（包括遺失的檔案）。未來單集已排除；未確定的播出日期或不完整的信號為未知。空季度永遠不會完成。",
-  "settings.refMaintFactsLastWatchedAt": "任何使用者上次播放該主體的時間",
-  "settings.refMaintFactsWatchedByAnyRequester":
+  "settings.refLifecycleFactsActiveDownloads":
+    "主體是否有正在進行中的下載。目前尚未收集，因此一律為 unknown。",
+  "settings.refLifecycleFactsWatchedByUserIds":
+    "觀看過此主體的使用者。對於一季或整部影集，僅計入看過其中每一集已播出單集的使用者，包括檔案遺失的單集。未來單集已排除；未確定的播出日期或不完整的信號為 unknown。沒有已播出單集的季或影集永遠不會算作完成。",
+  "settings.refLifecycleFactsLastWatchedAt": "任何使用者上次播放該主體的時間",
+  "settings.refLifecycleFactsWatchedByAnyRequester":
     "主體的請求者中是否至少有一人播放過它",
-  "settings.refMaintFactsWatchedByAllRequesters":
+  "settings.refLifecycleFactsWatchedByAllRequesters":
     "主體的請求者是否每個人都播放過它",
-  "settings.refMaintFactsRequestLeaseState":
+  "settings.refLifecycleFactsRequestLeaseState":
     "主體請求租約的聚合狀態：none、dormant、active 或 expired",
-  "settings.refMaintFactsRequestLeaseExpiresAt":
+  "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "主體最後一筆有效租約到期的時間",
-  "settings.refMaintFactsActiveRetentionClaims": "仍鎖定該主體的請求租約數量",
-  "settings.refMaintObsStatus":
+  "settings.refLifecycleFactsActiveRetentionClaims":
+    "仍鎖定該主體的請求租約數量",
+  "settings.refLifecycleObsStatus":
     "known、absent 或 unknown。absent 表示來源已回應且無值；unknown 表示 Scryer 無法查明。在讀取 value 之前請先測試此項 — unknown 事實絕不會強制轉型為 false、0 或空字串。",
-  "settings.refMaintSectionObservations":
+  "settings.refLifecycleSectionObservations":
     "— 作為完整封裝的相同事實，適用於需要區分 absent 與 unknown 或讀取原因的規則。在此讀取事實會使該事實退出自動暫緩：您必須為三值邏輯的結果承擔責任。",
-  "settings.refMaintSectionObsFiles":
+  "settings.refLifecycleSectionObsFiles":
     "— input.observations.files.value 中每個檔案對應一項",
-  "settings.refMaintObsObservedAt": "觀察到該值的時間（若來源有記錄時間）",
-  "settings.refMaintObsReason":
+  "settings.refLifecycleObsObservedAt": "觀察到該值的時間（若來源有記錄時間）",
+  "settings.refLifecycleObsReason":
     "穩定的機器代碼，說明事實為何為 unknown，或為何 absent 事實沒有值",
-  "settings.refMaintFactsMonitoredValue": "主體受到監控時為 true",
-  "settings.refMaintFactsTagsValue":
+  "settings.refLifecycleFactsMonitoredValue": "主體受到監控時為 true",
+  "settings.refLifecycleFactsTagsValue":
     "來自管理員標籤註冊表的小寫使用者自訂標籤名稱；絕非保留的 scryer: 設定項目",
-  "settings.refMaintFactsQualityProfileIdValue": "指派的品質設定檔識別碼",
-  "settings.refMaintFactsAddedAtValue": "主體加入時的 RFC3339 時間戳記",
-  "settings.refMaintFactsAddedByUserIdValue":
+  "settings.refLifecycleFactsQualityProfileIdValue": "指派的品質設定檔識別碼",
+  "settings.refLifecycleFactsAddedAtValue": "主體加入時的 RFC3339 時間戳記",
+  "settings.refLifecycleFactsAddedByUserIdValue":
     "新增該主體的使用者識別碼；無人新增時原因為 title_added_by_system",
-  "settings.refMaintFactsAddedByUsernameValue":
+  "settings.refLifecycleFactsAddedByUsernameValue":
     "該使用者的使用者名稱；若帳號已不存在則為 unknown，原因為 user_not_found",
-  "settings.refMaintFactsRequestedValue":
+  "settings.refLifecycleFactsRequestedValue":
     "至少有一個媒體請求建立了該主體時為 true；否則為確認的 false",
-  "settings.refMaintFactsRequestedByUserIdsValue":
+  "settings.refLifecycleFactsRequestedByUserIdsValue":
     "去除重複後的請求者識別碼；若主體未被請求則為空清單",
-  "settings.refMaintFactsRequestedByUsernamesValue":
+  "settings.refLifecycleFactsRequestedByUsernamesValue":
     "請求者使用者名稱；若其中任何帳號已不存在則為 unknown，原因為 user_not_found",
-  "settings.refMaintFactsFirstImportedAtValue": "首次匯入時的 RFC3339 時間戳記",
-  "settings.refMaintFactsLastUpgradedAtValue": "上次升級時的 RFC3339 時間戳記",
-  "settings.refMaintFactsHasFileValue": "硬碟上至少有一個檔案時為 true",
-  "settings.refMaintFactsFileCountValue": "硬碟上的檔案數量",
-  "settings.refMaintFactsTotalFileSizeBytesValue": "這些檔案的總大小（位元組）",
-  "settings.refMaintFactsFilesValue":
+  "settings.refLifecycleFactsFirstImportedAtValue":
+    "首次匯入時的 RFC3339 時間戳記",
+  "settings.refLifecycleFactsLastUpgradedAtValue":
+    "一律為 unknown，原因為 not_yet_collected：Scryer 目前尚未記錄升級，因此讀取此值的規則會被暫緩",
+  "settings.refLifecycleFactsHasFileValue": "硬碟上至少有一個檔案時為 true",
+  "settings.refLifecycleFactsFileCountValue": "硬碟上的檔案數量",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
+    "這些檔案的總大小（位元組）",
+  "settings.refLifecycleFactsFilesValue":
     "每個檔案對應一項；請參閱下方的 input.observations.files.value[]",
-  "settings.refMaintFactsEpisodeCountValue": "範圍內的單集數量",
-  "settings.refMaintFactsEpisodeFileCountValue": "這些單集中具有檔案的數量",
-  "settings.refMaintFactsMonitoredEpisodeCountValue":
+  "settings.refLifecycleFactsEpisodeCountValue": "範圍內的單集數量",
+  "settings.refLifecycleFactsEpisodeFileCountValue": "這些單集中具有檔案的數量",
+  "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "這些單集中受到監控的數量",
-  "settings.refMaintFactsEpisodePositionByAirDateValue":
+  "settings.refLifecycleFactsEpisodePositionByAirDateValue":
     "第 1 名是最新符合資格已下載且已播出的非特別篇單集。播出日期相同時依季與單集編號排序，然後使用穩定 ID。",
-  "settings.refMaintFactsSeasonPositionByAirDateValue":
+  "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "第 1 名是具有最新符合資格已下載且已播出非特別篇單集的季度。受保護的檔案仍佔據排名。",
-  "settings.refMaintFactsStorageRootIdValue":
-    "在此版本中選取的持久設定媒體庫根目錄識別碼",
-  "settings.refMaintFactsStorageAvailableBytesValue":
-    "從所選根目錄本身觀察到的可用容量（位元組）",
-  "settings.refMaintFactsStorageTotalBytesValue":
-    "從所選根目錄本身觀察到的總容量（位元組）",
-  "settings.refMaintFactsStorageAvailablePercentValue":
-    "可用容量除以總容量，介於 0 至 100",
-  "settings.refMaintFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
-  "settings.refMaintFactsWatchedByUserIdsValue":
-    "播放過它的所有人的識別碼，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的單集，包括遺失的檔案。未來單集已排除；缺少單集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 使用者 (signal_identity_missing)。",
-  "settings.refMaintFactsLastWatchedAtValue":
+  "settings.refLifecycleFactsActiveDownloadsValue":
+    "一律為 unknown，原因為 not_yet_collected：目前尚未讀取下載狀態，因此讀取此值的規則會被暫緩",
+  "settings.refLifecycleFactsWatchedByUserIdsValue":
+    "播放過它的所有人的識別碼，已排序並去重；空清單表示無人播放。對於季或影集，一個人必須看過其中每一集已播出的單集（包括遺失的檔案）才會被計入。未來單集已排除；缺少單集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 使用者 (signal_identity_missing)。",
+  "settings.refLifecycleFactsLastWatchedAtValue":
     "最近一次播放的 RFC3339 時間戳記；若無人播放過則 absent，原因為 never_watched；若有播放沒有記錄時間則 unknown，原因為 play_time_missing",
-  "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "至少有一位請求者播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
-  "settings.refMaintFactsWatchedByAllRequestersValue":
-    "每一位請求者皆播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
-  "settings.refMaintFactsRequestLeaseStateValue":
+  "settings.refLifecycleFactsWatchedByAnyRequesterValue":
+    "至少有一位請求者播放過時為 true；對於沒有已播出單集的季或影集，已知為 false；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
+  "settings.refLifecycleFactsWatchedByAllRequestersValue":
+    "每一位請求者皆播放過時為 true；對於沒有已播出單集的季或影集，已知為 false；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
+  "settings.refLifecycleFactsRequestLeaseStateValue":
     "從未為主體寫入請求租約時為 none，租約等待首次匯入時為 dormant，租約有效進行中時為 active，且所有租約皆已用盡時為 expired。已釋放或已轉換的租約視為撤回而非耗盡，因此不會使狀態變為 expired。過期是以評估時間為基準，因此租約在視窗關閉的瞬間即被視為過期。",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+  "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
     "有效租約中最新到期時間的 RFC3339 時間戳記；無任何租約保留該主體時為 absent，原因為 no_live_lease",
-  "settings.refMaintFactsActiveRetentionClaimsValue":
+  "settings.refLifecycleFactsActiveRetentionClaimsValue":
     "仍保留該主體的租約數量，包含處於休眠 (dormant) 狀態的租約",
-  "settings.refMaintSectionFiles": "— input.facts.files 中每個檔案對應一項",
-  "settings.refMaintFileSizeBytes": "檔案大小位元組數",
-  "settings.refMaintFileQuality": "偵測到的檔案品質（例如 2160P、1080P）",
-  "settings.refMaintFileVideoCodec": "檔案的視訊編解碼器（例如 H.265、H.264）",
-  "settings.refMaintFileIs3d":
+  "settings.refLifecycleSectionFiles": "— input.facts.files 中每個檔案對應一項",
+  "settings.refLifecycleFileSizeBytes": "檔案大小位元組數",
+  "settings.refLifecycleFileQuality": "偵測到的檔案品質（例如 2160P、1080P）",
+  "settings.refLifecycleFileVideoCodec":
+    "檔案的視訊編解碼器（例如 H.265、H.264）",
+  "settings.refLifecycleFileIs3d":
     "媒體中繼資料宣告 3D 視訊時為 true。False 表示未偵測到，包含尚未分析的檔案。",
-  "settings.refMaintFileVideoWidth": "以像素為單位的視訊寬度",
-  "settings.refMaintFileVideoHeight": "以像素為單位的視訊高度",
-  "settings.refMaintFileAudioLanguages": "檔案中存在的音訊語言",
-  "settings.refMaintFileSubtitleLanguages": "檔案中存在的字幕語言",
-  "settings.refMaintFileAddedAt": "新增檔案時的 RFC3339 時間戳記",
-  "settings.refMaintFactsSeriesMovies":
+  "settings.refLifecycleFileVideoWidth": "以像素為單位的視訊寬度",
+  "settings.refLifecycleFileVideoHeight": "以像素為單位的視訊高度",
+  "settings.refLifecycleFactsRuntimeMinutes":
+    "中繼資料提供者給出的片長（分鐘）",
+  "settings.refLifecycleFactsOriginalLanguage": "作品的原始語言",
+  "settings.refLifecycleFactsSeriesStatus":
+    "中繼資料提供者給出的影集狀態，例如連載中或已完結",
+  "settings.refLifecycleFactsFirstAired": "影集首播日期（YYYY-MM-DD）",
+  "settings.refLifecycleFactsNetwork": "播出影集的電視網",
+  "settings.refLifecycleFactsStudio": "製作作品的工作室",
+  "settings.refLifecycleFactsCountry": "出品國家",
+  "settings.refLifecycleFactsPopularity": "中繼資料提供者給出的熱門度分數",
+  "settings.refLifecycleFactsDaysSinceAdded": "主體加入後經過的完整天數",
+  "settings.refLifecycleFactsMaxVideoHeight":
+    "主體檔案中最高的視訊串流高度（像素）",
+  "settings.refLifecycleFactsSeasonCount": "影集的季數，不含特別篇",
+  "settings.refLifecycleFactsAiredEpisodeCount": "影集已播出的一般單集數",
+  "settings.refLifecycleFactsUnairedEpisodeCount": "影集尚未播出的一般單集數",
+  "settings.refLifecycleFactsMissingEpisodeCount":
+    "影集已播出、受監控但沒有檔案的單集數",
+  "settings.refLifecycleFactsAiredEpisodeFilePercent":
+    "有檔案的已播出單集佔已播出單集的百分比",
+  "settings.refLifecycleFactsLatestSeasonNumber": "影集最新一季的季號",
+  "settings.refLifecycleFactsLatestAiredEpisodeDate":
+    "影集最近播出單集的播出日期（YYYY-MM-DD）",
+  "settings.refLifecycleFactsNextEpisodeAirDate":
+    "影集下一個排定單集的播出日期（YYYY-MM-DD）",
+  "settings.refLifecycleFactsGenres": "來自作品已儲存中繼資料的類型名稱",
+  "settings.refLifecycleFactsRating": "作品已儲存的綜合評分",
+  "settings.refLifecycleFactsRatings": "綜合評分背後的每一項外部評分",
+  "settings.refLifecycleFactsPlayCountTotal":
+    "所有已啟用媒體伺服器上所有帳戶播放主體的次數總和；不指名任何人",
+  "settings.refLifecycleFactsWatchlistedByUserIds":
+    "待看清單中有此作品的使用者",
+  "settings.refLifecycleFactsWatchlistedByUsernames":
+    "待看清單中有此作品的使用者名稱",
+  "settings.refLifecycleFactsWatchlistedByAnyone":
+    "是否有任何使用者的待看清單中有此作品",
+  "settings.refLifecycleFactsWatchlistedByAnyRequester":
+    "作品的請求者中是否有人的待看清單中有此作品",
+  "settings.refLifecycleFactsWatchlistAddedAt":
+    "Scryer 首次在任何待看清單上看到此作品的時間",
+  "settings.refLifecycleFactsWatchlistOrigins":
+    "目前待看清單中有此作品的提供者",
+  "settings.refLifecycleFactsFavoritedByUserIds":
+    "在 Jellyfin 或 Emby 上將主體標為最愛的使用者",
+  "settings.refLifecycleFactsFavoritedByUsernames":
+    "在 Jellyfin 或 Emby 上將主體標為最愛的使用者名稱",
+  "settings.refLifecycleFactsFavoritedByAnyone":
+    "是否有任何使用者在 Jellyfin 或 Emby 上將主體標為最愛",
+  "settings.refLifecycleFactsFavoritedByAnyRequester":
+    "作品的請求者中是否有人在 Jellyfin 或 Emby 上將主體標為最愛",
+  "settings.refLifecycleFileAudioCodec": "檔案主要音訊串流的音訊編解碼器",
+  "settings.refLifecycleFileAudioChannels": "音訊聲道數",
+  "settings.refLifecycleFileAudioBitrateKbps": "音訊位元率（kbps）",
+  "settings.refLifecycleFileVideoBitrateKbps": "視訊位元率（kbps）",
+  "settings.refLifecycleFileVideoBitDepth": "視訊位元深度",
+  "settings.refLifecycleFileVideoHdrFormat":
+    "視訊的 HDR 格式，例如 HDR10 或 Dolby Vision",
+  "settings.refLifecycleSectionRatings":
+    "— input.facts.ratings 中每項外部評分一個項目",
+  "settings.refLifecycleSectionObsRatings":
+    "— input.observations.ratings.value 中每項外部評分一個項目",
+  "settings.refLifecycleRatingSource": "評分來源",
+  "settings.refLifecycleRatingValue": "來源自身尺度上的評分（來源有提供時）",
+  "settings.refLifecycleRatingNormalized":
+    "Scryer 共同尺度上的評分，可跨來源比較",
+  "settings.refLifecycleRatingVotes": "評分背後的投票數（來源有提供時）",
+  "settings.refLifecycleFactsRuntimeMinutesValue":
+    "片長（分鐘）；中繼資料提供者未給出值時缺失",
+  "settings.refLifecycleFactsOriginalLanguageValue":
+    "原始語言；中繼資料提供者未給出值時缺失",
+  "settings.refLifecycleFactsSeriesStatusValue":
+    "提供者給出的原始影集狀態；電影或提供者未給出值時缺失",
+  "settings.refLifecycleFactsFirstAiredValue":
+    "首播日期（YYYY-MM-DD），是日期而非時間戳記；電影或提供者未給出值時缺失",
+  "settings.refLifecycleFactsNetworkValue": "電視網名稱；提供者未給出值時缺失",
+  "settings.refLifecycleFactsStudioValue": "工作室名稱；提供者未給出值時缺失",
+  "settings.refLifecycleFactsCountryValue": "出品國家；提供者未給出值時缺失",
+  "settings.refLifecycleFactsPopularityValue":
+    "熱門度分數；提供者未給出值時缺失",
+  "settings.refLifecycleFactsDaysSinceAddedValue":
+    "主體加入後經過的完整天數，依評估時鐘計算",
+  "settings.refLifecycleFactsMaxVideoHeightValue":
+    "檔案中最高視訊串流的高度（像素）；沒有檔案回報時缺失。在作品的每個檔案都完成掃描之前為未知，原因為 not_yet_collected，包括掃描失敗或需要審查的檔案",
+  "settings.refLifecycleFactsSeasonCountValue":
+    "節目完整集數清單中的季數，不含特別篇，與主體無關；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsAiredEpisodeCountValue":
+    "播出日期在評估當天或之前的一般集數；沒有播出日期的集數視為未播出。電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsUnairedEpisodeCountValue":
+    "沒有播出日期或播出日期在評估當天之後的一般集數；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsMissingEpisodeCountValue":
+    "已播出、受監控且沒有檔案的一般集數；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsAiredEpisodeFilePercentValue":
+    "已播出集數中有檔案的百分比；尚無任何播出時不存在，原因為 no_aired_episode，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsLatestSeasonNumberValue":
+    "最大的一般季數；電影或沒有季的節目則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsLatestAiredEpisodeDateValue":
+    "最近播出的一般集數的播出日期（YYYY-MM-DD）；尚無任何播出時不存在，原因為 no_aired_episode，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsNextEpisodeAirDateValue":
+    "評估當天之後最早的播出日期（YYYY-MM-DD）；沒有排定集數時不存在，原因為 no_scheduled_episode，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
+  "settings.refLifecycleFactsGenresValue":
+    "類型名稱；無法讀取已儲存的中繼資料時以原因 metadata_unreadable 視為未知",
+  "settings.refLifecycleFactsRatingValue":
+    "綜合評分；沒有來源評分時缺失，無法讀取評分儲存時以原因 metadata_unreadable 視為未知",
+  "settings.refLifecycleFactsRatingsValue":
+    "每項外部評分一個項目；無法讀取評分儲存時以原因 metadata_unreadable 視為未知",
+  "settings.refLifecycleFactsPlayCountTotalValue":
+    "所有已啟用媒體伺服器上所有帳戶（無論是否連結到 Scryer 使用者）的播放次數總和。在所有帳戶最近被讀取之前以原因 audience_not_read 視為未知；觀看事實未知時，以一般原因視為未知。",
+  "settings.refLifecycleFactsWatchlistedByUserIdsValue":
+    "待看清單包含此作品的使用者 ID。待看清單是使用者自己已啟用並登入的 Plex、Trakt、TMDb 或 MDBList 待看清單，Simkl 或 MyAnimeList 的 plan-to-watch 清單，或 AniList 的 planning 清單。任何清單從未同步、上次失敗、已關閉、設為不同步或已失去其帳號時為未知，原因為 watchlist_not_synced；任何清單近期未同步時為未知，原因為 watchlist_stale。",
+  "settings.refLifecycleFactsWatchlistedByUsernamesValue":
+    "待看清單中有此作品的使用者名稱；其中有人已不存在時以原因 user_not_found 視為未知，任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
+  "settings.refLifecycleFactsWatchlistedByAnyoneValue":
+    "任何使用者的待看清單中有此作品時為 true；任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
+  "settings.refLifecycleFactsWatchlistedByAnyRequesterValue":
+    "請求者的待看清單中有此作品時為 true；沒有人請求時以原因 title_not_requested 缺失，任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
+  "settings.refLifecycleFactsWatchlistAddedAtValue":
+    "Scryer 首次在任何待看清單上看到此作品的 RFC3339 時間戳記；沒有待看清單包含它時以原因 not_on_a_watchlist 缺失，任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
+  "settings.refLifecycleFactsWatchlistOriginsValue":
+    "目前待看清單中有此作品的提供者；任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
+  "settings.refLifecycleFactsFavoritedByUserIdsValue":
+    "在已啟用的 Jellyfin 或 Emby 伺服器上將此主體標為最愛的使用者 ID。作品計入其所有最愛；影集或季的最愛計入該影集的每一季與每一集；單集的最愛計入該集、其所屬季與影集。Scryer 無法讀取 Plex 的最愛：所有已啟用伺服器皆為 Plex 時為未知，原因為 favorites_unsupported；已連結的使用者只能透過 Plex 看到時，原因為 favorite_member_unobservable。已連結使用者的最愛近期沒有完整讀取時為未知，原因為 favorites_member_not_read；無法讀取已儲存的最愛時，原因為 favorites_unreadable。升級後，最愛相關事實會維持未知，直到第一次同步讀取最愛為止。",
+  "settings.refLifecycleFactsFavoritedByUsernamesValue":
+    "將此主體標為最愛的使用者名稱，計算方式同 favorited_by_user_ids；其中有人已不存在時為未知，原因為 user_not_found，其他未知原因同 favorited_by_user_ids。",
+  "settings.refLifecycleFactsFavoritedByAnyoneValue":
+    "從 Jellyfin 或 Emby 讀到的最愛涵蓋此主體時為真，計算方式同 favorited_by_user_ids，不論帳號是否連結到 Scryer 使用者。每個已啟用的 Jellyfin 與 Emby 伺服器上每個帳號的最愛近期都已完整讀取，且沒有任何最愛涵蓋此主體時為假。這類伺服器上有帳號近期沒有完整讀取時為未知，原因為 audience_favorites_not_read；啟用了 Plex 伺服器時原因為 audience_favorites_unsupported，因為 Plex 帳號可能有 Scryer 無法讀取的最愛；另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
+  "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
+    "有請求者將此主體標為最愛時為真，計算方式同 favorited_by_user_ids；沒有人請求此作品時不存在，原因為 title_not_requested；請求者沒有已連結的媒體伺服器帳號時為未知，原因為 requester_not_linked；請求者的最愛近期沒有完整讀取時原因為 favorites_member_not_read，另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
+  "settings.refLifecycleFileAudioLanguages": "檔案中存在的音訊語言",
+  "settings.refLifecycleFileSubtitleLanguages": "檔案中存在的字幕語言",
+  "settings.refLifecycleFileAddedAt": "新增檔案時的 RFC3339 時間戳記",
+  "settings.refLifecycleFactsSeriesMovies":
     "連結至此節目時間軸的電影，各自具有其專屬標籤。僅存在於節目：電影主體完全缺少此欄位，無連結電影的節目則確認為空。add_tags 與 remove_tags 絕不寫入這些項目；它們作用於主體作品。",
-  "settings.refMaintFactsSeriesMoviesValue":
+  "settings.refLifecycleFactsSeriesMoviesValue":
     "每個連結電影對應一項；請參閱下方的 input.observations.series_movies.value[]",
-  "settings.refMaintSectionSeriesMovies":
+  "settings.refLifecycleSectionSeriesMovies":
     "— input.facts.series_movies 中每個連結電影對應一項",
-  "settings.refMaintSectionObsSeriesMovies":
+  "settings.refLifecycleSectionObsSeriesMovies":
     "— input.observations.series_movies.value 中每個連結電影對應一項",
-  "settings.refMaintSeriesMovieLinkId": "影集-電影連結的識別碼",
-  "settings.refMaintSeriesMovieName": "連結電影的標題",
-  "settings.refMaintSeriesMovieYear": "連結電影的發行年份（若已知）",
-  "settings.refMaintSeriesMovieMonitored": "此連結電影是否已啟用獲取/抓取",
-  "settings.refMaintSeriesMovieHasFile": "此連結電影在硬碟上是否有檔案",
-  "settings.refMaintSeriesMovieTags":
+  "settings.refLifecycleSeriesMovieLinkId": "影集-電影連結的識別碼",
+  "settings.refLifecycleSeriesMovieName": "連結電影的標題",
+  "settings.refLifecycleSeriesMovieYear": "連結電影的發行年份（若已知）",
+  "settings.refLifecycleSeriesMovieMonitored": "此連結電影是否已啟用獲取/抓取",
+  "settings.refLifecycleSeriesMovieHasFile": "此連結電影在硬碟上是否有檔案",
+  "settings.refLifecycleSeriesMovieTags":
     "此連結電影上的使用者自訂標籤，來自與作品標籤相同的註冊表。系列電影自帶標籤；它不會繼承節目的標籤。",
-  "settings.refMaintTagActionsTitle": "標籤操作",
-  "settings.refMaintTagActionsNote":
+  "settings.ruleBuilderModeLabel": "編輯器",
+  "settings.ruleBuilderModeSimple": "簡易",
+  "settings.ruleBuilderUnavailable":
+    "此規則的原始碼曾經手動編輯，或不是由簡易建構器產生，因此只能以 Rego 編輯。",
+  "settings.ruleBuilderEditAsRego": "以 Rego 編輯",
+  "settings.ruleBuilderEditAsRegoTitle": "要以 Rego 編輯此規則嗎？",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "一旦修改程式碼，此規則就必須維持為進階規則，之後無法再以簡易模式開啟，儲存後也是如此。",
+  "settings.ruleBuilderIncomplete":
+    "部分選項尚未完成。請修正建構器中標示的項目後再儲存。",
+  "settings.ruleBuilderConditions": "條件",
+  "settings.ruleBuilderJoinAll": "符合所有條件",
+  "settings.ruleBuilderJoinAny": "符合任一條件",
+  "settings.ruleBuilderAddCondition": "新增條件",
+  "settings.ruleBuilderActionSubject": "作用於",
+  "settings.ruleBuilderAction": "動作",
+  "settings.ruleBuilderActionPlaceholder": "選擇動作",
+  "settings.ruleBuilderActionConditions": "僅限於",
+  "settings.ruleBuilderActionConditionsHelp":
+    "除了規則的條件外，還要符合這些條件，此動作才會執行。其他動作不受影響。",
+  "settings.ruleBuilderAddActionCondition": "新增僅限此動作的條件",
+  "settings.ruleBuilderAddAction": "新增動作",
+  "settings.ruleBuilderProblemActionRequired": "請選擇動作。",
+  "settings.ruleBuilderFact": "事實",
+  "settings.ruleBuilderFactPlaceholder": "選擇事實",
+  "settings.ruleBuilderOperator": "比較",
+  "settings.ruleBuilderValue": "值",
+  "settings.ruleBuilderDays": "天數",
+  "settings.lifecycleBuilderActionsHelp":
+    "動作會依列出的順序執行。選擇某個動作後，無法與其搭配的動作會停用。",
+  "settings.ruleBuilderOutputConflict": "無法與{{outputs}}一起使用。",
+  "settings.ruleBuilderQualityProfilePlaceholder": "選擇品質設定檔",
+  "settings.ruleBuilderUserPlaceholder": "選擇使用者",
+  "settings.ruleBuilderListPlaceholder": "選擇清單",
+  "settings.lifecycleBuilderLibraryPlaceholder": "選擇媒體庫",
+  "settings.lifecycleBuilderRootPlaceholder": "選擇根資料夾",
+  "settings.ruleBuilderTagsPlaceholder": "選擇標籤",
+  "settings.ruleBuilderNoTags": "尚未建立任何標籤。",
+  "settings.ruleBuilderOpIsTrue": "為真",
+  "settings.ruleBuilderOpIsFalse": "為假",
+  "settings.ruleBuilderOpEquals": "等於",
+  "settings.ruleBuilderOpNotEquals": "不等於",
+  "settings.ruleBuilderOpGreaterThan": "大於",
+  "settings.ruleBuilderOpGreaterOrEqual": "至少",
+  "settings.ruleBuilderOpLessThan": "小於",
+  "settings.ruleBuilderOpLessOrEqual": "至多",
+  "settings.ruleBuilderOpContains": "包含",
+  "settings.ruleBuilderOpNotContains": "不包含",
+  "settings.ruleBuilderOpIsEmpty": "為空",
+  "settings.ruleBuilderOpIsNotEmpty": "不為空",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "超過 N 天前",
+  "settings.ruleBuilderOpLessThanDaysAgo": "不到 N 天前",
+  "settings.ruleBuilderOpHasValue": "有值",
+  "settings.ruleBuilderOpHasNoValue": "沒有值",
+  "settings.ruleBuilderProblemNoConditions": "請至少新增一個條件。",
+  "settings.ruleBuilderOpIsOneOf": "是以下其中之一",
+  "settings.ruleBuilderOpIsNotOneOf": "不是以下任何一個",
+  "settings.ruleBuilderOpContainsAny": "包含以下任何一個",
+  "settings.ruleBuilderOpContainsNone": "不包含以下任何一個",
+  "settings.ruleBuilderValues": "值",
+  "settings.ruleBuilderValuesPerLine": "每行一個值",
+  "settings.ruleBuilderProblemNoOutputs": "請至少選擇一個結果。",
+  "settings.ruleBuilderProblemFactRequired": "請選擇事實。",
+  "settings.ruleBuilderProblemFactUnknown": "此規則無法使用這項事實。",
+  "settings.ruleBuilderProblemOperatorInvalid": "請為這項事實選擇比較方式。",
+  "settings.ruleBuilderProblemValueRequired": "請輸入值。",
+  "settings.ruleBuilderProblemValueNotNumber": "請輸入數字。",
+  "settings.ruleBuilderProblemValueNotDays": "請輸入整數天數，最多 100000。",
+  "settings.ruleBuilderProblemValueUnrepresentable":
+    "此值包含規則無法容納的字元。",
+  "settings.ruleBuilderProblemValueDuplicate": "每個項目只能列出一次。",
+  "settings.ruleBuilderProblemOutputNotInScope": "此規則無法使用這個選項。",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "這個選項無法與另一個已選選項一起使用。",
+  "settings.ruleBuilderProblemOutputRequired":
+    "請從以下選擇一個：{{outputs}}。",
+  "settings.ruleBuilderProblemValueNotWhole": "請輸入整數。",
+  "settings.ruleBuilderProblemValueOutOfRange": "此數字超出允許範圍。",
+  "settings.ruleBuilderProblemValueNotOffered": "請選擇其中一個提供的值。",
+  "settings.ruleBuilderProblemValueInvalid": "此值包含此處不允許的字元。",
+  "settings.ruleBuilderProblemValueTooLong": "此值太長。",
+  "settings.ruleBuilderProblemValueTooMany": "此清單的項目太多。",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "此規則包含此版本無法辨識的選項。",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "這個選項也需要：{{outputs}}。",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "已不再提供：{{values}}。在您選擇其他值之前，規則會保留這個值。",
+  "settings.ruleBuilderSchemaLoading":
+    "正在載入簡易編輯器，期間可使用 Rego 編輯器。",
+  "settings.ruleBuilderSchemaFailed":
+    "無法載入簡易編輯器。請以 Rego 編輯規則，或重新開啟頁面再試一次。",
+  "settings.scoringBuilderOutputs": "分數",
+  "settings.scoringBuilderOutputsHelp":
+    "選擇一項：為發行版加分，或封鎖此發行版。代碼會在決策記錄中標示此分數項目。",
+  "settings.scoringBuilderAdjustScore": "調整分數",
+  "settings.scoringBuilderBlock": "封鎖發行版",
+  "settings.scoringBuilderCode": "代碼",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "點數",
+  "settings.requestBuilderOutputs": "決定與變更",
+  "settings.requestBuilderOutputsHelp":
+    "最多選擇一個投票：核准、拒絕，或保留審核。規則也可以變更核准時寫入的內容、新增標籤或傳送通知，有無投票皆可。原因代碼可搭配以上任何一項。",
+  "settings.requestBuilderMonitorPlaceholder": "選擇監控方式",
+  "settings.requestBuilderLanguagesPlaceholder": "選擇語言",
+  "settings.requestDeclaredActionsTitle": "此規則能做什麼",
+  "settings.requestDeclaredActionsNone": "未宣告任何內容",
+  "settings.requestRuleWarningsTitle": "警告",
+  "settings.requestRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
+  "settings.requestBuilderOriginManual": "手動請求",
+  "settings.requestBuilderOriginPublicList": "來自公開清單",
+  "settings.requestBuilderOriginPersonalList": "來自個人清單",
+  "settings.lifecycleDeclaredActionsNone": "沒有操作",
+  "settings.lifecycleDecidedActionsNone": "沒有操作",
+  "settings.lifecycleRuleWarningsTitle": "警告",
+  "settings.lifecycleRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
+  "settings.refLifecycleOutputFlagHeads":
+    "不帶值的操作是布林值：以 if 定義，主體成立時即套用。作品層級：unmonitor、monitor、search、fetch_subtitles、delete_files 與 delete_title。影集的單一季：monitor_season、unmonitor_season、delete_season_files 與 fetch_season_subtitles。單一單集：monitor_episode、unmonitor_episode、delete_episode_files 與 fetch_episode_subtitles。",
+  "settings.refLifecycleOutputValueHeads":
+    "帶值的操作以 := 指派字面值。set_quality_profile、move_to_library、move_to_root、notify、notify_season 與 notify_episode 接受字串；add_tags 與 remove_tags 接受字串清單。else 鏈可在字面值之間選擇；計算出的值會被拒絕。",
+  "settings.refLifecycleOutputHelpers":
+    "其他任何規則名稱都是您自己的輔助規則，只有在操作、unknown 或 reasons 使用它時才有作用。",
+  "settings.refLifecycleActionsTitle": "操作",
+  "settings.refLifecycleActionsOrder":
+    "無論原始碼中的順序為何，Scryer 都依此順序套用對象的操作：{{order}}。",
+  "settings.refLifecycleActionsDaysSince":
+    "days_since(timestamp) 回傳 RFC3339 時間戳記與評估時間之間的完整天數，因此 days_since(input.facts.added_at) > 180 表示加入已超過 180 天。",
+  "settings.refLifecycleActionsNotify":
+    "notify 會在規則的其他操作確實變更了某些內容後傳送一次訊息；若 notify 是規則唯一的操作，則立即傳送。若每個操作都已經就緒，則不會傳送任何訊息。預覽與試執行絕不會傳送。",
+  "settings.refLifecycleActionsConflicts":
+    "衝突的操作會附上原因暫緩，而不套用其中任何一項。這包括同一對象的衝突（例如同時 monitor 與 unmonitor，或同一標籤既加入又移除），也包括作品與其季或集之間、季與其集之間的衝突（例如監控一部影集的同時刪除其中一季的檔案）。",
+  "settings.refLifecycleTagActionsTitle": "標籤操作",
+  "settings.refLifecycleTagActionsNote":
     "add_tags 與 remove_tags 在符合條件的作品上寫入使用者標籤。每個標籤都必須存在於管理員在「設定」中維護的標籤註冊表中，且標籤以小寫形式儲存 — 引用了後續已刪除標籤的規則將暫緩並顯示 tag_not_defined，而不是寫入它。",
-  "settings.refMaintTagOscillationNote":
+  "settings.refLifecycleTagOscillationNote":
     "對相同作品上的相同標籤寫入相反修補程式的兩條規則，會以 tag_patch_conflict 暫緩這兩個候選項目，而不是讓最後執行的規則勝出。新增標籤的規則與在稍後執行中移除標籤的另一條規則無法以這種方式被捕獲：這是一種撰寫錯誤，會使標籤永遠來回翻轉，因此請調整兩者的範圍使其無法同時符合條件。",
-  "settings.maintenanceTemplateGallery": "初學者範本",
-  "settings.maintenanceTemplateGalleryDescription":
-    "將完整撰寫好的比對器載入編輯器。在您審查並按下建立之前不會儲存任何內容。",
-  "settings.maintenanceTemplateApply": "使用範本",
-  "settings.maintenanceTemplateFacetMovie": "電影",
-  "settings.maintenanceTemplateFacetShow": "影集",
-  "settings.maintenanceTemplateGraceBadge": "{{count}} 天寬限期",
-  "settings.maintenanceTemplateNoGraceBadge": "無寬限期",
-  "settings.maintenanceTemplateDestructiveBadge": "刪除檔案",
-  "settings.maintenanceTemplateNeedsProfileBadge": "挑選目標設定檔",
-  "settings.maintenanceTemplateDeadWantedTitle": "失效的徵求中項目",
-  "settings.maintenanceTemplateDeadWantedDescription":
+  "settings.lifecycleTemplateGallery": "初學者範本",
+  "settings.lifecycleTemplateApply": "使用範本",
+  "settings.lifecycleTemplateFacetMovie": "電影",
+  "settings.lifecycleTemplateFacetShow": "影集",
+  "settings.lifecycleTemplateGraceBadge": "{{count}} 天寬限期",
+  "settings.lifecycleTemplateNoGraceBadge": "無寬限期",
+  "settings.lifecycleTemplateNeedsProfileBadge": "指定目標設定檔",
+  "settings.lifecycleTemplateDeadWantedTitle": "失效的徵求中項目",
+  "settings.lifecycleTemplateDeadWantedDescription":
     "您仍在監控但從未取得任何檔案的作品。事實是純值，因此 Scryer 無法獲知其監控或檔案狀態的作品將會暫緩而非符合條件。在 30 天寬限期過後，該範圍會被取消監控，而硬碟上既有的任何內容將不受影響。",
-  "settings.maintenanceTemplateLibraryAgingTitle": "媒體庫老化清理",
-  "settings.maintenanceTemplateLibraryAgingDescription":
+  "settings.lifecycleTemplateLibraryAgingTitle": "媒體庫老化清理",
+  "settings.lifecycleTemplateLibraryAgingDescription":
     '注意：此範本會刪除作品及其檔案。任何包含檔案的項目都會老化淘汰，除非其帶有 "keep" 標籤。首先會執行 180 天的寬限期，且執行個體門檻以及此規則本身的授權必須一致同意，然後才會移除任何內容。',
-  "settings.maintenanceTemplateAddedLongAgoTitle": "加入已超過 180 天",
-  "settings.maintenanceTemplateAddedLongAgoDescription":
-    "真實日期計算：比對器將評估時間減去作品的 added_at，並符合超過 180 天的項目。該範圍會被取消監控，檔案則保留。沒有 added_at 值的作品將被暫緩而非符合條件。",
-  "settings.maintenanceTemplateOversizedTitle": "超大體積發行版本",
-  "settings.maintenanceTemplateOversizedDescription":
-    "檔案總計超過 40 GB 的作品。將作品移至您選擇的品質設定檔，且僅在設定檔實際變更時才重新搜尋 — 在儲存前請在編輯器中挑選該目標設定檔。",
-  "settings.maintenanceTemplateFourKPurgeTitle": "4K 清理",
-  "settings.maintenanceTemplateFourKPurgeDescription":
-    "任何包含 2160p 檔案的作品。在 7 天寬限期過後，將其移至您選擇的品質設定檔，並在設定檔變更時重新搜尋。儲存前請在編輯器中選取該目標設定檔。",
-  "settings.maintenanceTemplateRequestedExpiryTitle": "請求的媒體到期",
-  "settings.maintenanceTemplateRequestedExpiryDescription":
+  "settings.lifecycleTemplateAddedLongAgoTitle": "加入已超過 180 天",
+  "settings.lifecycleTemplateAddedLongAgoDescription":
+    "符合加入超過 180 天的作品。範圍會取消監控，檔案保留。沒有記錄加入日期的作品不會符合。",
+  "settings.lifecycleTemplateOversizedTitle": "超大體積發行版本",
+  "settings.lifecycleTemplateOversizedDescription":
+    "檔案總計超過 40 GB 的作品。將作品移至指定的品質設定檔並重新搜尋。儲存前，請將「Compact 1080p」預留名稱換成您的設定檔之一。",
+  "settings.lifecycleTemplateFourKPurgeTitle": "4K 清理",
+  "settings.lifecycleTemplateFourKPurgeDescription":
+    "任何含有 2160p 檔案的作品。7 天寬限期後移至指定的品質設定檔並重新搜尋。儲存前，請將原始碼中的「Compact 1080p」預留名稱換成您的設定檔之一。",
+  "settings.lifecycleTemplateRequestedExpiryTitle": "請求的媒體到期",
+  "settings.lifecycleTemplateRequestedExpiryDescription":
     '注意：此範本會刪除作品及其檔案。來自請求的作品會在 120 天後淘汰，除非帶有 "keep" 標籤。',
-  "settings.maintenanceTemplateDepartedRequesterTitle": "已離職/離開的請求者",
-  "settings.maintenanceTemplateDepartedRequesterDescription":
-    '注意：此範本會刪除作品及其檔案。它比對由指定使用者請求的作品 — 在儲存前請將比對器中的 "departed-user" 預留位置編輯為您指定的名稱，否則將不符合任何內容。',
-  "settings.maintenanceTemplateSystemAddedTitle": "系統新增清理",
-  "settings.maintenanceTemplateSystemAddedDescription":
+  "settings.lifecycleTemplateDepartedRequesterTitle": "已離職/離開的請求者",
+  "settings.lifecycleTemplateDepartedRequesterDescription":
+    '注意：此範本會刪除作品及其檔案。它比對由指定使用者請求的作品 — 在儲存前請將 "departed-user" 預留位置改為您指定的使用者名稱，否則將不符合任何內容。',
+  "settings.lifecycleTemplateSystemAddedTitle": "系統新增清理",
+  "settings.lifecycleTemplateSystemAddedDescription":
     "由掃描發現而非由人員手動新增且包含檔案的作品。在 60 天過後，該範圍會被取消監控，檔案則保留在原處。",
-  "settings.maintenanceTemplateWatchedRequestedTitle": "所有發起請求者皆已觀看",
-  "settings.maintenanceTemplateWatchedRequestedDescription":
+  "settings.lifecycleTemplateWatchedRequestedTitle": "所有發起請求者皆已觀看",
+  "settings.lifecycleTemplateWatchedRequestedDescription":
     "注意：此範本會刪除作品及其檔案。在 30 天寬限期過後，比對每位請求者皆已播放過的被請求電影。僅限電影：Scryer 針對每部電影與每一集單集記錄播放次數，從不按整部影集記錄，因此影集將暫緩而非符合條件。當請求者沒有關聯的媒體伺服器帳號，或上次信號同步超過 48 小時前時，它也會暫緩 — 不完整的觀看狀況不足以作為刪除的依據。",
-  "settings.maintenanceTemplateExpiredLeasesTitle": "已過期的請求租約",
-  "settings.maintenanceTemplateExpiredLeasesDescription":
+  "settings.lifecycleTemplateExpiredLeasesTitle": "已過期的請求租約",
+  "settings.lifecycleTemplateExpiredLeasesDescription":
     "注意：此範本會刪除作品及其檔案。在 7 天寬限期過後，它會比對請求租約皆已到期的作品。尚未開始的租約（作品尚未匯入）以及從未有租約的作品都將不受影響。",
-  "settings.maintenanceTemplateNoProfileTitle": "無品質設定檔",
-  "settings.maintenanceTemplateNoProfileDescription":
-    "未指派品質設定檔的作品。不採取任何動作：此項用於收集清單以便在決定處理方式前進行檢視。",
-  "settings.maintenanceTemplateNewestEpisodesTitle": "保留最新下載的 3 集單集",
-  "settings.maintenanceTemplateNewestEpisodesDescription":
+  "settings.lifecycleTemplateNoProfileTitle": "無品質設定檔",
+  "settings.lifecycleTemplateNoProfileDescription":
+    "未指派品質設定檔的作品。加上 needs-review 標籤，讓人員選擇設定檔；其他不做任何變更。",
+  "settings.lifecycleTemplateNewestEpisodesTitle": "保留最新下載的 3 集單集",
+  "settings.lifecycleTemplateNewestEpisodesDescription":
     "注意：此單集範圍範本會取消監控並刪除依播出日期排名在最新三集之外的已下載單集。特別篇、未來單集、遺失的檔案與未確定的日期不會獲得排名，因此不會符合條件。受保護的單集仍會佔據前三名的名額。",
-  "settings.maintenanceTemplateNewestSeasonsTitle": "保留最新下載的 2 季",
-  "settings.maintenanceTemplateNewestSeasonsDescription":
+  "settings.lifecycleTemplateNewestSeasonsTitle": "保留最新下載的 2 季",
+  "settings.lifecycleTemplateNewestSeasonsDescription":
     "注意：此季度範圍範本會依各季最新符合資格的已下載單集，取消監控並刪除排名在最新兩季之外的季度檔案。特別篇、未來單集、遺失的檔案與未確定的日期不會獲得排名；受保護的季度仍會佔據名額。",
   "settings.requestRules": "請求規則",
   "settings.noRequestRulesFound": "暫無請求規則。",
@@ -4629,8 +5056,6 @@ const zh_TW: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "所有庫",
   "settings.requestRuleLibrariesHelp":
     "全部不勾選，則此規則適用於所有庫中的請求。",
-  "settings.requestRuleRevision": "修訂版",
-  "settings.requestRuleDecisionCount": "決策數",
   "settings.requestRuleCopy": "複製規則",
   "settings.requestRuleCreate": "建立規則",
   "settings.requestRuleUpdate": "更新規則",
@@ -4643,20 +5068,9 @@ const zh_TW: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "放棄未儲存的更改？",
   "settings.requestRuleConfirmDiscardDescription":
     "編輯器中的匹配器尚未儲存，繼續將會替換它。",
-  "settings.requestRuleRequesters": "在此規則中指定人員",
-  "settings.requestRuleRequestersHelp":
-    "勾選此規則針對的賬戶並應用。編輯器中的匹配器會被改寫，您可以在儲存前先讀一遍。",
-  "settings.requestRuleRequestersApply": "把這些名字寫入匹配器",
-  "settings.requestRuleRequestersUnavailable":
-    "列出賬戶需要本頁面不具備的許可權，因此名字需要手動寫入匹配器。",
-  "settings.requestRuleRequestersNoTarget":
-    "此匹配器沒有指定任何人，所選賬戶無處寫入。請先新增 requesters 集合或使用者名稱比較。",
   "settings.requestPreviewTitle": "用一個請求試執行此規則",
   "settings.requestPreviewSubtitle":
     "針對您描述的請求執行一個匹配器。不會提交任何內容，也不會留下記錄。",
-  "settings.requestPreviewSource": "匹配器",
-  "settings.requestPreviewSourceStored": "已儲存的規則",
-  "settings.requestPreviewSourceDraft": "編輯器草稿",
   "settings.requestPreviewRuleSelect": "規則",
   "settings.requestPreviewRuleSelectPlaceholder": "選擇規則",
   "settings.requestPreviewUser": "請求者",
@@ -4673,8 +5087,6 @@ const zh_TW: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "正在使用 {{title}}。",
   "settings.requestPreviewRun": "執行預覽",
   "settings.requestPreviewRunning": "正在執行…",
-  "settings.requestPreviewEmpty":
-    "描述一個請求並執行預覽，即可看到此規則會怎麼判斷。",
   "settings.requestPreviewMetadataPartial": "後設資料不完整",
   "settings.requestPreviewShowInput": "顯示匹配器看到的輸入",
   "settings.requestPreviewHideInput": "隱藏輸入",
@@ -4682,6 +5094,9 @@ const zh_TW: LocaleDictionary = {
   "settings.requestPreviewUndefinedTags":
     "在套用之前請先在「設定 › 標籤」中定義這些標籤。",
   "settings.requestDecisionsTitle": "近期決策",
+  "settings.requestNavRules": "規則",
+  "settings.requestNavTry": "試執行請求",
+  "settings.requestNavDecisions": "決策",
   "settings.requestDecisionsOutcomeFilter": "結果",
   "settings.requestDecisionsOutcomeAll": "任意結果",
   "settings.requestDecisionsColTime": "評估時間",
@@ -4693,8 +5108,6 @@ const zh_TW: LocaleDictionary = {
   "settings.requestDecisionNoVotes": "沒有規則投票。",
   "settings.requestDecisionHeld": "已暫緩",
   "settings.requestTemplateGallery": "初學者規則",
-  "settings.requestTemplateGalleryDescription":
-    "可載入編輯器的實用範例。套用範例會自動填入表單；您仍可閱讀、命名、設定範圍並儲存它。",
   "settings.requestTemplateGalleryTagNote":
     "發出標籤的範本需要在「設定 › 標籤」中定義該標籤；決策請求時會捨棄未定義的標籤。",
   "settings.requestTemplateApply": "載入至編輯器",
@@ -4716,18 +5129,32 @@ const zh_TW: LocaleDictionary = {
   "settings.requestTemplateMonthlyQuotaDescription":
     "一旦請求者在過去三十天內已有五次獲准，即將請求送交人員審核。此規則從不直接拒絕；它要求人員介入檢視。",
   "settings.refReqTitle": "請求輸入參考",
-  "settings.refReqSubtitle": "請求比對器可讀取的所有值及其含義。",
   "settings.refReqIntro":
     "請求規則讀取一份說明該請求、發起請求者、目標媒體庫以及 Scryer 對該媒體了解程度的文件。事實是純值。Scryer 無法觀察到的事實會直接缺失，而讀取缺失事實的規則會將請求暫緩交由人員處理而非隨意猜測 — 您永遠不必自行撰寫該防護代碼。",
   "settings.refReqOutputTitle": "請求規則所定義的內容",
   "settings.refReqOutputIntro":
-    "必須定義其中至少一項，否則規則永遠無法投票，且 Scryer 會拒絕儲存它。",
+    "規則必須定義一個投票、一個調整核准內容的數值，或 add_tags；三者皆未定義的規則會在儲存時被拒絕。帶值的項目以 := 指派純字面值。",
   "settings.refReqOutputApprove":
     "approve — 該請求可以在無人員審核的情況下獲准。",
-  "settings.refReqOutputDeny": "deny — 該請求被拒絕。拒絕票優先於任何其他票。",
+  "settings.refReqOutputDeny":
+    "deny — 該請求被拒絕。跨規則而言，拒絕票優先於任何其他票；在同一條規則內，manual 優先於 deny。",
   "settings.refReqOutputManual":
-    "manual — 無論其他規則如何投票，該請求都會轉交由人員處理。",
-  "settings.refReqOutputTags": 'tags 包含 "…" — 媒體的標籤，僅在獲准時套用。',
+    "manual — 除非其他規則拒絕，否則該請求會轉交由人員處理。發生錯誤或被暫緩的規則視為 manual。",
+  "settings.refReqOutputTags":
+    'add_tags := ["…"] — 作品的標籤，僅在獲准時套用。',
+  "settings.refReqOutputSetQualityProfile":
+    'set_quality_profile := "設定檔名稱" — 以此品質設定檔核准，取代請求的設定檔。',
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — 以此保留期核准。0 表示永久保留；否則為 1 至 3650 天。",
+  "settings.refReqOutputSetMonitor":
+    'set_monitor := "FUTURE_EPISODES" — 以此監控方式核准：電影用 MONITORED 或 UNMONITORED；影集與動畫用 FUTURE_EPISODES、MISSING_AND_FUTURE_EPISODES、ALL_EPISODES 或 NONE。',
+  "settings.refReqOutputSetAudioLanguages":
+    'set_required_audio_languages := ["eng"] 與 set_preferred_audio_languages := ["jpn", "eng"] — 取代請求的音訊語言清單。',
+  "settings.refReqOutputNotify": 'notify := "…" — 傳送此通知。',
+  "settings.refReqOutputShapingOutcome":
+    "自動核准的請求會取得這些數值。保留審核的請求會將其作為建議顯示給審核者，被拒絕的請求只會在追蹤紀錄中列出。兩條規則為同一項目設定不同數值時，請求會保留審核。",
+  "settings.refReqOutputNoSchedule":
+    "請求規則沒有排程：每個請求與請求者的預檢都會執行。",
   "settings.refReqOutputReasons": 'reasons 包含 "…" — 顯示給請求者的穩定代碼。',
   "settings.refReqOutputNoPackage":
     "請勿撰寫 package 或 import 行。Scryer 會產生這兩者，並在將比對器交給此編輯器時將其去除。",
@@ -4737,11 +5164,69 @@ const zh_TW: LocaleDictionary = {
   "search.keepForCustom": "指定天數…",
   "search.keepForCustomLabel": "保留天數",
   "search.keepForHelp":
-    "Scryer 為您保留此媒體的時長。到期後維護規則可能會將其刪除；永久保留不會到期。",
+    "Scryer 為您保留此媒體的時長。到期後生命週期規則可能會將其刪除；永久保留不會到期。",
   "requests.preflightAutoApprove": "這將被自動核准",
   "requests.preflightManualReview": "這需要人工審核",
   "requests.preflightDeny": "這將被拒絕：{{reasons}}",
   "requests.preflightTags": "將標記為 {{tags}}。",
+  "error.ruleVoteRequired":
+    "為此請求規則定義一個投票（approve、deny 或 manual）、一個調整核准內容的數值，或 add_tags。",
+  "error.ruleActionValueNotLiteral":
+    "為此項目指派純字面值：帶引號的字串、set_lease_days 用整數，或標籤與音訊語言項目用帶引號字串的清單。",
+  "error.ruleActionValueInvalid":
+    "此項目的數值無效：名稱不可為空，標籤必須是有效標籤，保留期為 0 至 3650 天，監控方式與語言必須是 Scryer 提供的選項。",
+  "error.ruleActionUnknownQualityProfile":
+    "沒有品質設定檔使用此名稱，因此規則無法套用。",
+  "error.ruleActionUndefinedTag":
+    "此標籤尚未在「設定 › 標籤」中定義，因此規則套用時會被略過。",
+  "settings.regoSnippet.shapeRequest": "條件成立時設定核准寫入的保留期。",
+  "settings.regoSnippet.tagRequest": "條件成立時為請求的作品加上標籤。",
+  "requests.preflightShaping": "若獲核准，將變更為：{{changes}}。",
+  "requests.shapingTitle": "核准時會變更為",
+  "requests.shapingSetBy": "由 {{rule}} 設定",
+  "requests.shapingConflict": "{{head}}：規則設定了不同數值，由人工決定",
+  "requests.shapingSuggested": "由規則 {{rule}} 建議",
+  "requests.shapingLeaseDays": "{{count}} 天",
+  "requests.fallbackShapingConflict":
+    "規則為同一項目設定了不同數值，因此由人工決定。",
+  "requests.fallbackShapingInvalid":
+    "規則原本會核准，但其設定的數值無法套用到此請求，因此由人工決定。",
+  "requests.fallbackLibraryPermission": "由請求者的「自動核准請求」權限核准。",
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED": "無法建立請求規則引擎。",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "必填欄位為空。",
+  "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
+    "租期必須為 1 至 3650 天（十年），或為永久。",
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
+    "媒體庫類型與請求的媒體類型不符。",
+  "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "找不到媒體庫。",
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
+    "您無法讀取此請求的決策。",
+  "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
+    "媒體請求必須包含 SMG 外部識別碼。",
+  "error.reason.REQUEST_RULE_MEDIA_REQUEST_ID_REQUIRED":
+    "必須提供媒體請求 ID。",
+  "error.reason.REQUEST_RULE_MEDIA_REQUEST_NOT_FOUND": "找不到媒體請求。",
+  "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
+    "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
+    "一個請求最多可帶 16 個標籤。",
+  "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "規則評估失敗。",
+  "error.reason.REQUEST_RULE_COMPILE_FAILED": "規則編譯失敗。",
+  "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
+  "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND": "找不到範例媒體庫。",
+  "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND": "找不到範例請求者。",
+  "error.reason.REQUEST_RULE_SET_NOT_FOUND": "找不到請求規則集。",
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG": "標籤最多 64 個字元。",
+  "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
+    "標籤含有不支援的字元；請使用字母、數字、'.'、'_'、'-' 或空格。",
+  "error.reason.REQUEST_RULE_TAG_REQUIRED": "標籤不可為空。",
+  "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
+    "標籤不可以保留前綴 'scryer:' 開頭。",
+  "settings.requestRulesDefault":
+    "沒有啟用任何規則時，擁有自動核准權限的成員所提出的請求會被核准，其他請求則等待審查。",
+  "settings.requestRuleEnabledUpdated": "已更新 {{name}}。",
+  "settings.requestRuleRequesterFieldsHint":
+    "此規則會讀取請求者欄位，需要「管理權限」才能儲存。",
   "requests.preflightReason": "原因：{{reason}}。",
   "requests.preflightMetadataPartial":
     "Scryer 無法讀取此作品的完整中繼資料，因此將由人工決定。",
@@ -4773,6 +5258,7 @@ const zh_TW: LocaleDictionary = {
   "requests.approvedLease": "保留時間",
   "requests.approvedLeaseKeepForever": "依請求永久保留",
   "requests.approvedLeaseKeepRequested": "依請求保留 {{count}} 天",
+  "requests.approvedAudioLanguages": "音訊語言",
   "requests.approvedTags": "標籤",
   "requests.approvedTagsHelp":
     "核准時套用於作品。已預先填入規則輸出的標籤；您可在「設定 > 標籤」中新增或移除管理員定義的任何標籤。",
@@ -4813,19 +5299,23 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequesterUserId": "發起請求的帳號識別碼",
   "settings.refReqRequesterUsername": "發起請求的帳號使用者名稱",
   "settings.refReqRequesterAccountKind":
-    "該帳號的登入方式（例如 local 本機，或已關聯的提供者）",
+    "帳號的建立方式：local，或 external_auto_provisioned（首次透過身分提供者登入時建立的帳號）",
   "settings.refReqRequesterAppPermissions": "該帳號所擁有的全應用程式權限",
   "settings.refReqRequesterLibraryPermissions":
     "該帳號在被請求媒體庫上所擁有的權限",
   "settings.refReqRequesterLinkedProviders":
     "該帳號已關聯的媒體伺服器與身分識別提供者",
   "settings.refReqRequesterCreatedAt":
-    "帳號建立時間；缺失，因為 Scryer 尚未記錄它",
+    "帳號建立時間；在 Scryer 開始記錄之前建立的帳號則缺失",
+  "settings.refReqRequesterLastLoginAt":
+    "帳號最後一次登入的時間；若 Scryer 沒有登入紀錄則缺失",
+  "settings.refReqRequesterAccountAgeDays":
+    "帳號建立至今的完整天數；若建立時間缺失則缺失",
   "settings.refReqSectionLibrary": "— 請求所針對的媒體庫",
   "settings.refReqLibraryId": "媒體庫識別碼",
   "settings.refReqLibraryName": "媒體庫名稱",
   "settings.refReqLibraryFacet":
-    "媒體庫收錄的媒體類型（MOVIE 電影、SERIES 影集或 ANIME 動漫）",
+    "媒體庫收錄的媒體類型（movie 電影、series 影集或 anime 動漫）",
   "settings.refReqLibraryIsDefault":
     "此媒體庫為其所屬類型的預設媒體庫時為 true",
   "settings.refReqSectionRequest": "— 請求的內容",
@@ -4837,12 +5327,22 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequestQualityProfileId": "請求者選取的品質設定檔識別碼",
   "settings.refReqRequestQualityProfileName": "該設定檔的名稱",
   "settings.refReqRequestMonitorType":
-    "請求者要求的監控類型（例如 ALL_EPISODES）",
+    "請求者要求的監控類型，小寫且移除空格、連字號與底線（例如 allepisodes）",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "進階監控選擇所指定的季度數",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "進階監看選擇所列的季數，由小到大；沒有選擇時為 null",
+  "settings.refReqRequestListIsWatchlist":
+    "當清單是擁有者在已連結帳號上的稍後觀看清單時為 true",
+  "settings.refReqRequestListSourceType":
+    "提供者端的清單類型，小寫（例如 watchlist、plantowatch 或 list）",
   "settings.refReqRequestLeaseForever": "請求者要求永久保留媒體時為 true",
   "settings.refReqRequestLeaseDays":
-    "請求者要求保留的天數；若要求永久保留則缺失",
+    "請求者要求保留的天數；若要求永久保留則為 null",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "請求者要求作品必須具備的音訊語言。null 表示交由媒體庫決定；空清單表示不設要求",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "請求者偏好的音訊語言（依順序）。null 表示交由媒體庫決定",
   "settings.refReqSectionExternalIds":
     "— input.request.external_ids 上的提供者識別碼",
   "settings.refReqExternalIdsTmdb": "TMDB 識別碼（若提供者有提供）",
@@ -4885,7 +5385,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsQualityProfileAllowsUpgrades":
     "該設定檔在首次抓取後是否持續升級",
   "settings.refReqFactsExistsInLibraryIds": "已收錄此作品的媒體庫",
-  "settings.refReqFactsPreviousRequestCount": "此請求者先前請求此作品的次數",
+  "settings.refReqFactsPreviousRequestCount": "此前任何人請求此作品的次數",
   "settings.refReqFactsPreviouslyDenied": "先前的請求中是否有一次被拒絕",
   "settings.refReqFactsPreviouslyApproved": "先前的請求中是否有一次獲准",
   "settings.refReqFactsPendingRequestCount": "此請求者仍處於等待狀態的請求數量",
@@ -4896,6 +5396,31 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsDaysSinceLastRequest":
     "距離此請求者上次發起任何請求的天數",
   "settings.refReqFactsLibraryTitleCount": "目標媒體庫包含的作品數量",
+  "settings.refReqFactsSeasonCount": "影集的季數，適用於影集",
+  "settings.refReqFactsEpisodeCount": "影集的一般集數，適用於影集",
+  "settings.refReqFactsAiredEpisodeCount": "截至評估當天已播出的集數",
+  "settings.refReqFactsUnairedEpisodeCount": "尚未播出的集數",
+  "settings.refReqFactsNextEpisodeAirDate": "下一集的播出日期",
+  "settings.refReqFactsTheatricalReleaseDate": "院線上映日期，適用於電影",
+  "settings.refReqFactsDigitalReleaseDate": "數位發行日期，適用於電影",
+  "settings.refReqFactsPhysicalReleaseDate": "實體（光碟）發行日期，適用於電影",
+  "settings.refReqFactsHomeReleaseAvailable": "電影是否已推出數位版或光碟",
+  "settings.refReqFactsDaysUntilRelease": "距離電影首次發行的天數",
+  "settings.refReqFactsOtherRequesterCount": "有多少其他成員請求過這部作品",
+  "settings.refReqFactsPendingByOtherRequester":
+    "其他成員對這部作品的請求是否仍在等待",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "作品是否在請求者自己的稍後觀看清單上",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "作品在請求者稍後觀看清單上的時間",
+  "settings.refReqFactsListExcluded": "此作品是否受清單排除規則涵蓋",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "此請求者的請求已加入目標媒體庫的作品數",
+  "settings.refReqFactsStorageRootId": "作品將存放的根資料夾",
+  "settings.refReqFactsStorageAvailableBytes": "該根目錄的可用空間，以位元組計",
+  "settings.refReqFactsStorageTotalBytes":
+    "該根目錄所在檔案系統的總大小，以位元組計",
+  "settings.refReqFactsStorageAvailablePercent": "該根目錄的可用空間百分比",
   "settings.refReqSectionCertifications":
     "— input.facts.certifications 中每個分級認證對應一項",
   "settings.refReqCertCountry": "頒發分級認證的國家/地區",
@@ -4937,8 +5462,10 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsNetworkValue": "電視網/串流網路名稱",
   "settings.refReqFactsStudioValue": "片廠/工作室名稱",
   "settings.refReqFactsContentStatusValue": "提供者的內容狀態字串",
-  "settings.refReqFactsReleaseDateValue": "RFC3339 上映日期",
-  "settings.refReqFactsFirstAiredValue": "RFC3339 首播日期",
+  "settings.refReqFactsReleaseDateValue":
+    "來源回報的上映日期，格式為 RFC3339 或 YYYY-MM-DD",
+  "settings.refReqFactsFirstAiredValue":
+    "來源回報的首播日期，格式為 RFC3339 或 YYYY-MM-DD",
   "settings.refReqFactsReleaseAgeDaysValue": "上映或首播至今的完整天數",
   "settings.refReqFactsAwardCountValue": "記錄的得獎數量；若無則確認為零",
   "settings.refReqFactsQualityProfileTiersValue":
@@ -4950,7 +5477,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIdsValue":
     "已收錄此作品的媒體庫識別碼；若無則為空清單",
   "settings.refReqFactsPreviousRequestCountValue":
-    "此請求者先前對此作品發起請求的次數",
+    "所有請求者先前對此作品發起請求的次數",
   "settings.refReqFactsPreviouslyDeniedValue":
     "先前請求中曾有一次被拒絕時為 true",
   "settings.refReqFactsPreviouslyApprovedValue":
@@ -4967,6 +5494,60 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsDaysSinceLastRequestValue":
     "自請求者前次請求以來的完整天數；若為首次請求則 absent，原因為 no_previous_request",
   "settings.refReqFactsLibraryTitleCountValue": "目標媒體庫中的作品數量",
+  "settings.refReqFactsSeasonCountValue":
+    "季數；電影為 absent，原因為 not_a_series；請求未帶影集結構時為 unknown，原因為 metadata_unavailable",
+  "settings.refReqFactsEpisodeCountValue":
+    "一般集數；absent 與 unknown 的情況同 season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "提出請求時已播出的集數，加上排定在評估當天或之前播出的集數",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count 減去 aired_episode_count，不會小於零",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "評估當天之後第一集的 YYYY-MM-DD；沒有排定時為 absent，原因為 no_scheduled_episode",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD；沒有時為 absent，原因為 no_theatrical_release_date，影集則為 not_a_movie；日期未蒐集時為 unknown，原因為 not_yet_collected 或 metadata_unavailable",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD；沒有時為 absent，原因為 no_digital_release_date；其餘同 theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD；沒有時為 absent，原因為 no_physical_release_date；其餘同 theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "數位或實體日期在評估當天或之前時為 true",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "距離最早已知日期的完整天數；已發行時為 absent，原因為 already_released；沒有已知日期時原因為 no_release_date",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "不同的其他請求者人數；Scryer 無法讀取請求時為 unknown，原因為 catalog_unavailable",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "其他成員的請求仍在等待決定時為 true；unknown 的情況同 other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "請求者連結且已同步的稍後觀看清單包含此作品時為 true；未連結時為 absent，原因為 no_watchlist_linked；清單不可信時為 unknown，原因為 watchlist_not_synced、watchlist_stale 或 list_store_unreadable",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "首次出現在清單上至今的完整天數；不在清單上時為 absent，原因為 not_on_a_watchlist；其餘同 on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "適用所有清單或此請求來源清單的排除規則列出此作品時為 true；無法讀取時為 unknown，原因為 list_exclusions_unavailable",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "目標媒體庫中由此請求者的請求建立的作品數；無法計算時為 unknown，原因為 requester_titles_unavailable",
+  "settings.refReqFactsStorageRootIdValue":
+    "媒體庫預設根目錄或第一個根目錄的識別碼；媒體庫沒有根目錄時為 unknown，原因為 storage_root_unavailable",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Scryer 最近一次量測根目錄時的可用位元組，最多十分鐘前；observed_at 標示時間。無法得知時為 unknown，絕不為零，原因為 storage_not_sampled、storage_sample_stale 或 storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "同一次量測的總位元組；unknown 的情況同 storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "同一次量測的可用位元組乘以 100 再除以總位元組；unknown 的情況同 storage_available_bytes",
+  "settings.refReqRequestList":
+    "提交此請求的清單；見下方 input.request.list。手動請求時不存在",
+  "settings.refReqSectionRequestList":
+    "— 清單請求背後的清單，位於 input.request.list。手動請求及無法讀取清單時不存在",
+  "settings.refReqRequestListSubscriptionId": "清單的識別碼",
+  "settings.refReqRequestListName": "清單名稱；個人清單從不命名，因此不存在",
+  "settings.refReqRequestListScope": "public 或 personal",
+  "settings.refReqRequestListMode":
+    "清單如何處理其項目：add、hold、request 或 discover",
+  "settings.refReqRequestListProvider": "清單提供者",
+  "settings.refReqRequestListOwnerIsRequester": "清單擁有者就是請求者時為真",
+  "settings.refReqRequestListOwnerListPolicy":
+    "擁有者的清單政策：auto、approval 或 none；未儲存時為 approval",
+  "settings.refReqRequestListRank": "項目在清單上的排名；清單未排名時不存在",
   "move.dialogTitle": "移動標題",
   "move.destinationLibrary": "目標庫",
   "move.destinationRoot": "目標根目錄",
@@ -5407,6 +5988,9 @@ const zh_TW: LocaleDictionary = {
   "indexerSearch.facet.protocol": "協議",
   "indexerSearch.facet.resolution": "解析度",
   "indexerSearch.facet.source": "來源",
+  "indexerSearch.facet.videoCodec": "影片編碼",
+  "indexerSearch.facet.audioCodec": "音訊編碼",
+  "indexerSearch.facet.audioChannels": "音訊聲道",
   "indexerSearch.facet.audio": "音訊與 HDR",
   "indexerSearch.facet.flags": "標記",
   "indexerSearch.facet.indexer": "索引器",
@@ -5527,7 +6111,7 @@ const zh_TW: LocaleDictionary = {
     "已重新命名為 {{label}}。改寫了 {{titles}} 個條目、{{seriesMovies}} 部劇集電影和 {{delayProfiles}} 個延遲配置。",
   "settings.titleTagRenameWarning":
     "規則源永遠不會被改寫，因此仍有 {{count}} 處規則引用舊標籤 {{label}}，它們將不再匹配：{{references}}。",
-  "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} 個維護規則集",
+  "settings.titleTagReferenceLifecycleRuleSets": "{{count}} 個生命週期規則集",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} 個釋出規則集",
   "settings.titleTagReferenceManagedTagFilters": "{{count}} 個託管標籤過濾器",
   "settings.titleTagReferenceRequestRuleSets": "{{count}} 個請求規則集",
@@ -5561,19 +6145,13 @@ const zh_TW: LocaleDictionary = {
   "title.catalogFilters.needsAttentionHint":
     "包含掃描失敗或需要審查的檔案，需人工處理後才可使用。",
   "settings.titleTagSeriesMovieCount": "單集電影",
-  "settings.maintenanceActionAddTags": "新增標籤",
-  "settings.maintenanceActionRemoveTags": "移除標籤",
-  "settings.maintenanceRuleTags": "標籤",
-  "settings.maintenanceRuleTagsNone": "尚未選擇標籤",
-  "settings.maintenanceRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "新增 {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "移除 {{tags}}",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "標記為待刪除",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleActionAddTags": "新增標籤",
+  "settings.lifecycleActionRemoveTags": "移除標籤",
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "標記為待刪除",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "標記待稽核",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "標記待稽核",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
   "mediaFile.allInfo": "Info",
   "mediaFile.noAnalysis": "No native analysis recorded for this file yet.",
@@ -5683,27 +6261,251 @@ const zh_TW: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
   "pendingImports.reason.anime_numbering_ambiguous": "劇集編號不明確",
-  "settings.maintenanceExecutionReason.playbackHold":
-    "已暫緩：媒體伺服器上正在播放內容。",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackHold":
+    "已暫緩：此作品正在媒體伺服器上播放。",
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "已暫緩：無法向媒體伺服器確認是否正在播放。",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "已暫緩：媒體伺服器顯示有比已存觀看紀錄更新的播放。",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "已暫緩：媒體伺服器的歷史紀錄顯示有觀看紀錄未計入的帳戶播放。",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "已暫緩：執行前媒體伺服器無法確認觀看紀錄。",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "已暫緩：已連線的媒體伺服器沒有相符的項目，執行前無法確認觀看紀錄。",
-  "settings.refMaintFactsWatchedByAnyone":
+  "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "此規則會刪除，但沒有設定每次執行的作品數上限，因此其動作不會執行。它仍會評估並可預覽；設定上限後即可執行動作。",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "派送生命週期搜尋需要已接受的回執意圖。",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "派送生命週期搜尋需要預先配置的工作執行 ID。",
+  "error.reason.CONFIGURATION_LIFECYCLE_ATTEMPT_RESULT_REQUIRED":
+    "生命週期動作步驟完成時必須附帶嘗試結果。",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_ALREADY_ACTIVE":
+    "生命週期規則已有此作品的有效候選項目。",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
+    "生命週期序列進度每頁最多接受 100 個候選項目。",
+  "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
+    "一般生命週期工作派送必須從派送中狀態開始。",
+  "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
+    "失敗的生命週期序列標記缺少失敗步驟 ID。",
+  "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
+    "已接受的生命週期工作回執需要實際的工作執行 ID。",
+  "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
+    "生命週期序列成員資格在確認不符合之前為終止狀態。",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "生命週期工作回執的狀態轉換必須指明預期狀態。",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
+    "生命週期序列回執投影最多接受 700 個步驟。",
+  "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "重試的生命週期動作步驟必須推進其嘗試次數。",
+  "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
+    "此生命週期規則有進行中的候選項目或動作紀錄；請改為停用。",
+  "error.reason.CONFIGURATION_LIFECYCLE_SEQUENCE_IDENTITY_MISMATCH":
+    "生命週期動作步驟與其已儲存的序列身分不符。",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_ATTEMPT_INVALID":
+    "生命週期動作步驟的認領必須開始一個非負的執行中嘗試。",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_PREFIX_MISMATCH":
+    "失敗的生命週期序列標記沒有保留其步驟前綴。",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_TARGET_INVALID":
+    "生命週期動作步驟的認領有無效的目標身分。",
+  "error.reason.CONFIGURATION_LIFECYCLE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "成功的生命週期序列標記缺少完整的步驟證據。",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_EVIDENCE_MISMATCH":
+    "生命週期終止標記與已儲存的步驟證據不符。",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STATE_MISMATCH":
+    "生命週期序列終止標記與候選項目的終止狀態不一致。",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STEP_IDS_INVALID":
+    "生命週期序列終止標記的預期步驟 ID 無效。",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED":
+    "生命週期要刪除的檔案已變更；需要重新評估。",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED":
+    "生命週期刪除的指紋已變更。",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
+    "生命週期刪除的目標已變更；需要重新評估。",
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
+    "此規則已在您的媒體庫執行過動作，刪除它會抹去其所做事項的紀錄。請改為設為停用：規則會立即停止，紀錄也會保留。",
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
+    "生命週期的檔案涵蓋範圍不明確。",
+  "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
+    "候選項目數量已變更。啟用前請檢查目前的數量。",
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
+    "刪除子項目需要指定集或季。",
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
+    "此規則目前正在追蹤作品，刪除它會讓這些作品不留痕跡地被捨棄。請改為設為停用，或先清除候選項目。",
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
+    "DeleteFiles 的 Unmonitor 前置條件不相容。",
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
+    "DeleteFiles 需要先前的 Unmonitor 步驟。",
+  "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND": "找不到生命週期排除項目。",
+  "error.reason.LIFECYCLE_FIELD_REQUIRED": "必填欄位為空。",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "生命週期的檔案擁有權已變更。",
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
+    "生命週期的目標檔案已變更；需要再次評估。",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID": "寬限期必須為零天或以上。",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
+    "寬限期最多為 3650 天（十年）。",
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES": "電影作品沒有集數清單。",
+  "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
+    "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
+    "預覽最多接受 50 個作品。",
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
+    "預覽需要一至五十個主體。",
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
+    "預覽主體不存在、不在規則的媒體庫中，或不屬於所選的作品與範圍。",
+  "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
+    "確認期間規則已變更；啟用刪除前請再次檢查。",
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
+    "啟用刪除前必須再次檢查規則設定；請重新開啟確認。",
+  "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "規則評估失敗。",
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED": "生命週期規則編譯失敗。",
+  "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND": "找不到生命週期規則集。",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
+    "此規則隨 Scryer 提供，無法編輯；可以檢視並變更其狀態。",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
+    "此規則隨 Scryer 提供，無法刪除。請改為設為停用。",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
+    "此規則隨 Scryer 提供，無法重新命名。",
+  "error.reason.LIFECYCLE_RULE_SOURCE_INVALID": "生命週期規則原始碼無效。",
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
+    "此規則的動作永遠不會變更任何東西，因此只能以試執行方式執行。",
+  "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
+  "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "生命週期序列步驟參數無效。",
+  "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED": "必須提供生命週期主體 ID。",
+  "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID": "生命週期主體類型無效。",
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
+    "找不到生命週期主體，或它已不屬於此作品。",
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
+    "取消監控候選項目的身分與其作品不符。",
+  "error.reason.MEDIA_LIFECYCLE_CLAIM_NOT_LIVE": "生命週期認領已不再有效。",
+  "error.reason.MEDIA_REQUEST_LIFECYCLE_CLAIM_NOT_FOUND":
+    "找不到生命週期認領。",
+  "error.reason.SERVICES_MAINTENANCE_OPERATION_PROGRESS": "維護作業進行中。",
+  "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND": "找不到生命週期規則。",
+  "error.lifecycleArmCountMismatch":
+    "候選項目數量已變更。請再次檢查並確認目前的數量。",
+  "setup.restoreRefusal.maintenanceActive":
+    "還原或復原已在進行中。請等待其完成。",
+  "jobs.builtin.LifecycleRuleEvaluation.name": "生命週期規則評估",
+  "jobs.builtin.LifecycleRuleEvaluation.description":
+    "依排程開始與結束請求租期。每條生命週期規則依自己的排程評估；立即執行會評估所有已啟用的規則，且永遠不會執行動作。",
+  "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
+    "已暫緩：自上次讀取最愛以來，媒體伺服器上有帳號將此項目，或所檢查集數的影集或季，標為最愛。",
+  "settings.lifecycleExecutionReason.ruleNotEligible":
+    "已暫緩：動作執行前，規則已停用、改為試執行或解除啟用，或其安全閘門已關閉。",
+  "settings.lifecycleExecutionReason.noMatchAtExecution":
+    "未執行：動作前重新檢查時，作品已不再符合規則。",
+  "settings.lifecycleExecutionReason.unknownAtExecution":
+    "已暫緩：動作前重新檢查時，規則無法做出決定。下次執行時會再檢查。",
+  "settings.lifecycleExecutionReason.activeAcquisition":
+    "已暫緩：此作品正在抓取、下載或匯入。",
+  "settings.lifecycleExecutionReason.acquisitionUnknown":
+    "已暫緩：Scryer 無法確定此作品是否正在抓取、下載或匯入。",
+  "settings.lifecycleExecutionReason.storageDeletionInProgress":
+    "已暫緩：儲存空間清理正在刪除檔案。動作會等待其完成。",
+  "settings.lifecycleExecutionReason.actionNotFullySupported":
+    "已暫緩：此動作無法用於此對象，例如對一季或一集執行整部作品的動作。",
+  "settings.lifecycleExecutionReason.titleMissing":
+    "此作品已不在媒體庫中，因此未執行任何動作。",
+  "settings.lifecycleExecutionReason.locationOperationHold":
+    "已暫緩：此作品的檔案正在移動或重新命名。完成後才會執行動作。",
+  "settings.lifecycleExecutionReason.passActionStepBudget":
+    "由先前一次已用完動作步驟的執行暫緩。現在的執行已沒有此限制；動作會在下次執行時進行。",
+  "settings.lifecycleExecutionReason.passHighRiskStepBudget":
+    "已暫緩：本次執行中刪除多次失敗，其餘刪除會等到下次執行。",
+  "settings.lifecycleExecutionReason.actionSucceeded": "動作已完成。",
+  "settings.lifecycleExecutionReason.alreadySatisfied":
+    "無需變更：作品已是動作會使其成為的狀態。",
+  "settings.lifecycleExecutionReason.retryPending":
+    "動作因可能暫時的原因失敗，將會重試。",
+  "settings.lifecycleExecutionReason.actionFailed":
+    "動作失敗且不會重試。錯誤記錄在動作歷史中。",
+  "settings.lifecycleExecutionReason.leaseReclaimed":
+    "動作在完成前中斷，例如 Scryer 重新啟動時。它已釋出以便再次執行。",
+  "settings.lifecycleExecutionReason.ambiguousEpisodeFileCoverage":
+    "已暫緩：部分檔案無法對應到此季或此集的集數，因此刪除並不安全。",
+  "settings.lifecycleExecutionReason.qualityProfileUnresolved":
+    "已暫緩：此規則設定的品質設定檔已不再對應唯一一個設定檔。它已被重新命名或移除，或有兩個設定檔同名。",
+  "settings.lifecycleExecutionReason.actionsNotRunnable":
+    "已暫緩：為此對象決定的動作無法一起執行，例如加入又移除同一個標籤。",
+  "settings.lifecycleExecutionReason.actionsChangedAtExecution":
+    "已暫緩：動作前重新檢查時，規則決定了不同的動作。下次評估會取代此候選項目。",
+  "settings.lifecycleExecutionReason.actionNotDeclared":
+    "已暫緩：此候選項目帶有規則目前原始碼已不再宣告的動作，因此永遠不會執行。",
+  "settings.lifecycleRuleMaxTitlesPerRun": "每次執行的作品數",
+  "settings.lifecycleRuleMaxTitlesPerRunHelp":
+    "此規則在一次執行中最多處理的作品數。會刪除檔案或作品的規則必須設定此上限。",
+  "settings.lifecycleRuleMaxTitlesPerRunNone": "不限制",
+  "settings.lifecycleRuleLoadRefused": "此規則以目前儲存的形式無法執行。",
+  "settings.lifecycleSequenceStepMonitor": "監控",
+  "settings.lifecycleSequenceStepFetchSubtitles": "取得字幕",
+  "settings.lifecycleSequenceStepMoveToLibrary": "移至媒體庫",
+  "settings.lifecycleSequenceStepMoveToRoot": "移至根資料夾",
+  "settings.notificationEvent.lifecycleRuleNotified": "生命週期規則通知",
+  "settings.lifecycleExecutionReason.tagNotDefined":
+    "已暫緩：此規則寫入的標籤已不在「設定 › 標籤」中定義。",
+  "settings.lifecycleExecutionReason.tagPatchConflict":
+    "已暫緩：另一條規則會加入此規則移除的標籤，或移除此規則加入的標籤。",
+  "settings.lifecycleExecutionReason.monitoringConflict":
+    "已暫緩：另一條規則最近對此作品的監控做了相反的變更。",
+  "settings.lifecycleExecutionReason.actionsConflict":
+    "已暫緩：規則決定的動作無法一起執行，因此未套用任何變更。",
+  "settings.lifecycleExecutionReason.moveLibraryUnresolved":
+    "已暫緩：此移動指定的媒體庫已無法對應到唯一一個媒體庫。",
+  "settings.lifecycleExecutionReason.moveLibraryFacetMismatch":
+    "已暫緩：此移動指定的媒體庫存放的是另一種作品。",
+  "settings.lifecycleExecutionReason.moveRootNotInLibrary":
+    "已暫緩：此移動指定的根資料夾不屬於作品的媒體庫。",
+  "settings.lifecycleExecutionReason.moveRefused":
+    "已暫緩：移動遭拒，或其計畫已過時。檔案保留在原處，移動會重試。",
+  "error.ruleActionRequired":
+    "請至少定義一個動作，例如 unmonitor、delete_files 或 add_tags，讓此規則能有所作為。",
+  "error.ruleActionHeadFunction": "動作不能寫成函式，請改寫成規則。",
+  "error.ruleForeignDataReference":
+    "此規則讀取了自身套件以外的 data，請改用 input。",
+  "error.ruleWithTargetNotAllowed":
+    '此規則不能以 "with" 取代 {{path}}。其決定必須基於 Scryer 實際觀察到的內容。',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} 對 Scryer 有特定意義，不能寫成函式。請改寫為規則。",
+  "error.ruleQualityProfileUnknown":
+    "沒有品質設定檔使用此名稱，因此規則無法套用。",
+  "error.ruleQualityProfileAmbiguous":
+    "有多個品質設定檔使用此名稱。請重新命名其中一個，讓規則只指向單一設定檔。",
+  "error.ruleMonitorUnsupported": "此規則適用的媒體庫都不接受這種監看類型。",
+  "error.ruleAudioLanguageUnknown": "Scryer 不認得此音訊語言。",
+  "error.lifecycleMaxTitlesPerRunRequiredNamed":
+    "請設定每次執行的作品數。此規則的以下動作需要它：{{actions}}。",
+  "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
+    "規則未定義任何動作，因此永遠不會有作為。",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
+    "此移動指定的媒體庫存放的作品種類與規則的媒體庫不同。",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND": "此移動指定的媒體庫不存在。",
+  "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
+    "此移動指定的根資料夾不是已設定的媒體庫根目錄。",
+  "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
+    "規則對此對象既未給出決定，也未回報錯誤。",
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND":
+    "此規則設定的品質設定檔不存在。",
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "每次執行的作品數至少須為 1。",
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "請設定每次執行的作品數：此規則可以刪除。",
+  "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
+    "另一次儲存已先變更此規則。未儲存任何內容；請重新載入規則後再試。",
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
+    "此規則儲存於規則宣告自身動作之前，因此永遠不會執行。請取代其原始碼以再次執行。",
+  "settings.refLifecycleFactsWatchedByAnyone":
     "已連線媒體伺服器上的任何帳號是否播放過該項目,無論是否連結 Scryer;不指明具體是誰",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "已連線媒體伺服器上的任何帳號最後一次播放該項目的時間",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "當已啟用媒體伺服器上的任何帳號播放過它時為 true,無論該帳號是否連結到 Scryer 使用者;對於季和影集,任何已播出的單集都算。在過去 48 小時內的同步讀取每個已啟用連線上的所有帳號之前,以原因 audience_not_read 視為未知;觀看事實未知時,以一般原因視為未知。",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "任何帳號最近一次播放的 RFC3339 時間戳記;無人播放時以原因 never_watched 缺失,播放沒有記錄時間時以原因 play_time_missing(季和影集為 episode_play_time_missing)未知,尚未讀取所有帳號時以 audience_not_read 未知",
-  "settings.maintenancePreviewFacts": "規則讀取的事實",
+  "settings.lifecyclePreviewFacts": "規則讀取的事實",
   "setup.sourceImportProgress": "正在匯入來源",
   "setup.sourceImportInvalidRequest":
     "所選來源無法使用。請重新整理來源偵測後再選取。",
@@ -5734,26 +6536,18 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionOrder": "判定順序",
   "qualityProfile.decisionOrderInfo":
     "當兩個發佈都符合此設定檔時，Scryer 會由上而下檢查這些步驟。第一個能區分它們的步驟做出決定。評分一律最後決定。",
-  "qualityProfile.decisionPresets": "預設組合",
-  "qualityProfile.decisionPresetDefault": "預設",
-  "qualityProfile.decisionPresetLanguageFirst": "語言優先",
-  "qualityProfile.decisionPresetScoreOnly": "僅評分",
   "qualityProfile.decisionGateQualityTier": "品質等級",
   "qualityProfile.decisionGateQualityTierDescription":
     "在此設定檔的品質偏好中排名較高之等級的發佈勝出。",
-  "qualityProfile.decisionGateQualityTierSummary": "品質等級",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "在同一等級與同一發佈群組內，較新的 PROPER 或 REPACK 勝出。",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK 修訂",
   "qualityProfile.decisionGatePreferredLanguage": "偏好語言",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "音訊在媒體庫偏好音訊語言中排名較高的發佈勝出。",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "偏好音訊語言",
   "qualityProfile.decisionGateOptionalLanguages": "選用語言",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "包含較多媒體庫選用音訊語言的發佈勝出。",
-  "qualityProfile.decisionGateOptionalLanguagesSummary": "選用音訊語言數量",
   "qualityProfile.decisionGateUnknown": "無法辨識的步驟（{{value}}）",
   "qualityProfile.decisionGateUnknownDescription":
     "此版本的網頁應用程式無法辨識這個步驟，它會保留在原位。",
@@ -5765,9 +6559,6 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "將 {{value}} 加入判定順序",
   "qualityProfile.decisionAvailableSteps": "未使用的步驟",
   "qualityProfile.decisionAllStepsInUse": "所有步驟皆已使用。",
-  "qualityProfile.decisionSummary": "發佈依序按{{steps}}比較，最後按評分比較。",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}，接著按{{next}}",
-  "qualityProfile.decisionSummaryScoreOnly": "發佈僅按評分比較。",
   "qualityProfile.decisionWarningTierAbsent":
     "沒有品質等級步驟時，較低等級的發佈可能取代較高等級的檔案，且截止等級不適用。只有截止評分會停止尋找升級；若也沒有截止評分，設定檔在有檔案後即視為滿足。",
   "qualityProfile.decisionNoteTierBelowLanguage":
@@ -5788,6 +6579,104 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
   "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
+  "ruleOutput.lifecycle.add_tags": "新增標籤",
+  "ruleOutput.lifecycle.remove_tags": "移除標籤",
+  "ruleOutput.lifecycle.set_quality_profile": "變更品質設定檔",
+  "ruleOutput.lifecycle.monitor": "監控",
+  "ruleOutput.lifecycle.search": "搜尋",
+  "ruleOutput.lifecycle.fetch_subtitles": "取得字幕",
+  "ruleOutput.lifecycle.move_to_library": "移至媒體庫",
+  "ruleOutput.lifecycle.move_to_root": "移至根目錄",
+  "ruleOutput.lifecycle.unmonitor": "取消監控",
+  "ruleOutput.lifecycle.delete_files": "刪除檔案",
+  "ruleOutput.lifecycle.delete_title": "刪除作品與檔案",
+  "ruleOutput.lifecycle.notify": "通知",
+  "ruleOutput.lifecycle.monitor_season": "監控季",
+  "ruleOutput.lifecycle.fetch_season_subtitles": "取得季字幕",
+  "ruleOutput.lifecycle.unmonitor_season": "取消監控季",
+  "ruleOutput.lifecycle.delete_season_files": "刪除季檔案",
+  "ruleOutput.lifecycle.notify_season": "通知季",
+  "ruleOutput.lifecycle.monitor_episode": "監控集數",
+  "ruleOutput.lifecycle.fetch_episode_subtitles": "取得集數字幕",
+  "ruleOutput.lifecycle.unmonitor_episode": "取消監控集數",
+  "ruleOutput.lifecycle.delete_episode_files": "刪除集數檔案",
+  "ruleOutput.lifecycle.notify_episode": "通知集數",
+  "ruleSubject.lifecycle.title": "作品",
+  "ruleSubject.lifecycle.season": "季",
+  "ruleSubject.lifecycle.episode": "集數",
+  "ruleOutput.lifecycle.notify.placeholder": "通知內容",
+  "ruleOutput.request.approve": "核准",
+  "ruleOutput.request.deny": "拒絕",
+  "ruleOutput.request.manual": "保留審核",
+  "ruleOutput.request.set_quality_profile": "品質設定檔",
+  "ruleOutput.request.set_lease_days": "保留期",
+  "ruleOutput.request.set_lease_days.placeholder": "天數，或 0 表示永久保留",
+  "ruleOutput.request.set_monitor": "監控方式",
+  "ruleOutput.request.set_required_audio_languages": "必要音訊語言",
+  "ruleOutput.request.set_preferred_audio_languages": "偏好音訊語言",
+  "ruleOutput.request.add_tags": "新增標籤",
+  "ruleOutput.request.notify": "通知",
+  "ruleOutput.request.notify.placeholder": "通知內容",
+  "ruleOutput.request.reasons": "原因代碼",
+  "ruleOutput.request.reasons.placeholder": "每行一個原因代碼",
+  "settings.proxyReachThrough": "經由",
+  "settings.proxyReachThroughHelp":
+    "Scryer 透過所選的傳輸代理或通道向此求解器傳送請求。直連表示從 Scryer 自身的網路存取求解器。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "挑戰求解器不能經由另一個挑戰求解器存取。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "挑戰求解器不能經由自身存取。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "找不到用於存取求解器的代理或通道。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "用於存取求解器的代理或通道已停用。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "只有挑戰求解器可以經由其他代理存取。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "有一個或多個挑戰求解器經由此代理存取。請先修改它們。",
+  "tours.onboarding.welcome.title": "歡迎使用 Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer 會搜尋、下載並整理你的電影、影集和動畫。以下帶你快速認識一下，隨時都能略過。",
+  "tours.onboarding.search.title": "搜尋一切",
+  "tours.onboarding.search.body":
+    "在任何地方尋找影片、設定或操作。按 ⌘K 或 Ctrl+K 即可用鍵盤開啟搜尋。",
+  "tours.onboarding.libraries.title": "你的媒體庫",
+  "tours.onboarding.libraries.body":
+    "電影、影集和動畫各有一個媒體庫：已有的、缺少的和正在取得的都在這裡。",
+  "tours.onboarding.discover.title": "探索與請求",
+  "tours.onboarding.discover.body":
+    "瀏覽依你媒體庫推薦的內容，請求影片，並在「請求」中追蹤每個請求。",
+  "tours.onboarding.lists.title": "清單",
+  "tours.onboarding.lists.body":
+    "追蹤 Trakt 或你的 Plex 待看清單等來源的清單。Scryer 會保持同步，並替你加入或請求其中的影片。",
+  "tours.onboarding.activity.title": "活動",
+  "tours.onboarding.activity.body":
+    "即時顯示下載和匯入，以及需要你決定的事項。",
+  "tours.onboarding.indexers.title": "索引器與下載使用者端",
+  "tours.onboarding.indexers.body":
+    "Scryer 至少需要一個索引器來尋找發行版本，還需要一個下載使用者端來下載。下載使用者端就在下方。",
+  "tours.onboarding.indexers.action": "新增索引器",
+  "tours.onboarding.qualityProfiles.title": "品質配置",
+  "tours.onboarding.qualityProfiles.body":
+    "品質配置決定影片可接受哪些品質，以及 Scryer 何時繼續尋找更好的發行版本。",
+  "tours.onboarding.rules.title": "規則",
+  "tours.onboarding.rules.body":
+    "規則為發行版本評分，讓 Scryer 優先選擇你想要的，略過你不想要的。",
+  "tours.onboarding.mediaServers.title": "媒體伺服器",
+  "tours.onboarding.mediaServers.body":
+    "連接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看過什麼。若要在 Scryer 匯入後重新整理伺服器，還需在「外掛」中安裝該伺服器的外掛。",
+  "tours.onboarding.notifications.title": "通知",
+  "tours.onboarding.notifications.body":
+    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「外掛」面板加入。Jellyfin、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連線，也要從這個面板安裝該伺服器的外掛，匯入後伺服器才會重新整理。",
+  "tours.onboarding.plugins.title": "外掛",
+  "tours.onboarding.plugins.body":
+    "外掛可加入索引器、下載使用者端和通知服務。在這裡安裝和更新它們。",
+  "tours.stepOf": "第 {{current}} 步，共 {{total}} 步",
+  "tours.skip": "略過導覽",
+  "tours.back": "上一步",
+  "tours.next": "下一步",
+  "tours.done": "完成",
+  "tours.saveFailed": "無法儲存導覽進度，此導覽可能會再次出現。",
 };
 
 export default zh_TW;

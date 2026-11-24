@@ -663,6 +663,8 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<CreateTitleOutcome> {
+        // Refused before anything is created, so a bad language leaves no title.
+        let options_patch = crate::validated_title_audio_patch(options_patch)?;
         let title = self
             .new_title_for_library(actor, request, library_id)
             .await?;
@@ -677,6 +679,13 @@ impl AppUseCase {
         // episode monitoring is decided from this selection.
         self.apply_title_monitor_selection_patch(&created.title, &options_patch)
             .await?;
+        // Likewise before the first search, which reads these overrides.
+        self.store_new_title_audio_language_overrides(
+            &created,
+            &options_patch,
+            Some(actor.id.clone()),
+        )
+        .await;
         if !created.reused_existing {
             // A brand new title is a new matcher identity. Done here as well
             // as through `TitleAdded` so the guarantee does not depend on the
@@ -990,7 +999,7 @@ pub(crate) fn series_hydration_ref(target: &HydrationTarget) -> Option<SeriesTit
 const SERIES_METADATA_MISSING_TITLE: &str = "series metadata response missing title";
 
 /// The failure reported for a series SMG's title surface does not have.
-fn series_missing_from_gateway(reference: &SeriesTitleRef) -> AppError {
+pub(crate) fn series_missing_from_gateway(reference: &SeriesTitleRef) -> AppError {
     match reference.smg_id {
         Some(smg_id) => AppError::not_found_reason(
             crate::error_reasons::catalog::SMG_NO_SERIES_NOT_FOUND,

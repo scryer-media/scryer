@@ -301,9 +301,15 @@ impl ShowRepository for TestShowRepo {
 
     async fn find_series_movie_link_by_legacy_collection_id(
         &self,
-        _: &str,
+        collection_id: &str,
     ) -> AppResult<Option<scryer_domain::SeriesMovieLink>> {
-        Ok(None)
+        Ok(self
+            .series_movie_links
+            .lock()
+            .await
+            .iter()
+            .find(|link| link.legacy_collection_id.as_deref() == Some(collection_id))
+            .cloned())
     }
 
     async fn upsert_series_movie_link(
@@ -1215,6 +1221,21 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
             .collect())
     }
 
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .filter(|(submission, _)| item_ids.contains(&submission.download_client_item_id))
+            .map(|(submission, _)| submission.clone())
+            .collect())
+    }
+
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
         Ok(self
             .rows
@@ -1568,41 +1589,22 @@ impl DomainEventRepository for TestDomainEventRepo {
         Ok(crate::DashboardActivityStats::default())
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
-        _include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64> {
-        let events = self.events.lock().await;
-        Ok(events
-            .iter()
-            .rev()
-            .filter_map(crate::event_views::title_history_record_from_domain_event)
-            .filter(|record| {
-                event_types.is_none_or(|values| values.contains(&record.event_type))
-                    && title_ids.is_none_or(|values| {
-                        record
-                            .title_id
-                            .as_ref()
-                            .is_some_and(|title_id| values.contains(title_id))
-                    })
-                    && download_id.is_none_or(|value| record.download_id.as_deref() == Some(value))
-            })
-            .count() as i64)
-    }
-
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let page_size = if limit == 0 { usize::MAX } else { limit };
+        let title_ids = title_scope.map(|scope| match scope {
+            crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+            crate::TitleHistoryTitleScope::Libraries(_) => {
+                unimplemented!("these tests never read history by library")
+            }
+        });
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -1816,6 +1818,7 @@ fn build_app_with_import_artifact_repository_and_repositories(
         JwtAuthConfig {
             issuer: "test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(test_facet_registry()),
     )
@@ -2053,6 +2056,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,

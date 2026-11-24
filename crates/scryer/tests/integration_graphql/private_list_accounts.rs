@@ -129,6 +129,8 @@ async fn fixture_with(provider: ListAccountFixtureProvider) -> MatrixFixture {
                 use_season_folders: None,
                 release_numbering: None,
                 tags: vec![],
+                required_audio_languages: None,
+                preferred_audio_languages: None,
             }],
             filters: vec![],
             max_per_sync: Some(25),

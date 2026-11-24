@@ -1,11 +1,11 @@
 //! Wire types for request rules, pre-flight, decision traces, and lifecycle
-//! claims (spec 0003 §7).
+//! claims.
 //!
 //! Two audiences read this surface and they are not allowed to see the same
 //! things. An author or an approver gets the whole trace: which rule voted what,
 //! on which revision, and the document it saw. A **requester** gets the verdict,
 //! the reasons behind it, and the tags an approval would stamp — never a vote
-//! table, never a line of Rego, never the input document (FR-020). The split is
+//! table, never a line of Rego, never the input document. The split is
 //! not a convention here: [`RequestPreflightPayload`] has no field that could
 //! carry a vote, and a [`RequestRuleDecision`] read by its own requester comes
 //! back with `votes` emptied.
@@ -16,16 +16,6 @@ use chrono::{DateTime, Utc};
 use super::{DiscoveryContentRatingPayload, ExternalIdInput, MonitorTypeValue};
 
 // ── Enums ──────────────────────────────────────────────────────────────────
-
-/// Whether an evaluation consulted an enabled request rule.
-#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum RequestRuleEvaluationModeValue {
-    /// No enabled rule took part.
-    Disabled,
-    /// An enabled rule was evaluated, recorded, and acted on.
-    Enforce,
-}
 
 /// What a request evaluation concluded.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
@@ -63,6 +53,34 @@ pub enum LifecycleClaimProducerValue {
     RequestLease,
 }
 
+/// A head a request rule's source can define. Votes decide the outcome; the
+/// other heads shape what an approval does or say something to the people who
+/// are notified about the request.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(name = "RequestActionHead", rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestActionHeadValue {
+    /// Vote to approve.
+    Approve,
+    /// Vote to refuse. Outranks every other vote.
+    Deny,
+    /// Vote to leave the request for a person.
+    Manual,
+    /// Approve into the named quality profile.
+    SetQualityProfile,
+    /// Approve with this lease, in days; `0` keeps the title forever.
+    SetLeaseDays,
+    /// Approve with this monitoring policy.
+    SetMonitor,
+    /// Approve with these required audio languages.
+    SetRequiredAudioLanguages,
+    /// Approve with these preferred audio languages, in order.
+    SetPreferredAudioLanguages,
+    /// Stamp these tags on the title an approval creates.
+    AddTags,
+    /// Add this text to the notification sent when the request is submitted.
+    Notify,
+}
+
 /// What a lifecycle claim is.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -92,7 +110,7 @@ pub enum LifecycleClaimStateValue {
 
 // ── Read models ────────────────────────────────────────────────────────────
 
-/// A request rule set: identity, scope, and evaluation state. The matcher lives
+/// A request rule set: identity, scope, and evaluation state. The source lives
 /// on the revision, never here.
 #[derive(SimpleObject, Clone)]
 pub struct RequestRuleSet {
@@ -106,33 +124,115 @@ pub struct RequestRuleSet {
     pub enabled: bool,
     /// Libraries the rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
-    /// Revision number of the matcher currently in force.
+    /// Revision number of the source currently in force.
     pub current_revision_number: i32,
     /// How many recorded decisions this rule took part in. Traces outlive the
     /// rule that produced them, so this can be non-zero for a rule that is now
     /// disabled.
     pub decision_count: i32,
+    /// What the revision in force can do, read from its source. Null when the
+    /// source cannot be read.
+    pub declared_actions: Option<RequestDeclaredActions>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
     pub updated_at: DateTime<Utc>,
 }
 
-/// One immutable revision of a request rule set's matcher.
+/// Every head a request rule's source defines, and every literal value each
+/// valued head can produce.
+#[derive(SimpleObject, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestDeclaredActions {
+    /// The heads the source defines.
+    pub heads: Vec<RequestActionHeadValue>,
+    /// Quality profile names `set_quality_profile` can set.
+    pub quality_profiles: Vec<String>,
+    /// Lease lengths `set_lease_days` can set; `0` is forever.
+    pub lease_days: Vec<i32>,
+    /// Monitoring policies `set_monitor` can set.
+    pub monitors: Vec<String>,
+    /// Audio language codes `set_required_audio_languages` can set.
+    pub required_audio_languages: Vec<String>,
+    /// Audio language codes `set_preferred_audio_languages` can set.
+    pub preferred_audio_languages: Vec<String>,
+    /// Tags `add_tags` can stamp.
+    pub add_tags: Vec<String>,
+    /// Texts `notify` can send.
+    pub notifications: Vec<String>,
+}
+
+/// One text value and the rule set that set it.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub struct RequestShapedText {
+    /// The value.
+    pub value: String,
+    /// Name of the rule set that set it, as it was when the request was
+    /// evaluated.
+    pub rule_set_name: String,
+}
+
+/// One number and the rule set that set it.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub struct RequestShapedNumber {
+    /// The value.
+    pub value: i32,
+    /// Name of the rule set that set it, as it was when the request was
+    /// evaluated.
+    pub rule_set_name: String,
+}
+
+/// One list of texts and the rule set that set it.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub struct RequestShapedTextList {
+    /// The value.
+    pub value: Vec<String>,
+    /// Name of the rule set that set it, as it was when the request was
+    /// evaluated.
+    pub rule_set_name: String,
+}
+
+/// What an approval of a request is changed to by its rules.
+///
+/// Applied on an automatic approval, offered to the approver on manual review,
+/// and kept in the trace only on a denial. A head two rules set to different
+/// values is listed in `conflicts`, and a head whose value cannot apply to the
+/// request in `invalid`; neither carries a value.
+#[derive(SimpleObject, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestShaping {
+    /// Quality profile name.
+    pub quality_profile: Option<RequestShapedText>,
+    /// Lease in days; `0` keeps the title forever.
+    pub lease_days: Option<RequestShapedNumber>,
+    /// Monitoring policy.
+    pub monitor: Option<RequestShapedText>,
+    /// Required audio language codes.
+    pub required_audio_languages: Option<RequestShapedTextList>,
+    /// Preferred audio language codes, in order.
+    pub preferred_audio_languages: Option<RequestShapedTextList>,
+    /// Texts the rules added to the submission notification, in evaluation
+    /// order. Always empty on the requester's own surfaces.
+    pub notifications: Vec<RequestShapedText>,
+    /// Heads two rules set to different values.
+    pub conflicts: Vec<RequestActionHeadValue>,
+    /// Heads whose value cannot apply to this request.
+    pub invalid: Vec<RequestActionHeadValue>,
+}
+
+/// One immutable revision of a request rule set's source.
 #[derive(SimpleObject, Clone)]
 pub struct RequestRuleRevision {
     /// Revision ID.
     pub id: ID,
     /// ID of the rule set this revision belongs to.
     pub rule_set_id: ID,
-    /// Revision number, starting at one and incremented on every matcher edit.
+    /// Revision number, starting at one and incremented on every source edit.
     pub revision_number: i32,
     /// Rego source as the editor should show it, with the package declaration
     /// and the rego.v1 import stripped.
     pub rego_source: String,
     /// Hash of the exact stored source, used to attribute a decision to the
     /// revision that produced it.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     /// ID of the user who wrote the revision, or null when unattributed.
     pub created_by: Option<ID>,
     /// UTC creation time.
@@ -146,6 +246,9 @@ pub struct RequestRuleSetDetail {
     pub rule_set: RequestRuleSet,
     /// The revision currently in force.
     pub revision: RequestRuleRevision,
+    /// The visual builder's stored document, or null when the rule was not
+    /// written with the builder. Read only by the single rule set query.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
 /// Identifier returned after deleting a request rule set.
@@ -164,6 +267,10 @@ pub struct RequestRuleValidationPayload {
     pub valid: bool,
     /// Validation errors; empty when valid.
     pub errors: Vec<String>,
+    /// Findings that never block saving.
+    pub warnings: Vec<super::rules::RuleValidationDiagnosticPayload>,
+    /// What the source can do, or null when it could not be read.
+    pub declared_actions: Option<RequestDeclaredActions>,
 }
 
 /// One reason a decision came out the way it did, in the only form that is safe
@@ -204,11 +311,17 @@ pub struct RequestRuleVote {
     pub error: Option<String>,
 }
 
-/// The durable trace of one request evaluation (FR-016).
+/// The durable trace of one request evaluation. It outlives the rules that
+/// made it.
 ///
 /// `policyOutcome` is what the rules concluded and `effectiveOutcome` is what
-/// the instance acted on. They disagree only when a request was held because
-/// its tags could not be checked.
+/// the instance acted on. They disagree only when the rules approved and the
+/// title tag registry could not be read: the request is held for approval,
+/// with the fallback `error`. When the input facts could not be assembled or
+/// the rules could not be evaluated, both are `MANUAL_REVIEW` with the
+/// fallback `error`. Decisions recorded by 0.22 and earlier may also show
+/// `policyOutcome` `MANUAL_REVIEW` with the Auto-Approve permission's
+/// `effectiveOutcome` for that case.
 #[derive(SimpleObject, Clone)]
 pub struct RequestRuleDecision {
     /// Trace ID, or null for a preview, which persists nothing.
@@ -217,15 +330,14 @@ pub struct RequestRuleDecision {
     pub request_id: Option<ID>,
     /// UTC time the evaluation ran.
     pub evaluated_at: DateTime<Utc>,
-    /// `ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-    pub mode: RequestRuleEvaluationModeValue,
     /// What actually happened to the request.
     pub effective_outcome: RequestDecisionOutcomeValue,
     /// What the rules concluded.
     pub policy_outcome: RequestDecisionOutcomeValue,
-    /// Why the decision fell back rather than following a rule vote
-    /// (`no_rule_matched`, `held`, `error`, `rule_manual`), or null when a rule
-    /// decided.
+    /// Why the decision fell back rather than following a rule's own
+    /// `approve` or `deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
+    /// `library_permission` (the Auto-Approve permission approved),
+    /// `shaping_conflict` or `shaping_invalid`. Null when a rule decided.
     pub fallback_reason: Option<String>,
     /// Per-rule votes. **Empty for a requester reading their own request's
     /// decision**, who sees `reasons` instead.
@@ -239,9 +351,12 @@ pub struct RequestRuleDecision {
     pub tags: Vec<String>,
     /// Schema version of the input document the rules were evaluated against.
     pub input_schema_version: i32,
+    /// What the rules changed an approval to, or null when they changed
+    /// nothing.
+    pub shaping: Option<RequestShaping>,
 }
 
-/// Author-side preview of one matcher against one hypothetical request.
+/// Author-side preview of one rule against one hypothetical request.
 ///
 /// Nothing is persisted but the trace the evaluation writes, and the caller
 /// already holds catalog-settings authority, so this is the one place the whole
@@ -252,7 +367,7 @@ pub struct RequestRulePreviewPayload {
     /// compiled under.
     pub rule_set_id: String,
     /// Hash of the exact source that produced this outcome.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     /// The single rule's verdict, shaped as a decision so the authoring UI and
     /// the decision browser render the same component. `effectiveOutcome`
     /// equals `policyOutcome` here.
@@ -270,7 +385,7 @@ pub struct RequestRulePreviewPayload {
 }
 
 /// Requester-side pre-flight: what would happen if this draft were submitted
-/// now (FR-020).
+/// now.
 ///
 /// Deliberately has no vote table and no input document. A requester sees the
 /// outcome, the reasons behind it, and the tags an approval would stamp.
@@ -280,18 +395,23 @@ pub struct RequestPreflightPayload {
     pub outcome: RequestDecisionOutcomeValue,
     /// Why, in codes with the rule names that produced them.
     pub reasons: Vec<RequestPreflightReason>,
-    /// Tags an approval would stamp on the created title.
+    /// Tags an approval would stamp on the created title. Empty when the
+    /// draft would be denied.
     pub tags: Vec<String>,
     /// True when the metadata could not be fully established, so the verdict
-    /// rests on incomplete facts. An unevaluable policy never approves.
+    /// rests on incomplete facts. A rule that reads a fact that could not be
+    /// established is held rather than run.
     pub metadata_partial: bool,
-    /// `ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-    pub evaluation_mode: RequestRuleEvaluationModeValue,
-    /// Why the verdict fell back to needing approval, when it did. One of the
-    /// arbitration vocabulary's codes (`rule_manual`, `held`, `error`,
-    /// `no_rule_matched`), or null when a rule decided outright. It carries no
-    /// rule internals: it names the shape of the fallback, never a vote.
+    /// Why the verdict is a fallback rather than a rule's own `approve` or
+    /// `deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
+    /// `library_permission` (the Auto-Approve permission approved),
+    /// `shaping_conflict` or `shaping_invalid`. Null when a rule decided
+    /// outright. It carries no rule internals: it names the shape of the
+    /// fallback, never a vote.
     pub fallback_reason: Option<String>,
+    /// What an approval would be changed to, or null when nothing would be.
+    /// Never carries a notification.
+    pub shaping: Option<RequestShaping>,
 }
 
 /// One request lease on one title: a time to delete that rules read.
@@ -384,7 +504,7 @@ pub struct MediaRequestMetadataPayload {
 
 // ── Inputs ─────────────────────────────────────────────────────────────────
 
-/// Creates a request rule set together with its first matcher revision. The
+/// Creates a request rule set together with its first source revision. The
 /// rule set is always created disabled; enabling it is a second, deliberate call.
 #[derive(InputObject)]
 pub struct CreateRequestRuleSetInput {
@@ -392,23 +512,29 @@ pub struct CreateRequestRuleSetInput {
     pub name: String,
     /// Optional description.
     pub description: Option<String>,
-    /// Matcher source as written in the editor. The package declaration is
+    /// Rule source as written in the editor. The package declaration is
     /// applied by the server.
     pub rego_source: String,
     /// Libraries to confine the rule to. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    /// The visual builder's document, stored as given: a JSON object of at
+    /// most 64 KiB. Omitted or null stores none.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
-/// Replaces the matcher of an existing rule set, appending revision N+1.
+/// Replaces the source of an existing rule set, appending revision N+1.
 #[derive(InputObject)]
-pub struct UpdateRequestRuleMatcherInput {
+pub struct UpdateRequestRuleSourceInput {
     /// Rule-set ID.
     pub rule_set_id: ID,
-    /// Replacement matcher source as written in the editor.
+    /// Replacement rule source as written in the editor.
     pub rego_source: String,
+    /// The visual builder's document: a JSON object of at most 64 KiB.
+    /// Omitted keeps the stored one; null clears it.
+    pub builder_model: async_graphql::MaybeUndefined<Json<serde_json::Value>>,
 }
 
-/// Renames and re-scopes a rule set without touching its matcher, so no
+/// Renames and re-scopes a rule set without touching its source, so no
 /// revision is created.
 #[derive(InputObject)]
 pub struct UpdateRequestRuleMetadataInput {
@@ -427,6 +553,9 @@ pub struct UpdateRequestRuleMetadataInput {
 pub struct ValidateRequestRuleInput {
     /// Matcher source to validate, as written in the editor.
     pub rego_source: String,
+    /// Libraries the rule would be confined to, which decide the monitoring
+    /// policies it may set. Omitted or empty means every library.
+    pub library_ids: Option<Vec<String>>,
 }
 
 /// The hypothetical request an author-side preview is evaluated against.
@@ -454,9 +583,15 @@ pub struct RequestRuleSampleInput {
     /// Set to true for a sample that asks to keep the title forever. Rejected
     /// together with `leaseDays`.
     pub lease_forever: Option<bool>,
+    /// Audio languages the sample requires. Omit or send null to leave it to
+    /// the library; an empty list asks for no requirement.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Audio languages the sample prefers, in order. Omit or send null to
+    /// leave it to the library.
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
-/// Runs one matcher against one hypothetical request without saving anything.
+/// Runs one rule against one hypothetical request without saving anything.
 ///
 /// Supply either `ruleSetId` to preview a stored rule set or `regoSource` to
 /// preview an unsaved draft, never both: they answer different questions, and
@@ -465,9 +600,9 @@ pub struct RequestRuleSampleInput {
 pub struct PreviewRequestRuleInput {
     /// Stored rule set to preview at its current revision.
     pub rule_set_id: Option<ID>,
-    /// Unsaved matcher source to preview, as written in the editor.
+    /// Unsaved rule source to preview, as written in the editor.
     pub rego_source: Option<String>,
-    /// The request to evaluate the matcher against.
+    /// The request to evaluate the rule against.
     pub sample: RequestRuleSampleInput,
 }
 

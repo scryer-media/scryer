@@ -1041,3 +1041,97 @@ async fn graphql_dashboard_layouts_refuse_invalid_layouts_with_reasons() {
         ])
     );
 }
+
+const DASHBOARD_SETTINGS_SELECTION: &str = r#"
+    dashboardLayouts { breakpoint items { panelId settings } }
+"#;
+
+async fn set_dashboard_layout_with_settings(ctx: &TestContext, user: &User, input: Value) -> Value {
+    dashboard_exec(
+        ctx,
+        &format!(
+            "mutation($input: SetMyDashboardLayoutInput!) {{
+               setMyDashboardLayout(input: $input) {{ {DASHBOARD_SETTINGS_SELECTION} }}
+             }}"
+        ),
+        json!({ "input": input }),
+        user,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn graphql_dashboard_panel_settings_round_trip_and_are_refused_when_malformed() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "dashboard_settings_user").await;
+    let settings = json!({ "actions": ["delete_files", "notify"], "name": "Soon" });
+
+    let saved = set_dashboard_layout_with_settings(
+        &ctx,
+        &user,
+        json!({
+            "breakpoint": "LG",
+            "columns": 12,
+            "items": [
+                { "panelId": "panel-alpha--a1b2c3", "x": 0, "y": 0, "w": 4, "h": 4, "settings": settings },
+                { "panelId": "panel-beta", "x": 4, "y": 0, "w": 4, "h": 4, "settings": null },
+                dashboard_panel("panel-gamma", 8, 0, 4, 4),
+            ]
+        }),
+    )
+    .await;
+    assert_no_errors(&saved);
+    let expected = json!([{
+        "breakpoint": "LG",
+        "items": [
+            { "panelId": "panel-alpha--a1b2c3", "settings": settings },
+            { "panelId": "panel-beta", "settings": null },
+            { "panelId": "panel-gamma", "settings": null },
+        ]
+    }]);
+    assert_eq!(
+        saved["data"]["setMyDashboardLayout"]["dashboardLayouts"],
+        expected
+    );
+    let read = dashboard_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {DASHBOARD_SETTINGS_SELECTION} }} }}"),
+        json!({}),
+        &user,
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(read["data"]["myUiSettings"]["dashboardLayouts"], expected);
+
+    let oversized = json!({ "name": "x".repeat(2048) });
+    for bad in [json!([1, 2]), json!("all"), json!(7), oversized] {
+        let body = set_dashboard_layout_with_settings(
+            &ctx,
+            &user,
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [{ "panelId": "panel-alpha", "x": 0, "y": 0, "w": 4, "h": 4, "settings": bad }]
+            }),
+        )
+        .await;
+        let extensions = &body["errors"][0]["extensions"];
+        assert_eq!(
+            extensions["reason"],
+            json!("SETTINGS_DASHBOARD_PANEL_SETTINGS_INVALID"),
+            "{bad}: {body}"
+        );
+        assert_eq!(extensions["maxBytes"], json!("2048"), "{body}");
+        assert_eq!(extensions["panelId"], json!("panel-alpha"), "{body}");
+    }
+
+    // No refused save replaced the saved layout.
+    let after = dashboard_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {DASHBOARD_SETTINGS_SELECTION} }} }}"),
+        json!({}),
+        &user,
+    )
+    .await;
+    assert_eq!(after["data"]["myUiSettings"]["dashboardLayouts"], expected);
+}

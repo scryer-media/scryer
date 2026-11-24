@@ -594,6 +594,10 @@ async fn run_postgres_rust_hook(
             crate::migrations::event_storage::backfill_import_skip_reason_projection_postgres(tx)
                 .await
         }
+        "backfill_media_request_id_projection" => {
+            crate::migrations::event_storage::backfill_media_request_id_projection_postgres(tx)
+                .await
+        }
         "scrub_stored_release_url_credentials" => {
             crate::migrations::release_url_scrub::scrub_stored_release_url_credentials_postgres(tx)
                 .await

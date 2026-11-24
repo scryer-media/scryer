@@ -301,6 +301,8 @@ pub fn source_manifest_path(db_root: &Path) -> PathBuf {
     db_root.join("migration_manifest.toml")
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 pub fn load_source_manifest(db_root: &Path) -> Result<SourceMigrationManifest, String> {
     let path = source_manifest_path(db_root);
     let contents = fs::read_to_string(&path)
@@ -309,6 +311,8 @@ pub fn load_source_manifest(db_root: &Path) -> Result<SourceMigrationManifest, S
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 pub fn write_source_manifest(
     db_root: &Path,
     manifest: &SourceMigrationManifest,
@@ -320,6 +324,8 @@ pub fn write_source_manifest(
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 pub fn compile_source_bundle(db_root: &Path) -> Result<CompiledMigrationBundle, String> {
     let manifest = load_source_manifest(db_root)?;
     if manifest.format_version != DEFAULT_MANIFEST_VERSION {
@@ -415,6 +421,8 @@ pub fn migration_key_from_version_and_desc(version: i64, description: &str) -> S
     format!("{version:04}_{}", description.replace(' ', "_"))
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 fn compile_legacy_migrations(
     db_root: &Path,
     legacy: &LegacySqlBlock,
@@ -472,6 +480,8 @@ fn compile_legacy_migrations(
     Ok(entries)
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 fn compile_explicit_migration(
     db_root: &Path,
     migration: &SourceExplicitMigration,
@@ -603,6 +613,8 @@ fn validate_contiguous_versions(migrations: &[CompiledMigration]) -> Result<(), 
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -610,9 +622,9 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scryer/src/db")
     }
 
-    fn source_postgres_0254_baseline_sql() -> String {
-        fs::read_to_string(source_db_root().join("postgres/baselines/0254_baseline.sql"))
-            .expect("read PostgreSQL 0254 baseline")
+    fn source_postgres_0341_baseline_sql() -> String {
+        fs::read_to_string(source_db_root().join("postgres/baselines/0341_baseline.sql"))
+            .expect("read PostgreSQL 0341 baseline")
     }
 
     #[test]
@@ -702,30 +714,59 @@ mod tests {
     }
 
     #[test]
+    fn indexer_monthly_quota_migration_is_registered_for_both_engines() {
+        let bundle = compile_source_bundle(&source_db_root()).expect("compile migration catalog");
+        for (version, name) in [(347, "0347_indexer_monthly_quotas.sql")] {
+            let migration = bundle
+                .catalog
+                .find_migration(version)
+                .expect("monthly quota migration must be registered");
+            for (engine, prefix) in [
+                (EngineScope::Sqlite, "migrations"),
+                (EngineScope::Postgres, "postgres/migrations"),
+            ] {
+                let expected_file = format!("{prefix}/{name}");
+                assert!(
+                    migration.steps.iter().any(|step| matches!(
+                        step,
+                        CompiledMigrationStep::Sql {
+                            engine: step_engine,
+                            file,
+                            scope: StepScope::All,
+                            ..
+                        } if *step_engine == engine && *file == expected_file
+                    )),
+                    "migration {version} must run on both fresh installs and upgrades for {engine:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn source_bundle_registers_latest_migration_and_engine_baselines() {
         let bundle =
             compile_source_bundle(&source_db_root()).expect("compile source migration bundle");
-        assert!(bundle.catalog.find_migration(254).is_some());
+        assert!(bundle.catalog.find_migration(341).is_some());
         assert_eq!(bundle.catalog.baselines.len(), 2);
         for (engine, file) in [
-            (EngineScope::Sqlite, "baselines/0254_baseline.sql"),
+            (EngineScope::Sqlite, "baselines/0341_baseline.sql"),
             (
                 EngineScope::Postgres,
-                "postgres/baselines/0254_baseline.sql",
+                "postgres/baselines/0341_baseline.sql",
             ),
         ] {
             assert!(
                 bundle
                     .catalog
-                    .latest_baseline_at_or_below(254, engine)
+                    .latest_baseline_at_or_below(341, engine)
                     .is_some_and(|baseline| baseline.file == file)
             );
         }
     }
 
     #[test]
-    fn postgres_0254_baseline_keeps_expected_index_coverage() {
-        let sql = source_postgres_0254_baseline_sql();
+    fn postgres_0341_baseline_keeps_expected_index_coverage() {
+        let sql = source_postgres_0341_baseline_sql();
         let index_statement_count = sql
             .lines()
             .filter(|line| {
@@ -734,8 +775,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            index_statement_count, 301,
-            "PostgreSQL 0254 baseline should preserve the audited index set"
+            index_statement_count, 357,
+            "PostgreSQL 0341 baseline should preserve the audited index set"
         );
 
         for index_name in [
@@ -751,7 +792,7 @@ mod tests {
         ] {
             assert!(
                 sql.contains(index_name),
-                "expected PostgreSQL 0254 baseline to include {index_name}"
+                "expected PostgreSQL 0341 baseline to include {index_name}"
             );
         }
     }
@@ -762,8 +803,8 @@ mod tests {
             source_db_root().join("postgres/migrations/0198_seed_canonical_defaults.sql"),
         )
         .expect("PostgreSQL 0198 seed migration should be readable");
-        let sqlite = fs::read_to_string(source_db_root().join("baselines/0254_baseline.sql"))
-            .expect("SQLite 0254 baseline should be readable");
+        let sqlite = fs::read_to_string(source_db_root().join("baselines/0341_baseline.sql"))
+            .expect("SQLite 0341 baseline should be readable");
 
         for seed in [
             "anime_default_library",
@@ -969,21 +1010,21 @@ mod tests {
     }
 
     #[test]
-    fn postgres_0254_baseline_keeps_title_aware_unmatched_items_schema() {
-        let sql = source_postgres_0254_baseline_sql();
+    fn postgres_0341_baseline_keeps_title_aware_unmatched_items_schema() {
+        let sql = source_postgres_0341_baseline_sql();
         assert!(
             sql.contains("title_id text"),
-            "PostgreSQL 0254 baseline must include library_scan_unmatched_items.title_id"
+            "PostgreSQL 0341 baseline must include library_scan_unmatched_items.title_id"
         );
         assert!(
             sql.contains("idx_library_scan_unmatched_items_facet_title_status_updated"),
-            "PostgreSQL 0254 baseline must preserve the title-aware unmatched-items index"
+            "PostgreSQL 0341 baseline must preserve the title-aware unmatched-items index"
         );
     }
 
     #[test]
-    fn postgres_0254_baseline_keeps_runtime_title_image_columns() {
-        let sql = source_postgres_0254_baseline_sql();
+    fn postgres_0341_baseline_keeps_runtime_title_image_columns() {
+        let sql = source_postgres_0341_baseline_sql();
         for expected in [
             "poster_local_path text",
             "background_local_path text",
@@ -992,7 +1033,7 @@ mod tests {
         ] {
             assert!(
                 sql.contains(expected),
-                "expected PostgreSQL 0254 baseline to include {expected}"
+                "expected PostgreSQL 0341 baseline to include {expected}"
             );
         }
     }

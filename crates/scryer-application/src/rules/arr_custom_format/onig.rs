@@ -485,10 +485,10 @@ fn match_token(s: &[char], i: usize) -> usize {
                     _ => {}
                 }
                 for (open, close) in [('<', '>'), ('\'', '\'')] {
-                    if at(k) == Some(open) {
-                        if let Some(offset) = s[k + 1..].iter().position(|c| *c == close) {
-                            return k + 1 + offset + 1;
-                        }
+                    if at(k) == Some(open)
+                        && let Some(offset) = s[k + 1..].iter().position(|c| *c == close)
+                    {
+                        return k + 1 + offset + 1;
                     }
                 }
                 if at(k) == Some('~') {
@@ -1099,14 +1099,15 @@ fn split_quantifiers(m: &[char]) -> ParseResult<Vec<Token>> {
         if q[0] == '{' && q.last() == Some(&'?') {
             let body = &q[1..q.len() - 2];
             let text = text_of(body);
-            if let Some((min, max)) = text.split_once(',') {
-                if !min.is_empty() && !max.is_empty() {
-                    let (min, max) = (big(min), big(max));
-                    if min > max {
-                        tokens.push(quantifier(&q[..q.len() - 1])?);
-                        i = end - 1;
-                        continue;
-                    }
+            if let Some((min, max)) = text.split_once(',')
+                && !min.is_empty()
+                && !max.is_empty()
+            {
+                let (min, max) = (big(min), big(max));
+                if min > max {
+                    tokens.push(quantifier(&q[..q.len() - 1])?);
+                    i = end - 1;
+                    continue;
                 }
             }
         }
@@ -1724,14 +1725,9 @@ impl Parser {
                 self.next += 1;
             } else {
                 let mut body = intersections.pop().expect("at least one intersection");
-                let node = self.walk(&mut body, state);
-                match node {
-                    Ok(node) => {
-                        body.push(node);
-                        intersections.push(body);
-                    }
-                    Err(error) => return Err(error),
-                }
+                let node = self.walk(&mut body, state)?;
+                body.push(node);
+                intersections.push(body);
             }
             token = self
                 .tokens
@@ -1770,10 +1766,10 @@ impl Parser {
     fn group_open(&mut self, open: GroupOpen, state: State) -> ParseResult<Node> {
         let is_absence = open.kind == GroupKind::AbsenceRepeater;
         if open.kind == GroupKind::Capturing {
-            if let Some(name) = &open.name {
-                if !valid_group_name(name) {
-                    return Err(format!("Group name \"{name}\" invalid in Oniguruma"));
-                }
+            if let Some(name) = &open.name
+                && !valid_group_name(name)
+            {
+                return Err(format!("Group name \"{name}\" invalid in Oniguruma"));
             }
             self.capturing_groups += 1;
             if let Some(name) = open.name.as_ref().filter(|name| !name.is_empty()) {

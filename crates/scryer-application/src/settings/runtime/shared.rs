@@ -179,17 +179,26 @@ impl AppUseCase {
         key_name: &str,
         scope_id: Option<&str>,
     ) -> AppResult<Option<T>> {
-        let Some(raw_value) = self.read_setting_string_value(key_name, scope_id).await? else {
-            return Ok(None);
-        };
-        serde_json::from_str::<T>(&raw_value)
-            .map(Some)
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to parse setting '{key_name}' JSON value: {error}"
-                ))
-            })
+        let value = self.read_setting_string_value(key_name, scope_id).await?;
+        parse_setting_json_value(key_name, value)
     }
+}
+
+/// Decodes a normalized setting string the way [`AppUseCase::read_setting_json_value`] does.
+fn parse_setting_json_value<T: DeserializeOwned>(
+    key_name: &str,
+    value: Option<String>,
+) -> AppResult<Option<T>> {
+    let Some(raw_value) = value else {
+        return Ok(None);
+    };
+    serde_json::from_str::<T>(&raw_value)
+        .map(Some)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to parse setting '{key_name}' JSON value: {error}"
+            ))
+        })
 }
 impl AppUseCase {
     pub async fn smg_version_compatibility_notice(

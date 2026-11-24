@@ -73,6 +73,11 @@ import {
 } from "@/lib/utils/cron-description";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
+  type HealthCheckFacts,
+  healthCheckMessage,
+  parseHealthCheckFacts,
+} from "@/lib/utils/health-check-reason";
+import {
   isTerminalJobRunStatus,
   jobInstanceKey,
   jobTargetOf,
@@ -140,6 +145,8 @@ type HealthCheckIssue = {
   source: string;
   status: string;
   message: string;
+  reason: string | null;
+  facts: HealthCheckFacts;
 };
 
 type SortKey = "name" | "nextRun" | "lastRun" | "status";
@@ -255,6 +262,8 @@ function parseHealthCheckIssues(run: JobRun): HealthCheckIssue[] {
           source: check.source,
           status: check.status,
           message: check.message,
+          reason: typeof check.reason === "string" ? check.reason : null,
+          facts: parseHealthCheckFacts(check.facts),
         },
       ];
     });
@@ -1718,7 +1727,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                                       <p
                                         className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}
                                       >
-                                        {issue.message}
+                                        {healthCheckMessage(issue, t)}
                                       </p>
                                     </div>
                                   ))}

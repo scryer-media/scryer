@@ -525,9 +525,51 @@ impl AppUseCase {
                 )
                 .await?
         };
+        self.attach_search_profiles(titles, !respect_title_monitoring && title_id.is_some())
+            .await
+    }
+
+    /// The monitored titles among `ids` in `library_ids`, each with its
+    /// resolved quality profile: [`Self::titles_with_profiles_for_search`] for
+    /// a known set of titles. One bind-safe batched read; an id that names no
+    /// title is simply absent.
+    pub(crate) async fn titles_with_profiles_for_ids(
+        &self,
+        ids: &[String],
+        library_ids: &[String],
+    ) -> AppResult<Vec<(scryer_domain::Title, std::sync::Arc<QualityProfile>)>> {
+        if ids.is_empty() || library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let library_ids: HashSet<&str> = library_ids.iter().map(String::as_str).collect();
+        // The same narrow row the library-wide load reads.
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .get_by_ids_with_projection(
+                ids,
+                crate::TitleListProjection {
+                    include_external_ids: false,
+                    include_canonical_tags: true,
+                    row: CUTOFF_SWEEP_TITLE_ROW,
+                },
+            )
+            .await?
+            .into_iter()
+            .filter(|title| library_ids.contains(title.library_id.as_str()))
+            .collect();
+        self.attach_search_profiles(titles, false).await
+    }
+
+    async fn attach_search_profiles(
+        &self,
+        titles: Vec<scryer_domain::Title>,
+        include_unmonitored: bool,
+    ) -> AppResult<Vec<(scryer_domain::Title, std::sync::Arc<QualityProfile>)>> {
         let monitored: Vec<scryer_domain::Title> = titles
             .into_iter()
-            .filter(|title| title.monitored || (!respect_title_monitoring && title_id.is_some()))
+            .filter(|title| title.monitored || include_unmonitored)
             .collect();
         if monitored.is_empty() {
             return Ok(Vec::new());
@@ -665,30 +707,9 @@ impl AppUseCase {
                 continue;
             }
 
-            let Some(cutoff_tier) = profile
-                .criteria
-                .cutoff_tier
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
+            let Some(normalized_cutoff_tier) = profile.criteria.search_cutoff_tier() else {
                 continue;
             };
-
-            let Some(normalized_cutoff_tier) =
-                crate::quality_profile::normalize_quality_tier(Some(cutoff_tier))
-            else {
-                continue;
-            };
-
-            if !profile
-                .criteria
-                .quality_tiers
-                .iter()
-                .any(|tier| tier == &normalized_cutoff_tier)
-            {
-                continue;
-            }
 
             cutoff_profile_map.insert(
                 title.id.clone(),
@@ -793,10 +814,14 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// Bounded view: one page of cutoff-unmet targets plus the full
-    /// count. Computes the unmet set then slices — this bounds what reaches the
-    /// browser (the immediate large-library pain); paging the server-side
-    /// compute is a follow-up. `limit == 0` returns just the total with no items.
+    /// Bounded view: one page of cutoff-unmet targets plus the full count.
+    /// `limit == 0` returns just the total with no items.
+    ///
+    /// Answers what [`Self::list_cutoff_unmet_titles`] sliced would, from the
+    /// instance-wide item set kept per projection generation: the actor's
+    /// library scope, the facet and the requested libraries are applied to
+    /// those rows, which are already in listing order. Library names are read
+    /// per request, as before, so a renamed library never waits on the cache.
     pub async fn list_cutoff_unmet_titles_page(
         &self,
         actor: &User,
@@ -805,11 +830,63 @@ impl AppUseCase {
         limit: usize,
         offset: usize,
     ) -> AppResult<CutoffUnmetPage> {
-        let all = self
-            .list_cutoff_unmet_titles(actor, facet, requested_library_ids)
-            .await?;
-        let total = all.len();
-        let items = all.into_iter().skip(offset).take(limit).collect();
+        let mut library_ids = self
+            .require_privileged_library_ids(actor, facet.clone())
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let requested_library_ids = requested_library_ids
+            .as_ref()
+            .map(|requested| {
+                requested
+                    .iter()
+                    .map(|library_id| library_id.trim())
+                    .filter(|library_id| !library_id.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if !requested_library_ids.is_empty() {
+            library_ids.retain(|library_id| requested_library_ids.contains(library_id.as_str()));
+        }
+        let libraries = self
+            .services
+            .catalog
+            .libraries
+            .list(facet.clone())
+            .await?
+            .into_iter()
+            .filter(|library| library_ids.contains(&library.id))
+            .map(|library| (library.id, (library.name, library.slug)))
+            .collect::<HashMap<_, _>>();
+        if libraries.is_empty() {
+            return Ok(CutoffUnmetPage {
+                items: Vec::new(),
+                total: 0,
+            });
+        }
+
+        let all = self.current_cutoff_unmet_items().await?;
+        let in_scope = |item: &&CutoffUnmetItem| {
+            libraries.contains_key(&item.library_id)
+                && facet
+                    .as_ref()
+                    .is_none_or(|facet| facet == &item.title_facet)
+        };
+        let total = all.iter().filter(in_scope).count();
+        let items = all
+            .iter()
+            .filter(in_scope)
+            .skip(offset)
+            .take(limit)
+            .map(|item| {
+                let mut item = item.clone();
+                if let Some((name, slug)) = libraries.get(&item.library_id) {
+                    item.library_name = Some(name.clone());
+                    item.library_slug = Some(slug.clone());
+                }
+                item
+            })
+            .collect();
         Ok(CutoffUnmetPage { items, total })
     }
 
@@ -1652,14 +1729,16 @@ impl AppUseCase {
             let configs = self.recycle_bin_configs_for_recycling(media_roots).await;
             let mut purged = 0u32;
             for (media_root, config) in configs {
-                match crate::recycle_bin::list_committed_entries_for_title(
+                match crate::recycle_bin::list_committed_entries_for_title_with_upgrade_links(
                     &config,
                     title_id,
                     recycle_index,
                 )
                 .await
                 {
-                    Ok(entries) => {
+                    Ok((entries, upgrade_links)) => {
+                        let mut upgrades =
+                            crate::jobs::housekeeping::UpgradePurgeContext::listed(upgrade_links);
                         for entry in entries {
                             match self
                                 .purge_recycle_entry_after_validation(
@@ -1667,6 +1746,7 @@ impl AppUseCase {
                                     &config,
                                     &entry,
                                     actor.clone(),
+                                    &mut upgrades,
                                 )
                                 .await
                             {
@@ -1817,6 +1897,22 @@ impl AppUseCase {
                 continue;
             }
 
+            // A torrent stays in its client when its title is removed, so it
+            // keeps seeding; it stays available for unmatched import as the
+            // explicit path above leaves it. An unknown client counts as a
+            // torrent client here.
+            if !explicit && crate::seeding_gate::client_type_is_torrent(self, &identity.client_type)
+            {
+                live_download_ids.insert(submission.download_id);
+                debug!(
+                    title_id = %title_id,
+                    client_type = %identity.client_type,
+                    download_item_id = %identity.item_id,
+                    "leaving active torrent in its client after title deletion"
+                );
+                continue;
+            }
+
             match self
                 .services
                 .workflow
@@ -1929,7 +2025,7 @@ impl AppUseCase {
             .await?
             .into_iter()
             .filter(|record| {
-                match crate::maintenance_rules::safety::queued_import_title_id(record) {
+                match crate::lifecycle_rules::safety::queued_import_title_id(record) {
                     Some(owner) => owner == title_id,
                     None => {
                         from_title_downloads.contains(&record.id)

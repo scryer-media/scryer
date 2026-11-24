@@ -19,7 +19,16 @@ import {
   MONITOR_TYPE_LABEL_KEYS,
   defaultMonitorTypesForFacet,
 } from "@/lib/utils/default-monitor-type";
+import { requestDialogLibraryId } from "@/lib/utils/request-dialog-library";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
+import { stageMyRequestMetadataMutation } from "@/lib/graphql/mutations";
+import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
+import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
+import {
+  catalogAudioLanguagesForSubmit,
+  INHERIT_CATALOG_AUDIO_LANGUAGES,
+  type CatalogAudioLanguageDraft,
+} from "@/lib/utils/catalog-audio-languages";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import {
   submitMediaRequestInput,
@@ -58,6 +67,8 @@ import {
   sanitizeDigits,
 } from "@/components/ui/input";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { RequestShapingSummary } from "@/components/views/settings/lifecycle-action-summary";
+import { InfoHelp } from "@/components/common/info-help";
 
 /// How long the dialog waits after the requester stops changing the request
 /// before asking what would happen to it. Short enough to feel live, long
@@ -73,8 +84,7 @@ type LeaseChoice = "forever" | "custom" | `${number}`;
 ///
 /// It is a courtesy, not a gate: a "would be denied" answer still leaves submit
 /// enabled, because the server denying it for real is what writes the decision
-/// trace the requester can then read. A rule in shadow says so out loud, since
-/// its verdict is recorded rather than acted on.
+/// trace the requester can then read.
 ///
 /// Renders nothing at all when the pre-flight has not answered or failed, so a
 /// broken evaluation never blocks a request.
@@ -90,10 +100,7 @@ function RequestPreflightBanner({
 
   const reasonCodes = preflight.reasons.map((reason) => reason.code).join(", ");
   // The server's own word for why the verdict fell back to needing approval.
-  // The first reason code is only an approximation of it, kept for a server
-  // that predates `fallbackReason`.
-  const fallbackReason =
-    preflight.fallbackReason ?? preflight.reasons[0]?.code ?? null;
+  const fallbackReason = preflight.fallbackReason;
   const fallbackLabelKey = fallbackReason
     ? requestFallbackReasonLabelKey(fallbackReason)
     : null;
@@ -141,13 +148,19 @@ function RequestPreflightBanner({
     <div
       id={REQUEST_PREFLIGHT_BANNER_ID}
       data-preflight-outcome={preflight.outcome}
-      data-preflight-mode={preflight.evaluationMode}
       className={`flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-sm ${className}`}
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="space-y-1">
         <p className="font-semibold">{title}</p>
         {body ? <p className="text-[13px] leading-5">{body}</p> : null}
+        {/* What an approval would change. A denial applies none of it. */}
+        {preflight.outcome !== "DENY" ? (
+          <RequestShapingSummary
+            shaping={preflight.shaping}
+            idPrefix={selectorId(REQUEST_PREFLIGHT_BANNER_ID, "shaping")}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -190,32 +203,50 @@ export function RequestMediaDialog({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [leaseChoice, setLeaseChoice] = React.useState<LeaseChoice>("forever");
   const [customLeaseDays, setCustomLeaseDays] = React.useState(30);
+  const [audioLanguages, setAudioLanguages] =
+    React.useState<CatalogAudioLanguageDraft>(INHERIT_CATALOG_AUDIO_LANGUAGES);
   const [preflight, setPreflight] =
     React.useState<RequestPreflightResult | null>(null);
   const client = useClient();
 
+  // The item and facet this dialog was last reset for. The choices reset
+  // when the dialog opens or the requested item changes; a refreshed library
+  // list keeps them and re-picks the library only when the chosen one is gone.
+  const resetForRef = React.useRef<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
   React.useEffect(() => {
-    if (!open) return;
-    setLibraryId(
-      requestableLibraries.find((library) => library.isDefault)?.id ||
-        requestableLibraries[0]?.id ||
-        "",
+    if (!open) {
+      resetForRef.current = null;
+      return;
+    }
+    const resetFor = resetForRef.current;
+    const isNewRequest =
+      !resetFor || resetFor.facet !== facet || resetFor.result !== result;
+    const nextLibraryId = requestDialogLibraryId(
+      requestableLibraries,
+      isNewRequest ? "" : libraryId,
     );
-    setQualityProfileId("");
-    setMonitorType(
-      defaultMonitorTypeForFacet(
-        facet,
-        requestableLibraries.find((l) => l.isDefault)?.defaultMonitorType ??
-          requestableLibraries[0]?.defaultMonitorType,
-      ),
+    if (!isNewRequest && nextLibraryId === libraryId) return;
+    const nextMonitorType = defaultMonitorTypeForFacet(
+      facet,
+      requestableLibraries.find((library) => library.id === nextLibraryId)
+        ?.defaultMonitorType,
     );
+    setLibraryId(nextLibraryId);
+    setMonitorType(nextMonitorType);
     setMonitorSelection(EMPTY_MONITOR_SELECTION);
+    if (!isNewRequest) return;
+    resetForRef.current = { facet, result };
+    setQualityProfileId("");
     setMonitorSelectionLoading(false);
     setIsSubmitting(false);
     setLeaseChoice("forever");
     setCustomLeaseDays(30);
+    setAudioLanguages(INHERIT_CATALOG_AUDIO_LANGUAGES);
     setPreflight(null);
-  }, [facet, open, requestableLibraries]);
+  }, [facet, libraryId, open, requestableLibraries, result]);
 
   /// Null means forever, which is what the API models an absent lease as.
   const requestedLeaseDays =
@@ -224,6 +255,19 @@ export function RequestMediaDialog({
       : leaseChoice === "custom"
         ? clampRequestLeaseDays(customLeaseDays)
         : Number(leaseChoice);
+  // Keyed on what would be sent, not on the draft: a draft change that sends
+  // the same lists (switching to "choose" before ticking any) keeps the same
+  // value, so the preview does not ask again with identical variables.
+  const requestedAudioKey = JSON.stringify(
+    catalogAudioLanguagesForSubmit(audioLanguages),
+  );
+  const requestedAudio = React.useMemo(
+    () =>
+      JSON.parse(requestedAudioKey) as ReturnType<
+        typeof catalogAudioLanguagesForSubmit
+      >,
+    [requestedAudioKey],
+  );
 
   const selectedLibrary =
     requestableLibraries.find((library) => library.id === libraryId) ?? null;
@@ -274,6 +318,53 @@ export function RequestMediaDialog({
     );
   }, [open, requestProfileOptions, selectedLibrary]);
 
+  /// Have the server read this item's metadata once, when the dialog opens on
+  /// it. Every preview below and the submit then read that one record, so the
+  /// preview waits for this to settle and never fetches metadata itself.
+  ///
+  /// The staged record belongs to the item, not the library: the library only
+  /// says where the requester may ask, so switching library does not stage
+  /// again. A failure settles too. The preview then reports the metadata as
+  /// unavailable, which is the answer the submit would reach.
+  const stagingForRef = React.useRef<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
+  const [stagedFor, setStagedFor] = React.useState<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
+  const stagingLibraryId = selectedLibrary?.id ?? "";
+  React.useEffect(() => {
+    if (!open) {
+      stagingForRef.current = null;
+      setStagedFor(null);
+      return;
+    }
+    if (!stagingLibraryId) return;
+    const staging = stagingForRef.current;
+    if (staging && staging.facet === facet && staging.result === result) return;
+    const subject = { facet, result };
+    stagingForRef.current = subject;
+    const settle = () => {
+      if (stagingForRef.current === subject) setStagedFor(subject);
+    };
+    void client
+      .mutation(stageMyRequestMetadataMutation, {
+        input: {
+          libraryId: stagingLibraryId,
+          facet,
+          externalIds: metadataResultExternalIds(result, facet),
+        },
+      })
+      .toPromise()
+      .then(settle, settle);
+  }, [client, facet, open, result, stagingLibraryId]);
+  const metadataStaged =
+    stagedFor !== null &&
+    stagedFor.facet === facet &&
+    stagedFor.result === result;
+
   /// Ask the server what would happen to this request, debounced on every
   /// choice that can change the answer. The query is the requester's own
   /// pre-flight: it never returns rule internals, and it never errors for an
@@ -282,7 +373,7 @@ export function RequestMediaDialog({
   /// A failure hides the banner entirely rather than blocking the dialog. The
   /// answer is a courtesy; the submit is the thing that matters.
   React.useEffect(() => {
-    if (!open || !selectedLibrary || !qualityProfileId) {
+    if (!open || !selectedLibrary || !qualityProfileId || !metadataStaged) {
       setPreflight(null);
       return;
     }
@@ -296,6 +387,10 @@ export function RequestMediaDialog({
           ? monitorSelectionInput(monitorSelection)
           : undefined,
         requestedLeaseDays: requestedLeaseDays ?? undefined,
+        // Request rules can read the requested audio languages, so the
+        // preview carries them and asks again when they change.
+        requestedRequiredAudioLanguages: requestedAudio.required,
+        requestedPreferredAudioLanguages: requestedAudio.preferred,
       });
       void client
         .query(
@@ -328,10 +423,12 @@ export function RequestMediaDialog({
     canRequestMonitorType,
     client,
     facet,
+    metadataStaged,
     monitorSelection,
     monitorType,
     open,
     qualityProfileId,
+    requestedAudio,
     requestedLeaseDays,
     result,
     selectedLibrary,
@@ -352,6 +449,8 @@ export function RequestMediaDialog({
           ? monitorSelectionInput(monitorSelection)
           : undefined,
         requestedLeaseDays: requestedLeaseDays ?? undefined,
+        requestedRequiredAudioLanguages: requestedAudio.required,
+        requestedPreferredAudioLanguages: requestedAudio.preferred,
       });
       if (accepted) {
         onOpenChange(false);
@@ -368,6 +467,7 @@ export function RequestMediaDialog({
     onOpenChange,
     onRequest,
     qualityProfileId,
+    requestedAudio,
     requestedLeaseDays,
     result,
     selectedLibrary,
@@ -498,9 +598,15 @@ export function RequestMediaDialog({
               </label>
             ) : null}
 
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.keepFor")}
+            <div className="space-y-1">
+              <span className="flex items-center gap-1 text-xs font-medium text-card-foreground">
+                <label htmlFor={REQUEST_MEDIA_LEASE_ID}>
+                  {t("search.keepFor")}
+                </label>
+                <InfoHelp
+                  text={t("search.keepForHelp")}
+                  ariaLabel={t("search.keepFor")}
+                />
               </span>
               <Select
                 value={leaseChoice}
@@ -537,10 +643,7 @@ export function RequestMediaDialog({
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <span className="block text-[11px] text-muted-foreground">
-                {t("search.keepForHelp")}
-              </span>
-            </label>
+            </div>
 
             {leaseChoice === "custom" ? (
               <label className="space-y-1">
@@ -566,6 +669,19 @@ export function RequestMediaDialog({
                 />
               </label>
             ) : null}
+
+            <CatalogAudioLanguageFields
+              idPrefix="request-media"
+              value={audioLanguages}
+              onChange={setAudioLanguages}
+              inheritedRequired={
+                selectedLibrary?.inheritedRequiredAudioLanguages ?? null
+              }
+              inheritedPreferred={
+                selectedLibrary?.inheritedPreferredAudioLanguages ?? null
+              }
+              disabled={isSubmitting}
+            />
           </div>
 
           <RequestPreflightBanner preflight={preflight} />

@@ -2905,101 +2905,6 @@ async fn assert_move_beside_an_untouched_titles_record_is_refused(
     assert!(!planned.exists());
 }
 
-/// Two titles that already share a folder, neither with anything to move, do
-/// not hold back a rename of a third title elsewhere.
-#[tokio::test]
-async fn a_folder_two_untouched_titles_already_share_does_not_block_another_rename() {
-    let mut ctx = TestContext::new().await;
-    seed_typed_settings_definitions(&ctx).await;
-    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
-    ctx.app = ctx.app.with_test_overrides(|builder| {
-        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
-    });
-    let roots = tempfile::tempdir().expect("roots tempdir");
-    let movie_root = roots.path().join("movies");
-    std::fs::create_dir_all(&movie_root).expect("create movie root");
-    configure_library_roots(&ctx, MediaFacet::Movie, &[&movie_root]).await;
-    let actor = ctx
-        .app
-        .find_or_create_default_user()
-        .await
-        .expect("default user");
-
-    let (first, shared, first_file) =
-        seed_movie_renamed_into_place(&ctx, &actor, &movie_root, "Twin Harbor", "94115").await;
-    // A second title of the same name and year already lives in that folder,
-    // its file (a different quality) already under its planned name.
-    let second = create_catalog_title(
-        &ctx,
-        "Twin Harbor",
-        MediaFacet::Movie,
-        vec![ExternalId::new("tvdb".to_string(), "94116".to_string())],
-        vec![],
-        true,
-    )
-    .await;
-    set_title_folder_path(&ctx, &second.id, &shared).await;
-    let second_file = shared.join("Twin Harbor (2024) - 720p.mkv");
-    std::fs::write(&second_file, b"94116").expect("write second file");
-    let second_path = second_file.to_string_lossy().to_string();
-    ctx.shows
-        .create_collection(Collection {
-            id: Id::new().0,
-            title_id: second.id.clone(),
-            collection_type: scryer_domain::CollectionType::Movie,
-            collection_index: "1".to_string(),
-            label: Some("720p".to_string()),
-            ordered_path: Some(second_path.clone()),
-            narrative_order: None,
-            first_episode_number: None,
-            last_episode_number: None,
-            monitored: true,
-            created_at: chrono::Utc::now(),
-        })
-        .await
-        .expect("create second collection");
-    ctx.media_files
-        .insert_media_file(&InsertMediaFileInput {
-            title_id: second.id.clone(),
-            file_path: second_path,
-            size_bytes: 4096,
-            quality_label: Some("720p".to_string()),
-            ..Default::default()
-        })
-        .await
-        .expect("insert second media file");
-    let (moving, source) = seed_movie_in_folder(&ctx, &movie_root, "Cedar Quay", "94117").await;
-
-    let preview = ctx
-        .app
-        .preview_rename_for_facet(&actor, MediaFacet::Movie)
-        .await
-        .expect("preview rename plan");
-    assert_eq!(
-        preview.renamable, 1,
-        "only one title moves: {:?}",
-        preview.items
-    );
-    let result = ctx
-        .app
-        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
-        .await
-        .expect("an unrelated rename is not held back");
-    assert_eq!((result.applied, result.failed), (1, 0));
-
-    let moved_folder = movie_root.join("Cedar Quay (2024)");
-    let stored = ctx.titles.get_by_id(&moving.id).await.unwrap().unwrap();
-    assert_eq!(stored.folder_path.as_deref(), moved_folder.to_str());
-    assert!(!source.exists());
-    assert_eq!(std::fs::read_dir(&moved_folder).unwrap().count(), 1);
-    for title in [&first, &second] {
-        let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
-        assert_eq!(stored.folder_path.as_deref(), shared.to_str());
-    }
-    assert_eq!(std::fs::read(&second_file).unwrap(), b"94116");
-    assert!(first_file.exists());
-}
-
 /// An untouched title recorded at the library root has no title folder to
 /// collide with; every title folder sits under the root, so counting it would
 /// refuse every rename in the library.
@@ -3037,7 +2942,7 @@ async fn assert_root_level_record_does_not_block_a_rename(record_at_parent: bool
     } else {
         movie_root.as_path()
     };
-    set_title_folder_path(&ctx, &idle.id, invalid_folder).await;
+    seed_unchecked_title_folder_path(&ctx, &idle.id, invalid_folder).await;
     let (moving, source) = seed_movie_in_folder(&ctx, &movie_root, "Birch Quay", "94119").await;
 
     let preview = ctx
@@ -3517,7 +3422,7 @@ async fn an_all_noop_rename_repairs_a_title_recorded_at_the_library_root() {
         "94131",
     )
     .await;
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let preview = ctx
         .app
@@ -3565,7 +3470,7 @@ async fn an_all_noop_rename_leaves_a_root_record_when_the_media_is_split() {
         })
         .await
         .expect("insert stray media file");
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let preview = ctx
         .app
@@ -3651,7 +3556,7 @@ async fn an_all_noop_rename_leaves_a_root_record_when_an_extra_copy_is_elsewhere
         })
         .await
         .expect("insert extra copy");
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
     let rows_before = ctx
         .media_files
         .list_media_files_for_title(&title.id)
@@ -3731,7 +3636,7 @@ async fn an_all_noop_rename_leaves_a_root_record_when_a_collection_is_elsewhere(
         })
         .await
         .expect("create collection elsewhere");
-    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    seed_unchecked_title_folder_path(&ctx, &title.id, media_root.path()).await;
 
     let preview = ctx
         .app

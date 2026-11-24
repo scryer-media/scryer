@@ -17,7 +17,7 @@
 //! `Unmonitor`, and `Tag` (the registered `left-list` tag). `Unmonitor` and
 //! `Tag` are recorded as departures too, so the title's history says why it
 //! changed. There is no removal: taking a title out of the
-//! library because a list no longer wants it is a maintenance rule's
+//! library because a list no longer wants it is a lifecycle rule's
 //! decision, with its own preview and approval.
 
 use std::collections::HashMap;

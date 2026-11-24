@@ -138,7 +138,8 @@ export type UseQualityProfilesManagerResult = {
     deniedField: QualityProfileListField,
     value: string,
   ) => void;
-  addQualityTier: (qualityTier: string) => void;
+  /** Adds a tier at the lowest preference, or before `targetIndex`. */
+  addQualityTier: (qualityTier: string, targetIndex?: number) => void;
   removeQualityTier: (qualityTier: string) => void;
   reorderQualityTier: (qualityTier: string, targetIndex: number) => void;
   updateQualityProfilesGlobal: (
@@ -617,13 +618,20 @@ export function useQualityProfilesManager(
     }, [qualityProfileCatalogEntries, qualityProfileDraft, setGlobalStatus, t]);
 
   const addQualityTier = React.useCallback(
-    (qualityTier: string) => {
+    (qualityTier: string, targetIndex?: number) => {
       const normalized = qualityTier.trim().toUpperCase();
       if (!normalized) return;
-      updateQualityProfileDraft((current) => ({
-        ...current,
-        quality_tiers: dedupeOrdered([...current.quality_tiers, normalized]),
-      }));
+      updateQualityProfileDraft((current) => {
+        const tiers = current.quality_tiers.filter(
+          (value) => value !== normalized,
+        );
+        const index =
+          targetIndex === undefined
+            ? tiers.length
+            : Math.min(Math.max(targetIndex, 0), tiers.length);
+        tiers.splice(index, 0, normalized);
+        return { ...current, quality_tiers: dedupeOrdered(tiers) };
+      });
     },
     [updateQualityProfileDraft],
   );

@@ -389,6 +389,8 @@ fn parse_string_json(raw: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD};

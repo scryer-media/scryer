@@ -6,8 +6,8 @@ use scryer_interface_media::mappers::{
 };
 use scryer_interface_media::types::{
     ApproveMediaRequestInput, ApproveMediaRequestPayload, MediaRequestActionPayload,
-    MediaRequestPayload, SubmitMediaRequestInput, SubmitMediaRequestPayload,
-    UpdateMediaRequestInput,
+    MediaRequestPayload, StageMediaRequestMetadataInput, StageMediaRequestMetadataPayload,
+    SubmitMediaRequestInput, SubmitMediaRequestPayload, UpdateMediaRequestInput,
 };
 
 /// Resolve an approver's lease override into the application layer's
@@ -41,6 +41,37 @@ pub struct MediaRequestMutations;
 
 #[Object]
 impl MediaRequestMutations {
+    /// Read a request subject's metadata once and keep it for the previews and the submit that follow; requires request permission on the target library.
+    ///
+    /// The request dialog calls this when it opens. `previewMyRequestDecision`
+    /// reads the staged record and never fetches metadata itself, so a subject
+    /// that was not staged previews as metadata unavailable.
+    async fn stage_my_request_metadata(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Target library, facet, and external identifiers of the subject.")]
+        input: StageMediaRequestMetadataInput,
+    ) -> GqlResult<StageMediaRequestMetadataPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let staged = app
+            .stage_my_request_metadata(
+                &actor,
+                input.library_id.as_ref(),
+                input.facet.into_domain(),
+                input
+                    .external_ids
+                    .into_iter()
+                    .map(|external_id| external_id.into_domain())
+                    .collect(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(StageMediaRequestMetadataPayload {
+            metadata_partial: staged.metadata_partial,
+        })
+    }
+
     /// Create a media request with the requested metadata and acquisition preferences.
     async fn submit_media_request(
         &self,
@@ -78,7 +109,7 @@ impl MediaRequestMutations {
         let actor = actor_from_ctx(ctx)?;
         let request_id = String::from(input.request_id);
         let outcome = app
-            .approve_media_request(
+            .approve_media_request_with_audio_languages(
                 &actor,
                 &request_id,
                 input.quality_profile_id.as_ref(),
@@ -88,6 +119,10 @@ impl MediaRequestMutations {
                 input.monitor_selection.map(monitor_selection_from_input),
                 lease_override(input.lease_days, input.lease_forever)?,
                 input.tags,
+                scryer_application::ApprovedAudioLanguages {
+                    required: maybe_undefined_override(input.required_audio_languages),
+                    preferred: maybe_undefined_override(input.preferred_audio_languages),
+                },
             )
             .await
             .map_err(to_gql_error)?;
@@ -166,6 +201,12 @@ impl MediaRequestMutations {
                         async_graphql::MaybeUndefined::Null => Some(None),
                         async_graphql::MaybeUndefined::Value(days) => Some(Some(i64::from(days))),
                     },
+                    requested_required_audio_languages: maybe_undefined_override(
+                        input.requested_required_audio_languages,
+                    ),
+                    requested_preferred_audio_languages: maybe_undefined_override(
+                        input.requested_preferred_audio_languages,
+                    ),
                 },
             )
             .await
@@ -175,7 +216,11 @@ impl MediaRequestMutations {
         // re-evaluates the request, and returning it without the fresh verdict
         // would show the requester the decision they had before they edited.
         let policy = app
-            .media_request_policy_facts(&actor, std::slice::from_ref(&request))
+            .media_request_policy_facts(
+                &actor,
+                std::slice::from_ref(&request),
+                scryer_application::request_rules::MediaRequestPolicySelection::ALL,
+            )
             .await
             .unwrap_or_default();
         let facts = policy.get(&request.id).cloned().unwrap_or_default();
@@ -198,5 +243,14 @@ impl MediaRequestMutations {
         Ok(MediaRequestActionPayload {
             request_id: ID::from(request_id),
         })
+    }
+}
+
+/// Omitted keeps what is there, null clears it, a value replaces it.
+fn maybe_undefined_override<T>(value: async_graphql::MaybeUndefined<T>) -> Option<Option<T>> {
+    match value {
+        async_graphql::MaybeUndefined::Undefined => None,
+        async_graphql::MaybeUndefined::Null => Some(None),
+        async_graphql::MaybeUndefined::Value(value) => Some(Some(value)),
     }
 }

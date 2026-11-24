@@ -330,6 +330,8 @@ const ja: LocaleDictionary = {
   "label.filters": "フィルター",
   "label.enabled": "有効",
   "label.disabled": "無効",
+  "label.createEnabled": "有効で作成",
+  "label.createDisabled": "無効で作成",
   "unit.seconds": "秒",
   "label.enable": "有効化",
   "label.disable": "無効化",
@@ -636,7 +638,7 @@ const ja: LocaleDictionary = {
   "persona.trait.balanced.audio":
     "オーディオ: バランスの取れたコーデック重み付け",
   "persona.trait.balanced.x265": "x265: 4K未満では減点",
-  "persona.trait.balanced.size": "ファイルサイズ: 大きいファイルを優先",
+  "persona.trait.balanced.size": "ファイルサイズ: 大きすぎるファイルを減点",
   "persona.trait.balanced.remux": "Remux: デフォルトでは優先しない",
   "persona.trait.balanced.hdr": "HDR: Dolby VisionとHDR10に加点",
   "persona.trait.audiophile.source": "ソース: BluRayを強く優先",
@@ -651,14 +653,14 @@ const ja: LocaleDictionary = {
     "オーディオ: ロッシーコーデック許容 (DDP優先)",
   "persona.trait.efficient.x265": "x265: 全解像度で加点",
   "persona.trait.efficient.size":
-    "ファイルサイズ: コンパクトなエンコードを優先",
+    "ファイルサイズ: コンパクトなエンコードを優先、大きすぎるファイルを大きく減点",
   "persona.trait.efficient.remux": "Remux: 優先しない",
   "persona.trait.efficient.hdr": "HDR: 標準",
   "persona.trait.compatible.source": "ソース: WEB-DLを優先",
   "persona.trait.compatible.audio":
     "オーディオ: 幅広いデバイスサポートのためDDPとAACを優先",
   "persona.trait.compatible.x265": "x265: H.264をH.265より優先",
-  "persona.trait.compatible.size": "ファイルサイズ: 標準的な優先度",
+  "persona.trait.compatible.size": "ファイルサイズ: 大きすぎるファイルを減点",
   "persona.trait.compatible.remux": "Remux: 優先しない",
   "persona.trait.compatible.hdr": "HDR: Dolby Vision減点 (互換性リスク)",
   "settings.moviesLibrarySettings": "映画メディア設定",
@@ -798,6 +800,14 @@ const ja: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同一ティア内の最小スコア差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
+  "qualityProfile.minMissingEpisodesForPack":
+    "パックに必要な欠落エピソード数の最小値",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "シーズン内でこの数以上のエピソードが欠落している場合にのみ、シーズンパックを検索します。既定値は 2。1 にすると、欠落エピソード 1 件の自動検索でもパックを取得でき、既に所有しているエピソードがダウンロードされることがあります。",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "マルチシーズンパックに必要な欠落エピソードの最小割合（%）",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "シリーズのエピソードのうちこの割合を超えて欠落している場合にのみ、マルチシーズンパックを検討します。既定値は 30。0 では欠落エピソードが 1 件でもあれば対象となり、100 ではマルチシーズンパックは取得されません。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -1034,7 +1044,7 @@ const ja: LocaleDictionary = {
   "settings.featuresHeader": "機能",
   "settings.experimentalFeaturesLabel": "実験的機能を有効にする",
   "settings.experimentalFeaturesHelp":
-    "このインスタンスの全員に向けてまだ仕上げ中の機能を表示します。ライブラリやルート間でのタイトルの移動と、メンテナンスルールです。",
+    "このインスタンスの全員に向けてまだ仕上げ中の機能を表示します。ライブラリやルート間でのタイトルの移動と、ライフサイクルルールです。",
   "settings.personalizedDiscoveryLabel": "パーソナライズされたディスカバリー",
   "settings.personalizedDiscoveryHelp":
     "ライブラリの概要をメタデータゲートウェイに送信し、所有している作品に基づいてディスカバリーがタイトルを推薦できるようにします。オフにすると、ディスカバリーは公開フィードのみを使用します。",
@@ -1335,6 +1345,18 @@ const ja: LocaleDictionary = {
   "title.monitoredSection": "モニタリング中の{{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "最新をキューに追加",
+  "search.addConfigRequiredAudio": "必須オーディオ言語",
+  "search.addConfigPreferredAudio": "優先オーディオ言語",
+  "search.addConfigAudioChoose": "言語を選択",
+  "search.addConfigAudioRequireNone": "何も必須にしない",
+  "title.preferredAudioLanguages": "優先オーディオ言語",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "そのオーディオ言語は Scryer で認識できません。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "ルートのオーディオ言語は Scryer で認識できません。",
+  "requests.requestedAudioLanguages": "リクエストされたオーディオ言語",
+  "requests.requestedRequiredAudio": "必須: {{languages}}",
+  "requests.requestedPreferredAudio": "優先: {{languages}}",
   "title.requiredAudioLanguages": "必須オーディオ言語",
   "title.originalAudioLanguagePerTitle": "オリジナル言語（タイトルごと）",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1603,11 +1625,16 @@ const ja: LocaleDictionary = {
   "system.title": "システムヘルス",
   "system.diagnosticsBundle.download": "診断バンドルをダウンロード",
   "system.diagnosticsBundle.preparing": "診断を準備しています…",
-  "system.diagnosticsBundle.helper": "ログ、メトリクス、設定の概要をメンテナー向けに1つのファイルにまとめます。名前、アドレス、パス、シークレットは可能な限り削除されますが、共有する前にバンドルを確認してください。",
-  "system.diagnosticsBundle.failed": "診断バンドルをダウンロードできませんでした。",
-  "system.diagnosticsBundle.refusal.authenticationRequired": "診断をダウンロードするには再度サインインしてください。",
-  "system.diagnosticsBundle.refusal.permissionDenied": "診断のダウンロードにはシステム設定の権限が必要です。",
-  "system.diagnosticsBundle.refusal.failed": "診断バンドルを作成できませんでした。詳細はサーバーログを確認してください。",
+  "system.diagnosticsBundle.helper":
+    "ログ、メトリクス、設定の概要をメンテナー向けに1つのファイルにまとめます。バンドルは可能な限りサニタイズされており、Discord のチケットでは安全に共有できますが、GitHub の Issue や Discord の公開チャンネルでの共有はおすすめしません。",
+  "system.diagnosticsBundle.failed":
+    "診断バンドルをダウンロードできませんでした。",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "診断をダウンロードするには再度サインインしてください。",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "診断のダウンロードにはシステム設定の権限が必要です。",
+  "system.diagnosticsBundle.refusal.failed":
+    "診断バンドルを作成できませんでした。詳細はサーバーログを確認してください。",
   "system.jobsTitle": "求人",
   "system.notLoaded": "システムヘルスが読み込まれていません。",
   "system.refreshing": "更新中",
@@ -1994,6 +2021,19 @@ const ja: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "フィラーとして分類された映画をダウンロード キューに含める",
   "settings.sidecarFilesTitle": "サイドカーファイル",
+  "settings.libraryFullHashBackfillTitle": "バックグラウンドハッシュ",
+  "settings.libraryFullHashBackfillLabel": "夜間にファイルをハッシュ",
+  "settings.libraryFullHashBackfillDescription":
+    "このライブラリの各ファイルを夜間に一度読み取り、内容全体のハッシュを記録します。スピンダウンさせているディスク上のライブラリではオフにしてください。その場合、ファイルのハッシュは移動・インポート・チェックで必要になったときだけ読み取られます。",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "夜間ハッシュをオフにしますか？",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "これを無効にすると、特定のファイル移動が100%安全であることをScryerが保証しにくくなります。",
+  "settings.libraryFullHashBackfillDisableConfirm": "オフにする",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "このライブラリの夜間ハッシュをオンにしました。",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "このライブラリの夜間ハッシュをオフにしました。",
   "settings.nfoWriteOnImportLabel": "インポート時にNFOを書き込み",
   "settings.nfoWriteOnImportDescription":
     "インポートされたメディアと一緒にKodi/Jellyfin/Emby互換の.nfoメタデータファイルを書き込みます。既存の.nfoファイルが上書きされることはありません",
@@ -2432,6 +2472,7 @@ const ja: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}}エピソード",
   "history.unknownEvent": "不明",
   "history.noMore": "これ以上のイベントはありません",
+  "history.pageRange": "{{start}} – {{end}}",
   "history.loadMore": "もっと読み込む",
   "settings.recycleBin": "ごみ箱",
   "settings.recycleBinEnabled": "ごみ箱を有効にする",
@@ -2558,203 +2599,183 @@ const ja: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "非対応",
   "appUpgrade.success": "{{version}} にアップグレードしました",
   "appUpgrade.failed": "アップグレードに失敗しました。",
-  // ── Maintenance rules ──
-  "settings.maintenanceRules": "メンテナンスルール",
+  // ── Lifecycle rules ──
+  "settings.lifecycleRules": "ライフサイクルルール",
   "nav.rules": "ルール",
   "settings.rulesScoring": "スコアリングルール",
-  "settings.maintenanceNavRules": "ルール",
-  "settings.maintenanceNavHistory": "履歴",
-  "settings.maintenanceRuleAction": "アクション",
-  "settings.maintenanceRuleActionHelp":
-    "メンテナンスアクションが有効になったときに、このルールが行う処理です。",
-  "settings.maintenanceRuleActionPlaceholder": "アクションを選択",
-  "settings.maintenanceRuleNoActions": "タイトル単位のアクションはありません。",
-  "settings.maintenanceRuleGraceDays": "猶予日数",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleNavRules": "ルール",
+  "settings.lifecycleNavTry": "ルールを試す",
+  "settings.lifecycleNavHistory": "履歴",
+  "settings.lifecycleRuleAction": "アクション",
+  "settings.lifecycleRuleView": "表示",
+  "settings.lifecycleRuleViewTitle": "組み込みルールを表示",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "このルールは Scryer に付属しており、編集できません。状態はルール一覧で変更します。",
+  "settings.lifecycleRuleGraceDays": "猶予日数",
+  "settings.lifecycleRuleGraceDaysHelp":
     "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",
-  "settings.maintenanceRuleTargetProfile": "対象の品質プロファイル",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "このアクションが一致したタイトルを切り替える先のプロファイルです。",
-  "settings.maintenanceRuleTargetProfileIdHelp": "品質プロファイルの ID です。",
-  "settings.maintenanceRuleLibraries": "ライブラリの適用範囲",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "ライブラリの適用範囲",
+  "settings.lifecycleRuleLibrariesHelp":
     "すべてのライブラリのチェックを外すと、ルールはコレクション全体に適用されます。",
-  "settings.maintenanceRuleLibrariesAll": "すべてのライブラリ",
-  "settings.maintenanceRuleCreate": "メンテナンスルールを作成",
-  "settings.maintenanceRuleUpdate": "メンテナンスルールを更新",
-  "settings.maintenanceRuleCopy": "新しいルールとしてコピー",
-  "settings.maintenanceRuleCreateNew": "新しいメンテナンスルールを作成",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "すべてのライブラリ",
+  "settings.lifecycleRuleCreate": "ライフサイクルルールを作成",
+  "settings.lifecycleRuleUpdate": "ライフサイクルルールを更新",
+  "settings.lifecycleRuleCopy": "新しいルールとしてコピー",
+  "settings.lifecycleRuleCreateNew": "新しいライフサイクルルールを作成",
+  "settings.lifecycleRuleValidationRequired":
     "名前、マッチャーのソース、アクションは必須です。",
-  "settings.maintenanceRuleConfirmDiscardTitle":
+  "settings.lifecycleRuleConfirmDiscardTitle":
     "保存していない変更を破棄しますか？",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "メンテナンスルールエディターに未保存の変更があり、失われます。",
-  "settings.maintenanceRuleDeleting":
-    "メンテナンスルール {{name}} を削除しますか？",
-  "settings.noMaintenanceRulesFound": "メンテナンスルールはまだありません。",
-  "settings.maintenanceRuleRevision": "リビジョン",
-  "settings.maintenanceRuleRisk": "リスク",
-  "settings.maintenanceRiskNone": "リスクなし",
-  "settings.maintenanceRiskLow": "低リスク",
-  "settings.maintenanceRiskMedium": "中リスク",
-  "settings.maintenanceRiskHigh": "高リスク",
-  "settings.maintenanceActionDoNothing": "何もしない",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "ライフサイクルルールエディターに未保存の変更があり、失われます。",
+  "settings.lifecycleRuleDeleting":
+    "ライフサイクルルール {{name}} を削除しますか？",
+  "settings.noLifecycleRulesFound": "ライフサイクルルールはまだありません。",
+  "settings.lifecycleActionDoNothing": "何もしない",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "対象のモニタリングを解除し、ファイルは保持",
-  "settings.maintenanceActionDeleteTitleAndFiles":
-    "タイトルとそのファイルを削除",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles": "タイトルとそのファイルを削除",
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "タイトルのモニタリングを解除し、すべてのファイルを削除",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "シリーズのモニタリングを解除し、既存のファイルを削除",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "対象のモニタリングを解除し、そのファイルを削除",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "シーズンのモニタリングを解除してファイルを削除し、シリーズが空になれば削除",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "シーズンのモニタリングを解除し、シリーズが空になればシリーズも解除",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "品質プロファイルを変更し、変更された場合は検索",
-  "settings.maintenancePreviewTitle": "プレビュー",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "プレビュー",
+  "settings.lifecyclePreviewSubtitle":
     "実際のタイトルに対してマッチャーを実行します。プレビューは読み取り専用で、一致する対象を報告するだけで何も変更しません。",
-  "settings.maintenancePreviewSource": "マッチャー",
-  "settings.maintenancePreviewSourceStored": "保存済みルール",
-  "settings.maintenancePreviewSourceDraft": "エディターの下書き",
-  "settings.maintenancePreviewLibrary": "ライブラリ",
-  "settings.maintenancePreviewLibraryPlaceholder": "ライブラリを選択",
-  "settings.maintenancePreviewLimit": "タイトル数",
-  "settings.maintenancePreviewLimitHelp":
+  "settings.lifecyclePreviewLibrary": "ライブラリ",
+  "settings.lifecyclePreviewLibraryPlaceholder": "ライブラリを選択",
+  "settings.lifecyclePreviewLimit": "タイトル数",
+  "settings.lifecyclePreviewLimitHelp":
     "1 回の実行につき最大 {{max}} 件のタイトルです。",
-  "settings.maintenancePreviewRun": "プレビューを実行",
-  "settings.maintenancePreviewRunning": "プレビューを実行中...",
-  "settings.maintenancePreviewEmpty":
-    "ライブラリを選択してプレビューを実行してください。",
-  "settings.maintenancePreviewNoTitles": "評価されたタイトルはありません。",
-  "settings.maintenancePreviewColOutcome": "結果",
-  "settings.maintenancePreviewColReasons": "理由コード",
-  "settings.maintenancePreviewOutcomeMatch": "一致",
-  "settings.maintenancePreviewOutcomeNoMatch": "不一致",
-  "settings.maintenancePreviewOutcomeUnknown": "不明",
-  "settings.maintenancePreviewOutcomeError": "エラー",
-  "settings.maintenancePreviewMeta": "評価日時 {{time}} · マッチャー {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "ルール",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "保存済みルールを選択",
-  "settings.maintenanceRuleUpdated": "メンテナンスルールを更新しました。",
-  "settings.maintenanceRuleCreated":
-    "メンテナンスルールを作成し、無効の状態で保存しました。",
-  "settings.maintenanceRuleDeleted":
-    "メンテナンスルール {{name}} を削除しました。",
+  "settings.lifecyclePreviewRun": "プレビューを実行",
+  "settings.lifecyclePreviewRunning": "プレビューを実行中...",
+  "settings.lifecyclePreviewNoTitles": "評価されたタイトルはありません。",
+  "settings.lifecyclePreviewColOutcome": "結果",
+  "settings.lifecyclePreviewColReasons": "理由コード",
+  "settings.lifecyclePreviewOutcomeMatch": "一致",
+  "settings.lifecyclePreviewOutcomeNoMatch": "不一致",
+  "settings.lifecyclePreviewOutcomeUnknown": "不明",
+  "settings.lifecyclePreviewOutcomeError": "エラー",
+  "settings.lifecyclePreviewMeta": "評価日時 {{time}} · マッチャー {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "ルール",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "保存済みルールを選択",
+  "settings.lifecycleRuleUpdated": "ライフサイクルルールを更新しました。",
+  "settings.lifecycleRuleCreated":
+    "ライフサイクルルールを作成し、無効の状態で保存しました。",
+  "settings.lifecycleRuleDeleted":
+    "ライフサイクルルール {{name}} を削除しました。",
 
-  // ── メンテナンスルール — インスタンスの状態 ──
+  // ── ライフサイクルルール — インスタンスの状態 ──
 
-  // ── メンテナンスルール — インスタンスゲート ──
+  // ── ライフサイクルルール — インスタンスゲート ──
 
-  // ── メンテナンスルール — モードと有効化 ──
-  "settings.maintenanceArmingNone": "効果なし",
-  "settings.maintenanceArmingReversible": "可逆",
-  "settings.maintenanceArmingDestructive": "破壊的",
-  "settings.maintenanceArmDestructiveLoading":
+  // ── ライフサイクルルール — モードと有効化 ──
+  "settings.lifecycleArmDestructiveLoading":
     "このルールが保持している候補を数えています…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "{{count}} 件の候補が対象になり得ます。",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "現在、このルールには対象になり得る候補がありません。",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "読んでいる間に件数が変わりました。現在このルールは {{count}} 件を保持しています。数を確認して、もう一度承認してください。",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "このルールが {{count}} 件のタイトルのファイルを削除し得ることを理解しました。",
 
-  // ── メンテナンスルール — 候補 ──
-  "settings.maintenanceCandidatesFilterRule": "ルール",
-  "settings.maintenanceCandidatesFilterState": "状態",
-  "settings.maintenanceCandidatesFilterLibrary": "ライブラリ",
-  "settings.maintenanceCandidatesAllRules": "すべてのルール",
-  "settings.maintenanceCandidatesAllStates": "すべての状態",
-  "settings.maintenanceCandidatesAllLibraries": "すべてのライブラリ",
-  "settings.maintenanceCandidatesColRule": "ルール",
-  "settings.maintenanceCandidatesColState": "状態",
-  "settings.maintenanceCandidatesColFirstMatched": "初回一致",
-  "settings.maintenanceCandidatesColDue": "期限",
-  "settings.maintenanceCandidatesHeldSince": "{{time}} から保留中",
-  "settings.maintenanceCandidatesEmpty":
+  // ── ライフサイクルルール — 候補 ──
+  "settings.lifecycleCandidatesFilterRule": "ルール",
+  "settings.lifecycleCandidatesFilterState": "状態",
+  "settings.lifecycleCandidatesFilterLibrary": "ライブラリ",
+  "settings.lifecycleCandidatesAllRules": "すべてのルール",
+  "settings.lifecycleCandidatesAllStates": "すべての状態",
+  "settings.lifecycleCandidatesAllLibraries": "すべてのライブラリ",
+  "settings.lifecycleCandidatesColRule": "ルール",
+  "settings.lifecycleCandidatesColState": "状態",
+  "settings.lifecycleCandidatesColFirstMatched": "初回一致",
+  "settings.lifecycleCandidatesColDue": "期限",
+  "settings.lifecycleCandidatesHeldSince": "{{time}} から保留中",
+  "settings.lifecycleCandidatesEmpty":
     "このフィルターに一致する候補はありません。",
-  "settings.maintenanceCandidateExclude": "このタイトルを除外",
-  "settings.maintenanceCandidateStateObserving": "観察中",
-  "settings.maintenanceCandidateStatePendingAction": "アクション待ち",
-  "settings.maintenanceCandidateStateDue": "期限到来",
-  "settings.maintenanceCandidateStateExecuting": "実行中",
-  "settings.maintenanceCandidateStateSucceeded": "成功",
-  "settings.maintenanceCandidateStateFailed": "失敗",
-  "settings.maintenanceCandidateStateCanceled": "取り消し",
-  "settings.maintenanceCandidateStateExcluded": "除外",
-  "settings.maintenanceCandidateStateBlocked": "ブロック",
-  "settings.maintenanceCountdownDueNow": "期限到来",
-  "settings.maintenanceCountdownInMinutes": "あと {{count}} 分",
-  "settings.maintenanceCountdownInHours": "あと {{count}} 時間",
-  "settings.maintenanceCountdownInDays": "あと {{count}} 日",
-  "settings.maintenanceCountdownOverdueMinutes": "{{count}} 分超過",
-  "settings.maintenanceCountdownOverdueHours": "{{count}} 時間超過",
-  "settings.maintenanceCountdownOverdueDays": "{{count}} 日超過",
+  "settings.lifecycleCandidateExclude": "このタイトルを除外",
+  "settings.lifecycleCandidateStateObserving": "観察中",
+  "settings.lifecycleCandidateStatePendingAction": "アクション待ち",
+  "settings.lifecycleCandidateStateDue": "期限到来",
+  "settings.lifecycleCandidateStateExecuting": "実行中",
+  "settings.lifecycleCandidateStateSucceeded": "成功",
+  "settings.lifecycleCandidateStateFailed": "失敗",
+  "settings.lifecycleCandidateStateCanceled": "取り消し",
+  "settings.lifecycleCandidateStateExcluded": "除外",
+  "settings.lifecycleCandidateStateBlocked": "ブロック",
+  "settings.lifecycleCountdownDueNow": "期限到来",
+  "settings.lifecycleCountdownInMinutes": "あと {{count}} 分",
+  "settings.lifecycleCountdownInHours": "あと {{count}} 時間",
+  "settings.lifecycleCountdownInDays": "あと {{count}} 日",
+  "settings.lifecycleCountdownOverdueMinutes": "{{count}} 分超過",
+  "settings.lifecycleCountdownOverdueHours": "{{count}} 時間超過",
+  "settings.lifecycleCountdownOverdueDays": "{{count}} 日超過",
 
-  // ── メンテナンスルール — 実行と履歴 ──
-  "settings.maintenanceRunsTitle": "実行と履歴",
-  "settings.maintenanceRunsSubtitle":
-    "最近の評価パスとアクションの試行を、新しい順に表示します。",
-  "settings.maintenanceRunScope": "対象範囲",
-  "settings.maintenanceRunScopeAll": "すべてのルール",
-  "settings.maintenanceRunEvaluationNow": "今すぐ評価",
-  "settings.maintenanceRunEvaluationRunning": "評価中…",
-  "settings.maintenanceRunActionsNow": "今すぐアクションを実行",
-  "settings.maintenanceRunActionsRunning": "アクション実行中…",
-  "settings.maintenanceRunStarted": "実行を開始しました。",
-  "settings.maintenanceRunNotStarted": "何も開始されませんでした: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "評価の実行",
-  "settings.maintenanceEvaluationRunsEmpty": "評価の実行記録はまだありません。",
-  "settings.maintenanceActionRunsTitle": "アクションの実行",
-  "settings.maintenanceActionRunsEmpty":
-    "アクションの実行記録はまだありません。",
-  "settings.maintenanceRunColStarted": "開始",
-  "settings.maintenanceRunColStatus": "状態",
-  "settings.maintenanceRunColCounts": "件数",
-  "settings.maintenanceRunColDuration": "所要時間",
-  "settings.maintenanceRunColError": "エラー",
-  "settings.maintenanceRunCounts":
+  // ── ライフサイクルルール — 実行と履歴 ──
+  "settings.lifecycleRunsTitle": "実行と履歴",
+  "settings.lifecycleRunScope": "対象範囲",
+  "settings.lifecycleRunScopeAll": "すべてのルール",
+  "settings.lifecycleRunEvaluationNow": "今すぐ評価",
+  "settings.lifecycleRunEvaluationRunning": "評価中…",
+  "settings.lifecycleRunActionsNow": "今すぐアクションを実行",
+  "settings.lifecycleRunActionsRunning": "アクション実行中…",
+  "settings.lifecycleRunStarted": "実行を開始しました。",
+  "settings.lifecycleRunNotStarted": "何も開始されませんでした: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "評価の実行",
+  "settings.lifecycleEvaluationRunsEmpty": "評価の実行記録はまだありません。",
+  "settings.lifecycleActionRunsTitle": "アクションの実行",
+  "settings.lifecycleActionRunsEmpty": "アクションの実行記録はまだありません。",
+  "settings.lifecycleRunColStarted": "開始",
+  "settings.lifecycleRunColStatus": "状態",
+  "settings.lifecycleRunColCounts": "件数",
+  "settings.lifecycleRunColDuration": "所要時間",
+  "settings.lifecycleRunColError": "エラー",
+  "settings.lifecycleRunCounts":
     "評価 {{evaluated}} · 一致 {{matched}} · 不一致 {{noMatch}} · 不明 {{unknown}} · エラー {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}} 秒",
-  "settings.maintenanceRunRevision": "リビジョン {{revision}}",
-  "settings.maintenanceRunStatusRunning": "実行中",
-  "settings.maintenanceRunStatusSucceeded": "成功",
-  "settings.maintenanceRunStatusFailed": "失敗",
-  "settings.maintenanceRunStatusHeld": "保留",
-  "settings.maintenanceRunStatusAlreadySatisfied": "すでに条件を満たしています",
-  "settings.maintenanceRunStatusSkipped": "スキップ",
-  "settings.maintenanceActionRunColAttempt": "試行回数",
-  "settings.maintenanceActionRunColHoldReason": "保留の理由",
+  "settings.lifecycleRunDuration": "{{seconds}} 秒",
+  "settings.lifecycleRunRevision": "リビジョン {{revision}}",
+  "settings.lifecycleRunStatusRunning": "実行中",
+  "settings.lifecycleRunStatusSucceeded": "成功",
+  "settings.lifecycleRunStatusFailed": "失敗",
+  "settings.lifecycleRunStatusHeld": "保留",
+  "settings.lifecycleRunStatusAlreadySatisfied": "すでに条件を満たしています",
+  "settings.lifecycleRunStatusSkipped": "スキップ",
+  "settings.lifecycleActionRunColAttempt": "試行回数",
+  "settings.lifecycleActionRunColHoldReason": "保留の理由",
 
-  // ── メンテナンスルール — 除外 ──
-  "settings.maintenanceExclusionsTitle": "除外",
-  "settings.maintenanceExclusionsSubtitle":
-    "メンテナンスルールが決して手を触れてはならないタイトルです。全体除外はすべてのルールに適用されます。",
-  "settings.maintenanceExclusionsEmpty": "除外はありません。",
-  "settings.maintenanceExclusionColScope": "対象範囲",
-  "settings.maintenanceExclusionColReason": "理由",
-  "settings.maintenanceExclusionColCreated": "追加日時",
-  "settings.maintenanceExclusionScopeGlobal": "すべてのルール",
-  "settings.maintenanceExclusionRemove": "除外を解除",
-  "settings.maintenanceExclusionRemoved": "{{title}} の除外を解除しました。",
-  "settings.maintenanceExclusionRemoving": "{{title}} の除外を解除しますか？",
-  "settings.maintenanceExcludeTitle": "メンテナンスから除外",
-  "settings.maintenanceExcludeBody":
+  // ── ライフサイクルルール — 除外 ──
+  "settings.lifecycleExclusionsTitle": "除外",
+  "settings.lifecycleExclusionsSubtitle":
+    "ライフサイクルルールが決して手を触れてはならないタイトルです。全体除外はすべてのルールに適用されます。",
+  "settings.lifecycleExclusionsEmpty": "除外はありません。",
+  "settings.lifecycleExclusionColScope": "対象範囲",
+  "settings.lifecycleExclusionColReason": "理由",
+  "settings.lifecycleExclusionColCreated": "追加日時",
+  "settings.lifecycleExclusionScopeGlobal": "すべてのルール",
+  "settings.lifecycleExclusionRemove": "除外を解除",
+  "settings.lifecycleExclusionRemoved": "{{title}} の除外を解除しました。",
+  "settings.lifecycleExclusionRemoving": "{{title}} の除外を解除しますか？",
+  "settings.lifecycleExcludeTitle": "ライフサイクルルールから除外",
+  "settings.lifecycleExcludeBody":
     "{{title}} は次回の評価から除外され、その候補は除外状態になります。",
-  "settings.maintenanceExcludeScope": "対象範囲",
-  "settings.maintenanceExcludeScopeGlobal": "すべてのルール",
-  "settings.maintenanceExcludeReason": "理由",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "対象範囲",
+  "settings.lifecycleExcludeScopeGlobal": "すべてのルール",
+  "settings.lifecycleExcludeReason": "理由",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "このタイトルを除外する理由（任意）",
-  "settings.maintenanceExcludeConfirm": "除外する",
-  "settings.maintenanceExcluded": "{{title}} をメンテナンスから除外しました。",
+  "settings.lifecycleExcludeConfirm": "除外する",
+  "settings.lifecycleExcluded":
+    "{{title}} をライフサイクルルールから除外しました。",
   "move.dialogTitle": "タイトルを移動",
   "move.destinationLibrary": "移動先ライブラリ",
   "move.destinationRoot": "移動先ルート",
@@ -3134,6 +3155,9 @@ const ja: LocaleDictionary = {
   "indexerSearch.facet.protocol": "プロトコル",
   "indexerSearch.facet.resolution": "解像度",
   "indexerSearch.facet.source": "ソース",
+  "indexerSearch.facet.videoCodec": "映像コーデック",
+  "indexerSearch.facet.audioCodec": "音声コーデック",
+  "indexerSearch.facet.audioChannels": "音声チャンネル",
   "indexerSearch.facet.audio": "音声・HDR",
   "indexerSearch.facet.flags": "フラグ",
   "indexerSearch.facet.indexer": "インデクサー",
@@ -3235,8 +3259,6 @@ const ja: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "すべてのライブラリ",
   "settings.requestRuleLibrariesHelp":
     "すべてのチェックを外すと、このルールはすべてのライブラリのリクエストに適用されます。",
-  "settings.requestRuleRevision": "リビジョン",
-  "settings.requestRuleDecisionCount": "判定数",
   "settings.requestRuleCopy": "ルールをコピー",
   "settings.requestRuleCreate": "ルールを作成",
   "settings.requestRuleUpdate": "ルールを更新",
@@ -3253,20 +3275,9 @@ const ja: LocaleDictionary = {
     "保存していない変更を破棄しますか？",
   "settings.requestRuleConfirmDiscardDescription":
     "エディタのマッチャーは保存されていません。続行すると置き換えられます。",
-  "settings.requestRuleRequesters": "このルールで人を指定する",
-  "settings.requestRuleRequestersHelp":
-    "対象のアカウントをチェックして適用します。エディタのマッチャーが書き換えられるので、保存前に内容を確認できます。",
-  "settings.requestRuleRequestersApply": "これらの名前をマッチャーに書き込む",
-  "settings.requestRuleRequestersUnavailable":
-    "アカウント一覧の取得にはこのページにない権限が必要です。名前はマッチャーに手で入力してください。",
-  "settings.requestRuleRequestersNoTarget":
-    "このマッチャーは誰も指定していないため、選んだアカウントを書き込む場所がありません。先に requesters セットかユーザー名の比較を追加してください。",
   "settings.requestPreviewTitle": "このルールをリクエストで試す",
   "settings.requestPreviewSubtitle":
     "あなたが記述したリクエストに対してマッチャーを 1 つ実行します。送信も記録もされません。",
-  "settings.requestPreviewSource": "マッチャー",
-  "settings.requestPreviewSourceStored": "保存済みのルール",
-  "settings.requestPreviewSourceDraft": "エディタの下書き",
   "settings.requestPreviewRuleSelect": "ルール",
   "settings.requestPreviewRuleSelectPlaceholder": "ルールを選択",
   "settings.requestPreviewUser": "リクエストした人",
@@ -3283,14 +3294,15 @@ const ja: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "{{title}} を使用します。",
   "settings.requestPreviewRun": "プレビューを実行",
   "settings.requestPreviewRunning": "実行中…",
-  "settings.requestPreviewEmpty":
-    "リクエストを記述してプレビューを実行すると、このルールの判断がわかります。",
   "settings.requestPreviewMetadataPartial": "メタデータが不完全",
   "settings.requestPreviewShowInput": "マッチャーが見た入力を表示",
   "settings.requestPreviewHideInput": "入力を隠す",
   "settings.requestPreviewInputUnavailable":
     "入力ドキュメントを読み戻せませんでした。",
   "settings.requestDecisionsTitle": "最近の判定",
+  "settings.requestNavRules": "ルール",
+  "settings.requestNavTry": "リクエストで試す",
+  "settings.requestNavDecisions": "判定",
   "settings.requestDecisionsOutcomeFilter": "結果",
   "settings.requestDecisionsOutcomeAll": "すべての結果",
   "settings.requestDecisionsColTime": "評価日時",
@@ -3307,7 +3319,7 @@ const ja: LocaleDictionary = {
   "search.keepForCustom": "日数を指定…",
   "search.keepForCustomLabel": "保持する日数",
   "search.keepForHelp":
-    "Scryer がこのメディアを保持する期間です。期限が切れるとメンテナンスルールが削除することがあります。無期限は期限切れになりません。",
+    "Scryer がこのメディアを保持する期間です。期限が切れるとライフサイクルルールが削除することがあります。無期限は期限切れになりません。",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "タグ",
@@ -3343,8 +3355,8 @@ const ja: LocaleDictionary = {
     "{{label}} に名前を変更しました。タイトル {{titles}} 件、シリーズ映画 {{seriesMovies}} 件、遅延プロファイル {{delayProfiles}} 件を書き換えました。",
   "settings.titleTagRenameWarning":
     "ルールのソースは書き換えられないため、{{count}} 件のルール参照が今も古いラベル {{label}} を指しており、一致しなくなります: {{references}}。",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "メンテナンスルールセット {{count}} 件",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "ライフサイクルルールセット {{count}} 件",
   "settings.titleTagReferenceReleaseRuleSets":
     "リリースルールセット {{count}} 件",
   "settings.titleTagReferenceManagedTagFilters":
@@ -3365,23 +3377,17 @@ const ja: LocaleDictionary = {
   "title.catalogFilters.userTags": "タグ",
   "title.catalogFilters.selectUserTags": "タグを選択...",
 
-  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // Series-movie tags and the lifecycle tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,
   // the same way the WP3 block above does.
   "settings.titleTagSeriesMovieCount": "シリーズ映画",
-  "settings.maintenanceActionAddTags": "タグを追加",
-  "settings.maintenanceActionRemoveTags": "タグを削除",
-  "settings.maintenanceRuleTags": "タグ",
-  "settings.maintenanceRuleTagsNone": "タグが選択されていません",
-  "settings.maintenanceRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} を追加",
-  "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} を削除",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "削除対象としてタグ付け",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleActionAddTags": "タグを追加",
+  "settings.lifecycleActionRemoveTags": "タグを削除",
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "削除対象としてタグ付け",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "確認用にフラグ",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "確認用にフラグ",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
@@ -3677,27 +3683,28 @@ const ja: LocaleDictionary = {
   "lists.policy.value.auto": "自動承認",
   "lists.policy.value.approval": "承認が必要",
   "lists.policy.value.none": "リストを許可しない",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "人ではなくリストが対象をライブラリに追加したかどうか",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "有効なリスト（公開・個人いずれか）が今も対象を含んでいるかどうか",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "今も対象を含んでいる有効な公開リストの名前",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "対象を含んだことのあるすべてのリストが対象を外したかどうか",
-  "settings.refMaintFactsListsLeftAt": "最後のリストが対象を外した日時",
-  "settings.refMaintFactsListsLastListName": "対象が最も最近外れた公開リスト",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsLeftAt": "最後のリストが対象を外した日時",
+  "settings.refLifecycleFactsListsLastListName":
+    "対象が最も最近外れた公開リスト",
+  "settings.refLifecycleFactsListsAddedByListValue":
     "リストの同期がタイトルを作成した場合は true。リストストアを読み取れなかった場合は理由 list_store_unreadable で不明",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "有効なリストが少なくとも 1 つ対象を含んでいる間は true",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "公開リストの名前のみ（並べ替え済み）。メンバーの個人リスト名は含まれません",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "対象を含んでいたすべてのリストが外した時点で true。まだ含むリストがある場合や、どのリストにも載ったことがない場合は false",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339 形式のタイムスタンプ。まだ対象を含むリストがある間は理由 not_left_every_list で値なし",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "その公開リストの名前。対象が公開リストから外れたことがない場合は理由 no_public_list_left で値なし",
   "lists.providerSettings.heading": "プロバイダー設定",
   "lists.providerSettings.copy":
@@ -3807,27 +3814,27 @@ const ja: LocaleDictionary = {
     "ファイルを新しい名前へ移動できませんでした。ファイルとエピソードは元のままです。",
   "pendingImports.reason.anime_numbering_ambiguous":
     "エピソード番号があいまいです",
-  "settings.maintenanceExecutionReason.playbackHold":
-    "保留: メディアサーバーで再生中です。",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackHold":
+    "保留: このタイトルはメディアサーバーで再生中です。",
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "保留: メディアサーバーに再生状況を問い合わせられませんでした。",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "保留: メディアサーバーに保存済みの視聴履歴より新しい再生があります。",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "保留: メディアサーバーの履歴に、視聴履歴の対象外のアカウントによる再生があります。",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "保留: 実行前にメディアサーバーで視聴履歴を確認できませんでした。",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "保留: 接続されたメディアサーバーに一致する項目がないため、実行前に視聴履歴を確認できませんでした。",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "接続済みメディアサーバーにアカウントを持つ誰かが、Scryer とのリンクの有無にかかわらず再生したかどうか。個人は特定しません",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "接続済みメディアサーバーにアカウントを持つ誰かが最後に再生した日時",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "有効なメディアサーバー上のいずれかのアカウントが再生した場合に true。アカウントが Scryer ユーザーにリンクされているかは問いません。シーズンと番組では放送済みのいずれかのエピソードが対象です。過去 48 時間以内の同期がすべての有効な接続のすべてのアカウントを読み取るまでは理由 audience_not_read で不明となり、視聴ファクトが不明な場合は通常の理由で不明になります。",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "いずれかのアカウントによる最新の再生の RFC3339 タイムスタンプ。誰も再生していない場合は理由 never_watched で値なし、再生に記録時刻がない場合は理由 play_time_missing(シーズンと番組では episode_play_time_missing)、すべてのアカウントが読み取られていない場合は audience_not_read で不明になります",
-  "settings.maintenancePreviewFacts": "ルールが読み取ったファクト",
+  "settings.lifecyclePreviewFacts": "ルールが読み取ったファクト",
   "setup.sourceImportProgress": "ソースをインポート中",
   "setup.sourceImportInvalidRequest":
     "選択したソースを利用できません。ソースの検出を更新して、もう一度選択してください。",
@@ -3866,26 +3873,18 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionOrder": "判定順序",
   "qualityProfile.decisionOrderInfo":
     "2つのリリースがどちらもこのプロファイルを満たす場合、Scryer は上からこれらのステップを確認します。最初に差がついたステップで決まります。スコアは常に最後に判定します。",
-  "qualityProfile.decisionPresets": "プリセット",
-  "qualityProfile.decisionPresetDefault": "デフォルト",
-  "qualityProfile.decisionPresetLanguageFirst": "言語優先",
-  "qualityProfile.decisionPresetScoreOnly": "スコアのみ",
   "qualityProfile.decisionGateQualityTier": "品質ティア",
   "qualityProfile.decisionGateQualityTierDescription":
     "このプロファイルの品質の優先順位で上位にあるティアのリリースが勝ちます。",
-  "qualityProfile.decisionGateQualityTierSummary": "品質ティア",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "同じティアかつ同じリリースグループでは、新しい PROPER または REPACK が勝ちます。",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK のリビジョン",
   "qualityProfile.decisionGatePreferredLanguage": "優先言語",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "ライブラリの優先音声言語で上位にある音声を持つリリースが勝ちます。",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "優先音声言語",
   "qualityProfile.decisionGateOptionalLanguages": "任意の言語",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "ライブラリの任意の音声言語をより多く含むリリースが勝ちます。",
-  "qualityProfile.decisionGateOptionalLanguagesSummary": "任意の音声言語の数",
   "qualityProfile.decisionGateUnknown": "不明なステップ ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "このバージョンのウェブアプリはこのステップを認識できません。位置はそのまま保持されます。",
@@ -3897,11 +3896,6 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "{{value}} を判定順序に追加",
   "qualityProfile.decisionAvailableSteps": "未使用のステップ",
   "qualityProfile.decisionAllStepsInUse": "すべてのステップを使用中です。",
-  "qualityProfile.decisionSummary":
-    "リリースは {{steps}}、最後にスコアの順で比較されます。",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}、次に {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "リリースはスコアのみで比較されます。",
   "qualityProfile.decisionWarningTierAbsent":
     "品質ティアのステップがないと、下位ティアのリリースが上位ティアのファイルを置き換えることがあり、カットオフティアは適用されません。アップグレードの検索を止めるのはカットオフスコアだけです。カットオフスコアもない場合、ファイルがあればプロファイルは満たされます。",
   "qualityProfile.decisionNoteTierBelowLanguage":
@@ -3924,6 +3918,65 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "ドラッグして {{value}} を並べ替え",
   "qualityProfile.decisionStepMoveUp": "{{value}} を上へ移動",
   "qualityProfile.decisionStepMoveDown": "{{value}} を下へ移動",
+  "settings.proxyReachThrough": "経由先",
+  "settings.proxyReachThroughHelp":
+    "Scryer はこのソルバーへのリクエストを、選択したトランスポートプロキシまたはトンネル経由で送信します。直接接続では Scryer 自身のネットワークからソルバーに接続します。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "チャレンジソルバーを別のチャレンジソルバー経由で接続することはできません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "チャレンジソルバーを自分自身経由で接続することはできません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "ソルバーへの経由先プロキシまたはトンネルが見つかりません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "ソルバーへの経由先プロキシまたはトンネルは無効です。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "別のプロキシ経由で接続できるのはチャレンジソルバーだけです。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "1 つ以上のチャレンジソルバーがこのプロキシ経由で接続されています。先にそれらを変更してください。",
+  "tours.onboarding.welcome.title": "Scryer へようこそ",
+  "tours.onboarding.welcome.body":
+    "Scryer は映画、シリーズ、アニメを探してダウンロードし、整理します。簡単にご案内します。いつでもスキップできます。",
+  "tours.onboarding.search.title": "なんでも検索",
+  "tours.onboarding.search.body":
+    "タイトル、設定、操作をどこからでも探せます。⌘K または Ctrl+K でキーボードから検索を開けます。",
+  "tours.onboarding.libraries.title": "ライブラリ",
+  "tours.onboarding.libraries.body":
+    "映画、シリーズ、アニメにはそれぞれライブラリがあり、持っているもの、足りないもの、取得中のものが分かります。",
+  "tours.onboarding.discover.title": "見つけてリクエスト",
+  "tours.onboarding.discover.body":
+    "ライブラリに基づくおすすめを眺めてタイトルをリクエストし、各リクエストは「リクエスト」で確認できます。",
+  "tours.onboarding.lists.title": "リスト",
+  "tours.onboarding.lists.body":
+    "Trakt や Plex のウォッチリストなどのリストをフォローできます。Scryer は同期を保ち、そのタイトルを追加またはリクエストします。",
+  "tours.onboarding.activity.title": "アクティビティ",
+  "tours.onboarding.activity.body":
+    "ダウンロードとインポートの進行状況、そしてあなたの判断が必要なものが表示されます。",
+  "tours.onboarding.indexers.title": "インデクサーとダウンロードクライアント",
+  "tours.onboarding.indexers.body":
+    "リリースを探すには少なくとも 1 つのインデクサーが、取得するにはダウンロードクライアントが必要です。ダウンロードクライアントはすぐ下にあります。",
+  "tours.onboarding.indexers.action": "インデクサーを追加",
+  "tours.onboarding.qualityProfiles.title": "品質プロファイル",
+  "tours.onboarding.qualityProfiles.body":
+    "品質プロファイルは、タイトルに許可する品質と、Scryer がより良いリリースを探し続ける条件を決めます。",
+  "tours.onboarding.rules.title": "ルール",
+  "tours.onboarding.rules.body":
+    "ルールはリリースを採点し、Scryer が望むものを優先し、望まないものを見送れるようにします。",
+  "tours.onboarding.mediaServers.title": "メディアサーバー",
+  "tours.onboarding.mediaServers.body":
+    "Jellyfin、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
+  "tours.onboarding.notifications.title": "通知",
+  "tours.onboarding.notifications.body":
+    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。サービスはこの「プラグイン」パネルから追加します。Jellyfin、Plex、Emby もここにあります。「メディアサーバー」で接続済みでも、このパネルからそのサーバーのプラグインをインストールするまで、インポート後にサーバーは更新されません。",
+  "tours.onboarding.plugins.title": "プラグイン",
+  "tours.onboarding.plugins.body":
+    "プラグインはインデクサー、ダウンロードクライアント、通知サービスを追加します。ここでインストールと更新ができます。",
+  "tours.stepOf": "ステップ {{current}} / {{total}}",
+  "tours.skip": "ツアーをスキップ",
+  "tours.back": "戻る",
+  "tours.next": "次へ",
+  "tours.done": "完了",
+  "tours.saveFailed":
+    "ツアーの進行状況を保存できなかったため、このツアーが再度表示される場合があります。",
 };
 
 export default ja;

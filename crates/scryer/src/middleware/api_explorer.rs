@@ -314,7 +314,7 @@ mod tests {
                 actor_log_context(&actor).source.as_deref(),
                 Some(mode.audit_source())
             );
-            let data = graphql_ws_connection_data(1, Some(actor));
+            let data = graphql_ws_connection_data(1, Some(actor), None);
             assert!(
                 data.get(&std::any::TypeId::of::<InteractiveSession>())
                     .is_none()

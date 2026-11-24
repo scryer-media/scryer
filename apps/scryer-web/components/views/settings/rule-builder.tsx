@@ -1,0 +1,1385 @@
+import * as React from "react";
+import { flushSync } from "react-dom";
+import { Plus, Trash2 } from "lucide-react";
+import { EditorValidationPlacement } from "@/components/common/editor-validation-status";
+import { HelpLabel } from "@/components/common/info-help";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { IconButton } from "@/components/ui/icon-button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
+import { FilterableSelect } from "@/components/ui/filterable-select";
+import { SingleSelectField } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useTranslate } from "@/lib/context/translate-context";
+import {
+  RULE_BUILDER_PROBLEM_KEYS,
+  addRuleBuilderAction,
+  initialRuleBuilderOutputValue,
+  isRuleBuilderOutputInVariant,
+  ruleBuilderConflicts,
+  ruleBuilderOutputHelp,
+  ruleBuilderOutputLabel,
+  ruleBuilderOutputPlaceholder,
+  ruleBuilderActionLabel,
+  ruleBuilderActionRows,
+  ruleBuilderFields,
+  ruleBuilderOperators,
+  ruleBuilderSetItems,
+  ruleBuilderSetValue,
+  type RuleBuilderConditionValue,
+  ruleBuilderRowSubject,
+  ruleBuilderSubjectFields,
+  removeRuleBuilderAction,
+  setRuleBuilderActionConditions,
+  setRuleBuilderActionOutput,
+  setRuleBuilderActionSubject,
+  translatedOr,
+  type RuleBuilderActionRow,
+  type RuleBuilderCondition,
+  type RuleBuilderField,
+  type RuleBuilderJoin,
+  type RuleBuilderModel,
+  type RuleBuilderOutput,
+  type RuleBuilderOutputValue,
+  type RuleBuilderOptionValue,
+  type RuleBuilderProblem,
+  type RuleBuilderProblemCode,
+  type RuleBuilderSchema,
+} from "@/lib/utils/rule-builder";
+import {
+  RULE_BUILDER_CATALOGS,
+  ruleBuilderCatalogMisses,
+} from "@/lib/utils/rule-builder-catalog-presentation";
+import { selectorId } from "@/lib/utils/dom-ids";
+import { cn } from "@/lib/utils";
+
+/// Values for the builder's pickers, by the option source a schema names.
+/// Null while a catalog is still loading.
+export type RuleBuilderOptions = Readonly<
+  Record<string, readonly RuleBuilderOptionValue[] | null>
+>;
+
+type Translate = ReturnType<typeof useTranslate>;
+
+function outputLabel(schema: RuleBuilderSchema, id: string, t: Translate) {
+  const output = schema.outputs.find((entry) => entry.id === id);
+  return output ? ruleBuilderOutputLabel(t, output) : id;
+}
+
+/// Options for a picker, keeping a stored value that the catalog no longer
+/// lists so the operator still sees what the rule holds.
+function pickerOptions(
+  names: readonly RuleBuilderOptionValue[],
+  kept: readonly string[],
+) {
+  const all = names.map((name) =>
+    typeof name === "string" ? { value: name, label: name } : name,
+  );
+  for (const value of kept)
+    if (value && !all.some((option) => option.value === value))
+      all.push({ value, label: value });
+  return all;
+}
+
+/// The label a picker shows for each selected literal.
+function pickerLabels(
+  names: readonly RuleBuilderOptionValue[],
+  selected: readonly string[],
+): string {
+  const options = pickerOptions(names, selected);
+  return selected
+    .map((value) => options.find((option) => option.value === value)?.label)
+    .join(", ");
+}
+
+function ProblemText({
+  id,
+  schema,
+  problems,
+}: {
+  id: string;
+  schema: RuleBuilderSchema;
+  problems: RuleBuilderProblem[];
+}) {
+  const t = useTranslate();
+  if (problems.length === 0) return null;
+  const messages = problems.map((problem) =>
+    t(RULE_BUILDER_PROBLEM_KEYS[problem.code], {
+      outputs: (problem.outputs ?? [])
+        .map((other) => outputLabel(schema, other, t))
+        .join(", "),
+    }),
+  );
+  return (
+    <p
+      id={id}
+      data-rule-builder-problem
+      className="text-xs text-[var(--scry-warning-text)]"
+    >
+      {[...new Set(messages)].join(" ")}
+    </p>
+  );
+}
+
+/// The builder's tables: conditions, actions and outputs share one frame.
+const TABLE_FRAME_CLASS =
+  "overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]";
+const TABLE_HEAD_CLASS =
+  "px-2 py-1.5 text-left text-xs font-medium text-[var(--scry-muted2)]";
+const TABLE_CELL_CLASS = "px-2 py-1.5 align-top";
+
+/// Problems a condition row shows under its fact or comparison control. A
+/// value problem shows under the value control, and anything else under the
+/// whole row.
+const FACT_PROBLEM_CODES: ReadonlySet<RuleBuilderProblemCode> = new Set([
+  "BUILDER_FACT_REQUIRED",
+  "BUILDER_FACT_UNKNOWN",
+]);
+const OPERATOR_PROBLEM_CODES: ReadonlySet<RuleBuilderProblemCode> = new Set([
+  "BUILDER_OPERATOR_INVALID",
+]);
+const VALUE_PROBLEM_CODES: ReadonlySet<RuleBuilderProblemCode> = new Set([
+  "BUILDER_VALUE_REQUIRED",
+  "BUILDER_VALUE_NOT_NUMBER",
+  "BUILDER_VALUE_NOT_DAYS",
+  "BUILDER_VALUE_NOT_WHOLE",
+  "BUILDER_VALUE_OUT_OF_RANGE",
+  "BUILDER_VALUE_NOT_OFFERED",
+  "BUILDER_VALUE_UNREPRESENTABLE",
+  "BUILDER_VALUE_INVALID",
+]);
+
+/// One condition. `idBase` and `keys` name its elements: the rule's shared
+/// conditions are `<prefix>-condition-*` by index, an action row's own are
+/// `<prefix>-action-condition-*` by row and index.
+function ConditionRow({
+  schema,
+  fields,
+  idBase,
+  keys,
+  condition,
+  options,
+  problems,
+  readOnly,
+  onChange,
+  onRemove,
+}: {
+  schema: RuleBuilderSchema;
+  fields: readonly RuleBuilderField[];
+  idBase: string;
+  keys: readonly (string | number)[];
+  condition: RuleBuilderCondition;
+  options: RuleBuilderOptions;
+  problems: RuleBuilderProblem[];
+  readOnly: boolean;
+  onChange: (condition: RuleBuilderCondition) => void;
+  onRemove: () => void;
+}) {
+  const t = useTranslate();
+  const field = fields.find((candidate) => candidate.path === condition.field);
+  const operators = field ? ruleBuilderOperators(schema, field.kind) : [];
+  const operator = operators.find(
+    (candidate) => candidate.id === condition.operator,
+  );
+  const valueKind = operator?.value ?? "none";
+  const valueId = selectorId(`${idBase}-value`, ...keys);
+  const factId = selectorId(`${idBase}-fact`, ...keys);
+  const hasValue = valueKind !== "none";
+  // An id is picked by name from the field's catalog once it has loaded with
+  // something in it; until then, and for a catalog the page cannot supply, it
+  // is typed in.
+  const catalog =
+    valueKind === "text" || valueKind === "text_set"
+      ? field?.options
+      : undefined;
+  const catalogNames =
+    catalog && Object.hasOwn(options, catalog) ? options[catalog] : undefined;
+  const catalogPresentation = catalog
+    ? RULE_BUILDER_CATALOGS[catalog]
+    : undefined;
+  const pickFromCatalog =
+    catalogPresentation !== undefined &&
+    catalogNames !== undefined &&
+    (catalogNames === null || catalogNames.length > 0);
+  const setItems =
+    valueKind === "text_set" ? ruleBuilderSetItems(condition.value) : [];
+  const factProblems = problems.filter((p) => FACT_PROBLEM_CODES.has(p.code));
+  const operatorProblems = problems.filter((p) =>
+    OPERATOR_PROBLEM_CODES.has(p.code),
+  );
+  const valueProblems = hasValue
+    ? problems.filter((p) => VALUE_PROBLEM_CODES.has(p.code))
+    : [];
+  const rowProblems = problems.filter(
+    (p) =>
+      !factProblems.includes(p) &&
+      !operatorProblems.includes(p) &&
+      !valueProblems.includes(p),
+  );
+
+  const valueProblemText = (
+    <ProblemText
+      id={selectorId(`${idBase}-value-problem`, ...keys)}
+      schema={schema}
+      problems={valueProblems}
+    />
+  );
+  const valueLabel = (key: string) => (
+    <label htmlFor={valueId} className="sr-only">
+      {t(key)}
+    </label>
+  );
+
+  let valueControl: React.ReactNode = null;
+  if (valueKind === "choice") {
+    valueControl = (
+      <SingleSelectField
+        id={valueId}
+        size="compact"
+        label={t("settings.ruleBuilderValue")}
+        labelClassName="sr-only"
+        value={condition.value}
+        disabled={readOnly}
+        onValueChange={(value) => onChange({ ...condition, value })}
+        options={(field?.choices ?? []).map((choice) => ({
+          value: choice.value,
+          label: t(choice.labelKey),
+        }))}
+      />
+    );
+  } else if (valueKind === "text" && pickFromCatalog) {
+    valueControl = (
+      <>
+        {valueLabel("settings.ruleBuilderValue")}
+        <FilterableSelect
+          id={valueId}
+          size="compact"
+          optionIdPrefix={valueId}
+          value={condition.value}
+          disabled={readOnly || catalogNames === null}
+          placeholder={
+            catalogNames === null
+              ? t("label.loading")
+              : t(catalogPresentation.placeholderKey)
+          }
+          onValueChange={(value) => onChange({ ...condition, value })}
+          options={pickerOptions(catalogNames ?? [], [condition.value]).sort(
+            (a, b) => a.label.localeCompare(b.label),
+          )}
+        />
+      </>
+    );
+  } else if (valueKind === "text_set") {
+    valueControl = (
+      <>
+        {valueLabel("settings.ruleBuilderValues")}
+        {pickFromCatalog ? (
+          <MultiSelectDropdown
+            id={valueId}
+            size="compact"
+            optionIdPrefix={valueId}
+            disabled={readOnly || catalogNames === null}
+            triggerLabel={
+              catalogNames === null
+                ? t("label.loading")
+                : setItems.length > 0
+                  ? pickerLabels(catalogNames ?? [], setItems)
+                  : t(catalogPresentation.placeholderKey)
+            }
+            ariaLabel={t(catalogPresentation.placeholderKey)}
+            options={pickerOptions(catalogNames ?? [], setItems).sort((a, b) =>
+              a.label.localeCompare(b.label),
+            )}
+            selectedValues={setItems}
+            onSelectedValuesChange={(items) =>
+              onChange({ ...condition, value: ruleBuilderSetValue(items) })
+            }
+          />
+        ) : (
+          <Textarea
+            id={valueId}
+            value={condition.value}
+            readOnly={readOnly}
+            rows={2}
+            className="min-h-0 text-sm"
+            placeholder={t("settings.ruleBuilderValuesPerLine")}
+            onChange={(event) =>
+              onChange({ ...condition, value: event.target.value })
+            }
+          />
+        )}
+      </>
+    );
+  } else if (hasValue) {
+    valueControl = (
+      <>
+        {valueLabel(
+          valueKind === "days"
+            ? "settings.ruleBuilderDays"
+            : "settings.ruleBuilderValue",
+        )}
+        <Input
+          id={valueId}
+          className="h-8 text-sm"
+          value={condition.value}
+          readOnly={readOnly}
+          placeholder={
+            valueKind === "days" ? t("settings.ruleBuilderDays") : undefined
+          }
+          inputMode={valueKind === "text" ? undefined : "decimal"}
+          onChange={(event) =>
+            onChange({ ...condition, value: event.target.value })
+          }
+        />
+      </>
+    );
+  }
+
+  // The column headers are said once, in the table's head; each cell keeps
+  // its label for assistive technology.
+  return (
+    <tr id={selectorId(idBase, ...keys)}>
+      <td className={cn(TABLE_CELL_CLASS, "min-w-56")}>
+        <label htmlFor={factId} className="sr-only">
+          {t("settings.ruleBuilderFact")}
+        </label>
+        <FilterableSelect
+          id={factId}
+          size="compact"
+          placeholder={t("settings.ruleBuilderFactPlaceholder")}
+          optionIdPrefix={factId}
+          valueKind="code"
+          value={condition.field}
+          disabled={readOnly}
+          onValueChange={(path) => {
+            const next = fields.find((candidate) => candidate.path === path);
+            onChange({
+              field: path,
+              operator: next ? defaultOperator(schema, next) : "",
+              value: "",
+            });
+          }}
+          options={[
+            ...fields
+              .map((candidate) => ({
+                value: candidate.path,
+                label: candidate.label,
+                detail: t(candidate.descKey),
+              }))
+              .sort((a, b) => a.label.localeCompare(b.label)),
+            // A field this row cannot read stays visible, flagged below,
+            // rather than vanishing from the condition.
+            ...(condition.field && !field
+              ? [
+                  {
+                    value: condition.field,
+                    label: condition.field.replace(/^input\./, ""),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        <ProblemText
+          id={selectorId(`${idBase}-fact-problem`, ...keys)}
+          schema={schema}
+          problems={factProblems}
+        />
+        <ProblemText
+          id={selectorId(`${idBase}-problem`, ...keys)}
+          schema={schema}
+          problems={rowProblems}
+        />
+      </td>
+      <td className={cn(TABLE_CELL_CLASS, "min-w-36")}>
+        <SingleSelectField
+          id={selectorId(`${idBase}-operator`, ...keys)}
+          size="compact"
+          label={t("settings.ruleBuilderOperator")}
+          labelClassName="sr-only"
+          value={condition.operator}
+          disabled={readOnly || !field}
+          onValueChange={(next) => {
+            const nextOperator = operators.find(
+              (candidate) => candidate.id === next,
+            );
+            onChange({
+              ...condition,
+              operator: next,
+              value: carriesValue(valueKind, nextOperator?.value)
+                ? condition.value
+                : "",
+            });
+          }}
+          options={operators.map((candidate) => ({
+            value: candidate.id,
+            label: t(candidate.labelKey),
+          }))}
+        />
+        <ProblemText
+          id={selectorId(`${idBase}-operator-problem`, ...keys)}
+          schema={schema}
+          problems={operatorProblems}
+        />
+      </td>
+      <td className={cn(TABLE_CELL_CLASS, "min-w-56")}>
+        {valueControl}
+        {valueControl ? valueProblemText : null}
+      </td>
+      <td className={cn(TABLE_CELL_CLASS, "w-0")}>
+        <IconButton
+          id={selectorId(`${idBase}-remove`, ...keys)}
+          label={t("label.remove")}
+          tone="delete"
+          className="size-8"
+          disabled={readOnly}
+          onClick={onRemove}
+        >
+          <Trash2 className="h-4 w-4" />
+        </IconButton>
+      </td>
+    </tr>
+  );
+}
+
+/// The comparison a new condition on `field` starts on: a fact picked by name
+/// starts on "is one of" (or "contains any of"), anything else on its kind's
+/// first comparison.
+function defaultOperator(
+  schema: RuleBuilderSchema,
+  field: RuleBuilderField,
+): string {
+  const operators = ruleBuilderOperators(schema, field.kind);
+  const set = field.options
+    ? operators.find((operator) => operator.value === "text_set")
+    : undefined;
+  return (set ?? operators[0])?.id ?? "";
+}
+
+/// Whether a value still means the same after switching comparisons: a single
+/// text is a one-item set, so it carries into a set comparison.
+function carriesValue(
+  from: RuleBuilderConditionValue,
+  to: RuleBuilderConditionValue | undefined,
+): boolean {
+  return to === from || (from === "text" && to === "text_set");
+}
+
+function Loading() {
+  const t = useTranslate();
+  return <p className="text-xs text-muted-foreground">{t("label.loading")}</p>;
+}
+
+function OutputValuePicker({
+  schema,
+  output,
+  value,
+  options,
+  readOnly,
+  compact = false,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  output: RuleBuilderOutput;
+  value: RuleBuilderOutputValue;
+  options: RuleBuilderOptions;
+  readOnly: boolean;
+  /// Shorter controls for the outputs table.
+  compact?: boolean;
+  onChange: (value: RuleBuilderOutputValue) => void;
+}) {
+  const t = useTranslate();
+  const id = selectorId(`${schema.idPrefix}-action-value`, output.id);
+  const inputClass = compact ? "h-8 text-sm" : undefined;
+  const selectSize = compact ? "compact" : undefined;
+  const spec = output.value;
+  const catalog =
+    spec.kind === "choice" || spec.kind === "text_list"
+      ? spec.options
+      : undefined;
+  // A catalog the page cannot supply is typed in, as is one this build does
+  // not know how to present.
+  const presentation =
+    catalog && Object.hasOwn(options, catalog)
+      ? RULE_BUILDER_CATALOGS[catalog]
+      : undefined;
+  const names = catalog && presentation ? (options[catalog] ?? null) : null;
+  const placeholder = presentation
+    ? t(presentation.placeholderKey)
+    : ruleBuilderOutputPlaceholder(t, output);
+  const stored =
+    typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+  const misses = presentation ? ruleBuilderCatalogMisses(names, stored) : [];
+  const missing =
+    misses.length > 0 ? (
+      <p
+        id={selectorId(`${schema.idPrefix}-action-catalog-missing`, output.id)}
+        data-problem-code="BUILDER_VALUE_NOT_IN_CATALOG"
+        data-rule-builder-problem
+        className="mt-1 text-xs text-[var(--scry-warning-text)]"
+      >
+        {t(RULE_BUILDER_PROBLEM_KEYS.BUILDER_VALUE_NOT_IN_CATALOG, {
+          values: misses.join(", "),
+        })}
+      </p>
+    ) : null;
+
+  switch (spec.kind) {
+    case "flag":
+      return null;
+    case "text":
+    case "number":
+      return (
+        <Input
+          id={id}
+          value={typeof value === "string" ? value : ""}
+          readOnly={readOnly}
+          placeholder={placeholder}
+          className={inputClass}
+          inputMode={spec.kind === "number" ? "numeric" : undefined}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      );
+    case "choice": {
+      const text = typeof value === "string" ? value : "";
+      if (!presentation) {
+        return (
+          <Input
+            id={id}
+            value={text}
+            readOnly={readOnly}
+            placeholder={placeholder}
+            className={inputClass}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        );
+      }
+      if (names === null) return <Loading />;
+      return (
+        <>
+          <SingleSelectField
+            id={id}
+            value={text}
+            size={selectSize}
+            disabled={readOnly}
+            valueKind={presentation.display ?? "text"}
+            placeholder={placeholder}
+            onValueChange={onChange}
+            options={pickerOptions(names, [text])}
+          />
+          {missing}
+        </>
+      );
+    }
+    case "text_list": {
+      const selected = Array.isArray(value) ? value : [];
+      if (!presentation) {
+        // One entry per line; the text is split exactly as typed so it
+        // round-trips while the operator is still typing.
+        return (
+          <Textarea
+            id={id}
+            value={selected.join("\n")}
+            readOnly={readOnly}
+            placeholder={placeholder}
+            onChange={(event) =>
+              onChange(
+                event.target.value === "" ? [] : event.target.value.split("\n"),
+              )
+            }
+          />
+        );
+      }
+      if (names === null) return <Loading />;
+      if (names.length === 0 && selected.length === 0) {
+        return (
+          <p id={id} className="text-xs text-muted-foreground">
+            {presentation.emptyKey ? t(presentation.emptyKey) : null}
+          </p>
+        );
+      }
+      return (
+        <>
+          <MultiSelectDropdown
+            id={id}
+            optionIdPrefix={id}
+            size={selectSize}
+            disabled={readOnly}
+            triggerLabel={
+              selected.length > 0 ? pickerLabels(names, selected) : placeholder
+            }
+            ariaLabel={placeholder}
+            options={pickerOptions(names, selected)}
+            selectedValues={selected}
+            onSelectedValuesChange={onChange}
+          />
+          {missing}
+        </>
+      );
+    }
+    case "structured": {
+      const parts =
+        typeof value === "object" && !Array.isArray(value) ? value : {};
+      return (
+        <div className="grid gap-2 md:grid-cols-2">
+          {spec.parts.map((part) => (
+            <label key={part.id}>
+              <Label className="mb-2 block">{t(part.labelKey)}</Label>
+              <Input
+                id={selectorId(
+                  `${schema.idPrefix}-action-value`,
+                  output.id,
+                  part.id,
+                )}
+                value={parts[part.id] ?? ""}
+                readOnly={readOnly}
+                placeholder={
+                  part.placeholderKey ? t(part.placeholderKey) : undefined
+                }
+                inputMode={part.kind === "number" ? "numeric" : undefined}
+                onChange={(event) =>
+                  onChange({ ...parts, [part.id]: event.target.value })
+                }
+              />
+            </label>
+          ))}
+        </div>
+      );
+    }
+  }
+}
+
+function OutputRow({
+  schema,
+  variant,
+  output,
+  outputs,
+  options,
+  problems,
+  readOnly,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  variant: string | null;
+  output: RuleBuilderOutput;
+  outputs: RuleBuilderModel["outputs"];
+  options: RuleBuilderOptions;
+  problems: RuleBuilderProblem[];
+  readOnly: boolean;
+  onChange: (outputs: RuleBuilderModel["outputs"]) => void;
+}) {
+  const t = useTranslate();
+  const prefix = schema.idPrefix;
+  const chosen = Object.hasOwn(outputs, output.id);
+  const inVariant = isRuleBuilderOutputInVariant(output, variant);
+  const conflicts = ruleBuilderConflicts(schema, output.id, outputs);
+  const label = ruleBuilderOutputLabel(t, output);
+  const help = ruleBuilderOutputHelp(t, output);
+  // A chosen output can always be cleared, even once it no longer fits.
+  const blocked = !chosen && (!inVariant || conflicts.length > 0);
+
+  const toggle = (checked: boolean) => {
+    const next = { ...outputs };
+    if (!checked) delete next[output.id];
+    else next[output.id] = initialRuleBuilderOutputValue(output);
+    onChange(next);
+  };
+
+  const checkboxId = selectorId(`${prefix}-action`, output.id);
+  const showValue = chosen && output.value.kind !== "flag";
+
+  return (
+    <tr className={cn(chosen && "bg-[var(--scry-surfC)]")}>
+      <td className="w-9 py-1.5 pr-1 pl-3 align-middle">
+        <Checkbox
+          id={checkboxId}
+          checked={chosen}
+          disabled={readOnly || blocked}
+          onCheckedChange={(value) => toggle(value === true)}
+        />
+      </td>
+      <td
+        className={cn(
+          "w-52 py-1.5 pr-3 align-middle text-sm whitespace-nowrap",
+          blocked && "text-muted-foreground",
+        )}
+      >
+        <label htmlFor={checkboxId} className="cursor-pointer">
+          {help ? <HelpLabel label={label} help={help} /> : label}
+        </label>
+      </td>
+      <td className="py-1 pr-3 align-middle">
+        {!inVariant ? (
+          <p
+            id={selectorId(`${prefix}-action-scope`, output.id)}
+            className="text-xs text-muted-foreground"
+          >
+            {schema.labels.outputNotInVariant
+              ? t(schema.labels.outputNotInVariant)
+              : null}
+          </p>
+        ) : conflicts.length > 0 ? (
+          <p
+            id={selectorId(`${prefix}-action-conflict`, output.id)}
+            className="text-xs text-muted-foreground"
+          >
+            {t("settings.ruleBuilderOutputConflict", {
+              outputs: conflicts
+                .map((other) => outputLabel(schema, other, t))
+                .join(", "),
+            })}
+          </p>
+        ) : null}
+        {showValue ? (
+          <OutputValuePicker
+            schema={schema}
+            output={output}
+            value={outputs[output.id]}
+            options={options}
+            readOnly={readOnly}
+            compact
+            onChange={(value) => onChange({ ...outputs, [output.id]: value })}
+          />
+        ) : null}
+        <ProblemText
+          id={selectorId(`${prefix}-action-problem`, output.id)}
+          schema={schema}
+          problems={problems}
+        />
+      </td>
+    </tr>
+  );
+}
+
+type OutputTableRow =
+  | { kind: "output"; output: RuleBuilderOutput }
+  | { kind: "choice"; outputs: RuleBuilderOutput[] };
+
+/// The outputs table in schema order. Flags the schema allows at most one of,
+/// such as a request's approve, deny and hold, share one row as a choice.
+function outputTableRows(schema: RuleBuilderSchema): OutputTableRow[] {
+  const byId = new Map(schema.outputs.map((output) => [output.id, output]));
+  const groupOf = new Map<string, RuleBuilderOutput[]>();
+  for (const rule of schema.outputRules) {
+    if (rule.rule === "at_least_one") continue;
+    const members = rule.of.flatMap((id) => {
+      const output = byId.get(id);
+      return output ? [output] : [];
+    });
+    if (
+      members.length < 2 ||
+      members.some((output) => output.value.kind !== "flag")
+    )
+      continue;
+    for (const output of members) groupOf.set(output.id, members);
+  }
+  const rows: OutputTableRow[] = [];
+  const placed = new Set<RuleBuilderOutput[]>();
+  for (const output of schema.outputs) {
+    const group = groupOf.get(output.id);
+    if (!group) rows.push({ kind: "output", output });
+    else if (!placed.has(group)) {
+      placed.add(group);
+      rows.push({ kind: "choice", outputs: group });
+    }
+  }
+  return rows;
+}
+
+/// One row of checkboxes for flags that exclude each other: ticking one
+/// clears the others.
+function OutputChoiceRow({
+  schema,
+  variant,
+  members,
+  outputs,
+  readOnly,
+  problems,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  variant: string | null;
+  members: RuleBuilderOutput[];
+  outputs: RuleBuilderModel["outputs"];
+  readOnly: boolean;
+  problems: RuleBuilderProblem[];
+  onChange: (outputs: RuleBuilderModel["outputs"]) => void;
+}) {
+  const t = useTranslate();
+  const prefix = schema.idPrefix;
+  const chosen = members.find((output) => Object.hasOwn(outputs, output.id));
+
+  const choose = (id: string) => {
+    const next = { ...outputs };
+    for (const output of members) delete next[output.id];
+    const output = members.find((entry) => entry.id === id);
+    if (output) next[output.id] = initialRuleBuilderOutputValue(output);
+    onChange(next);
+  };
+
+  return (
+    <tr className={cn(chosen && "bg-[var(--scry-surfC)]")}>
+      <td colSpan={3} className="py-1.5 pr-3 pl-3 align-middle">
+        <div
+          role="group"
+          aria-label={members
+            .map((output) => ruleBuilderOutputLabel(t, output))
+            .join(" / ")}
+          className="flex flex-wrap items-center gap-x-6 gap-y-1"
+        >
+          {members.map((output) => {
+            const id = selectorId(`${prefix}-action`, output.id);
+            const checked = chosen?.id === output.id;
+            const blocked =
+              !checked && !isRuleBuilderOutputInVariant(output, variant);
+            return (
+              <label
+                key={output.id}
+                htmlFor={id}
+                className={cn(
+                  "flex cursor-pointer items-center gap-2 text-sm",
+                  blocked && "text-muted-foreground",
+                )}
+              >
+                <Checkbox
+                  id={id}
+                  checked={checked}
+                  disabled={readOnly || blocked}
+                  onCheckedChange={(value) =>
+                    choose(value === true ? output.id : "")
+                  }
+                />
+                {ruleBuilderOutputLabel(t, output)}
+              </label>
+            );
+          })}
+        </div>
+        <ProblemText
+          id={selectorId(
+            `${prefix}-action-problem`,
+            chosen?.id ?? members[0].id,
+          )}
+          schema={schema}
+          problems={problems}
+        />
+      </td>
+    </tr>
+  );
+}
+
+/// A list of conditions with its join and its add button.
+function ConditionList({
+  schema,
+  fields,
+  idBase,
+  keys,
+  joinId,
+  join,
+  conditions,
+  problems,
+  readOnly,
+  label,
+  trailing,
+  options,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  fields: readonly RuleBuilderField[];
+  idBase: string;
+  keys: readonly (string | number)[];
+  options: RuleBuilderOptions;
+  joinId: string;
+  join: RuleBuilderJoin;
+  conditions: RuleBuilderCondition[];
+  problems: RuleBuilderProblem[];
+  readOnly: boolean;
+  label: React.ReactNode;
+  /// Set at the end of the heading row.
+  trailing?: React.ReactNode;
+  onChange: (change: {
+    join?: RuleBuilderJoin;
+    conditions?: RuleBuilderCondition[];
+  }) => void;
+}) {
+  const t = useTranslate();
+  return (
+    <div className="space-y-2">
+      {/* All or any decides something only once there are two conditions. */}
+      <div className="flex min-h-8 flex-wrap items-center gap-3">
+        <Label className="block">{label}</Label>
+        {conditions.length > 1 ? (
+          <SingleSelectField
+            id={joinId}
+            size="sm"
+            className="w-56"
+            value={join}
+            disabled={readOnly}
+            onValueChange={(next) =>
+              onChange({ join: next as RuleBuilderJoin })
+            }
+            options={[
+              { value: "ALL", label: t("settings.ruleBuilderJoinAll") },
+              { value: "ANY", label: t("settings.ruleBuilderJoinAny") },
+            ]}
+          />
+        ) : null}
+        {trailing ? <div className="ml-auto">{trailing}</div> : null}
+      </div>
+      <div className={TABLE_FRAME_CLASS}>
+        <table
+          id={selectorId(`${idBase}-table`, ...keys)}
+          className="w-full border-collapse"
+        >
+          {conditions.length > 0 ? (
+            <thead className="border-b border-[var(--scry-border3)]">
+              <tr>
+                <th className={TABLE_HEAD_CLASS}>
+                  {t("settings.ruleBuilderFact")}
+                </th>
+                <th className={TABLE_HEAD_CLASS}>
+                  {t("settings.ruleBuilderOperator")}
+                </th>
+                <th className={TABLE_HEAD_CLASS}>
+                  {t("settings.ruleBuilderValue")}
+                </th>
+                <th className={TABLE_HEAD_CLASS}>
+                  <span className="sr-only">{t("label.remove")}</span>
+                </th>
+              </tr>
+            </thead>
+          ) : null}
+          <tbody className="divide-y divide-[var(--scry-border3)]">
+            {conditions.map((condition, index) => (
+              <ConditionRow
+                key={index}
+                schema={schema}
+                fields={fields}
+                idBase={idBase}
+                keys={[...keys, index]}
+                condition={condition}
+                options={options}
+                readOnly={readOnly}
+                problems={problems.filter(
+                  (problem) => problem.conditionIndex === index,
+                )}
+                onChange={(next) =>
+                  onChange({
+                    conditions: conditions.map((existing, at) =>
+                      at === index ? next : existing,
+                    ),
+                  })
+                }
+                onRemove={() =>
+                  onChange({
+                    conditions: conditions.filter((_, at) => at !== index),
+                  })
+                }
+              />
+            ))}
+            <tr>
+              <td colSpan={4} className="px-1 py-1">
+                <Button
+                  id={selectorId(`${idBase}-add`, ...keys)}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={readOnly}
+                  onClick={() =>
+                    onChange({
+                      conditions: [
+                        ...conditions,
+                        { field: "", operator: "", value: "" },
+                      ],
+                    })
+                  }
+                >
+                  <Plus className="mr-1 h-4 w-4" />
+                  {t("settings.ruleBuilderAddCondition")}
+                </Button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/// One action of a family with subjects: what it acts on, the action, its
+/// value, and the conditions that apply to it alone.
+function ActionRow({
+  schema,
+  variant,
+  model,
+  row,
+  index,
+  options,
+  problems,
+  readOnly,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  variant: string | null;
+  model: RuleBuilderModel;
+  row: RuleBuilderActionRow;
+  index: number;
+  options: RuleBuilderOptions;
+  problems: RuleBuilderProblem[];
+  readOnly: boolean;
+  onChange: (model: RuleBuilderModel) => void;
+}) {
+  const t = useTranslate();
+  const prefix = schema.idPrefix;
+  const subject = ruleBuilderRowSubject(schema, row);
+  const rows = ruleBuilderActionRows(model);
+  const taken = new Set(
+    rows.filter((_, at) => at !== index).map((other) => other.output),
+  );
+  const offered = schema.outputs.filter(
+    (output) =>
+      subject?.outputs.includes(output.id) &&
+      (!taken.has(output.id) || output.id === row.output),
+  );
+  const output = schema.outputs.find((entry) => entry.id === row.output);
+  const help = output ? ruleBuilderOutputHelp(t, output) : null;
+  const rowProblems = problems.filter(
+    (problem) => problem.conditionIndex === undefined,
+  );
+  return (
+    <tbody
+      id={selectorId(`${prefix}-action-row`, index)}
+      className="border-b border-[var(--scry-border3)] last:border-b-0"
+    >
+      <tr>
+        <td className={cn(TABLE_CELL_CLASS, "min-w-40")}>
+          <SingleSelectField
+            id={selectorId(`${prefix}-action-subject`, index)}
+            size="compact"
+            label={t("settings.ruleBuilderActionSubject")}
+            labelClassName="sr-only"
+            value={subject?.id ?? row.subject ?? ""}
+            disabled={readOnly}
+            onValueChange={(next) =>
+              onChange(setRuleBuilderActionSubject(schema, model, index, next))
+            }
+            options={(schema.subjects ?? []).map((entry) => ({
+              value: entry.id,
+              label: translatedOr(t, entry.labelKey, entry.id),
+            }))}
+          />
+        </td>
+        <td className={cn(TABLE_CELL_CLASS, "min-w-52")}>
+          <SingleSelectField
+            id={selectorId(`${prefix}-action-output`, index)}
+            size="compact"
+            label={t("settings.ruleBuilderAction")}
+            labelClassName="sr-only"
+            placeholder={t("settings.ruleBuilderActionPlaceholder")}
+            value={row.output}
+            disabled={readOnly || !subject}
+            onValueChange={(next) =>
+              onChange(setRuleBuilderActionOutput(schema, model, index, next))
+            }
+            options={offered.map((entry) => ({
+              value: entry.id,
+              label: ruleBuilderActionLabel(t, entry),
+            }))}
+          />
+          {help ? (
+            <p className="mt-1 text-xs text-muted-foreground">{help}</p>
+          ) : null}
+          <ProblemText
+            id={selectorId(`${prefix}-action-row-problem`, index)}
+            schema={schema}
+            problems={rowProblems}
+          />
+        </td>
+        <td className={cn(TABLE_CELL_CLASS, "min-w-56")}>
+          {output && output.value.kind !== "flag" ? (
+            <OutputValuePicker
+              schema={schema}
+              output={output}
+              value={
+                model.outputs[output.id] ??
+                initialRuleBuilderOutputValue(output)
+              }
+              options={options}
+              readOnly={readOnly}
+              compact
+              onChange={(value) =>
+                onChange({
+                  ...model,
+                  outputs: { ...model.outputs, [output.id]: value },
+                })
+              }
+            />
+          ) : null}
+        </td>
+        <td className={cn(TABLE_CELL_CLASS, "w-0")}>
+          <IconButton
+            id={selectorId(`${prefix}-action-remove`, index)}
+            label={t("label.remove")}
+            tone="delete"
+            className="size-8"
+            disabled={readOnly}
+            onClick={() => onChange(removeRuleBuilderAction(model, index))}
+          >
+            <Trash2 className="h-4 w-4" />
+          </IconButton>
+        </td>
+      </tr>
+      <tr>
+        {/* Indented under its action: these narrow this action alone. */}
+        <td colSpan={4} className="px-2 pb-2 pl-8">
+          {row.conditions.length > 0 ? (
+            <ConditionList
+              schema={schema}
+              fields={ruleBuilderSubjectFields(schema, variant, subject)}
+              idBase={`${prefix}-action-condition`}
+              keys={[index]}
+              options={options}
+              joinId={selectorId(`${prefix}-action-join`, index)}
+              join={row.join}
+              conditions={row.conditions}
+              problems={problems.filter(
+                (problem) => problem.conditionIndex !== undefined,
+              )}
+              readOnly={readOnly}
+              label={
+                <HelpLabel
+                  label={t("settings.ruleBuilderActionConditions")}
+                  help={t("settings.ruleBuilderActionConditionsHelp")}
+                />
+              }
+              onChange={(change) =>
+                onChange(setRuleBuilderActionConditions(model, index, change))
+              }
+            />
+          ) : (
+            <Button
+              id={selectorId(`${prefix}-action-condition-add`, index)}
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={readOnly}
+              onClick={() =>
+                onChange(
+                  setRuleBuilderActionConditions(model, index, {
+                    conditions: [{ field: "", operator: "", value: "" }],
+                  }),
+                )
+              }
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              {t("settings.ruleBuilderAddActionCondition")}
+            </Button>
+          )}
+        </td>
+      </tr>
+    </tbody>
+  );
+}
+
+/// Conditions, then outputs, written into Rego by the generator. Everything
+/// here edits the model; the source the rule saves is always generated. What
+/// the builder offers comes entirely from the schema.
+export function RuleBuilder({
+  schema,
+  model,
+  variant,
+  problems: allProblems,
+  options,
+  readOnly = false,
+  onChange,
+  feedback,
+  headerEnd,
+}: {
+  schema: RuleBuilderSchema;
+  model: RuleBuilderModel;
+  variant: string | null;
+  problems: RuleBuilderProblem[];
+  options: RuleBuilderOptions;
+  readOnly?: boolean;
+  onChange: (model: RuleBuilderModel) => void;
+  /// Validation status of the generated source.
+  feedback: React.ReactNode;
+  /// Set at the end of the Conditions heading, such as the editor's mode
+  /// toggle.
+  headerEnd?: React.ReactNode;
+}) {
+  const t = useTranslate();
+  const prefix = schema.idPrefix;
+  const hasSubjects = (schema.subjects?.length ?? 0) > 0;
+  // Unfinished choices are marked only once a save is held for them, so a
+  // row just added does not open with a complaint.
+  const [problemsShown, setProblemsShown] = React.useState(false);
+  React.useEffect(() => {
+    const element = document.getElementById(prefix);
+    if (!element) return;
+    const show = () => flushSync(() => setProblemsShown(true));
+    element.addEventListener(REVEAL_PROBLEMS_EVENT, show);
+    return () => element.removeEventListener(REVEAL_PROBLEMS_EVENT, show);
+  }, [prefix]);
+  const problems = problemsShown ? allProblems : NO_PROBLEMS;
+  // An empty outputs table already says nothing is chosen, so the "choose one
+  // of" list is not repeated under it.
+  const general = problems.filter(
+    (problem) =>
+      problem.code !== "BUILDER_OUTPUT_REQUIRED" &&
+      problem.conditionIndex === undefined &&
+      problem.output === undefined &&
+      problem.actionIndex === undefined,
+  );
+  const sharedProblems = problems.filter(
+    (problem) => problem.actionIndex === undefined,
+  );
+
+  return (
+    <div id={prefix} className="space-y-4">
+      <ConditionList
+        schema={schema}
+        fields={ruleBuilderFields(schema, variant)}
+        idBase={`${prefix}-condition`}
+        keys={[]}
+        options={options}
+        joinId={`${prefix}-join`}
+        join={model.join}
+        conditions={model.conditions}
+        problems={sharedProblems}
+        readOnly={readOnly}
+        label={t("settings.ruleBuilderConditions")}
+        trailing={headerEnd}
+        onChange={(change) => onChange({ ...model, ...change })}
+      />
+
+      <div className="space-y-2">
+        <Label className="block">
+          <HelpLabel
+            label={t(schema.labels.outputs)}
+            help={t(schema.labels.outputsHelp)}
+          />
+        </Label>
+        {hasSubjects ? (
+          <div className={TABLE_FRAME_CLASS}>
+            <table id={`${prefix}-actions`} className="w-full border-collapse">
+              <thead className="border-b border-[var(--scry-border3)]">
+                <tr>
+                  <th className={TABLE_HEAD_CLASS}>
+                    {t("settings.ruleBuilderActionSubject")}
+                  </th>
+                  <th className={TABLE_HEAD_CLASS}>
+                    {t("settings.ruleBuilderAction")}
+                  </th>
+                  <th className={TABLE_HEAD_CLASS}>
+                    {t("settings.ruleBuilderValue")}
+                  </th>
+                  <th className={TABLE_HEAD_CLASS}>
+                    <span className="sr-only">{t("label.remove")}</span>
+                  </th>
+                </tr>
+              </thead>
+              {ruleBuilderActionRows(model).map((row, index) => (
+                <ActionRow
+                  key={index}
+                  schema={schema}
+                  variant={variant}
+                  model={model}
+                  row={row}
+                  index={index}
+                  options={options}
+                  readOnly={readOnly}
+                  problems={problems.filter(
+                    (problem) => problem.actionIndex === index,
+                  )}
+                  onChange={onChange}
+                />
+              ))}
+              <tfoot className="border-t border-[var(--scry-border3)]">
+                <tr>
+                  <td colSpan={4} className="px-1 py-1">
+                    <Button
+                      id={`${prefix}-action-add`}
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={readOnly}
+                      onClick={() => onChange(addRuleBuilderAction(model))}
+                    >
+                      <Plus className="mr-1 h-4 w-4" />
+                      {t("settings.ruleBuilderAddAction")}
+                    </Button>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ) : (
+          <div className={cn(TABLE_FRAME_CLASS, "max-w-3xl")}>
+            <table id={`${prefix}-outputs`} className="w-full border-collapse">
+              <tbody className="divide-y divide-[var(--scry-border3)]">
+                {outputTableRows(schema).map((row) =>
+                  row.kind === "choice" ? (
+                    <OutputChoiceRow
+                      key={row.outputs[0].id}
+                      schema={schema}
+                      variant={variant}
+                      members={row.outputs}
+                      outputs={model.outputs}
+                      readOnly={readOnly}
+                      problems={problems.filter((problem) =>
+                        row.outputs.some(
+                          (output) => output.id === problem.output,
+                        ),
+                      )}
+                      onChange={(outputs) => onChange({ ...model, outputs })}
+                    />
+                  ) : (
+                    <OutputRow
+                      key={row.output.id}
+                      schema={schema}
+                      variant={variant}
+                      output={row.output}
+                      outputs={model.outputs}
+                      options={options}
+                      readOnly={readOnly}
+                      problems={problems.filter(
+                        (problem) => problem.output === row.output.id,
+                      )}
+                      onChange={(outputs) => onChange({ ...model, outputs })}
+                    />
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <ProblemText
+        id={`${prefix}-problems`}
+        schema={schema}
+        problems={general}
+      />
+
+      <EditorValidationPlacement.Provider value="inline">
+        {feedback}
+      </EditorValidationPlacement.Provider>
+    </div>
+  );
+}
+
+/// Scroll the builder's first marked problem into view, once the render that
+/// shows it has landed. Used when a save is held for unfinished choices.
+export function revealFirstRuleBuilderProblem(schema: RuleBuilderSchema) {
+  window.setTimeout(() => {
+    const builder = document.getElementById(schema.idPrefix);
+    builder?.dispatchEvent(new Event(REVEAL_PROBLEMS_EVENT));
+    builder
+      ?.querySelector("[data-rule-builder-problem]")
+      ?.scrollIntoView({ block: "center" });
+  });
+}
+
+const REVEAL_PROBLEMS_EVENT = "rule-builder-reveal-problems";
+const NO_PROBLEMS: RuleBuilderProblem[] = [];

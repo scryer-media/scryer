@@ -23,6 +23,7 @@ import { SearchLanguagePicker } from "@/components/common/search-language-picker
 import { InfoHelp } from "@/components/common/info-help";
 import { Input } from "@/components/ui/input";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
+import { PreferredAudioLanguageList } from "@/components/common/preferred-audio-language-list";
 import { TitleTagsEditor } from "@/components/common/title-tags-picker";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,6 +34,7 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { METADATA_LANGUAGES, getLanguageLabel } from "@/lib/i18n";
+import { selectorId } from "@/lib/utils/dom-ids";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type {
   LibraryRootRecord,
@@ -62,6 +64,8 @@ export type InlineTitleSettingsTitle = {
   requiredAudioLanguagesOverride?: string[] | null;
   effectiveRequiredAudioLanguages?: string[];
   inheritsRequiredAudioLanguages?: boolean;
+  effectivePreferredAudioLanguages?: string[];
+  inheritsPreferredAudioLanguages?: boolean;
   fillerPolicy?: string | null;
   recapPolicy?: string | null;
   /** Which episode numbering this title's releases are read in. */
@@ -171,6 +175,9 @@ export function TitleOptionsSettingsGrid({
   const [saving, setSaving] = React.useState(false);
   const [audioSaving, setAudioSaving] = React.useState(false);
   const requiredAudioLanguages = title.effectiveRequiredAudioLanguages ?? [];
+  const preferredAudioLanguages = title.effectivePreferredAudioLanguages ?? [];
+  const inheritsPreferredAudioLanguages =
+    title.inheritsPreferredAudioLanguages ?? true;
   const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
   const currentRootFolderId = title.rootFolderId?.trim() || "";
   const currentSeasonFolder =
@@ -281,6 +288,11 @@ export function TitleOptionsSettingsGrid({
   const effectiveAudioLanguages =
     formatAudioLanguageLabels(
       requiredAudioLanguages,
+      t("title.originalAudioLanguagePerTitle"),
+    ) || t("label.none");
+  const effectivePreferredAudioLanguages =
+    formatAudioLanguageLabels(
+      preferredAudioLanguages,
       t("title.originalAudioLanguagePerTitle"),
     ) || t("label.none");
   const effectiveFillerPolicy =
@@ -519,6 +531,39 @@ export function TitleOptionsSettingsGrid({
                 className="!flex w-full justify-end"
                 buttonClassName="w-[70%]"
               />
+            </div>
+          </SettingsRow>
+
+          <SettingsRow
+            icon={Languages}
+            label={t("title.preferredAudioLanguages")}
+            help={t("settings.audioPreferredLanguagesHint")}
+            effective={
+              inheritsPreferredAudioLanguages
+                ? `${effectivePreferredAudioLanguages} (${t("title.inheritDefault")})`
+                : effectivePreferredAudioLanguages
+            }
+          >
+            <div className="space-y-2">
+              <PreferredAudioLanguageList
+                value={preferredAudioLanguages}
+                onChange={(codes) =>
+                  void saveTitleOptions({ preferredAudioLanguages: codes })
+                }
+                disabled={saving}
+                triggerId={selectorId(idPrefix, "preferred-audio-languages")}
+              />
+              <Button
+                id={selectorId(idPrefix, "preferred-audio-languages-inherit")}
+                variant="ghost"
+                size="sm"
+                disabled={saving || inheritsPreferredAudioLanguages}
+                onClick={() =>
+                  void saveTitleOptions({ preferredAudioLanguages: null })
+                }
+              >
+                {t("title.inheritDefault")}
+              </Button>
             </div>
           </SettingsRow>
 

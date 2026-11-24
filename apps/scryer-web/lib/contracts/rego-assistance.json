@@ -93,10 +93,34 @@
       "source": "manual if {\n    input.facts.approved_last_30d >= ${1:5}\n}"
     },
     {
-      "family": "maintenance",
-      "label": "match-tag",
-      "descKey": "settings.regoSnippet.matchTag",
-      "source": "match if {\n    \"${1:keep}\" in input.facts.tags\n}"
+      "family": "request",
+      "label": "shape-request",
+      "descKey": "settings.regoSnippet.shapeRequest",
+      "source": "set_lease_days := ${1:30} if {\n    input.facts.is_adult\n}"
+    },
+    {
+      "family": "request",
+      "label": "tag-request",
+      "descKey": "settings.regoSnippet.tagRequest",
+      "source": "add_tags := [\"${1:family}\"] if {\n    input.facts.certification_rank <= ${2:1}\n}"
+    },
+    {
+      "family": "lifecycle",
+      "label": "unmonitor-tagged",
+      "descKey": "settings.regoSnippet.unmonitorTagged",
+      "source": "unmonitor if {\n    \"${1:retire}\" in input.facts.tags\n}"
+    },
+    {
+      "family": "lifecycle",
+      "label": "tag-after-days",
+      "descKey": "settings.regoSnippet.tagAfterDays",
+      "source": "add_tags := [\"${1:needs-review}\"] if {\n    days_since(input.facts.added_at) > ${2:365}\n}"
+    },
+    {
+      "family": "lifecycle",
+      "label": "set-profile",
+      "descKey": "settings.regoSnippet.setProfile",
+      "source": "set_quality_profile := \"${1:Profile name}\" if {\n    input.facts.total_file_size_bytes > ${2:40000000000}\n}"
     }
   ]
 }

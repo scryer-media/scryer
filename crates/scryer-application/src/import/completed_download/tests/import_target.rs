@@ -242,6 +242,11 @@ async fn scryer_grab_of_only_an_executable_is_routed_to_failure_handling() {
         crate::tracked_downloads::status_texts(&td.status_messages),
         vec![expected]
     );
+    assert_eq!(
+        td.status_messages[0].kind,
+        crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables,
+        "failure handling reads the kind to block the release on every indexer"
+    );
     assert!(
         td.burned_by_import_gate,
         "the failure is the import gate's, so terminal cleanup removes the files too"
@@ -683,6 +688,9 @@ async fn verified_retry_clears_failed_state_durably() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     crate::import_workflow::reconcile_history_retry_result(
         &app, &mut td, &completed, &evidence, &result,
@@ -1295,6 +1303,9 @@ async fn execution_error_after_the_attempt_row_exists_never_writes_failed() {
             .is_some_and(|message| message.contains("root folder")),
         "{result:?}"
     );
+    // Import history lists only records it can tie to a title the reader may
+    // see: a failed attempt that recorded no title would never be listed.
+    assert_eq!(result.title_id.as_deref(), Some("title-a"), "{result:?}");
 }
 
 struct RetryObservationClient {

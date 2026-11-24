@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     AnimeNumberingBridge, CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
-    MaintenanceRuleRevision, MaintenanceRuleSet, MonitorSelection, PersistedPluginWasmPayload,
+    LifecycleRuleRevision, LifecycleRuleSet, MonitorSelection, PersistedPluginWasmPayload,
     title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
@@ -31,7 +31,9 @@ use scryer_plugin_sdk::{
 };
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -141,6 +143,20 @@ pub struct TitleOptionsPatch {
     /// Explicit season/series-movie picks for the `advanced` monitor type.
     /// `Some(None)` clears the stored selection.
     pub monitor_selection: Option<Option<MonitorSelection>>,
+    /// The title's own required audio languages. `Some(None)` inherits the
+    /// library's and facet's; `Some(Some(vec![]))` requires nothing. Kept in
+    /// settings, not on the title row.
+    pub required_audio_languages: Option<Option<Vec<String>>>,
+    /// The title's own preferred audio languages, in order. `Some(None)` and
+    /// an empty list both inherit. Kept in settings, not on the title row.
+    pub preferred_audio_languages: Option<Option<Vec<String>>>,
+}
+
+impl TitleOptionsPatch {
+    /// Whether the patch sets either audio language override.
+    pub fn carries_audio_language_overrides(&self) -> bool {
+        self.required_audio_languages.is_some() || self.preferred_audio_languages.is_some()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -939,6 +955,16 @@ pub struct EpisodeImageUrlUpdate {
     pub image_url: Option<String>,
 }
 
+/// One write of a batch handed to [`ShowRepository::apply_episode_writes`].
+#[derive(Clone, Debug)]
+pub enum EpisodeWrite {
+    Create(Episode),
+    Update {
+        episode_id: String,
+        update: EpisodeUpdate,
+    },
+}
+
 #[async_trait]
 pub trait DiscoveryRepository: Send + Sync {
     async fn get_discovery_sync_state(
@@ -1354,6 +1380,16 @@ pub trait DiscoveryRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
+/// The catalog titles a title-history page read covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleHistoryTitleScope<'a> {
+    /// Exactly these titles.
+    Titles(&'a [String]),
+    /// Every title in these libraries, resolved by the store in the same
+    /// statement instead of as an id list.
+    Libraries(&'a [String]),
+}
+
 /// Stored values and related metadata required by a title list consumer.
 ///
 /// All fields default to on, so a caller that never thinks about the
@@ -1474,6 +1510,22 @@ impl TitleListProjection {
     }
 }
 
+/// The shape of one show's stored episode list, specials left out, as of one
+/// day. An episode has aired when its air date is on or before that day.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleEpisodeShape {
+    pub season_count: i64,
+    pub aired_episode_count: i64,
+    pub unaired_episode_count: i64,
+    /// Aired episodes with a live primary file.
+    pub aired_episode_file_count: i64,
+    /// Aired, monitored episodes without a live primary file.
+    pub missing_episode_count: i64,
+    pub latest_season_number: Option<i64>,
+    pub latest_aired_episode_date: Option<String>,
+    pub next_episode_air_date: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleCounts {
     pub total: usize,
@@ -1532,6 +1584,12 @@ pub struct TitleNameBucketQuery<'a> {
     /// that reads its script; a release name carries no language tag to pick
     /// one. Empty when none applies.
     pub romanization_keys: &'a [String],
+    /// The scripts of the catalog names those keys can answer to, when a rule
+    /// set reads a catalog name in another script than the observed name's (a
+    /// Cyrillic name against its Latin transliteration). Only the
+    /// romanization lane reads them, and only by key; every other lane stays
+    /// in `script`. Empty keeps that lane in `script` too.
+    pub romanization_scripts: &'a [&'static str],
     pub collation_keys: &'a [(&'static str, Vec<u8>)],
     /// Guard on how many index hits are hydrated, so a pathological bucket
     /// cannot turn one release into a catalog-sized read. The equality lanes
@@ -1695,7 +1753,19 @@ pub fn name_candidates_in_bucket(
             let script =
                 scryer_domain::title_spelling::title_script(&candidate.match_term).as_str();
             let numbers_key = scryer_domain::title_spelling::title_numbers_key(&candidate.raw_term);
-            if script != query.script || numbers_key != query.numbers_key {
+            if numbers_key != query.numbers_key {
+                continue;
+            }
+            // A name in another script is in reach only by its romanization
+            // key, which is how the persisted index reads it.
+            if script != query.script
+                && !(query.romanization_scripts.contains(&script)
+                    && scryer_domain::title_normalization::romanization_key(
+                        &candidate.match_term,
+                        candidate.language_tag.as_deref(),
+                    )
+                    .is_some_and(|key| query.romanization_keys.contains(&key)))
+            {
                 continue;
             }
             candidates.push(candidate);
@@ -1855,7 +1925,7 @@ pub trait TitleRepository: Send + Sync {
     /// Every defined label, ordered, with no membership counts.
     ///
     /// The registry gate runs on every title add, every raw tag write, every
-    /// tag patch, and every maintenance candidate the executor touches. Those
+    /// tag patch, and every lifecycle candidate the executor touches. Those
     /// paths only need to know whether a label exists; the counted list scans
     /// every bag per definition and must not be paid there. Repositories that
     /// keep a real table override this with a plain `SELECT label`.
@@ -1974,6 +2044,32 @@ pub trait TitleRepository: Send + Sync {
             }
         }
     }
+    /// Ids of the titles in `library_ids`, in list order (`LOWER(name)`, then
+    /// id), at most `limit` of them. The same titles in the same order as
+    /// [`Self::list_with_projection`] for those libraries; a store reads only
+    /// the id. An empty `library_ids` holds no titles.
+    async fn list_title_ids_for_libraries(
+        &self,
+        library_ids: &[String],
+        limit: Option<usize>,
+    ) -> AppResult<Vec<String>> {
+        if library_ids.is_empty() || limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let titles = self
+            .list_with_projection(
+                None,
+                Some(library_ids),
+                None,
+                TitleListProjection::without_canonical_tags().without_external_ids(),
+            )
+            .await?;
+        Ok(titles
+            .into_iter()
+            .take(limit.unwrap_or(usize::MAX))
+            .map(|title| title.id)
+            .collect())
+    }
     /// How many titles one library holds, for the request-rule
     /// `library_title_count` fact (spec 0003 §3.2).
     ///
@@ -2005,7 +2101,7 @@ pub trait TitleRepository: Send + Sync {
     /// which is exactly what this default does. A narrowing repository must
     /// compare at least as loosely as `folder_paths_match` does: on Windows
     /// that means folding both sides through
-    /// [`crate::stored_paths::folder_path_lookup_key`] (case and separator
+    /// [`crate::stored_paths::folder_path_lookup_key_for_platform`] (case and separator
     /// insensitive) rather than plain equality, or a stored `C:\Media\Show`
     /// is invisible to a scan that supplies `c:/media/show`.
     ///
@@ -2642,6 +2738,17 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(titles)
     }
+    /// [`Self::get_by_ids`] with the projection spelled out, for callers that
+    /// read only part of each row. External ids are never loaded. The default
+    /// ignores the projection: a repository holding whole `Title` values loses
+    /// nothing by returning them.
+    async fn get_by_ids_with_projection(
+        &self,
+        ids: &[String],
+        _projection: TitleListProjection,
+    ) -> AppResult<Vec<Title>> {
+        self.get_by_ids(ids).await
+    }
     /// `(title id, library id)` for each id that exists, for permission checks
     /// that need nothing else from the row. Order is not guaranteed.
     async fn list_library_ids_for_titles(
@@ -2667,6 +2774,66 @@ pub trait TitleRepository: Send + Sync {
             ratings.push((title_id.clone(), self.get_title_ratings(title_id).await?));
         }
         Ok(ratings)
+    }
+    /// The stored content ratings of each title, in SMG's order, for a batch
+    /// of titles.
+    ///
+    /// `None` means the title's content ratings have not been stored: it was
+    /// never hydrated, was rematched since, or was last hydrated before they
+    /// were stored. `Some(vec![])` means hydration stored that it has none.
+    async fn list_title_content_ratings(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Option<Vec<crate::types::ContentRating>>)>> {
+        Ok(title_ids.iter().map(|id| (id.clone(), None)).collect())
+    }
+    /// The stored awards of each title, in SMG's order, for a batch of
+    /// titles, under the same `None` / `Some` contract as
+    /// [`Self::list_title_content_ratings`].
+    async fn list_title_awards(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Option<Vec<crate::types::TitleAward>>)>> {
+        Ok(title_ids.iter().map(|id| (id.clone(), None)).collect())
+    }
+    /// The stored genre names of each title, in tag order, for a batch of
+    /// titles. A title with no stored genre has an empty list. The default
+    /// reads the titles' tags; a store answers it with one bounded read.
+    async fn list_title_genres(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Vec<String>)>> {
+        let mut by_id: std::collections::HashMap<String, Vec<String>> = self
+            .get_by_ids(title_ids)
+            .await?
+            .into_iter()
+            .map(|title| {
+                let genres = title
+                    .canonical_tags
+                    .into_iter()
+                    .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
+                    .map(|tag| tag.name)
+                    .collect();
+                (title.id, genres)
+            })
+            .collect();
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), by_id.remove(id).unwrap_or_default()))
+            .collect())
+    }
+    /// The episode-list shape of each listed show, as of `today`, in one
+    /// grouped read per bounded chunk of ids. A title with no regular episode
+    /// is left out. A store that cannot answer it refuses, so the facts built
+    /// from it read unknown rather than zero.
+    async fn list_title_episode_shapes(
+        &self,
+        _title_ids: &[String],
+        _today: chrono::NaiveDate,
+    ) -> AppResult<Vec<(String, TitleEpisodeShape)>> {
+        Err(AppError::Repository(
+            "this store does not read episode shapes".into(),
+        ))
     }
     /// Title-local cache of the credits SMG returned for the title's last successful
     /// hydration, in SMG's order.
@@ -3447,6 +3614,27 @@ pub trait LibraryRepository: Send + Sync {
     /// title counts toward a root of its own library only. Roots with no
     /// titles are absent.
     async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>>;
+    /// Whether the background full-hash backfill reads each of these
+    /// libraries' files, keyed by library id. A library absent from the map
+    /// does not exist. Stores without the setting keep the job on.
+    async fn full_hash_backfill_enabled(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, bool>> {
+        Ok(library_ids.iter().map(|id| (id.clone(), true)).collect())
+    }
+    /// Turn the background full-hash backfill on or off for one library.
+    /// `false` when no such library exists.
+    async fn set_full_hash_backfill_enabled(
+        &self,
+        library_id: &str,
+        enabled: bool,
+    ) -> AppResult<bool> {
+        let _ = (library_id, enabled);
+        Err(AppError::Repository(
+            "this library store cannot change the full-hash backfill setting".to_string(),
+        ))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3471,6 +3659,10 @@ pub struct NewMediaRequest {
     pub requested_monitor_type: Option<String>,
     /// Season/series-movie picks captured for the `advanced` monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Required audio languages for the new title; `None` inherits.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages for the new title; `None` inherits.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     /// Lease the requester asked for, in days; `None` means forever
     /// (spec 0003 FR-040).
     pub requested_lease_days: Option<i64>,
@@ -3525,12 +3717,32 @@ pub struct MediaRequestUpdateResult {
     pub event: DomainEvent,
 }
 
+/// The order a request list is read in.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MediaRequestOrder {
+    /// Most recently changed first.
+    #[default]
+    RecentlyUpdated,
+    /// Longest waiting first, by when the request was created.
+    OldestCreated,
+}
+
+/// The most requests [`MediaRequestRepository::request_ids_for_title_identity`]
+/// names. A title with more is answered `None`.
+pub const MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS: usize = 500;
+
 #[derive(Clone, Debug, Default)]
 pub struct MediaRequestQuery {
     pub facet: Option<MediaFacet>,
     pub library_ids: Option<Vec<String>>,
     pub status: Option<scryer_domain::MediaRequestStatus>,
     pub requester_user_id: Option<String>,
+    pub order: MediaRequestOrder,
+    /// The most rows to return, taken after `offset` in the list order. `None`
+    /// reads every matching row, for the internal passes that need them all.
+    pub limit: Option<usize>,
+    /// Rows to skip in the list order. Read only with `limit`.
+    pub offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3539,6 +3751,86 @@ pub struct MediaRequestQualityProfileReferenceCounts {
     /// creates the title before writing the terminal status, so approved IDs
     /// are protected by the title reference instead of request history.
     pub pending_requested: u64,
+}
+
+/// The metadata staged for one request subject: what one SMG read returned,
+/// reduced to the request shape and kept so a preview and the submit that
+/// follows read the same record without asking SMG again.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedMediaRequestMetadata {
+    /// The subject: the facet and its normalized external identifiers.
+    pub staging_key: String,
+    /// The staged record as the application serialized it.
+    pub payload_json: String,
+    pub staged_at: DateTime<Utc>,
+}
+
+/// One requester's own submissions, aggregated in the store for the
+/// requester-history facts. Each figure is what the matching
+/// [`MediaRequestRepository::count_for_requester`] or
+/// [`MediaRequestRepository::latest_request_at_for_user`] call answers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaRequestRequesterSummary {
+    pub pending_count: u64,
+    /// Approved, created at or after `since`.
+    pub approved_since_count: u64,
+    /// Rejected, created at or after `since`.
+    pub rejected_since_count: u64,
+    /// Approved, at any time.
+    pub approved_count: u64,
+    /// When they last submitted anything; `None` when they never have.
+    pub latest_request_at: Option<DateTime<Utc>>,
+}
+
+/// What has been asked for one identity before, aggregated in the store so
+/// the request facts never decode a request row to count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaRequestFingerprintSummary {
+    /// Requests for the identity, any requester, any status.
+    pub request_count: u64,
+    pub any_rejected: bool,
+    pub any_approved: bool,
+    /// Distinct members other than the requester who asked for the identity,
+    /// as a submitter or a joined co-requester.
+    pub other_requester_count: u64,
+    /// A request submitted by another member is still pending.
+    pub pending_by_other_requester: bool,
+}
+
+impl MediaRequestFingerprintSummary {
+    /// The summary of an already loaded history, for stores that only have
+    /// [`MediaRequestRepository::history_for_fingerprint`].
+    pub fn from_history(
+        history: &[MediaRequest],
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> Self {
+        use scryer_domain::MediaRequestStatus;
+        let mut summary = Self::default();
+        let mut others = std::collections::HashSet::new();
+        for request in history
+            .iter()
+            .filter(|request| excluding_request_id != Some(request.id.as_str()))
+        {
+            summary.request_count += 1;
+            summary.any_rejected |= request.status == MediaRequestStatus::Rejected;
+            summary.any_approved |= request.status == MediaRequestStatus::Approved;
+            summary.pending_by_other_requester |= request.status == MediaRequestStatus::Pending
+                && request.created_by_user_id != requester_user_id;
+            for user_id in std::iter::once(request.created_by_user_id.as_str()).chain(
+                request
+                    .requesters
+                    .iter()
+                    .map(|requester| requester.user_id.as_str()),
+            ) {
+                if user_id != requester_user_id {
+                    others.insert(user_id.to_string());
+                }
+            }
+        }
+        summary.other_requester_count = others.len() as u64;
+        summary
+    }
 }
 
 #[async_trait]
@@ -3581,6 +3873,8 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
@@ -3624,13 +3918,16 @@ pub trait MediaRequestRepository: Send + Sync {
     /// calls: the facts document is compared between runs, so an order that
     /// drifted would read as a changed fact.
     ///
-    /// Batched on purpose: maintenance evaluation asks this for a whole chunk
+    /// Each entry also carries the `created_at` of the oldest of those
+    /// requests, read by the same statement as the submitters.
+    ///
+    /// Batched on purpose: lifecycle evaluation asks this for a whole chunk
     /// of titles at once, and a per-title query would make the pass scale with
     /// the library.
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<HashMap<String, Vec<String>>>;
+    ) -> AppResult<HashMap<String, crate::types::TitleRequesters>>;
 
     /// The origin of the oldest request that created each of `title_ids`,
     /// over the same requests [`Self::requester_user_ids_by_title_ids`] reads.
@@ -3706,6 +4003,21 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>>;
 
+    /// The stored requests of `library_id` that carry any of `external_ids`,
+    /// matched the way a title is matched to a request: source without regard
+    /// to ASCII case, value exactly. A request removed with the account that
+    /// submitted it is not among them, since its ids went with it. `None`
+    /// when the store cannot name them, or when there are more than
+    /// [`MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS`]; the caller then considers
+    /// every request.
+    async fn request_ids_for_title_identity(
+        &self,
+        _library_id: &str,
+        _external_ids: &[ExternalId],
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(None)
+    }
+
     /// How many requests `user_id` submitted, optionally narrowed to one status
     /// and to requests created at or after `since`. Edits exclude their own
     /// request so a resubmission observes only prior requests.
@@ -3729,6 +4041,85 @@ pub trait MediaRequestRepository: Send + Sync {
         identity_fingerprint: &str,
     ) -> AppResult<Vec<MediaRequest>>;
 
+    /// [`Self::history_for_fingerprint`] reduced to the counts the request
+    /// facts read, seen from `requester_user_id`, without the request being
+    /// edited. A store answers it in one aggregate statement.
+    async fn fingerprint_history_summary(
+        &self,
+        identity_fingerprint: &str,
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestFingerprintSummary> {
+        let history = self.history_for_fingerprint(identity_fingerprint).await?;
+        Ok(MediaRequestFingerprintSummary::from_history(
+            &history,
+            requester_user_id,
+            excluding_request_id,
+        ))
+    }
+
+    /// Titles in `library_id` that requests submitted by `user_id` created.
+    /// Only a store that holds both requests and titles can answer; the
+    /// default says so rather than reporting zero.
+    async fn count_created_titles_in_library_for_requester(
+        &self,
+        _user_id: &str,
+        _library_id: &str,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "this request store cannot count the titles a requester's requests created".into(),
+        ))
+    }
+
+    /// The requester-history figures for `user_id`, with the request being
+    /// edited excluded. A store answers it in one aggregate statement; this
+    /// default composes the separate reads.
+    async fn requester_history_summary(
+        &self,
+        user_id: &str,
+        since: DateTime<Utc>,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestRequesterSummary> {
+        use scryer_domain::MediaRequestStatus;
+        Ok(MediaRequestRequesterSummary {
+            pending_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Pending),
+                    None,
+                    excluding_request_id,
+                )
+                .await?,
+            approved_since_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Approved),
+                    Some(since),
+                    excluding_request_id,
+                )
+                .await?,
+            rejected_since_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Rejected),
+                    Some(since),
+                    excluding_request_id,
+                )
+                .await?,
+            approved_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Approved),
+                    None,
+                    excluding_request_id,
+                )
+                .await?,
+            latest_request_at: self
+                .latest_request_at_for_user(user_id, excluding_request_id)
+                .await?,
+        })
+    }
+
     /// When `user_id` last submitted anything, for `days_since_last_request`.
     /// Excludes the request currently being edited when its id is provided.
     /// `None` when they never have — a real answer, not an unknown.
@@ -3737,6 +4128,48 @@ pub trait MediaRequestRepository: Send + Sync {
         user_id: &str,
         excluding_request_id: Option<&str>,
     ) -> AppResult<Option<DateTime<Utc>>>;
+
+    /// The metadata staged for `staging_key`, if any.
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<StagedMediaRequestMetadata>>;
+
+    /// Store the staged metadata for its subject, replacing what was staged
+    /// for that subject before.
+    async fn stage_metadata(&self, record: &StagedMediaRequestMetadata) -> AppResult<()>;
+
+    /// The staged metadata of every key in `staging_keys` that has a record,
+    /// in no particular order. A store answers a batch in bind-safe reads,
+    /// not one read per key.
+    async fn staged_metadata_many(
+        &self,
+        staging_keys: &[String],
+    ) -> AppResult<Vec<StagedMediaRequestMetadata>> {
+        let mut records = Vec::new();
+        for staging_key in staging_keys {
+            records.extend(self.staged_metadata(staging_key).await?);
+        }
+        Ok(records)
+    }
+
+    /// Store a batch of staged records as [`Self::stage_metadata`] would each
+    /// one. A store writes the batch in one transaction.
+    async fn stage_metadata_many(&self, records: &[StagedMediaRequestMetadata]) -> AppResult<()> {
+        for record in records {
+            self.stage_metadata(record).await?;
+        }
+        Ok(())
+    }
+
+    /// Remove up to `limit` staged records staged before `cutoff`. Returns how
+    /// many went. A call that finds none writes nothing. Request rows keep
+    /// their own copy of the metadata and are never touched.
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize>;
 
     /// Stamp the request-rule verdict onto a request row that is *not* being
     /// resolved (spec 0003 FR-016).
@@ -4203,6 +4636,23 @@ pub trait ShowRepository: Send + Sync {
     }
     async fn create_episode(&self, episode: Episode) -> AppResult<Episode>;
     async fn update_episode(&self, episode_id: &str, update: EpisodeUpdate) -> AppResult<Episode>;
+    /// Applies `writes` in order and returns one result per write: what
+    /// `create_episode` or `update_episode` would have returned for that
+    /// write, issued on its own after the ones before it. A write that fails
+    /// neither stops nor undoes the others. This default issues them one at a
+    /// time; a store groups them into a few transactions.
+    async fn apply_episode_writes(&self, writes: Vec<EpisodeWrite>) -> Vec<AppResult<Episode>> {
+        let mut results = Vec::with_capacity(writes.len());
+        for write in writes {
+            results.push(match write {
+                EpisodeWrite::Create(episode) => self.create_episode(episode).await,
+                EpisodeWrite::Update { episode_id, update } => {
+                    self.update_episode(&episode_id, update).await
+                }
+            });
+        }
+        results
+    }
     async fn set_episodes_monitored(
         &self,
         episode_ids: &[String],
@@ -4272,6 +4722,26 @@ pub trait UserRepository: Send + Sync {
         Ok(None)
     }
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
+    /// The account's creation and last sign-in times, read by primary key.
+    /// `None` when no account has the id. A store that keeps neither column
+    /// reports both as unstored.
+    async fn account_timestamps(
+        &self,
+        _user_id: &str,
+    ) -> AppResult<Option<crate::types::UserAccountTimestamps>> {
+        Ok(Some(crate::types::UserAccountTimestamps::default()))
+    }
+    /// Stamps the account's last sign-in time. Called once when an
+    /// interactive sign-in establishes a full session; never for an
+    /// authenticated request, a session re-issue or API-key use. A store that
+    /// keeps no such column records nothing.
+    async fn record_sign_in(
+        &self,
+        _user_id: &str,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn get_login_snapshot_by_username(
         &self,
         username: &str,
@@ -4300,6 +4770,15 @@ pub trait UserRepository: Send + Sync {
         ))
     }
     async fn list_all(&self) -> AppResult<Vec<User>>;
+    /// The username of every user.
+    async fn list_usernames(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_all()
+            .await?
+            .into_iter()
+            .map(|user| user.username)
+            .collect())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
     async fn rotate_auth_session_version(
@@ -4378,6 +4857,14 @@ pub trait UserUiSettingsRepository: Send + Sync {
         user_id: &str,
         breakpoint: Option<UiDashboardBreakpoint>,
     ) -> AppResult<Option<UiSettings>>;
+    /// Records the outcome of each named tour in one write. A tour already
+    /// recorded keeps its first outcome.
+    async fn record_tours(
+        &self,
+        user_id: &str,
+        tour_ids: &[String],
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings>;
 }
 
 #[async_trait]
@@ -4600,6 +5087,17 @@ pub trait MediaServerConnectionRepository: Send + Sync {
         entity_kind: scryer_domain::MediaServerPlaybackEntityKind,
         entity_id: &str,
     ) -> AppResult<Vec<scryer_domain::MediaServerPlaybackItem>>;
+    /// Mappings for provider items, as `(connection id, provider item id)`
+    /// pairs: the reverse of [`Self::list_playback_items_for_entities`], used
+    /// to place a live session on a Scryer title. A pair with no mapping is
+    /// absent. The default knows no mapping, which leaves a session to the
+    /// other evidence and, failing that, unattributed.
+    async fn list_playback_items_for_provider_items(
+        &self,
+        _provider_items: &[(String, String)],
+    ) -> AppResult<Vec<scryer_domain::MediaServerPlaybackItem>> {
+        Ok(Vec::new())
+    }
     async fn list_playback_items_for_entities(
         &self,
         entities: &[(scryer_domain::MediaServerPlaybackEntityKind, String)],
@@ -5412,23 +5910,16 @@ pub trait DomainEventRepository: Send + Sync {
     }
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>>;
     async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>>;
-    /// `title_ids` scopes the page to those catalog titles. `include_titleless`
+    /// `title_scope` scopes the page to those catalog titles. `include_titleless`
     /// additionally admits rows that have no catalog title at all - an unlinked
     /// grab (FR-026) is recorded against the release and the indexer, so it can
     /// never be named by a title id, and a page scoped only by the caller's
     /// library authorization would otherwise drop it. It is ignored when
-    /// `title_ids` is `None`, where nothing is excluded anyway.
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
-        include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64>;
+    /// `title_scope` is `None`, where nothing is excluded anyway.
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
@@ -5716,6 +6207,10 @@ pub trait ProxyConfigRepository: Send + Sync {
     /// purpose is that the next connection be a new one, so any cached client
     /// or session built on the old pin has to go.
     async fn clear_host_key(&self, id: &str) -> AppResult<()>;
+    /// How many challenge solvers name `id` as the proxy or tunnel they are
+    /// reached through, counting only enabled solvers when `enabled_only`.
+    /// One counting statement; the stored reference is the only input.
+    async fn count_solvers_reaching_through(&self, id: &str, enabled_only: bool) -> AppResult<u64>;
 }
 
 /// Fetches an indexer's caps document with a request Scryer issues itself,
@@ -5922,6 +6417,28 @@ pub trait SettingsRepository: Send + Sync {
         Ok(values)
     }
 
+    /// Whether any scope id holds an explicit row for this scope + key. A
+    /// store that cannot answer cheaply says `true`, so a caller using this
+    /// to skip work only ever does more of it.
+    async fn any_explicit_setting_json_for_scope_ids(
+        &self,
+        _scope: &str,
+        _key_name: &str,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    /// Every explicit `(scope_id, effective_value_json)` row for this scope +
+    /// key, or `None` when the store cannot list them; a caller then takes its
+    /// wider path.
+    async fn list_explicit_setting_json_values(
+        &self,
+        _scope: &str,
+        _key_name: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        Ok(None)
+    }
+
     async fn upsert_setting_json(
         &self,
         scope: &str,
@@ -5953,6 +6470,18 @@ pub trait SettingsRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn delete_values_for_scope_id(&self, scope_id: &str) -> AppResult<u32>;
+
+    /// Delete the rows of `key_names` in `scope` scoped to any of `scope_ids`,
+    /// bind-safe for any number of ids. Rows of other keys, and rows scoped to
+    /// other ids, stay. Returns how many rows went.
+    async fn delete_values_for_keys_and_scope_ids(
+        &self,
+        _scope: &str,
+        _key_names: &[&str],
+        _scope_ids: &[String],
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
 }
 
 #[async_trait]
@@ -6002,10 +6531,10 @@ pub trait HousekeepingRepository: Send + Sync {
     -> AppResult<u32>;
     async fn delete_rule_set_history_older_than(&self, days: i64) -> AppResult<u32>;
     /// Evaluation runs are display-only history; nothing decides from them.
-    async fn delete_maintenance_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+    async fn delete_lifecycle_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
-    /// Held maintenance action runs that finished more than `days` ago. The
+    /// Held lifecycle action runs that finished more than `days` ago. The
     /// newest run of each candidate generation, every run that is not held,
     /// and every run carrying a scoped-deletion resume journal are kept.
     async fn delete_held_lifecycle_action_runs_older_than(&self, _days: i64) -> AppResult<u32> {
@@ -6072,6 +6601,49 @@ pub trait IndexerStatsTracker: Send + Sync {
         _dispatched_at: DateTime<Utc>,
     ) {
         self.record_api_request_sent(indexer_id, indexer_name);
+    }
+
+    /// Atomically checks and consumes one locally configured monthly request
+    /// slot. An indexer without a monthly request limit is always admitted
+    /// and costs no database work; trackers without durable quota
+    /// configuration are unlimited.
+    fn admit_monthly_request<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Blocking counterpart for plugin HTTP workers running on dedicated OS
+    /// threads. Never call this from an async runtime thread: an
+    /// implementation that would have to wait on the database there refuses
+    /// the request instead.
+    fn admit_monthly_request_blocking(
+        &self,
+        _indexer_id: &str,
+        _at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Atomically checks and consumes one locally configured monthly grab
+    /// slot. The admission is retained when downstream outcome is uncertain.
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Whether a grab from this indexer is already known to be refused by a
+    /// monthly limit: its grab limit, or its request limit, is remembered as
+    /// reached for the current month and the current limit. Answered from
+    /// memory; it counts nothing and runs no statement. `false` means "not
+    /// known to be refused", so the real admission still decides.
+    fn monthly_grab_refusal_remembered(&self, _indexer_id: &str, _at: DateTime<Utc>) -> bool {
+        false
     }
 
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
@@ -6909,6 +7481,29 @@ pub trait ReleaseAttemptRepository: Send + Sync {
         source_password: Option<String>,
     ) -> AppResult<()>;
 
+    /// Record a `pending` attempt for a submission about to be made and return
+    /// its id, so the submission's outcome is written onto this row with
+    /// [`Self::settle_release_attempt`] instead of leaving it pending beside a
+    /// second row. `None` when the store keeps no row to settle; the caller
+    /// then records the outcome as a row of its own. Redacts the source hint
+    /// like [`Self::record_release_attempt`].
+    async fn begin_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<Option<String>>;
+
+    /// Write the outcome of the submission a [`Self::begin_release_attempt`]
+    /// row stands for onto that row.
+    async fn settle_release_attempt(
+        &self,
+        attempt_id: &str,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+    ) -> AppResult<()>;
+
     async fn list_failed_release_signatures(
         &self,
         limit: usize,
@@ -7665,6 +8260,18 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         Ok(submissions)
     }
 
+    /// The submissions whose client item id is one of `item_ids`, whatever
+    /// their client or title, newest submission first. For a caller that
+    /// holds item ids without a client type. SQL stores read them through the
+    /// item-id index, so callers may pass a selection of any size. There is
+    /// no default: the failed-download check finds its work through this
+    /// read, so a wrapper that did not forward it would silently turn that
+    /// check off.
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>>;
+
     /// On-demand recovery rows for durable password retries with an active,
     /// matching client binding, including jobs absent from the native queue.
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
@@ -7854,13 +8461,13 @@ pub trait ImportArtifactRepository: Send + Sync {
 /// receipt is sufficient for the action policy and deliberately does not imply
 /// that historical job metadata remains retained.
 #[derive(Clone, Debug)]
-pub enum MaintenanceSearchJobRunCreation {
+pub enum LifecycleSearchJobRunCreation {
     Created {
         run: Box<JobRunRecord>,
-        receipt: scryer_domain::MaintenanceActionJobReceipt,
+        receipt: scryer_domain::LifecycleActionJobReceipt,
     },
     Existing {
-        receipt: scryer_domain::MaintenanceActionJobReceipt,
+        receipt: scryer_domain::LifecycleActionJobReceipt,
     },
 }
 
@@ -7916,13 +8523,13 @@ pub trait JobRunRepository: Send + Sync {
     /// A duplicate `(step key, dispatch attempt)` returns the original receipt
     /// and must never create or spawn another Search job. Implementations may
     /// retain job history independently; receipt evidence outlives pruning.
-    async fn create_maintenance_search_job_run(
+    async fn create_lifecycle_search_job_run(
         &self,
         _run: &JobRunRecord,
-        _receipt: &scryer_domain::MaintenanceActionJobReceipt,
-    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        _receipt: &scryer_domain::LifecycleActionJobReceipt,
+    ) -> AppResult<LifecycleSearchJobRunCreation> {
         Err(AppError::Repository(
-            "maintenance Search dispatch is not configured".to_string(),
+            "lifecycle Search dispatch is not configured".to_string(),
         ))
     }
 
@@ -8031,6 +8638,19 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         &self,
         item: &LibraryScanUnmatchedItem,
     ) -> AppResult<String>;
+
+    /// `upsert_library_scan_unmatched_item` for each of `items`. The SQL
+    /// store writes them in one transaction; the default writes them one by
+    /// one, stopping at the first error.
+    async fn upsert_library_scan_unmatched_items(
+        &self,
+        items: &[LibraryScanUnmatchedItem],
+    ) -> AppResult<()> {
+        for item in items {
+            self.upsert_library_scan_unmatched_item(item).await?;
+        }
+        Ok(())
+    }
 
     async fn get_library_scan_unmatched_item(
         &self,
@@ -8603,6 +9223,12 @@ mod import_retry_locator {
 
 pub const IMPORT_RETRY_TRACKED_STATE_REASON: &str = "import_retry_recovery";
 
+/// Reason stored with an `import_pending` identity state whose detail holds
+/// the download's stalled-pass count, so the count survives a restart. Such a
+/// row records a counter, not an import outcome: a client that drops the job
+/// still makes it missing.
+pub const STALLED_IMPORT_PASSES_TRACKED_STATE_REASON: &str = "import_stalled_passes";
+
 /// Import payload key recording why an import holds its sources, beside the
 /// `archive_processing_pending` flag. It only ever annotates a hold.
 pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reason";
@@ -8610,6 +9236,74 @@ pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reaso
 /// Import payload key set when an operator's release cleared the hold, so an
 /// interrupted release can be told apart from an import that never held.
 pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released";
+
+/// Import payload key set when the download's file turned out to be the
+/// library file itself. While any import of a download carries it, the
+/// download's client entry is removed without its data.
+pub const LIBRARY_HOLDS_PAYLOAD_KEY: &str = "library_holds_download_payload";
+
+/// Import payload key listing the download files an import left on a library
+/// file without telling whether the two are one entry: the cheap reads could
+/// not tell, and the test that can renames the download's file for a moment,
+/// which an import that keeps its source never does. Each entry is an
+/// [`UnsettledLibraryFile`]. A cleanup about to remove the download's data
+/// settles them first; an import without the key has nothing to settle.
+pub const LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY: &str = "library_file_unsettled";
+
+/// A download file an import found on a library file without telling whether
+/// the two are one entry, as [`LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY`] records it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct UnsettledLibraryFile {
+    /// The download's file.
+    pub source_path: String,
+    /// The library file found at the import's destination.
+    pub library_path: String,
+}
+
+impl UnsettledLibraryFile {
+    pub fn new(source: &std::path::Path, library_path: &std::path::Path) -> Self {
+        Self {
+            source_path: crate::stored_paths::path_to_stored_string(source),
+            library_path: crate::stored_paths::path_to_stored_string(library_path),
+        }
+    }
+
+    /// The download's file, decoded from its stored form.
+    pub fn source(&self) -> std::path::PathBuf {
+        crate::stored_paths::stored_path_to_path_buf(&self.source_path)
+    }
+
+    /// The library file, decoded from its stored form.
+    pub fn library(&self) -> std::path::PathBuf {
+        crate::stored_paths::stored_path_to_path_buf(&self.library_path)
+    }
+
+    /// The entries an import payload records, skipping any that do not read.
+    pub fn from_payload(payload: &serde_json::Value) -> Vec<Self> {
+        payload[LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// What the imports of one download say about its sources.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadImportSources {
+    /// An import still holds the download's sources, so nothing is removed.
+    pub held: bool,
+    /// An import found that the download's file is the library file, so the
+    /// client entry may go but never its data.
+    pub library_holds_payload: bool,
+    /// Download files an import left on library files without telling
+    /// whether each is the library file itself.
+    pub library_file_unsettled: Vec<UnsettledLibraryFile>,
+}
 
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
@@ -8661,6 +9355,61 @@ pub trait ImportRepository: Send + Sync {
     ) -> AppResult<bool> {
         Ok(false)
     }
+
+    /// Whether an import holds `download_id`'s sources, and whether one found
+    /// that the download's file is the library file, in one read. A store
+    /// that keeps no such mark answers the hold alone.
+    async fn download_import_sources(
+        &self,
+        download_id: &DownloadId,
+    ) -> AppResult<DownloadImportSources> {
+        Ok(DownloadImportSources {
+            held: self
+                .archive_processing_pending_for_download(download_id)
+                .await?,
+            library_holds_payload: false,
+            library_file_unsettled: Vec::new(),
+        })
+    }
+
+    /// Mark the import `import_id` as one whose download's file is the
+    /// library file. Answers `false`, changing nothing, when the import has
+    /// no download identity that a later cleanup could read the mark by.
+    async fn record_library_holds_download_payload(&self, _import_id: &str) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
+    }
+
+    /// Record on the import `import_id` the download files it left on library
+    /// files without telling whether each is the library file itself, beside
+    /// any it recorded before. Answers `false`, changing nothing, when the
+    /// import has no download identity that a later cleanup could read them
+    /// by.
+    async fn record_library_files_unsettled(
+        &self,
+        _import_id: &str,
+        _files: &[UnsettledLibraryFile],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
+    }
+
+    /// A cleanup settled the unsettled library files of the download's
+    /// imports: every import of it drops them, and when one was the library
+    /// file itself (`library_holds_payload`), carries the library-holds mark
+    /// instead. One write.
+    async fn settle_library_files_unsettled(
+        &self,
+        _download_id: &DownloadId,
+        _library_holds_payload: bool,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
+    }
+
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,
@@ -9102,8 +9851,6 @@ pub trait DownloadQueueCommandRepository: Send + Sync {
         sources: &[(Option<String>, String, String, bool)],
         completed_only: bool,
     ) -> AppResult<Vec<crate::DownloadQueueCommandRecord>>;
-
-    async fn prune_terminal_delete_commands_older_than(&self, days: i64) -> AppResult<u32>;
 }
 
 #[derive(Debug, Clone)]
@@ -9389,6 +10136,43 @@ pub trait FileImporter: Send + Sync {
         self.remove_import_source_after_verified_import(guard, final_dest_path)
             .await
     }
+
+    /// Whether the library file a re-run found already imported is the
+    /// download's file itself; see
+    /// [`crate::library_file_is_import_source_blocking`]. An importer that
+    /// gives each source a turn runs it in that turn, since the check may
+    /// set the source aside for a moment. The default has no turns to take.
+    async fn library_file_is_import_source(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<bool> {
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            crate::library_file_is_import_source_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
+
+    /// Whether the library file an import found is the download's file
+    /// itself, as far as reads that never set the download's file aside can
+    /// tell; see [`crate::library_file_sameness_without_set_aside_blocking`].
+    /// An importer that gives each source a turn runs it in that turn, since
+    /// it may put back a source an earlier check set aside. The default has
+    /// no turns to take.
+    async fn library_file_sameness_without_set_aside(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<crate::LibraryFileSameness> {
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            crate::library_file_sameness_without_set_aside_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
 }
 
 #[async_trait]
@@ -9483,10 +10267,16 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(ids)
     }
 
+    /// Catalog an import's destination, or reuse the row already there, in
+    /// one transaction. A reused row takes the input's size and signature,
+    /// and its stored hash is cleared unless both are unchanged. `hashes`,
+    /// when given, are written in the same transaction as what the import
+    /// proved about the file the row now describes.
     async fn claim_import_destination(
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<ClaimedMediaFile>;
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()>;
@@ -9608,6 +10398,28 @@ pub trait MediaFileRepository: Send + Sync {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<String>>;
+
+    /// [`Self::list_series_movie_link_ids_with_files_for_title`] for several
+    /// titles: every link id any of them answers, each once. Any number of
+    /// ids is accepted; SQL stores read them together.
+    async fn list_series_movie_link_ids_with_files_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        let mut link_ids = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for title_id in title_ids {
+            for link_id in self
+                .list_series_movie_link_ids_with_files_for_title(title_id)
+                .await?
+            {
+                if seen.insert(link_id.clone()) {
+                    link_ids.push(link_id);
+                }
+            }
+        }
+        Ok(link_ids)
+    }
 
     async fn list_title_media_size_summaries(
         &self,
@@ -9830,6 +10642,30 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(false)
     }
 
+    /// The whole-file hash stored on `row`, by the row's id or by its title
+    /// and stored path. `None` when the row is absent or holds no hash. The
+    /// default stores nothing.
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+    ) -> AppResult<Option<crate::location::model::PersistedContentHashes>> {
+        let _ = row;
+        Ok(None)
+    }
+
+    /// Store a whole-file hash, with its mark, on `row` while the row still
+    /// records `size_bytes`. Returns whether a row changed. The default
+    /// stores nothing.
+    async fn record_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+        size_bytes: i64,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let _ = (row, size_bytes, hashes);
+        Ok(false)
+    }
+
     /// Fill the acquisition-time columns of a row a recycle-bin restore
     /// recreated from what the recycled row recorded. Only columns the row has
     /// no value for are written, so anything the rescan did establish stands.
@@ -9932,6 +10768,19 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(owners)
     }
 
+    /// `(file id, stored path)` for each of `file_ids` that has a row, the
+    /// path `get_media_file_by_id` reports. Order is not guaranteed. SQL
+    /// stores read only the two columns; the default reads each row.
+    async fn list_media_file_paths(&self, file_ids: &[String]) -> AppResult<Vec<(String, String)>> {
+        let mut paths = Vec::with_capacity(file_ids.len());
+        for file_id in file_ids {
+            if let Some(file) = self.get_media_file_by_id(file_id).await? {
+                paths.push((file_id.clone(), file.file_path));
+            }
+        }
+        Ok(paths)
+    }
+
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>>;
 
     /// Batch-load media files by path, pairing each hit with the path that was
@@ -9970,7 +10819,10 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         &self,
         item: &AcquisitionScopeState,
     ) -> AppResult<String> {
-        if let Some(existing) = find_existing_acquisition_scope_state(self, item).await? {
+        if let Some(existing) = self
+            .get_acquisition_scope_state_for_scope(&item.title_id, AcquisitionScopeKey::of(item))
+            .await?
+        {
             return Ok(existing.id);
         }
         self.upsert_acquisition_scope_state(item).await?;
@@ -10067,6 +10919,39 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(true)
     }
 
+    /// [`Self::complete_acquisition_scope_for_title`] for the row stored under
+    /// any scope key, such as a series-movie link's: the row is completed
+    /// whatever its status, with `last_search_at` set and the in-flight grab
+    /// cleared only when `landed_import`. Returns whether a row was there.
+    /// SQL stores complete it in one keyed statement, so a transition between
+    /// a read and the write cannot be overwritten with stale values. The
+    /// default reads the row and then writes it.
+    async fn complete_acquisition_scope_for_key(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<bool> {
+        let Some(wanted) = self
+            .get_acquisition_scope_state_for_scope(title_id, scope)
+            .await?
+        else {
+            return Ok(false);
+        };
+        self.transition_acquisition_scope_to_completed(&AcquisitionScopeCompleteTransition {
+            id: wanted.id,
+            last_search_at: last_search_at.map(str::to_string),
+            grabbed_release: if landed_import {
+                None
+            } else {
+                wanted.grabbed_release
+            },
+        })
+        .await?;
+        Ok(true)
+    }
+
     /// `complete_acquisition_scope_for_title` for each episode of one title.
     /// The SQL store writes them in one statement, so on an error nothing is
     /// kept and a caller can replay the episodes one by one. The default runs
@@ -10127,6 +11012,14 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         episode_id: Option<&str>,
     ) -> AppResult<Option<AcquisitionScopeState>>;
 
+    /// The one acquisition state row for `scope` under `title_id`, read by the
+    /// scope's own key. Returns the same projection as the list read.
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>>;
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()>;
 
     async fn delete_acquisition_scope_states_for_collection(
@@ -10146,12 +11039,14 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
     /// `insert_release_decision` for each decision in order, one result per
     /// decision. SQL stores write the batch in one transaction and replay it
     /// row by row if that fails, so each result matches the per-row call.
+    /// The decisions are taken by value so a store can move them to the
+    /// thread that prepares them instead of copying them.
     async fn insert_release_decisions(
         &self,
-        decisions: &[ReleaseDecision],
+        decisions: Vec<ReleaseDecision>,
     ) -> Vec<AppResult<String>> {
         let mut results = Vec::with_capacity(decisions.len());
-        for decision in decisions {
+        for decision in &decisions {
             results.push(self.insert_release_decision(decision).await);
         }
         results
@@ -10199,6 +11094,34 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<Vec<AcquisitionScopeState>>;
 
+    /// The scope coordinates of every state row in one of `statuses`, and
+    /// nothing else of the row. The default reads the full rows; SQL stores
+    /// override with a read of the four coordinate columns.
+    async fn list_acquisition_scope_coordinates_for_statuses(
+        &self,
+        statuses: &[AcquisitionScopeStatus],
+    ) -> AppResult<Vec<AcquisitionScopeCoordinates>> {
+        Ok(self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                statuses: statuses
+                    .iter()
+                    .map(|status| status.as_str().to_string())
+                    .collect(),
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?
+            .into_iter()
+            .filter(|state| statuses.contains(&state.status))
+            .map(|state| AcquisitionScopeCoordinates {
+                title_id: state.title_id,
+                episode_id: state.episode_id,
+                collection_id: state.collection_id,
+                series_movie_link_id: state.series_movie_link_id,
+            })
+            .collect())
+    }
+
     /// Batch-load every acquisition scope state for many titles. Returns a flat
     /// list (each state carries `title_id`); callers group by that field. The
     /// default fans out via `list_acquisition_scope_states`; SQL stores override
@@ -10221,10 +11144,147 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
+    /// The same set of rows as
+    /// [`Self::list_acquisition_scope_states_for_title_ids`], with
+    /// `latest_release_decision` left empty. For callers that never read the
+    /// decision; SQL stores skip its join and blob. Row order is not part of
+    /// the contract: a long id list is read in several statements, and the two
+    /// calls may return the rows in different orders. A caller that needs an
+    /// order sorts or groups the result itself.
+    async fn list_acquisition_scope_states_for_title_ids_without_decisions(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states_for_title_ids(title_ids)
+            .await?;
+        for state in &mut states {
+            state.latest_release_decision = None;
+        }
+        Ok(states)
+    }
+
+    /// The title's mismatch-recovery scopes, the rows
+    /// `AcquisitionScopeStatesQuery::mismatch_recovery_eligible_only` selects,
+    /// with an id after `after_id`, in id order, at most `limit` of them, and
+    /// with `latest_release_decision` left empty. Paging on the id, which
+    /// never changes, keeps every eligible row in exactly one page while rows
+    /// are updated or share an `updated_at`. The default reads the eligible
+    /// rows through [`Self::list_acquisition_scope_states`]; SQL stores
+    /// override it with one keyset read without the decision join.
+    async fn list_mismatch_recovery_scopes_for_title(
+        &self,
+        title_id: &str,
+        after_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                statuses: vec![AcquisitionScopeStatus::Wanted.as_str().to_string()],
+                title_id: Some(title_id.to_string()),
+                mismatch_recovery_eligible_only: true,
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?;
+        states.retain(|state| after_id.is_none_or(|after| state.id.as_str() > after));
+        states.sort_by(|left, right| left.id.cmp(&right.id));
+        states.truncate(usize::try_from(limit).unwrap_or(0));
+        for state in &mut states {
+            state.latest_release_decision = None;
+        }
+        Ok(states)
+    }
+
+    /// The `grabbed` scopes of the titles in `title_ids`, newest `updated_at`
+    /// first and then by id, with `latest_release_decision` left empty. The
+    /// default filters
+    /// [`Self::list_acquisition_scope_states_for_title_ids_without_decisions`];
+    /// SQL stores override it with a read that filters on the status.
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states_for_title_ids_without_decisions(title_ids)
+            .await?;
+        states.retain(|state| state.status == AcquisitionScopeStatus::Grabbed);
+        states.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(states)
+    }
+
+    /// The newest release decision of each acquisition scope state in `ids`,
+    /// keyed by state id: the decision
+    /// [`Self::list_acquisition_scope_states_by_ids`] attaches. A state with
+    /// no decision, or a missing id, is absent. The default reads whole rows;
+    /// SQL stores override it with a read of the decision columns, chunked to
+    /// stay under the bind limit.
+    async fn list_latest_release_decisions_for_acquisition_scope_states(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, ReleaseDecision>> {
+        Ok(self
+            .list_acquisition_scope_states_by_ids(ids)
+            .await?
+            .into_iter()
+            .filter_map(|state| {
+                state
+                    .latest_release_decision
+                    .map(|decision| (state.id, decision))
+            })
+            .collect())
+    }
+
     async fn count_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<i64>;
+
+    /// The acquisition state rows of `title_id` counted per status, in no
+    /// particular order; a status with no rows is absent. The default reads
+    /// the title's rows; SQL stores override it with one grouped count.
+    async fn tally_acquisition_scope_states_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<AcquisitionScopeStatusTally>> {
+        let states = self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                title_id: Some(title_id.to_string()),
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?;
+        let mut tallies: Vec<AcquisitionScopeStatusTally> = Vec::new();
+        for state in states {
+            let index = match tallies
+                .iter()
+                .position(|tally| tally.status == state.status)
+            {
+                Some(index) => index,
+                None => {
+                    tallies.push(AcquisitionScopeStatusTally {
+                        status: state.status,
+                        count: 0,
+                        mismatch_recovery_eligible: 0,
+                        latest_search_at: None,
+                    });
+                    tallies.len() - 1
+                }
+            };
+            let tally = &mut tallies[index];
+            tally.count += 1;
+            tally.mismatch_recovery_eligible += i64::from(state.mismatch_recovery_eligible);
+            if state.last_search_at > tally.latest_search_at {
+                tally.latest_search_at = state.last_search_at;
+            }
+        }
+        Ok(tallies)
+    }
 
     async fn list_release_decisions_for_title(
         &self,
@@ -10246,6 +11306,24 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         &self,
         wanted_item_id: &str,
     ) -> AppResult<i64>;
+
+    /// Decision codes of the newest `sample` decisions across the instance,
+    /// counted in the store, and how many decisions there are in all.
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<ReleaseDecisionCodeTally>;
+}
+
+/// Decision codes counted over the newest decisions of the whole instance.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReleaseDecisionCodeTally {
+    /// Every decision stored.
+    pub total_rows: i64,
+    /// The decisions the codes were counted over, newest first.
+    pub sampled: i64,
+    /// `(decision code, count)` over the sampled decisions, by code.
+    pub by_code: Vec<(String, i64)>,
 }
 
 /// One row at a time: ensure, read back `last_search_at`, mark grabbed.
@@ -10269,68 +11347,6 @@ pub async fn ensure_acquisition_scopes_grabbed_per_row<
     Ok(())
 }
 
-/// Locate the acquisition-state row matching `item`'s scope (episode /
-/// series-movie link / collection / bare title), if one exists.
-pub(crate) async fn find_existing_acquisition_scope_state<
-    R: AcquisitionScopeStateRepository + ?Sized,
->(
-    repo: &R,
-    item: &AcquisitionScopeState,
-) -> AppResult<Option<AcquisitionScopeState>> {
-    if let Some(series_movie_link_id) = item.series_movie_link_id.as_deref() {
-        return Ok(repo
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                title_id: Some(item.title_id.clone()),
-                limit: 500,
-                ..AcquisitionScopeStatesQuery::default()
-            })
-            .await?
-            .into_iter()
-            .find(|existing| {
-                existing.series_movie_link_id.as_deref() == Some(series_movie_link_id)
-            }));
-    }
-
-    // Episode scope before collection scope: an episode state row carries both
-    // its `episode_id` and its owning `collection_id`, so it must be matched on
-    // the more specific episode identity first — otherwise every episode of a
-    // season would resolve to the same collection-matched sibling row.
-    if let Some(episode_id) = item.episode_id.as_deref() {
-        return repo
-            .get_acquisition_scope_state_for_title(&item.title_id, Some(episode_id))
-            .await;
-    }
-
-    if let Some(collection_id) = item.collection_id.as_deref() {
-        return Ok(repo
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                title_id: Some(item.title_id.clone()),
-                limit: 500,
-                ..AcquisitionScopeStatesQuery::default()
-            })
-            .await?
-            .into_iter()
-            .find(|existing| {
-                existing.episode_id.is_none()
-                    && existing.collection_id.as_deref() == Some(collection_id)
-            }));
-    }
-
-    Ok(repo
-        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-            title_id: Some(item.title_id.clone()),
-            limit: 500,
-            ..AcquisitionScopeStatesQuery::default()
-        })
-        .await?
-        .into_iter()
-        .find(|existing| {
-            existing.episode_id.is_none()
-                && existing.collection_id.is_none()
-                && existing.series_movie_link_id.is_none()
-        }))
-}
-
 #[async_trait]
 pub trait PendingReleaseRepository: Send + Sync {
     async fn insert_pending_release(&self, release: &PendingRelease) -> AppResult<String>;
@@ -10347,6 +11363,35 @@ pub trait PendingReleaseRepository: Send + Sync {
     ) -> AppResult<String>;
     async fn list_expired_pending_releases(&self, now: &str) -> AppResult<Vec<PendingRelease>>;
     async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>>;
+    /// Whether [`Self::list_waiting_pending_releases`] would return any row,
+    /// answered without reading one.
+    async fn has_waiting_pending_releases(&self) -> AppResult<bool> {
+        Ok(!self.list_waiting_pending_releases().await?.is_empty())
+    }
+    /// Whether [`Self::list_expired_pending_releases`] would return any row for
+    /// `now`: a waiting row whose delay has run out, answered without reading
+    /// one.
+    async fn has_expired_pending_releases(&self, now: &str) -> AppResult<bool> {
+        Ok(!self.list_expired_pending_releases(now).await?.is_empty())
+    }
+    /// One page of the waiting and standby rows no indexer observed (the rows
+    /// an external announcement parked), in id order after `after_id`.
+    async fn list_waiting_indexerless_pending_releases(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<PendingRelease>> {
+        let mut rows: Vec<_> = self
+            .list_waiting_pending_releases()
+            .await?
+            .into_iter()
+            .filter(|row| row.indexer_id.is_none())
+            .filter(|row| after_id.is_none_or(|after| row.id.as_str() > after))
+            .collect();
+        rows.sort_by(|left, right| left.id.cmp(&right.id));
+        rows.truncate(limit);
+        Ok(rows)
+    }
     /// Active rows whose indexer observation did not include a publish time.
     /// Callers use `added_at` plus the current policy to decide review timing.
     async fn list_active_release_age_unknown_pending_releases(
@@ -10398,6 +11443,10 @@ pub trait PendingReleaseRepository: Send + Sync {
         grabbed_at: Option<&str>,
     ) -> AppResult<()>;
     /// Terminal policy rejection is retained as audit history, not deleted.
+    /// Only an active row (waiting, standby, processing or needs review) is
+    /// expired; a row that has already left the active set, such as one
+    /// grabbed or superseded meanwhile, keeps its status, and the call still
+    /// returns `Ok(())`.
     async fn expire_pending_release(&self, id: &str, decision_code: &str) -> AppResult<()>;
     async fn mark_release_age_unknown_pending_release_needs_review(
         &self,
@@ -10471,6 +11520,17 @@ pub trait BlocklistRepository: Send + Sync {
 
     async fn list_for_title(&self, title_id: &str, limit: usize) -> AppResult<Vec<BlocklistEntry>>;
 
+    /// The title's rows whose normalized release name is one of
+    /// `normalized_release_names` or whose infohash is one of `info_hashes`,
+    /// however old. Both lists arrive normalized; either may be empty, and
+    /// any length is accepted.
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>>;
+
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)>;
 
     /// One entry by id. The clear path resolves the entry this way for its
@@ -10504,6 +11564,21 @@ pub trait RuleSetRepository: Send + Sync {
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>>;
     async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()>;
     async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()>;
+    /// The stored builder document of one rule set, as canonical JSON text.
+    async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>>;
+    /// [`Self::create_rule_set`] storing `builder_model` in the same write.
+    async fn create_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()>;
+    /// [`Self::update_rule_set`] replacing the stored builder document with
+    /// `builder_model` (`None` clears it) in the same write.
+    async fn update_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()>;
     async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
     async fn record_rule_set_history(
         &self,
@@ -10515,6 +11590,28 @@ pub trait RuleSetRepository: Send + Sync {
     async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>>;
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
+
+    /// The name of every rule set.
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .collect())
+    }
+
+    /// Inserts new rule sets and their history in one transaction: all of them
+    /// are written, or none.
+    async fn create_rule_sets(
+        &self,
+        _rule_sets: &[RuleSet],
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "batched rule set writes are not configured".to_string(),
+        ))
+    }
 
     async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
         Ok(Vec::new())
@@ -10582,38 +11679,109 @@ pub struct RuleSetHistoryChange {
     pub actor_id: Option<String>,
 }
 
-/// Persistence for user-authored maintenance rules (RFC 137 section 11).
+/// Persistence for user-authored lifecycle rules.
 ///
 /// Rule sets and their matcher revisions are two tables but one unit of change:
 /// a rule set with no revision has no matcher and no action, so
 /// [`Self::create_rule_set`] and [`Self::add_revision`] must each write both
 /// rows in a single transaction.
 #[async_trait]
-pub trait MaintenanceRuleSetRepository: Send + Sync {
-    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>>;
+pub trait LifecycleRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<LifecycleRuleSet>>;
 
-    async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>>;
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<LifecycleRuleSet>>;
 
     /// Insert the rule set and its first revision atomically.
     async fn create_rule_set(
         &self,
-        rule_set: &MaintenanceRuleSet,
-        revision: &MaintenanceRuleRevision,
+        rule_set: &LifecycleRuleSet,
+        revision: &LifecycleRuleRevision,
     ) -> AppResult<()>;
 
-    /// Append `revision`, repoint the rule set at it, and reset its
-    /// `effect_arming` to [`scryer_domain::MaintenanceEffectArming::None`] — all
-    /// three atomically, flagging a rule that was armed as edited since it was
-    /// enabled. Existing revisions are never rewritten.
+    /// Like [`Self::create_rule_set`], but writes nothing and returns `false`
+    /// when a rule set already carries one of `taken_names`. The check and the
+    /// insert share one transaction.
+    async fn create_rule_set_unless_named(
+        &self,
+        rule_set: &LifecycleRuleSet,
+        revision: &LifecycleRuleRevision,
+        taken_names: &[String],
+    ) -> AppResult<bool> {
+        let existing = self.list_rule_sets().await?;
+        if existing
+            .iter()
+            .any(|existing| taken_names.contains(&existing.name))
+        {
+            return Ok(false);
+        }
+        self.create_rule_set(rule_set, revision).await?;
+        Ok(true)
+    }
+
+    /// The names of the rule sets whose name starts with `prefix`, matched
+    /// case-sensitively.
+    async fn list_rule_set_names_with_prefix(&self, prefix: &str) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .filter(|name| name.starts_with(prefix))
+            .collect())
+    }
+
+    /// Append `revision`, repoint the rule set at it, drop an enabled rule to
+    /// dry run flagged as edited since it was enabled, and clear its deletion
+    /// confirmation — all atomically. Existing revisions are never rewritten.
     ///
-    /// The disarm is part of the same write on purpose: arming acknowledges the
-    /// blast radius of one specific matcher and action, so it must never outlive
-    /// the revision it was granted against. A new revision that left the rule
-    /// armed would execute destructively under an acknowledgement given for a
-    /// matcher that no longer exists.
+    /// The disarm is part of the same write on purpose: the confirmation
+    /// acknowledges the blast radius of one specific source, so it must never
+    /// outlive the revision it was given for. A new revision that left the
+    /// rule enabled would execute destructively under an acknowledgement given
+    /// for a source that no longer exists.
+    ///
+    /// `max_titles_per_run` replaces the rule's per-fire maximum in the same
+    /// write when `Some` (`Some(None)` clears it); `None` keeps the stored
+    /// one, so a source that gains a delete head can gain its maximum in the
+    /// same save.
     async fn add_revision(
         &self,
-        revision: &MaintenanceRuleRevision,
+        revision: &LifecycleRuleRevision,
+        max_titles_per_run: Option<Option<u32>>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Append `revision` and repoint the rule set at it, keeping its state,
+    /// atomically. The write only applies while the rule's current revision
+    /// is the one `revision` follows; otherwise it writes nothing and refuses
+    /// with `LIFECYCLE_RULE_REVISION_CONFLICT`.
+    ///
+    /// The state stored at write time is kept, never raised: a concurrent
+    /// disable stands. When `keep_enabled` is false an enabled rule drops to
+    /// dry run (the edit flag is left as it was), for a revision whose
+    /// actions change nothing or an edit that read the rule as not enabled.
+    ///
+    /// The deletion confirmation is cleared, except that
+    /// `carry_destructive_confirmation` moves a confirmation that named the
+    /// revision `revision` follows onto `revision` itself.
+    ///
+    /// Only for a revision that declares no delete action:
+    /// the destructive acknowledgement is bound to the delete heads a source
+    /// declares, so a revision that cannot delete carries no new blast radius
+    /// to acknowledge. A revision that declares a delete action must go
+    /// through [`Self::add_revision`], with one exception: startup moving the
+    /// shipped rule from its `match` form to the source that deletes exactly
+    /// the same titles, so the acknowledgement already given still describes
+    /// it. That is the only caller that carries the confirmation.
+    ///
+    /// `max_titles_per_run` is written in the same transaction, as in
+    /// [`Self::add_revision`].
+    async fn add_revision_keeping_state(
+        &self,
+        revision: &LifecycleRuleRevision,
+        keep_enabled: bool,
+        carry_destructive_confirmation: bool,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
@@ -10621,14 +11789,14 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         &self,
         rule_set_id: &str,
         revision_number: i64,
-    ) -> AppResult<Option<MaintenanceRuleRevision>>;
+    ) -> AppResult<Option<LifecycleRuleRevision>>;
 
     /// [`Self::get_revision`] for each `(rule_set_id, revision_number)` key,
     /// in key order. SQL stores override this with one read.
     async fn get_revisions(
         &self,
         keys: &[(String, i64)],
-    ) -> AppResult<Vec<Option<MaintenanceRuleRevision>>> {
+    ) -> AppResult<Vec<Option<LifecycleRuleRevision>>> {
         let mut revisions = Vec::with_capacity(keys.len());
         for (rule_set_id, revision_number) in keys {
             revisions.push(self.get_revision(rule_set_id, *revision_number).await?);
@@ -10637,25 +11805,31 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     }
 
     /// Newest revision first.
-    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
+    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<LifecycleRuleRevision>>;
 
     /// Update the fields that carry no evaluation semantics. Never creates a
     /// revision — the matcher, action, and grace period are untouched.
     ///
-    /// `disarm` resets `effect_arming` to
-    /// [`scryer_domain::MaintenanceEffectArming::None`] in the *same* write,
-    /// with the same edited-since-enabled flag as `add_revision`. The
-    /// caller sets it when the library scope actually changed: scope is the
-    /// rule's blast radius, so a re-scoped rule is no longer the rule an
-    /// operator acknowledged, exactly as a new revision is not. Writing the two
-    /// separately would leave an instant in which the new scope is in force
-    /// under the old scope's arming.
+    /// `disarm` drops an enabled rule to dry run and clears its deletion
+    /// confirmation in the *same* write, with the same edited-since-enabled
+    /// flag as `add_revision`. The caller sets it when the library scope
+    /// actually changed: scope is the rule's blast radius, so a re-scoped rule
+    /// is no longer the rule an operator acknowledged, exactly as a new
+    /// revision is not. Writing the two separately would leave an instant in
+    /// which the new scope is in force under the old scope's confirmation.
+    ///
+    /// `schedule` replaces the rule's schedule in the same write; `None`
+    /// keeps the stored one. `max_titles_per_run` does the same for the
+    /// per-fire maximum, with `Some(None)` clearing it.
+    #[allow(clippy::too_many_arguments)]
     async fn update_rule_set_metadata(
         &self,
         id: &str,
         name: &str,
         description: &str,
         library_ids: &[String],
+        schedule: Option<&scryer_domain::ScriptSchedule>,
+        max_titles_per_run: Option<Option<u32>>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -10667,51 +11841,75 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// exists, coordinating with concurrent candidate/run insertion.
     async fn delete_rule_set_if_unused(&self, _id: &str) -> AppResult<()> {
         Err(AppError::Repository(
-            "guarded maintenance deletion is not configured".into(),
+            "guarded lifecycle deletion is not configured".into(),
         ))
     }
 
-    /// Atomically write a rule's mode and arming, derive `enabled` from the
-    /// mode, and clear the edited-since-enabled flag. Destructive arming first
-    /// checks the reviewed configuration under the row lock; a stale or missing
-    /// confirmation, or a missing row, returns false without changing the rule.
+    /// Replaces the most titles the rule may act on in one fire. `None`
+    /// clears it. The state is untouched.
+    async fn set_rule_set_max_titles_per_run(
+        &self,
+        _id: &str,
+        _max_titles_per_run: Option<u32>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "lifecycle rule maximum is not configured".into(),
+        ))
+    }
+
+    /// Atomically write a rule's state, clear the edited-since-enabled flag,
+    /// and set its deletion confirmation in the same statement.
+    ///
+    /// `destructive_confirmation` is `Some` exactly when enabling a rule whose
+    /// actions can delete. It is checked against the reviewed configuration
+    /// under the row lock and its revision is stored as the confirmed one; a
+    /// stale confirmation, or a missing row, returns false without changing
+    /// the rule. Every other write stores no confirmation.
     async fn update_rule_set_state(
         &self,
         id: &str,
-        mode: scryer_domain::MaintenanceEvaluationMode,
-        arming: scryer_domain::MaintenanceEffectArming,
-        confirmation: Option<&scryer_domain::MaintenanceRuleArmingConfirmation>,
+        state: scryer_domain::LifecycleRuleState,
+        destructive_confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 }
 
 /// Which candidates a read should return. Every field narrows; an empty
-/// `states` means every state.
+/// `states` means every state, and an empty `action_heads` means any decided
+/// actions.
 #[derive(Clone, Debug, Default)]
-pub struct MaintenanceCandidateQuery {
+pub struct LifecycleCandidateQuery {
     pub rule_set_id: Option<String>,
-    pub states: Vec<scryer_domain::MaintenanceCandidateState>,
+    /// Only candidates of these rule sets; `Some` of an empty list matches
+    /// nothing. Any number of ids is accepted.
+    pub rule_set_ids: Option<Vec<String>>,
+    pub states: Vec<scryer_domain::LifecycleCandidateState>,
     pub library_id: Option<String>,
+    /// Only candidates whose decided actions include at least one of these
+    /// heads, as [`crate::lifecycle_rules::decided_actions_include_head`]
+    /// judges it. A candidate without decided actions matches none.
+    pub action_heads: Vec<scryer_rules::lifecycle_actions::LifecycleActionHead>,
     pub limit: Option<usize>,
 }
 
-/// Durable lifecycle candidates (RFC 137 section 8).
+/// One repeat match to record, as [`LifecycleCandidateRepository::record_candidate_match`]
+/// takes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LifecycleCandidateMatch {
+    pub id: String,
+    pub last_matched_at: DateTime<Utc>,
+    pub reason_codes: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Durable lifecycle candidates.
 ///
 /// The store, not just the migration's partial unique index, is responsible for
 /// the one-active-candidate-per-(rule, kind, subject) invariant: a create is refused
 /// when an active candidate already exists.
 #[async_trait]
-pub trait MaintenanceCandidateRepository: Send + Sync {
-    /// The non-terminal candidate for this subject, if any.
-    async fn get_active_candidate(
-        &self,
-        rule_set_id: &str,
-        title_id: &str,
-    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
-        self.get_active_subject_candidate(rule_set_id, "title", title_id)
-            .await
-    }
-
+pub trait LifecycleCandidateRepository: Send + Sync {
     async fn get_active_subject_candidate(
         &self,
         rule_set_id: &str,
@@ -10719,17 +11917,27 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleCandidate>>;
 
-    async fn list_candidates(
+    /// The non-terminal candidate of each listed subject that has one, in no
+    /// particular order. One read for a whole page of subjects; any number of
+    /// ids is accepted.
+    async fn list_active_subject_candidates(
         &self,
-        query: &MaintenanceCandidateQuery,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_ids: &[String],
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
-    /// Highest match generation ever recorded for this subject, terminal rows
-    /// included. Zero when the subject has never had a candidate.
-    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
-        self.max_subject_match_generation(rule_set_id, "title", title_id)
-            .await
-    }
+    /// The candidates with these ids that exist, in no particular order. Any
+    /// number of ids is accepted.
+    async fn get_candidates_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    async fn list_candidates(
+        &self,
+        query: &LifecycleCandidateQuery,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
     async fn max_subject_match_generation(
         &self,
@@ -10746,7 +11954,7 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     /// Record a repeat match: advance `last_matched_at` and `last_evaluated_at`,
     /// refresh the reason codes, and clear any hold. `first_matched_at` is
     /// deliberately not a parameter — the grace clock never restarts on a
-    /// continuing membership (RFC 7.5).
+    /// continuing membership.
     async fn record_candidate_match(
         &self,
         id: &str,
@@ -10754,6 +11962,23 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         reason_codes: &[String],
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
+
+    /// [`Self::record_candidate_match`] for each of `matches`, together. A
+    /// store records them in one transaction, so a failure records none of
+    /// them. Each write sets the same values however often it runs, so a
+    /// caller may replay a failed batch row by row.
+    async fn record_candidate_matches(&self, matches: &[LifecycleCandidateMatch]) -> AppResult<()> {
+        for candidate_match in matches {
+            self.record_candidate_match(
+                &candidate_match.id,
+                candidate_match.last_matched_at,
+                &candidate_match.reason_codes,
+                candidate_match.updated_at,
+            )
+            .await?;
+        }
+        Ok(())
+    }
 
     /// Record an inconclusive evaluation: advance `last_evaluated_at` and stamp
     /// `held_since` if it is not already set. Never advances the clock and
@@ -10780,39 +12005,46 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     async fn transition_candidate_state(
         &self,
         id: &str,
-        state: scryer_domain::MaintenanceCandidateState,
+        state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
-        expected_states: &[scryer_domain::MaintenanceCandidateState],
+        expected_states: &[scryer_domain::LifecycleCandidateState],
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
+
+    /// Compare-and-set, for each `(candidate id, marker)` pair, the
+    /// conflicting action the rule decided for an enclosing or contained
+    /// subject, or clear it with `None`. All pairs are written in one
+    /// transaction; each lands only while its row is in one of
+    /// `expected_states`, and no row's state is changed. Returns how many
+    /// rows were written.
+    async fn set_candidate_actions_conflicts(
+        &self,
+        changes: &[(String, Option<scryer_domain::LifecycleActionsConflict>)],
+        expected_states: &[scryer_domain::LifecycleCandidateState],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<usize>;
 
     /// Finish a candidate only while this worker still owns the exact
     /// `Executing` lease it acquired. Sequence holds and retryable failures
     /// must use this stronger form so a stale worker cannot overwrite a newer
-    /// execution lease.
+    /// execution lease. `state_cause_code` is the underlying code behind
+    /// `state_reason`, such as the location planner's refusal behind
+    /// `move_refused`; every other state write clears it.
     async fn finish_leased_candidate(
         &self,
         id: &str,
         expected_lease_updated_at: DateTime<Utc>,
-        state: scryer_domain::MaintenanceCandidateState,
+        state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
+        state_cause_code: Option<&str>,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool>;
-
-    /// Cancel every active candidate of one rule set in a single write. Used
-    /// when a whole rule is superseded or retired; returns how many rows moved.
-    async fn cancel_active_candidates_for_rule(
-        &self,
-        rule_set_id: &str,
-        state_reason: &str,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<u64>;
 
     /// Candidate counts per state for one rule set, states with no rows omitted.
     async fn count_candidates_by_state(
         &self,
         rule_set_id: &str,
-    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>>;
+    ) -> AppResult<Vec<(scryer_domain::LifecycleCandidateState, i64)>>;
 
     /// Candidates of one rule whose materialized `due_at` has passed and whose
     /// state can still reach execution (observing, pending_action, due,
@@ -10824,11 +12056,24 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     /// without it a candidate whose worker died mid-run is never selected again,
     /// so it stays `executing` forever and keeps inflating the count destructive
     /// arming makes an operator acknowledge.
+    ///
+    /// Ordered by `(due_at, id)`. `after` continues a walk past the last row
+    /// of the previous page, so a fire can work through every due candidate
+    /// in bounded pages.
+    ///
+    /// `held_after` leaves out a `blocked` row last written after that
+    /// instant: the rule's latest evaluation start, so a candidate an action
+    /// pass held waits for the rule's next evaluation instead of being
+    /// examined again by every pass before it. An evaluation's own writes
+    /// carry its start time, so a row it holds or refreshes is never left out.
+    /// `None` leaves out nothing.
     async fn list_due_candidates(
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        held_after: Option<DateTime<Utc>>,
+        after: Option<&LifecycleDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
@@ -10842,24 +12087,9 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         stale_before: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
-
-    /// Persist the bounded attempt counter for the current generation.
-    ///
-    /// The executor writes this as a *reservation*, before the action's external
-    /// side effects begin, not as an after-the-fact tally of failures. That is
-    /// what makes a reclaimed execution compute attempt N+1 instead of colliding
-    /// with the `(idempotency_key, attempt)` row an interrupted attempt already
-    /// wrote — and it is what makes the attempt cap bound a crash loop, which a
-    /// counter only advanced on a *handled* failure never could.
-    async fn record_candidate_attempts(
-        &self,
-        id: &str,
-        action_attempts: i64,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<()>;
 }
 
-/// Append-only record of action-handler attempts (RFC 137 section 8).
+/// Append-only record of action-handler attempts.
 #[async_trait]
 pub trait LifecycleActionRunRepository: Send + Sync {
     /// Insert the attempt as `running` before anything is mutated, so an
@@ -10868,19 +12098,6 @@ pub trait LifecycleActionRunRepository: Send + Sync {
 
     /// Write the attempt's terminal status, hold reason, error, and detail.
     async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
-
-    /// Finish a storage-held running attempt and return its reservation in one
-    /// transaction. The release succeeds only while this exact generation,
-    /// action, attempt, and execution lease still belong to the candidate.
-    ///
-    /// Storage capacity and the filesystem guard are environmental holds, not
-    /// failures. Releasing their reservation avoids consuming retry budget or
-    /// colliding with the next attempt's execution idempotency key.
-    async fn finish_held_action_run_and_release_attempt(
-        &self,
-        run: &scryer_domain::LifecycleActionRun,
-        expected_attempt: i64,
-    ) -> AppResult<bool>;
 
     /// The newest durable policy-deletion checkpoint for this exact candidate
     /// generation and action, independently of later safety holds.
@@ -10927,17 +12144,41 @@ pub trait LifecycleActionRunRepository: Send + Sync {
 /// reclaimed only through this operation; callers must never overwrite another
 /// worker's evidence by treating `Busy` as a retryable write failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MaintenanceActionStepClaim {
-    Claimed(scryer_domain::MaintenanceActionStepRun),
+pub enum LifecycleActionStepClaim {
+    Claimed(scryer_domain::LifecycleActionStepRun),
     Busy,
-    Completed(scryer_domain::MaintenanceActionStepRun),
+    Completed(scryer_domain::LifecycleActionStepRun),
+}
+
+/// Where a walk of a rule's due candidates stopped: the last row it read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LifecycleDueCursor {
+    pub due_at: DateTime<Utc>,
+    pub id: String,
+}
+
+impl LifecycleDueCursor {
+    pub fn after(candidate: &scryer_domain::LifecycleCandidate) -> Self {
+        Self {
+            due_at: candidate.due_at,
+            id: candidate.id.clone(),
+        }
+    }
+}
+
+/// One rule having changed one title with one step kind.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LifecycleStepAct {
+    pub rule_set_id: String,
+    pub title_id: String,
+    pub step_kind: String,
 }
 
 /// Candidate coordinates for a bounded sequence-progress projection. A caller
 /// supplies only the candidates already on its page; each can contribute at
 /// most seven current step rows.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MaintenanceActionStepCandidateKey {
+pub struct LifecycleActionStepCandidateKey {
     pub candidate_id: String,
     pub match_generation: i64,
     pub revision_number: i64,
@@ -10947,20 +12188,20 @@ pub struct MaintenanceActionStepCandidateKey {
 /// carries its exact request hash and reconciliation evidence so callers can
 /// hold on an unknown state rather than submit blindly.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MaintenanceActionJobReceiptClaim {
-    Claimed(scryer_domain::MaintenanceActionJobReceipt),
-    Existing(scryer_domain::MaintenanceActionJobReceipt),
+pub enum LifecycleActionJobReceiptClaim {
+    Claimed(scryer_domain::LifecycleActionJobReceipt),
+    Existing(scryer_domain::LifecycleActionJobReceipt),
 }
 
 /// Compare-and-set request for durable job reconciliation. Keeping the state
 /// expectation, external identity, and evidence together avoids callers
 /// accidentally advancing a receipt with evidence from a different attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaintenanceActionJobReceiptTransition {
-    pub key: scryer_domain::MaintenanceActionStepKey,
+pub struct LifecycleActionJobReceiptTransition {
+    pub key: scryer_domain::LifecycleActionStepKey,
     pub dispatch_attempt: i64,
-    pub expected_states: Vec<scryer_domain::MaintenanceActionJobReceiptState>,
-    pub next_state: scryer_domain::MaintenanceActionJobReceiptState,
+    pub expected_states: Vec<scryer_domain::LifecycleActionJobReceiptState>,
+    pub next_state: scryer_domain::LifecycleActionJobReceiptState,
     pub job_run_id: Option<String>,
     pub reconciliation_evidence_json: String,
     pub updated_at: DateTime<Utc>,
@@ -10968,29 +12209,29 @@ pub struct MaintenanceActionJobReceiptTransition {
 
 /// Durable v2 step intent, attempt evidence, and external-job receipts.
 #[async_trait]
-pub trait MaintenanceActionStepRepository: Send + Sync {
+pub trait LifecycleActionStepRepository: Send + Sync {
     async fn get_action_step(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-    ) -> AppResult<Option<scryer_domain::MaintenanceActionStepRun>>;
+        key: &scryer_domain::LifecycleActionStepKey,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionStepRun>>;
 
     /// Insert the intent before its mutation or atomically acquire/reclaim its
     /// lease. The supplied evidence is used only for a new row or an eligible
     /// next attempt; an existing running row is never overwritten here.
     async fn claim_action_step(
         &self,
-        step: &scryer_domain::MaintenanceActionStepRun,
+        step: &scryer_domain::LifecycleActionStepRun,
         stale_before: DateTime<Utc>,
         lease_id: &str,
         leased_at: DateTime<Utc>,
-    ) -> AppResult<MaintenanceActionStepClaim>;
+    ) -> AppResult<LifecycleActionStepClaim>;
 
     /// Update only a currently running row owned by `expected_lease_id`. This
     /// is the durable per-file checkpoint path; it cannot change the state or
     /// erase a terminal result.
     async fn checkpoint_action_step(
         &self,
-        step: &scryer_domain::MaintenanceActionStepRun,
+        step: &scryer_domain::LifecycleActionStepRun,
         expected_lease_id: &str,
     ) -> AppResult<bool>;
 
@@ -10998,7 +12239,7 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
     /// corresponding immutable attempt evidence.
     async fn finish_action_step(
         &self,
-        step: &scryer_domain::MaintenanceActionStepRun,
+        step: &scryer_domain::LifecycleActionStepRun,
         expected_lease_id: &str,
     ) -> AppResult<bool>;
 
@@ -11007,50 +12248,50 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
         candidate_id: &str,
         match_generation: i64,
         revision_number: i64,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepRun>>;
 
     /// Bounded page projection. This avoids one query per candidate when a
     /// sequence-aware candidate list renders step progress.
     async fn list_action_steps_for_candidates(
         &self,
-        candidates: &[MaintenanceActionStepCandidateKey],
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+        candidates: &[LifecycleActionStepCandidateKey],
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepRun>>;
 
-    async fn list_action_step_attempts(
+    /// Across every rule: which rule changed which title with the named step
+    /// kinds, by attempts started at or after `since` that succeeded. Each
+    /// (rule, title, kind) once, at most `limit` of them. Served by the index
+    /// on step attempts' start time.
+    async fn list_step_acts_since(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>>;
-
-    async fn get_action_job_receipt(
-        &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-        dispatch_attempt: i64,
-    ) -> AppResult<Option<scryer_domain::MaintenanceActionJobReceipt>>;
+        step_kinds: &[&str],
+        since: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<LifecycleStepAct>>;
 
     async fn list_action_job_receipts(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+        key: &scryer_domain::LifecycleActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionJobReceipt>>;
 
     /// Bounded receipt projection for the already bounded step list. Search
     /// receipt states are therefore available to a candidate page without one
     /// query per sequence step.
     async fn list_action_job_receipts_for_steps(
         &self,
-        steps: &[scryer_domain::MaintenanceActionStepKey],
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+        steps: &[scryer_domain::LifecycleActionStepKey],
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionJobReceipt>>;
 
     /// Generic two-phase dispatch support for adapters whose job creation is
     /// external. Search uses `JobRunRepository`'s stronger atomic creation
     /// boundary instead of this method.
     async fn claim_action_job_dispatch(
         &self,
-        receipt: &scryer_domain::MaintenanceActionJobReceipt,
-    ) -> AppResult<MaintenanceActionJobReceiptClaim>;
+        receipt: &scryer_domain::LifecycleActionJobReceipt,
+    ) -> AppResult<LifecycleActionJobReceiptClaim>;
 
     async fn transition_action_job_receipt(
         &self,
-        transition: &MaintenanceActionJobReceiptTransition,
+        transition: &LifecycleActionJobReceiptTransition,
     ) -> AppResult<bool>;
 }
 
@@ -11059,25 +12300,14 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
 /// generation and reset retry limits. Only a confirmed raw no-match releases
 /// it; unknown evaluation never does.
 #[async_trait]
-pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
+pub trait LifecycleSequenceCompletionRepository: Send + Sync {
     async fn get_active_sequence_completion(
         &self,
         rule_set_id: &str,
         revision_number: i64,
         subject_kind: &str,
         subject_id: &str,
-    ) -> AppResult<Option<scryer_domain::MaintenanceSequenceTerminalMembership>>;
-
-    /// Active markers in stable-ID keyset order for a reconciliation page. This
-    /// lets a storage-root pass release a marker only after it has observed an
-    /// exact raw no-match without a released early page starving later rows.
-    async fn list_active_sequence_completions(
-        &self,
-        rule_set_id: &str,
-        revision_number: i64,
-        after_id: Option<&str>,
-        limit: usize,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+    ) -> AppResult<Option<scryer_domain::LifecycleSequenceTerminalMembership>>;
 
     /// Verify the durable per-step evidence and atomically write the terminal
     /// membership marker before moving the candidate to its terminal state.
@@ -11085,10 +12315,10 @@ pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
     /// of a new candidate for the same continuous match.
     async fn finish_sequence_terminal_membership_and_candidate(
         &self,
-        membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
-        expected_candidate_state: scryer_domain::MaintenanceCandidateState,
+        membership: &scryer_domain::LifecycleSequenceTerminalMembership,
+        expected_candidate_state: scryer_domain::LifecycleCandidateState,
         expected_candidate_updated_at: DateTime<Utc>,
-        terminal_candidate_state: scryer_domain::MaintenanceCandidateState,
+        terminal_candidate_state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool>;
@@ -11103,44 +12333,43 @@ pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
     ) -> AppResult<bool>;
 }
 
-/// Subjects a maintenance rule must never act on (RFC 137 section 11).
+/// Subjects a lifecycle rule must never act on.
 #[async_trait]
-pub trait MaintenanceExclusionRepository: Send + Sync {
+pub trait LifecycleExclusionRepository: Send + Sync {
     /// Every exclusion, newest first, optionally narrowed to the ones that
     /// apply to one rule: its own rows plus every global row.
     async fn list_exclusions(
         &self,
         rule_set_id: Option<&str>,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleRuleExclusion>>;
 
     async fn get_exclusion(
         &self,
         id: &str,
-    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>>;
+    ) -> AppResult<Option<scryer_domain::LifecycleRuleExclusion>>;
 
     async fn create_exclusion(
         &self,
-        exclusion: &scryer_domain::MaintenanceRuleExclusion,
+        exclusion: &scryer_domain::LifecycleRuleExclusion,
     ) -> AppResult<()>;
 
     async fn delete_exclusion(&self, id: &str) -> AppResult<()>;
 }
 
-/// Bounded per-rule records of what one evaluation pass did
-/// (RFC 137 section 11).
+/// Bounded per-rule records of what one evaluation pass did.
 #[async_trait]
-pub trait MaintenanceEvaluationRunRepository: Send + Sync {
+pub trait LifecycleEvaluationRunRepository: Send + Sync {
     /// Insert the run as `running`. Recorded before evaluation so an
     /// interrupted pass leaves evidence rather than nothing.
     async fn start_evaluation_run(
         &self,
-        run: &scryer_domain::MaintenanceEvaluationRun,
+        run: &scryer_domain::LifecycleEvaluationRun,
     ) -> AppResult<()>;
 
     /// Write the terminal status, counts, timing, and error of a started run.
     async fn finish_evaluation_run(
         &self,
-        run: &scryer_domain::MaintenanceEvaluationRun,
+        run: &scryer_domain::LifecycleEvaluationRun,
     ) -> AppResult<()>;
 
     /// Newest first.
@@ -11148,36 +12377,51 @@ pub trait MaintenanceEvaluationRunRepository: Send + Sync {
         &self,
         rule_set_id: Option<&str>,
         limit: Option<usize>,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleEvaluationRun>>;
+
+    /// For each named rule: when its latest evaluation started, and whether
+    /// it holds an `executing` candidate. Two indexed reads for the whole
+    /// list, never one per rule; rules with neither are absent.
+    async fn rule_schedule_anchors(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, LifecycleRuleScheduleAnchor>>;
 }
 
-/// The maintenance evaluation/execution tables land together, are written by
-/// the two maintenance job passes, and cascade from the same rule set, so they
+/// What a rule's schedule anchors on when it is (re)scheduled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LifecycleRuleScheduleAnchor {
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub in_flight: bool,
+}
+
+/// The lifecycle evaluation/execution tables land together, are written by
+/// the two lifecycle job passes, and cascade from the same rule set, so they
 /// are wired as one service slot. The capability traits stay separate so a
 /// caller declares only what it uses.
-pub trait MaintenanceEvaluationRepository:
-    MaintenanceCandidateRepository
-    + MaintenanceExclusionRepository
-    + MaintenanceEvaluationRunRepository
+pub trait LifecycleEvaluationRepository:
+    LifecycleCandidateRepository
+    + LifecycleExclusionRepository
+    + LifecycleEvaluationRunRepository
     + LifecycleActionRunRepository
-    + MaintenanceActionStepRepository
-    + MaintenanceSequenceCompletionRepository
+    + LifecycleActionStepRepository
+    + LifecycleSequenceCompletionRepository
 {
 }
 
-impl<T> MaintenanceEvaluationRepository for T where
-    T: MaintenanceCandidateRepository
-        + MaintenanceExclusionRepository
-        + MaintenanceEvaluationRunRepository
+impl<T> LifecycleEvaluationRepository for T where
+    T: LifecycleCandidateRepository
+        + LifecycleExclusionRepository
+        + LifecycleEvaluationRunRepository
         + LifecycleActionRunRepository
-        + MaintenanceActionStepRepository
-        + MaintenanceSequenceCompletionRepository
+        + LifecycleActionStepRepository
+        + LifecycleSequenceCompletionRepository
 {
 }
 
 /// Persistence for user-authored request rules (spec 0003 section 6).
 ///
-/// Mirrors [`MaintenanceRuleSetRepository`] minus arming: a request rule votes
+/// Mirrors [`LifecycleRuleSetRepository`] minus arming: a request rule votes
 /// and nothing else, so there is no blast radius for an operator to acknowledge
 /// and no disarm to carry in a write. Rule set and revision are still one unit
 /// of change — a rule set with no revision has no matcher — so
@@ -11189,20 +12433,29 @@ pub trait RequestRuleSetRepository: Send + Sync {
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>>;
 
-    /// Insert the rule set and its first revision atomically.
+    /// Insert the rule set, its first revision and its builder document
+    /// atomically.
     async fn create_rule_set(
         &self,
         rule_set: &scryer_domain::RequestRuleSet,
         revision: &scryer_domain::RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()>;
 
     /// Append `revision` and repoint the rule set at it, atomically. Existing
-    /// revisions are never rewritten.
+    /// revisions are never rewritten. `builder_model_json` is `None` to keep
+    /// the stored builder document, `Some(None)` to clear it and `Some(doc)`
+    /// to replace it.
     async fn add_revision(
         &self,
         revision: &scryer_domain::RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()>;
+
+    /// The stored builder document of one rule set. Only the single-rule read
+    /// asks for it, so listings never decode it.
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>>;
 
     async fn get_revision(
         &self,
@@ -11240,12 +12493,10 @@ pub trait RequestRuleSetRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
-    /// Move a rule set between evaluation modes. `enabled` is derived by the
-    /// caller from the mode so the two columns can never disagree.
-    async fn update_rule_set_evaluation_mode(
+    /// Enable or disable a rule set.
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: scryer_domain::RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -11266,6 +12517,22 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
         request_id: &str,
     ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>>;
 
+    /// [`Self::latest_for_request`] for a page of requests, keyed by request
+    /// id. A request with no recorded decision is absent.
+    async fn latest_for_requests(
+        &self,
+        request_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_domain::RequestRuleDecisionRecord>>
+    {
+        let mut latest = std::collections::HashMap::with_capacity(request_ids.len());
+        for request_id in request_ids {
+            if let Some(record) = self.latest_for_request(request_id).await? {
+                latest.insert(request_id.clone(), record);
+            }
+        }
+        Ok(latest)
+    }
+
     /// Newest first, optionally narrowed to one effective outcome.
     async fn list_recent(
         &self,
@@ -11273,14 +12540,38 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
         outcome: Option<scryer_domain::RequestDecisionOutcome>,
     ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>>;
 
-    /// How many recorded decisions a rule set participated in.
-    ///
-    /// The rule ids live inside `votes_json` rather than in a join table, so
-    /// this is a substring match over that column. It is deliberately loose:
-    /// the number drives an "this rule has decided N requests" affordance in
-    /// the authoring UI, not any safety decision, and a rule id is a generated
-    /// opaque id, so a false positive would need one id to contain another.
+    /// How many recorded decisions a rule set participated in: the decisions
+    /// whose votes name the rule set's id.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
+
+    /// [`Self::count_for_rule_set`] for each of `rule_set_ids` at once, in one
+    /// grouped statement per bind-safe chunk. A rule set with no decision is
+    /// absent from the map; blank ids are skipped.
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>>;
+
+    /// Remove up to `limit` traces that older builds wrote for pre-flight
+    /// previews (request ids starting with
+    /// [`crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX`]), with their rule
+    /// set links, in one transaction. Returns how many traces went. A call
+    /// that finds none writes nothing. Traces of submitted requests are never
+    /// touched.
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize>;
+
+    /// Remove up to `limit` traces that are older than the newest `keep`
+    /// traces of every rule set that voted in them, with their rule set
+    /// links. A trace two rule sets voted in stays while either still counts
+    /// it among its newest `keep`. Traces no rule set voted in are a group of
+    /// their own: the newest `keep` of them stay. A pre-flight trace is never
+    /// touched, and neither is anything when `keep` is zero. Returns how many
+    /// traces went. A call that finds none writes nothing.
+    async fn delete_traces_beyond_latest_per_rule_set(
+        &self,
+        keep: usize,
+        limit: usize,
+    ) -> AppResult<usize>;
 }
 
 /// Title leases and keep claims (spec 0003 FR-041…FR-044).
@@ -11300,7 +12591,7 @@ pub trait LifecycleClaimRepository: Send + Sync {
     /// Live (dormant or active) claims for each of `title_ids`, keyed by title
     /// id. Titles with no live claim are absent rather than empty.
     ///
-    /// Batched on purpose: the maintenance pass asks this for a whole chunk of
+    /// Batched on purpose: the lifecycle pass asks this for a whole chunk of
     /// titles at once, and a per-title query would make the pass scale with the
     /// library.
     async fn list_live_for_titles(
@@ -11318,7 +12609,7 @@ pub trait LifecycleClaimRepository: Send + Sync {
     /// they were withdrawn rather than spent, so they say nothing about whether
     /// a lease ran out.
     ///
-    /// Batched for the same reason its sibling is: the maintenance pass asks it
+    /// Batched for the same reason its sibling is: the lifecycle pass asks it
     /// once per chunk of titles.
     async fn list_retention_history_for_titles(
         &self,
@@ -12978,6 +14269,14 @@ pub struct DownloadCleanupRecord {
     /// was rescheduled with; `None` after any other outcome. Lets the next
     /// failure back off further without counting holds and deferrals.
     pub previous_failure_retry_seconds: Option<i64>,
+    /// Not stored: read with the import holds right before the cleanup runs.
+    /// An import found the download's file is the library file, so the
+    /// client entry may go but never its data.
+    pub library_holds_payload: bool,
+    /// Not stored: read with the import holds right before the cleanup runs.
+    /// Download files an import left on library files without telling
+    /// whether each is the library file itself.
+    pub library_file_unsettled: Vec<UnsettledLibraryFile>,
 }
 
 /// The catalog references one download submission holds, exactly as stored.
@@ -13789,9 +15088,9 @@ pub trait SubtitleDownloadRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
-// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+// ── Lifecycle safety probes ─────────────────────────────────────────────
 //
-// Read-only observation ports the maintenance action executor consults before
+// Read-only observation ports the lifecycle action executor consults before
 // it touches media. Nothing below writes, schedules, or executes anything.
 
 /// What one media-server connection reported when it was asked for its live
@@ -13800,12 +15099,13 @@ pub trait SubtitleDownloadRepository: Send + Sync {
 /// `Unreachable` is a first-class answer rather than an error: one server that
 /// is down, mis-credentialed, or returning garbage must not erase what the
 /// other connections truthfully reported. The fold in
-/// [`crate::maintenance_rules::safety`] is what turns an `Unreachable` into a
+/// [`crate::lifecycle_rules::safety`] is what turns an `Unreachable` into a
 /// fail-closed hold.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackProbeStatus {
-    /// The server answered and is streaming this many sessions right now.
-    ActiveSessions(u32),
+    /// The server answered and these sessions are playing right now, one
+    /// entry per session. Never empty: a server playing nothing is `Idle`.
+    Playing(Vec<PlayingMedia>),
     /// The server answered and nothing is playing.
     Idle,
     /// The server could not be asked, or its answer could not be read. Carries
@@ -13813,11 +15113,49 @@ pub enum PlaybackProbeStatus {
     Unreachable(String),
 }
 
+impl PlaybackProbeStatus {
+    /// How many sessions the server reported playing.
+    pub fn playing_sessions(&self) -> usize {
+        match self {
+            Self::Playing(sessions) => sessions.len(),
+            Self::Idle | Self::Unreachable(_) => 0,
+        }
+    }
+}
+
+/// What one live session is playing, as the server reported it.
+///
+/// Nothing here is a Scryer identity: the lifecycle safety check attributes a
+/// session to a title with the same mapping the watch-signal sync uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlayingMedia {
+    /// A movie or an episode, normalized exactly as a watch-signal item is:
+    /// the provider's item id, its external ids, the series' provider item
+    /// id and the season and episode numbers of an episode, and its file
+    /// paths. Play-state fields carry nothing.
+    Video(ProviderPlayedItem),
+    /// Music or another audio item. Scryer manages no audio, so a session
+    /// playing one is not playing any Scryer title.
+    Audio,
+    /// Anything else (an unidentified video, a trailer, live TV), or an item
+    /// the server reported in a shape that could not be read. It can still be
+    /// placed through the provider's mapping or a file path, and holds as
+    /// unattributed otherwise.
+    Other {
+        provider_item_id: Option<String>,
+        name: Option<String>,
+        file_paths: Vec<String>,
+    },
+}
+
 /// One enabled media-server connection's contribution to a playback snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionPlaybackActivity {
     pub connection_id: String,
     pub provider: scryer_domain::MediaServerProvider,
+    /// The connection's path mappings (Scryer path to server path), so a
+    /// session's file can be read back in Scryer's spelling.
+    pub path_mappings: Vec<scryer_domain::MediaServerPathMapping>,
     pub status: PlaybackProbeStatus,
 }
 
@@ -13879,7 +15217,8 @@ pub struct ProviderPlayedItem {
     pub kind: scryer_domain::MediaServerSignalKind,
     pub name: Option<String>,
     pub external_ids: std::collections::BTreeMap<String, String>,
-    /// Series-scoped ids for an episode. Empty for a movie.
+    /// Series-scoped ids for an episode or a season. Empty for a movie or a
+    /// series, which carry their own in `external_ids`.
     pub series_external_ids: std::collections::BTreeMap<String, String>,
     pub series_provider_item_id: Option<String>,
     pub season_number: Option<i64>,
@@ -13991,6 +15330,18 @@ pub trait MediaServerSignalReader: Send + Sync {
         external_user_id: &str,
     ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure>;
 
+    /// Every item the person marked as a favourite, played or not: movies,
+    /// series, seasons and episodes. `Ok(None)` is a server with no
+    /// favourites at all (Plex), which is not the same answer as an empty
+    /// list. An `Err` is this participant's failure, exactly as for
+    /// [`Self::fetch_played_items`]: their stored rows stay as they are.
+    async fn fetch_favorite_items(
+        &self,
+        _external_user_id: &str,
+    ) -> Result<Option<Vec<ProviderPlayedItem>>, SignalReadFailure> {
+        Ok(None)
+    }
+
     /// Items' played state as the server reports it now, read just before an
     /// action that a watch fact allowed. Nothing is stored from it.
     ///
@@ -14017,6 +15368,28 @@ pub trait MediaServerSignalReader: Send + Sync {
         ))
     }
 
+    /// Which of `participants` have each item as a favourite now, read just
+    /// before an action that a favourite fact allowed. Nothing is stored
+    /// from it. Used for the series and season items
+    /// [`ProviderItemRecheck::parent_item_ids`] names, which the item read
+    /// itself does not return.
+    ///
+    /// The answer is keyed by provider item id, holding the participants
+    /// that have it as a favourite; an item nobody has as one may be left
+    /// out. A participant the server refuses (404 or 403) or who cannot see
+    /// an item has no favourite of it. An `Err` is a re-check that could not
+    /// be made.
+    async fn recheck_favorites(
+        &self,
+        _provider_item_ids: &[String],
+        _participants: &[String],
+    ) -> Result<std::collections::BTreeMap<String, Vec<String>>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot re-check a favourite",
+        ))
+    }
+
     /// Every play the server records for any of its accounts, linked to a
     /// Scryer user or not, folded to one entry per account and item.
     ///
@@ -14030,6 +15403,84 @@ pub trait MediaServerSignalReader: Send + Sync {
             "this media server cannot list plays for every account",
         ))
     }
+
+    /// Every account's favourites, linked to a Scryer user or not: movies,
+    /// series, seasons and episodes, read with the connection's own
+    /// credential for every account it can list.
+    ///
+    /// The outer `Err` is the account list's failure: no account was read.
+    /// Each account's own read succeeds or fails on its own, so one
+    /// unreadable account leaves every other account's answer standing.
+    async fn fetch_audience_favorites(
+        &self,
+    ) -> Result<Vec<ProviderAccountFavorites>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot list favourites for every account",
+        ))
+    }
+}
+
+/// One account's favourites, from the audience favourites read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderAccountFavorites {
+    pub external_account_id: String,
+    pub favorites: Result<Vec<ProviderPlayedItem>, SignalReadFailure>,
+}
+
+/// One stored favourite: an account's favourite item, placed on Scryer media
+/// where mapping succeeded. A series or season favourite carries its title
+/// and no episode; a season one also the provider's season number. An
+/// episode favourite carries the Scryer episode when it resolved, and the
+/// title alone when only its series did.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AudienceFavorite {
+    pub connection_id: String,
+    pub external_account_id: String,
+    pub provider_item_id: String,
+    pub kind: scryer_domain::MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub season_number: Option<i64>,
+}
+
+/// What one sweep learned of one account's favourites.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AudienceFavoriteAccountRead {
+    /// The account's favourites were read in full. `unplaced` is the reason
+    /// code when one of them could not be placed on Scryer media and nothing
+    /// proves it is outside the libraries: the rows are stored, and the
+    /// account's favourites are not counted as known until a read places
+    /// them all.
+    Read {
+        favorites: Vec<AudienceFavorite>,
+        unplaced: Option<String>,
+    },
+    /// The account's read failed, for this reason code. Its stored rows are
+    /// kept, and its favourites are not known until a read succeeds.
+    Failed { reason: String },
+}
+
+/// One account's favourites as the sweep read them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudienceFavoriteAccount {
+    pub external_account_id: String,
+    pub read: AudienceFavoriteAccountRead,
+}
+
+/// The stored state of one account's favourites read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudienceFavoriteRead {
+    pub connection_id: String,
+    pub external_account_id: String,
+    /// The sweep that last listed the account.
+    pub sweep_started_at: DateTime<Utc>,
+    /// When the account's favourites were last read in full and every one
+    /// placed. `None` while the last read failed, left one unplaced, or the
+    /// account list itself could not be read.
+    pub read_at: Option<DateTime<Utc>>,
+    /// Why the last read did not count, as a reason code.
+    pub failure_reason: Option<String>,
 }
 
 /// One account's play of one item, from the audience read.
@@ -14071,6 +15522,10 @@ pub struct ProviderItemPlay {
     pub external_user_id: String,
     pub played: bool,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// Whether this account has the item itself as a favourite. Jellyfin and
+    /// Emby report it in the same user data the play state comes from; Plex
+    /// has no favourites and always reads false.
+    pub is_favorite: bool,
 }
 
 /// What a live re-check of one item found.
@@ -14085,6 +15540,11 @@ pub struct ProviderItemRecheck {
     /// are every listed user's own state for the item, one entry per user who
     /// has played it.
     pub history: Vec<ProviderItemPlay>,
+    /// The series and season items the server files this item under, as the
+    /// same answer names them (Jellyfin and Emby episodes). Empty for a movie
+    /// and on Plex. Reading them costs nothing; their favourite flags are read
+    /// only through [`MediaServerSignalReader::recheck_favorites`].
+    pub parent_item_ids: Vec<String>,
 }
 
 /// Durable storage for normalized media-server watch signals.
@@ -14098,6 +15558,9 @@ pub trait MediaServerSignalRepository: Send + Sync {
     /// Returns the number of rows the participant now has. An empty `signals`
     /// is a meaningful write, not a no-op: it means this person has nothing
     /// played any more, and every prior row for them is removed.
+    ///
+    /// A set identical to the stored one, read through a link the roster
+    /// already names with the same identity, writes nothing at all.
     ///
     /// `read_through` is the link the sweep read these signals through. It is
     /// recorded in the signal roster in the same transaction as the swap, so
@@ -14149,6 +15612,18 @@ pub trait MediaServerSignalRepository: Send + Sync {
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
 
+    /// Every favourite row (`is_favorite`, any kind: movie, series, season or
+    /// episode) grouped by the owning title id. A title nobody favourited is
+    /// absent from the map.
+    async fn favorite_signals_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        Err(AppError::Repository(
+            "favourite signals are not configured".into(),
+        ))
+    }
+
     /// Atomically replace one connection's audience plays and record the read
     /// that produced them. Rows the read did not return are removed: an
     /// account that no longer has an item played no longer counts.
@@ -14176,6 +15651,53 @@ pub trait MediaServerSignalRepository: Send + Sync {
     async fn audience_reads(&self) -> AppResult<Vec<AudienceRead>> {
         Err(AppError::Repository(
             "audience plays are not configured".into(),
+        ))
+    }
+
+    /// Store one sweep's favourites read of a connection's accounts, in one
+    /// transaction. `accounts` is every account the sweep listed: an account
+    /// it no longer lists loses its rows and its read state. A read account's
+    /// rows are replaced only when they changed; a failed one keeps its rows.
+    /// Returns the favourite rows the connection now has.
+    async fn replace_audience_favorites(
+        &self,
+        _connection_id: &str,
+        _accounts: &[AudienceFavoriteAccount],
+        _sweep_started_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
+        ))
+    }
+
+    /// The account list itself could not be read: every account of the
+    /// connection keeps its rows, and none counts as read until a sweep
+    /// lists it again.
+    async fn clear_audience_favorite_reads(
+        &self,
+        _connection_id: &str,
+        _reason: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
+        ))
+    }
+
+    /// Every account's favourites read state.
+    async fn audience_favorite_reads(&self) -> AppResult<Vec<AudienceFavoriteRead>> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
+        ))
+    }
+
+    /// Stored favourites (every kind) grouped by the owning title id. A
+    /// title nobody favourited is absent from the map.
+    async fn audience_favorites_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<AudienceFavorite>>> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
         ))
     }
 

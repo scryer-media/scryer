@@ -129,6 +129,11 @@ async fn login_payload_from_user(
         }
     }
     .map_err(to_gql_error)?;
+    if !password_change_required {
+        // Every caller is a media-server sign-in; a required password change
+        // stamps when it issues the full session.
+        app.record_interactive_sign_in(&user.id).await;
+    }
     let expires_at = Utc::now()
         + chrono::Duration::seconds(if password_change_required {
             app.mfa_enrollment_token_lifetime()
@@ -299,6 +304,7 @@ impl UserMutations {
             .set_user_app_permissions(&actor, &user_id, permissions)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).revoke_user_connections(&user.id);
         let user = app
             .attach_user_authorization(user)
             .await
@@ -340,6 +346,7 @@ impl UserMutations {
             .set_user_library_permissions(&actor, &user_id, grants)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).revoke_user_connections(&user.id);
         let user = app
             .attach_user_authorization(user)
             .await
@@ -382,6 +389,7 @@ impl UserMutations {
         app.delete_user(&actor, &id_string)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).revoke_user_connections(&id_string);
         Ok(DeleteUserPayload { id })
     }
 

@@ -9,9 +9,9 @@ use scryer_application::{
     FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY, FORM_LOGIN_ENABLED_KEY,
     HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_SIZE_MB_KEY,
     IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CATEGORY_SETTING_KEY,
-    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
-    MAINTENANCE_GATE_EVALUATION_KEY, MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
-    MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY, METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY,
+    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+    LIFECYCLE_GATE_EVALUATION_KEY, LIFECYCLE_GATE_RESULT_DISPLAY_KEY,
+    LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY, METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY,
     MFA_REQUIRE_PASSWORD_LOGIN_KEY, MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON,
     MINIMUM_SEEDERS_FLOOR_SETTING_KEY, MOVIES_ROOT_FOLDERS_KEY, NZBGET_OLDER_PRIORITY_SETTING_KEY,
     NZBGET_RECENT_PRIORITY_SETTING_KEY, PASSWORD_MIN_LENGTH_KEY, POST_PROCESSING_SCRIPT_ANIME_KEY,
@@ -498,12 +498,37 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "false",
             is_sensitive: false,
         },
+        // An empty list and the restriction off leave local trust as it was.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SECURITY,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::local_trust::ALLOWED_HOSTS_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SECURITY,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::local_trust::RESTRICT_TO_TRUSTED_PROXIES_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SECURITY,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY,
             data_type: "boolean",
             default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SECURITY,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::MCP_ENABLED_KEY,
+            data_type: "boolean",
+            default_value_json: "true",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -744,6 +769,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+            data_type: "json",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
             data_type: "json",
             default_value_json: "null",
             is_sensitive: false,
@@ -1439,13 +1472,13 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "\"none\"",
             is_sensitive: false,
         },
-        // The maintenance gates. Every default is false, and they are seeded
+        // The lifecycle gates. Every default is false, and they are seeded
         // separately rather than as one blob so a partial write can never arm
         // a gate the operator did not ask for.
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: MAINTENANCE_GATE_EVALUATION_KEY,
+            key_name: LIFECYCLE_GATE_EVALUATION_KEY,
             data_type: "boolean",
             default_value_json: "false",
             is_sensitive: false,
@@ -1453,7 +1486,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
+            key_name: LIFECYCLE_GATE_RESULT_DISPLAY_KEY,
             data_type: "boolean",
             default_value_json: "false",
             is_sensitive: false,
@@ -1461,7 +1494,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY,
+            key_name: LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY,
             data_type: "boolean",
             default_value_json: "false",
             is_sensitive: false,
@@ -1469,7 +1502,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+            key_name: LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY,
             data_type: "boolean",
             default_value_json: "false",
             is_sensitive: false,
@@ -3111,16 +3144,16 @@ mod tests {
         }));
     }
 
-    /// Every maintenance gate ships disarmed. This is the one seed list where a
+    /// Every lifecycle gate ships disarmed. This is the one seed list where a
     /// wrong default is not a cosmetic bug: a `true` here would arm an
     /// instance-wide capability on upgrade without anyone asking for it.
     #[test]
-    fn every_maintenance_gate_is_seeded_and_defaults_to_off() {
+    fn every_lifecycle_gate_is_seeded_and_defaults_to_off() {
         for key_name in [
-            MAINTENANCE_GATE_EVALUATION_KEY,
-            MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
-            MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY,
-            MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+            LIFECYCLE_GATE_EVALUATION_KEY,
+            LIFECYCLE_GATE_RESULT_DISPLAY_KEY,
+            LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY,
+            LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY,
         ] {
             assert!(
                 service_setting_seeds().iter().any(|seed| {

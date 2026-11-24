@@ -1,6 +1,6 @@
 //! Core mechanics proved against a family that exists only here.
 //!
-//! The maintenance and release suites prove the two shipped families still
+//! The lifecycle and release suites prove the two shipped families still
 //! behave as they did. These prove the *core* keeps its promises for a family
 //! nobody has written yet — which is the whole reason it exists.
 
@@ -54,6 +54,7 @@ struct ProbeDecision {
 struct ProbeError {
     rule_set_id: String,
     tier: &'static str,
+    kind: crate::policy::PolicyErrorKind,
     message: String,
 }
 
@@ -106,7 +107,7 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
     type EvalError = ProbeError;
 
     fn limits() -> RuntimeLimits {
-        RuntimeLimits::maintenance_defaults()
+        RuntimeLimits::lifecycle_defaults()
     }
 
     fn user_policy_path(rule_id: &str) -> String {
@@ -174,6 +175,7 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
         _rule_id: &str,
         _rule_name: &str,
         _extra: &Self::RuleExtra,
+        _ctx: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         if matches!(value, Value::Undefined) {
             return Err("decision rule produced no value".to_string());
@@ -204,10 +206,15 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
         Ok(())
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         ProbeError {
             rule_set_id: rule.id.clone(),
             tier: rule.extra,
+            kind,
             message,
         }
     }
@@ -392,8 +399,9 @@ fn a_malformed_decision_is_an_error_not_a_decision() {
     );
 
     assert!(records.is_empty(), "{records:?}");
-    assert!(
-        errors[0].message.contains("'allow' must be a boolean"),
+    assert_eq!(
+        errors[0].kind,
+        crate::policy::PolicyErrorKind::MalformedDecision,
         "{}",
         errors[0].message
     );
@@ -421,7 +429,7 @@ fn post_decode_rejection_drops_the_record() {
 
 #[test]
 fn oversized_input_is_refused_before_any_rule_runs() {
-    let mut limits = RuntimeLimits::maintenance_defaults();
+    let mut limits = RuntimeLimits::lifecycle_defaults();
     limits.max_input_bytes = 16;
     let engine =
         ProbeEngine::build_with_limits(&[policy("tiny", "normal", "allow := true\n")], limits)
@@ -439,7 +447,7 @@ fn a_family_that_opts_out_of_the_bound_evaluates_an_oversized_input() {
     // behaviour change for a family that shipped without one. Same policy, same
     // input, same limits as the test above — only `BOUND_INPUT` differs, and
     // the oversized document is scored instead of refused.
-    let mut limits = RuntimeLimits::maintenance_defaults();
+    let mut limits = RuntimeLimits::lifecycle_defaults();
     limits.max_input_bytes = 16;
     let policies = [policy("tiny", "normal", "allow := true\n")];
 
@@ -517,4 +525,86 @@ fn held_reason_codes_are_deduplicated_in_fact_name_order() {
             "source_unreachable".to_string()
         ]
     );
+}
+
+/// The template is prepared once at build, so its clones skip regorus's
+/// module analysis. They must decide exactly as the clones of an unprepared
+/// template did: the same records and errors, input after input, from every
+/// clone, whichever evaluated first.
+#[test]
+fn a_prepared_template_decides_as_an_unprepared_one_from_every_clone() {
+    let policies = [
+        policy(
+            "prepared_rated",
+            "normal",
+            "allow if {\n  input.facts.age_rating <= 13\n}\n\n\
+             reasons contains \"age_ok\" if {\n  input.facts.age_rating <= 13\n}\n\n\
+             tags contains g if {\n  some g in input.facts.genres\n}\n",
+        ),
+        policy(
+            "prepared_held",
+            "normal",
+            "allow := true\n\nhold if {\n  input.facts.age_rating > 16\n}\n",
+        ),
+        policy(
+            "prepared_broken",
+            "normal",
+            "allow if {\n  lower(1) == \"x\"\n}\n",
+        ),
+    ];
+    let inputs = [
+        known_input(),
+        ProbeInput {
+            facts: ProbeFacts {
+                age_rating: Observation::known(18),
+                genres: Observation::known(vec!["drama".to_string(), "war".to_string()]),
+            },
+        },
+        ProbeInput {
+            facts: ProbeFacts {
+                age_rating: Observation::unknown("not_collected"),
+                genres: Observation::known(Vec::new()),
+            },
+        },
+    ];
+    let limits = <ProbeFamily as PolicyFamily>::limits();
+    let prepared = ProbeEngine::build(&policies).expect("probe policies should compile");
+    let unprepared = ProbeEngine::build_unprepared_for_test(&policies, limits)
+        .expect("probe policies should compile");
+
+    let run = |engine: &ProbeEngine, input: &ProbeInput| {
+        let outcome = engine
+            .evaluator()
+            .evaluate_policies(input, "normal")
+            .expect("evaluation should succeed");
+        (
+            outcome
+                .records
+                .into_iter()
+                .map(|record| (record.rule_set_id, record.decision))
+                .collect::<Vec<_>>(),
+            outcome.errors,
+        )
+    };
+    for _round in 0..3 {
+        for input in &inputs {
+            assert_eq!(run(&prepared, input), run(&unprepared, input));
+        }
+    }
+    // One evaluator, reused across inputs, also agrees.
+    let mut reused = prepared.evaluator();
+    for input in &inputs {
+        let outcome = reused
+            .evaluate_policies(input, "normal")
+            .expect("evaluation should succeed");
+        let got = (
+            outcome
+                .records
+                .into_iter()
+                .map(|record| (record.rule_set_id, record.decision))
+                .collect::<Vec<_>>(),
+            outcome.errors,
+        );
+        assert_eq!(got, run(&unprepared, input));
+    }
 }

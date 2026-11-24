@@ -1,17 +1,17 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, RequestRuleDecisionRepository};
-use scryer_domain::{RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode};
-use sqlx::Row;
+use scryer_domain::{RequestDecisionOutcome, RequestRuleDecisionRecord};
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
 
 /// Append-only traces of request evaluations (spec 0003 FR-016).
 ///
-/// There is no update and no delete: a decision explains what the instance did
-/// at one instant, and rewriting it would make the explanation a fiction. Rule
-/// deletion does not cascade here either — the trace outlives the rule.
+/// There is no update: a decision explains what the instance did at one
+/// instant, and rewriting it would make the explanation a fiction. Two
+/// deletes exist. One removes the pre-flight traces older builds wrote, which
+/// explain no request. The other is retention: each rule set keeps its newest
+/// few traces. Rule deletion does not cascade here.
 #[derive(Clone)]
 pub struct RequestRuleDecisionStore {
     datastore: StoreDatastore,
@@ -27,10 +27,15 @@ impl RequestRuleDecisionStore {
 impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
     async fn record(&self, decision: &RequestRuleDecisionRecord) -> AppResult<()> {
         let args = decision_args(decision)?;
+        let rule_set_statements = rule_set_link_statements(decision);
         SqlRuntime::run_in_transaction(&self.datastore, "record_request_rule_decision", move |tx| {
             let args = args.clone();
+            let rule_set_statements = rule_set_statements.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_DECISION_SQL, &args).await?;
+                for (sql, link_args) in &rule_set_statements {
+                    SqlRuntime::execute(SqlExec::Tx(tx), sql, link_args).await?;
+                }
                 Ok(())
             })
         })
@@ -62,6 +67,40 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         .transpose()
     }
 
+    async fn latest_for_requests(
+        &self,
+        request_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, RequestRuleDecisionRecord>> {
+        let mut latest = std::collections::HashMap::with_capacity(request_ids.len());
+        // One statement for a page of requests; a longer list is split to stay
+        // under the bind limits. The ranking is the order of
+        // `latest_for_request`.
+        for chunk in request_ids.chunks(LATEST_DECISION_REQUEST_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {DECISION_COLUMNS}
+                   FROM (
+                        SELECT {DECISION_COLUMNS},
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY request_id
+                                   ORDER BY evaluated_at DESC, id DESC
+                               ) AS decision_rank
+                          FROM request_rule_decisions
+                         WHERE request_id IN ({placeholders})
+                        ) AS ranked_decisions
+                  WHERE decision_rank = 1"
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                let decision = row_to_decision(&row)?;
+                latest.insert(decision.request_id.clone(), decision);
+            }
+        }
+        Ok(latest)
+    }
+
     async fn list_recent(
         &self,
         limit: usize,
@@ -91,13 +130,9 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
             .collect()
     }
 
-    /// The rule ids live inside `votes_json` rather than in a join table, so
-    /// this is a substring match over that column rather than a join. It is
-    /// deliberately loose: the number drives a "this rule decided N requests"
-    /// affordance in the authoring UI and nothing safety-bearing, and rule ids
-    /// are generated opaque ids, so a false positive would require one id to
-    /// contain another. `%` and `_` in the id would widen the pattern; ids are
-    /// UUIDs, which contain neither.
+    /// Counted from the decision's rule set links, written with the decision,
+    /// so the read is served by the rule set index rather than a scan of every
+    /// stored vote.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64> {
         let rule_set_id = rule_set_id.trim();
         if rule_set_id.is_empty() {
@@ -106,9 +141,9 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
             "SELECT COUNT(*) AS decision_count
-               FROM request_rule_decisions
-              WHERE votes_json LIKE {}",
-            &[SqlArg::Text(format!("%{rule_set_id}%"))],
+               FROM request_rule_decision_rule_sets
+              WHERE rule_set_id = {}",
+            &[SqlArg::Text(rule_set_id.to_string())],
         )
         .await?;
         let Some(row) = row else {
@@ -116,28 +151,295 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         };
         Ok(row.i64("decision_count")?.max(0) as u64)
     }
+
+    /// One `GROUP BY` per chunk of ids, served by the rule set index.
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>> {
+        let ids: Vec<String> = rule_set_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut counts = std::collections::HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(RULE_SET_COUNT_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT rule_set_id, COUNT(*) AS decision_count
+                   FROM request_rule_decision_rule_sets
+                  WHERE rule_set_id IN ({placeholders})
+                  GROUP BY rule_set_id"
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                counts.insert(
+                    row.text("rule_set_id")?,
+                    row.i64("decision_count")?.max(0) as u64,
+                );
+            }
+        }
+        Ok(counts)
+    }
+
+    /// The select reads the partial index `idx_request_rule_decisions_preflight`,
+    /// whose predicate it repeats literally, so a pass with nothing left to
+    /// remove reads an empty index and writes nothing.
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize> {
+        let limit = limit.min(PREFLIGHT_TRACE_DELETE_CHUNK);
+        if limit == 0 {
+            return Ok(0);
+        }
+        let ids: Vec<String> = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT id FROM request_rule_decisions
+                  WHERE {PREFLIGHT_TRACE_PREDICATE}
+                  LIMIT {{}}"
+            ),
+            &[SqlArg::I64(limit as i64)],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("id"))
+        .collect::<AppResult<_>>()?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = std::iter::repeat_n("{}", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let delete_links = format!(
+            "DELETE FROM request_rule_decision_rule_sets WHERE decision_id IN ({placeholders})"
+        );
+        // The predicate is repeated so this statement can only ever remove a
+        // pre-flight trace, whatever the id list holds.
+        let delete_decisions = format!(
+            "DELETE FROM request_rule_decisions
+              WHERE id IN ({placeholders}) AND {PREFLIGHT_TRACE_PREDICATE}"
+        );
+        let args: Vec<SqlArg> = ids.into_iter().map(SqlArg::Text).collect();
+        let removed = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_preflight_request_rule_decisions",
+            move |tx| {
+                let args = args.clone();
+                let delete_links = delete_links.clone();
+                let delete_decisions = delete_decisions.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), &delete_links, &args).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), &delete_decisions, &args).await
+                })
+            },
+        )
+        .await?;
+        Ok(removed as usize)
+    }
+
+    /// One read ranks every rule set's traces newest first and names the
+    /// traces outside the newest `keep` of each rule set that voted in them;
+    /// a second names the traces no rule set voted in outside the newest
+    /// `keep` of those. The deletes then go in bind-safe transactions. Once a
+    /// pass has run, both tables hold about `keep` rows per group, so the
+    /// reads are small and a pass with nothing to remove writes nothing.
+    async fn delete_traces_beyond_latest_per_rule_set(
+        &self,
+        keep: usize,
+        limit: usize,
+    ) -> AppResult<usize> {
+        if keep == 0 || limit == 0 {
+            return Ok(0);
+        }
+        let mut ids: Vec<String> = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT ranked.decision_id AS decision_id
+               FROM (
+                    SELECT l.decision_id AS decision_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY l.rule_set_id
+                               ORDER BY d.evaluated_at DESC, d.id DESC
+                           ) AS trace_rank
+                      FROM request_rule_decision_rule_sets l
+                      JOIN request_rule_decisions d ON d.id = l.decision_id
+                    ) AS ranked
+              GROUP BY ranked.decision_id
+             HAVING MIN(ranked.trace_rank) > {}
+              LIMIT {}",
+            &[
+                SqlArg::I64(keep.min(i64::MAX as usize) as i64),
+                SqlArg::I64(limit.min(SUPERSEDED_TRACE_READ_MAX) as i64),
+            ],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("decision_id"))
+        .collect::<AppResult<_>>()?;
+        // Traces no rule set voted in are one more group, read apart because
+        // they have no link row to rank. Pre-flight traces are left to their
+        // own purge, so they neither go here nor take a kept place.
+        let unlinked_limit = limit
+            .min(SUPERSEDED_TRACE_READ_MAX)
+            .saturating_sub(ids.len());
+        if unlinked_limit > 0 {
+            let unlinked = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT d.id AS decision_id
+                       FROM request_rule_decisions d
+                      WHERE NOT EXISTS (
+                                SELECT 1 FROM request_rule_decision_rule_sets l
+                                 WHERE l.decision_id = d.id
+                            )
+                        AND NOT (d.{PREFLIGHT_TRACE_PREDICATE})
+                      ORDER BY d.evaluated_at DESC, d.id DESC
+                      LIMIT {{}} OFFSET {{}}"
+                ),
+                &[
+                    SqlArg::I64(unlinked_limit as i64),
+                    SqlArg::I64(keep.min(i64::MAX as usize) as i64),
+                ],
+            )
+            .await?;
+            for row in &unlinked {
+                ids.push(row.text("decision_id")?);
+            }
+        }
+        let mut removed = 0usize;
+        for chunk in ids.chunks(SUPERSEDED_TRACE_DELETE_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_links = format!(
+                "DELETE FROM request_rule_decision_rule_sets WHERE decision_id IN ({placeholders})"
+            );
+            let delete_decisions =
+                format!("DELETE FROM request_rule_decisions WHERE id IN ({placeholders})");
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            removed += SqlRuntime::run_in_transaction(
+                &self.datastore,
+                "delete_superseded_request_rule_decisions",
+                move |tx| {
+                    let args = args.clone();
+                    let delete_links = delete_links.clone();
+                    let delete_decisions = delete_decisions.clone();
+                    Box::pin(async move {
+                        SqlRuntime::execute(SqlExec::Tx(tx), &delete_links, &args).await?;
+                        SqlRuntime::execute(SqlExec::Tx(tx), &delete_decisions, &args).await
+                    })
+                },
+            )
+            .await? as usize;
+        }
+        Ok(removed)
+    }
 }
 
-const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, mode, effective_outcome,
-    policy_outcome, fallback_reason, votes_json, tags_json, input_hash,
+/// Superseded traces named by one read at most.
+const SUPERSEDED_TRACE_READ_MAX: usize = 10_000;
+
+/// Superseded traces removed per transaction at most; one bind each.
+const SUPERSEDED_TRACE_DELETE_CHUNK: usize = 500;
+
+/// Rule set ids bound per decision count statement, far under both dialects'
+/// bind limits.
+const RULE_SET_COUNT_CHUNK: usize = 500;
+
+/// The traces older builds wrote for pre-flight previews. Spelled exactly as
+/// the partial index's predicate, so both dialects can serve it from that
+/// index; the literal must match
+/// `scryer_application::PREFLIGHT_REQUEST_ID_PREFIX`.
+const PREFLIGHT_TRACE_PREDICATE: &str = "request_id LIKE 'preflight:%'";
+
+/// Pre-flight traces removed per transaction at most; one bind each.
+const PREFLIGHT_TRACE_DELETE_CHUNK: usize = 500;
+
+/// Request ids bound per latest-decision statement.
+const LATEST_DECISION_REQUEST_CHUNK: usize = 10_000;
+
+const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, effective_outcome,
+    policy_outcome, fallback_reason, votes_json, tags_json, shaping_json, input_hash,
     input_schema_version, created_at";
 
 const INSERT_DECISION_SQL: &str = "INSERT INTO request_rule_decisions
-        (id, request_id, evaluated_at, mode, effective_outcome, policy_outcome,
-         fallback_reason, votes_json, tags_json, input_hash, input_schema_version, created_at)
+        (id, request_id, evaluated_at, effective_outcome, policy_outcome,
+         fallback_reason, votes_json, tags_json, shaping_json, input_hash, input_schema_version,
+         created_at)
      VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+
+/// Rule set links bound per statement: two binds each, well under every
+/// engine's ceiling.
+const RULE_SET_LINK_CHUNK: usize = 400;
+
+/// The distinct rule set ids the decision's votes name, in first-seen order.
+///
+/// Votes that are not a JSON array, and a vote with no rule set id, name
+/// nothing, the same as the migration that filled the links for decisions
+/// stored before them.
+fn voted_rule_set_ids(votes_json: &str) -> Vec<String> {
+    let votes = match serde_json::from_str::<serde_json::Value>(votes_json) {
+        Ok(serde_json::Value::Array(votes)) => votes,
+        Ok(_) => return Vec::new(),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "a request rule decision's votes do not parse; it is linked to no rule set"
+            );
+            return Vec::new();
+        }
+    };
+    let mut seen = std::collections::HashSet::new();
+    votes
+        .iter()
+        .filter_map(|vote| vote.get("rule_set_id")?.as_str())
+        .filter(|id| !id.is_empty())
+        .filter(|id| seen.insert(*id))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The statements that link one decision to the rule sets its votes name.
+fn rule_set_link_statements(decision: &RequestRuleDecisionRecord) -> Vec<(String, Vec<SqlArg>)> {
+    voted_rule_set_ids(&decision.votes_json)
+        .chunks(RULE_SET_LINK_CHUNK)
+        .map(|chunk| {
+            let placeholders = std::iter::repeat_n("({}, {})", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "INSERT INTO request_rule_decision_rule_sets (decision_id, rule_set_id)
+                 VALUES {placeholders}
+                 ON CONFLICT DO NOTHING"
+            );
+            let args = chunk
+                .iter()
+                .flat_map(|rule_set_id| {
+                    [
+                        SqlArg::Text(decision.id.clone()),
+                        SqlArg::Text(rule_set_id.clone()),
+                    ]
+                })
+                .collect();
+            (sql, args)
+        })
+        .collect()
+}
 
 fn decision_args(decision: &RequestRuleDecisionRecord) -> AppResult<Vec<SqlArg>> {
     Ok(vec![
         SqlArg::Text(decision.id.clone()),
         SqlArg::Text(decision.request_id.clone()),
         SqlArg::Timestamp(decision.evaluated_at),
-        SqlArg::Text(decision.mode.as_storage_str().to_string()),
         SqlArg::Text(decision.effective_outcome.as_storage_str().to_string()),
         SqlArg::Text(decision.policy_outcome.as_storage_str().to_string()),
         SqlArg::OptText(decision.fallback_reason.clone()),
         SqlArg::Text(decision.votes_json.clone()),
         SqlArg::Text(canonical_json_text(&decision.tags)?),
+        SqlArg::OptText(decision.shaping_json.clone()),
         SqlArg::Text(decision.input_hash.clone()),
         SqlArg::I64(decision.input_schema_version),
         SqlArg::Timestamp(decision.created_at),
@@ -148,11 +450,10 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
     Ok(RequestRuleDecisionRecord {
         id: row.text("id")?,
         request_id: row.text("request_id")?,
-        evaluated_at: timestamp_or_now(row, "evaluated_at")?,
-        // An unrecognized mode or outcome was written by a newer build. Both
-        // read back at their safe default — disabled, manual review — so this
-        // build never presents a verdict it cannot interpret as an approval.
-        mode: RequestRuleEvaluationMode::parse_storage(&row.text("mode")?).unwrap_or_default(),
+        evaluated_at: row.timestamp_or_now("evaluated_at")?,
+        // An unrecognized outcome was written by a newer build. It reads back
+        // as manual review, so this build never presents a verdict it cannot
+        // interpret as an approval.
         effective_outcome: RequestDecisionOutcome::parse_storage(&row.text("effective_outcome")?)
             .unwrap_or_default(),
         policy_outcome: RequestDecisionOutcome::parse_storage(&row.text("policy_outcome")?)
@@ -160,20 +461,25 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
         fallback_reason: row.opt_text("fallback_reason")?,
         votes_json: json_text_or(row, "votes_json", "[]")?,
         tags: serde_json::from_str(&json_text_or(row, "tags_json", "[]")?).unwrap_or_default(),
+        shaping_json: row.opt_text("shaping_json")?,
         input_hash: row.text("input_hash")?,
         input_schema_version: row.i64("input_schema_version")?,
-        created_at: timestamp_or_now(row, "created_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
     })
 }
 
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
+#[cfg(test)]
+mod tests {
+    use super::PREFLIGHT_TRACE_PREDICATE;
+
+    #[test]
+    fn the_preflight_predicate_names_the_application_prefix() {
+        assert_eq!(
+            PREFLIGHT_TRACE_PREDICATE,
+            format!(
+                "request_id LIKE '{}%'",
+                scryer_application::PREFLIGHT_REQUEST_ID_PREFIX
+            )
+        );
     }
 }

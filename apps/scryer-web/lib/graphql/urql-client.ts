@@ -1,7 +1,10 @@
 import {
   cacheExchange,
   Client,
+  type Exchange,
   fetchExchange,
+  makeOperation,
+  mapExchange,
   subscriptionExchange,
 } from "@urql/core";
 import { getAuthlessWebClientProof } from "@/lib/authless-web-client";
@@ -12,6 +15,8 @@ import {
   getPasswordChangeRequiredToken,
 } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath, getRuntimeGraphqlUrl } from "@/lib/runtime-config";
+import { isLongOperation } from "@/lib/graphql/long-operations";
+import { slowLane } from "@/lib/graphql/slow-lane";
 import { wsClient } from "@/lib/graphql/ws-client";
 import { metadataLanguageForUi } from "@/lib/i18n";
 
@@ -276,6 +281,20 @@ export function isAbortError(error: unknown): boolean {
   return false;
 }
 
+// Slow requests share a small number of connections (see `slow-lane.ts`).
+// A fetch the caller supplied, such as an abortable one, is kept and wrapped.
+const slowLaneExchange: Exchange = mapExchange({
+  onOperation(operation) {
+    if (!isLongOperation(operation)) {
+      return operation;
+    }
+    return makeOperation(operation.kind, operation, {
+      ...operation.context,
+      fetch: slowLane(operation.context.fetch ?? scryerFetch),
+    });
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Backend client — connects to the Rust GraphQL server at /graphql
 // ---------------------------------------------------------------------------
@@ -299,6 +318,7 @@ export const backendClient = new Client({
         };
       },
     }),
+    slowLaneExchange,
     fetchExchange,
   ],
   fetchOptions: () => {

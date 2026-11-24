@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canApplyConflictPreview,
+  canFixConflictMatch,
   isResolvableConflict,
 } from "./pending-import-conflicts.ts";
 
@@ -66,4 +67,19 @@ test("folder resolution offers only supported pending movie conflicts", () => {
     }),
     false,
   );
+});
+
+test("fix match is offered only for a movie bound to a title owning another folder", () => {
+  const conflict = {
+    facet: "MOVIE",
+    reason: "title_already_owns_another_folder",
+  };
+  assert.equal(canFixConflictMatch(conflict), true);
+  for (const facet of ["SERIES", "ANIME"])
+    assert.equal(canFixConflictMatch({ ...conflict, facet }), false);
+  for (const reason of [
+    "folder_ownership_changed_by_user",
+    "invalid_title_folder_ownership",
+  ])
+    assert.equal(canFixConflictMatch({ ...conflict, reason }), false);
 });

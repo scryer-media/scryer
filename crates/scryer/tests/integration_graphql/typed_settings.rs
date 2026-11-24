@@ -1959,10 +1959,14 @@ async fn graphql_audio_language_preferences_round_trip() {
         json!({"input": {"scope": "MOVIE", "preferredAudioLanguages": ["@@"]}}),
     )
     .await;
-    let message = unknown["errors"][0]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("unknown preferred audio language \"@@\""),
-        "an unknown language code is rejected by name: {unknown}"
+    let extensions = &unknown["errors"][0]["extensions"];
+    assert_eq!(
+        extensions["reason"], "SETTINGS_AUDIO_LANGUAGE_UNKNOWN",
+        "an unknown language code is refused by reason: {unknown}"
+    );
+    assert_eq!(
+        extensions["audioLanguage"], "@@",
+        "the refusal names the rejected code: {unknown}"
     );
 
     // A rejected update writes nothing, not even its valid half.

@@ -13,12 +13,12 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use scryer_application::disk::{Access, Disk, IfPresent, Parents, Replace, Staging};
 use scryer_application::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 
 use super::api::TorboxItemKind;
-use crate::downloads::clients::http::owned::{STATE_DIR_NAME, safe_file_stem, sync_directory};
+use crate::downloads::clients::http::owned::{STATE_DIR_NAME, safe_file_stem};
 
 /// The document format this build writes and reads.
 pub(crate) const RECORD_FORMAT_VERSION: u32 = 1;
@@ -182,13 +182,14 @@ impl TorboxRecordStore {
 
     /// The stored records, or none when no document was ever written.
     pub(crate) async fn load(&self) -> AppResult<Vec<TorboxJobRecord>> {
-        let bytes = match tokio::fs::read(&self.path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        let bytes = match Disk::process().read(&self.path).await.if_present() {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return Ok(Vec::new()),
             Err(error) => {
                 return Err(AppError::Repository(format!(
-                    "the TorBox client could not read its records at {}: {error}",
-                    self.path.display()
+                    "the TorBox client could not read its records at {}: {}",
+                    self.path.display(),
+                    error.words()
                 )));
             }
         };
@@ -222,15 +223,18 @@ impl TorboxRecordStore {
             jobs,
         })
         .map_err(|error| AppError::Repository(error.to_string()))?;
-        let staging = self.path.with_extension("json.next");
+        let disk = Disk::process();
         let write = async {
-            tokio::fs::create_dir_all(parent).await?;
-            let mut file = tokio::fs::File::create(&staging).await?;
-            file.write_all(&bytes).await?;
-            file.sync_all().await?;
-            drop(file);
-            tokio::fs::rename(&staging, &self.path).await?;
-            sync_directory(parent).await
+            disk.create_dir(parent, Parents::Create).await?;
+            let (replace, access) = (Replace::Allowed, Access::Default);
+            disk.write_staged(&self.path, bytes, replace, access, Staging::Fixed, true)
+                .await?;
+            // Windows has no directory sync, so there it is not required.
+            let synced = disk.sync_dir(parent).await?;
+            if cfg!(unix) {
+                synced.required()?;
+            }
+            Ok::<(), std::io::Error>(())
         };
         write.await.map_err(|error| {
             AppError::Repository(format!(

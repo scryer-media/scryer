@@ -10,9 +10,10 @@ use crate::acquisition_decision_helpers::is_download_submit_unavailable_error;
 use crate::acquisition_release_search::title_with_bridge_cour_titles;
 use crate::acquisition_release_search::{
     AutoCandidateEvaluationContext, CandidateTitleMatch, ReleaseAutoDecisionCode,
-    annotate_auto_decision, candidate_presents_identity_disambiguator, canonical_title_evidence,
-    context_free_identity_anchor_keys, evaluate_auto_candidate_with_step, external_id_agreement,
-    parsed_release_matches_title_evidence, serialize_decision_explanation,
+    candidate_presents_identity_disambiguator, canonical_title_evidence,
+    context_free_identity_anchor_keys, decision_explanation_value_for,
+    evaluate_auto_candidate_with_step, external_id_agreement,
+    parsed_release_matches_title_evidence, release_decision_explanation_for,
     series_movie_search_title,
 };
 use crate::acquisition_search_queries::{
@@ -87,6 +88,16 @@ impl RssSeenGuids {
         is_new
     }
 
+    /// Drops `guid` from `indexer`'s set, so its next poll treats the item as
+    /// new again. Used for a release passed over only because its indexer was
+    /// at its monthly limit: nothing was decided about it, so it must come
+    /// back once the limit lifts.
+    fn forget(&mut self, indexer: &str, guid: &str) {
+        if let Some(seen) = self.by_indexer.get_mut(indexer) {
+            seen.remove(guid);
+        }
+    }
+
     /// Trims each indexer polled this cycle back to its bound, dropping its
     /// least recently returned GUIDs first. This cycle's GUIDs are never
     /// evicted: dropping one would let the next poll, which reads back to the
@@ -115,6 +126,16 @@ impl RssSeenGuids {
             }
         }
     }
+}
+
+/// The identity an RSS item is remembered by in [`RssSeenGuids`].
+fn rss_seen_guid(result: &IndexerSearchResult) -> &str {
+    result
+        .guid
+        .as_deref()
+        .or(result.download_url.as_deref())
+        .or(result.link.as_deref())
+        .unwrap_or(&result.title)
 }
 
 /// The key a feed item's GUID is remembered under: the indexer that returned
@@ -545,6 +566,18 @@ fn rss_pending_matches_candidate(
             && rss_listing_identity_prefix(&pending_release_as_rss_result(pending))
                 == rss_listing_identity_prefix(candidate)
             && rss_scopes_overlap(candidate_scope, pending_scope, episodes))
+}
+
+/// Whether a decision that is not a permanent rejection parks the release
+/// as pending instead of dropping it.
+fn rss_decision_parks(code: ReleaseAutoDecisionCode) -> bool {
+    matches!(
+        code,
+        ReleaseAutoDecisionCode::PendingDelay
+            | ReleaseAutoDecisionCode::MinimumAge
+            | ReleaseAutoDecisionCode::ReleaseAgeUnknown
+            | ReleaseAutoDecisionCode::DownloadClientUnavailable
+    )
 }
 
 fn rss_is_permanent_rejection(code: ReleaseAutoDecisionCode) -> bool {
@@ -1398,7 +1431,9 @@ struct RssCycleIntake {
 /// platform reports them (`/proc/self/status` on Linux), for the RSS cycle
 /// logs. `None` elsewhere or when the file cannot be read.
 fn process_resident_kib() -> (Option<u64>, Option<u64>) {
-    match std::fs::read_to_string("/proc/self/status") {
+    match crate::disk::Disk::process()
+        .read_to_string_blocking(std::path::Path::new("/proc/self/status"))
+    {
         Ok(status) => (
             proc_status_kib(&status, "VmRSS:"),
             proc_status_kib(&status, "VmHWM:"),
@@ -1457,15 +1492,20 @@ impl AppUseCase {
             return Some(due);
         }
 
-        let pending_waiting = self
+        // A held release changes only when its delay runs out; until then a
+        // replay re-parks it as it was. Every cycle the feed cadence admits
+        // still replays every waiting and standby row, so a row is never
+        // stranded: between those cycles only an elapsed delay is a reason to
+        // run.
+        let now = self.runtime.environment.now().to_rfc3339();
+        let delay_elapsed = self
             .services
             .workflow
             .pending_releases
-            .list_waiting_pending_releases()
+            .has_expired_pending_releases(&now)
             .await
-            .map(|pending| !pending.is_empty())
             .unwrap_or(true);
-        if pending_waiting {
+        if delay_elapsed {
             return Some(due);
         }
         let age_unknown_pending = self
@@ -1528,9 +1568,8 @@ impl AppUseCase {
             .services
             .workflow
             .pending_releases
-            .list_waiting_pending_releases()
+            .has_waiting_pending_releases()
             .await
-            .map(|pending| !pending.is_empty())
             .unwrap_or(true);
         if waiting {
             return true;
@@ -1570,13 +1609,15 @@ impl AppUseCase {
             let mut seen_guids = self.runtime.acquisition.rss_seen_guids.write().await;
             let mut new_results: Vec<IndexerSearchResult> = Vec::new();
             for result in results {
+                // A release from an indexer already known to be at its
+                // monthly limit cannot be grabbed, so it is neither matched nor
+                // remembered: the first poll after the limit lifts sees it as
+                // new.
+                if self.indexer_monthly_grab_refused_now(result.indexer_id.as_deref()) {
+                    continue;
+                }
                 let release_identity = rss_release_identity(&result);
-                let guid = result
-                    .guid
-                    .as_deref()
-                    .or(result.download_url.as_deref())
-                    .or(result.link.as_deref())
-                    .unwrap_or(&result.title);
+                let guid = rss_seen_guid(&result);
 
                 // Record every fresh GUID, then give an active unknown-age row
                 // one more look even if it was already seen this process
@@ -2121,7 +2162,7 @@ impl AppUseCase {
         // Snapshot download client state
         let dl_snapshot = super::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
         let delay_profiles = self.load_delay_profiles().await;
-        let mut grabbed_urls: HashSet<String> = HashSet::new();
+        let mut pass = RssPassState::default();
         let mut report = RssSyncReport {
             releases_fetched: total_new,
             releases_matched: matched_count,
@@ -2198,7 +2239,7 @@ impl AppUseCase {
                     &dl_snapshot,
                     queue,
                     &delay_profiles,
-                    &mut grabbed_urls,
+                    &mut pass,
                     &mut report,
                     &now,
                 )
@@ -2210,7 +2251,7 @@ impl AppUseCase {
                     &dl_snapshot,
                     queue,
                     &delay_profiles,
-                    &mut grabbed_urls,
+                    &mut pass,
                     &mut report,
                     &now,
                 )
@@ -2236,7 +2277,7 @@ impl AppUseCase {
                     &dl_snapshot,
                     queue,
                     &delay_profiles,
-                    &mut grabbed_urls,
+                    &mut pass,
                     &mut report,
                     &now,
                 )
@@ -2477,7 +2518,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -2557,7 +2598,7 @@ impl AppUseCase {
             dl_snapshot,
             queue,
             delay_profiles,
-            grabbed_urls,
+            pass,
             report,
             now,
         )
@@ -2579,7 +2620,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -2753,7 +2794,7 @@ impl AppUseCase {
                 dl_snapshot,
                 queue,
                 delay_profiles,
-                grabbed_urls,
+                pass,
                 report,
                 now,
             )
@@ -2773,7 +2814,7 @@ impl AppUseCase {
                 dl_snapshot,
                 queue,
                 delay_profiles,
-                grabbed_urls,
+                pass,
                 report,
                 now,
             )
@@ -2858,7 +2899,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -2964,7 +3005,7 @@ impl AppUseCase {
             dl_snapshot,
             queue,
             delay_profiles,
-            grabbed_urls,
+            pass,
             report,
             now,
         )
@@ -2986,7 +3027,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -3140,7 +3181,7 @@ impl AppUseCase {
                 dl_snapshot,
                 queue,
                 delay_profiles,
-                grabbed_urls,
+                pass,
                 report,
                 now,
             )
@@ -3204,6 +3245,17 @@ impl AppUseCase {
         .map(|batch| batch.results)
     }
 
+    /// Drops `result` from the RSS seen set, so a release passed over for its
+    /// indexer's monthly limit is seen as new by a later poll.
+    async fn forget_rss_seen_guid(&self, result: &IndexerSearchResult) {
+        self.runtime
+            .acquisition
+            .rss_seen_guids
+            .write()
+            .await
+            .forget(rss_seen_guid_indexer(result), rss_seen_guid(result));
+    }
+
     /// Try to grab the best candidate from scored RSS releases.
     /// Reuses the same logic as process_single_wanted_item for consistency.
     ///
@@ -3231,7 +3283,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -3239,7 +3291,10 @@ impl AppUseCase {
         // `DbBlocklisted` reads the per-title blocklist (the single, removable
         // exclusion source), never the failed-attempt history.
         let db_blocklist = self
-            .load_title_release_blocklist_signatures(&title.id)
+            .load_title_release_blocklist_signatures(
+                &title.id,
+                crate::app_usecase_discovery::search_result_blocklist_keys(scored),
+            )
             .await;
         let episode = match wanted.episode_id.as_deref() {
             Some(episode_id) => self
@@ -3277,16 +3332,12 @@ impl AppUseCase {
         // Catalog rows belong to the title visit, shared across all scopes.
         let existing_files = reads.primary_file_cutoffs(self).await.unwrap_or_default();
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
+            .resolve_upgrade_context_for_scope(
                 title,
                 Some(subject.owner_facet.as_str()),
-                analyzed_cutoff_quality,
+                &existing_files,
+                &cutoff_scope,
             )
             .await
         {
@@ -3427,6 +3478,19 @@ impl AppUseCase {
 
         let mut ranked = Vec::with_capacity(scored.len());
         for (index, candidate) in scored.iter().enumerate() {
+            // An indexer whose monthly limit already refused a grab in this
+            // pass is passed over; its releases stay eligible for a later one.
+            // An indexer already known to be at its limit is passed over the
+            // same way, before anything is written for its release.
+            if pass.indexer_limit_refused(candidate.indexer_id.as_deref()) {
+                self.forget_rss_seen_guid(candidate).await;
+                continue;
+            }
+            if self.indexer_monthly_grab_refused_now(candidate.indexer_id.as_deref()) {
+                pass.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+                self.forget_rss_seen_guid(candidate).await;
+                continue;
+            }
             let scope = candidate
                 .coverage_scope
                 .as_ref()
@@ -3580,7 +3644,7 @@ impl AppUseCase {
                 .unwrap_or(ReleaseAutoDecisionCode::QualityBlocked)
             } else if route_key
                 .as_ref()
-                .is_some_and(|route| grabbed_urls.contains(route))
+                .is_some_and(|route| pass.grabbed_urls.contains(route))
             {
                 ReleaseAutoDecisionCode::DownloadClientUnavailable
             } else {
@@ -3598,15 +3662,12 @@ impl AppUseCase {
             } else {
                 std::borrow::Cow::Borrowed(candidate)
             };
-            let mut decision_candidate = candidate.as_ref().clone();
-            annotate_auto_decision(&mut decision_candidate, decision_code);
             let eligible = decision_code.is_eligible();
             decided.push((
                 candidate_index,
                 admission,
                 candidate,
                 decision_code,
-                decision_candidate,
                 oldest_overlapping_pending_published_at,
             ));
             if eligible {
@@ -3616,29 +3677,62 @@ impl AppUseCase {
 
         // One construction, shared with the convergence path, so the two
         // cannot drift apart in what they record.
-        let decision_rows = decided
+        // Each explanation is built once; a parked release stores the same
+        // text its decision row records.
+        let explanations = decided
             .iter()
-            .map(|(_, admission, candidate, decision_code, _, _)| {
-                (candidate.as_ref(), *decision_code, admission.best_score())
+            .map(|(_, _, candidate, decision_code, _)| {
+                release_decision_explanation_for(candidate.as_ref(), *decision_code)
             })
             .collect::<Vec<_>>();
-        crate::acquisition_workflow::record_release_decisions(
+        let parked_explanations = decided
+            .iter()
+            .zip(&explanations)
+            .map(|((_, _, candidate, decision_code, _), explanation)| {
+                rss_decision_parks(*decision_code)
+                    .then(|| {
+                        external::pending_explanation_for(
+                            candidate.as_ref(),
+                            *decision_code,
+                            explanation.as_str(),
+                        )
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        let decision_rows = decided
+            .iter()
+            .zip(explanations)
+            .map(
+                |((_, admission, candidate, decision_code, _), explanation)| {
+                    crate::acquisition_workflow::ExplainedReleaseDecision {
+                        candidate: candidate.as_ref(),
+                        decision_code: *decision_code,
+                        incumbent_bar: admission.best_score(),
+                        explanation,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        crate::acquisition_workflow::record_explained_release_decisions(
             self,
             &wanted,
             title,
-            &decision_rows,
+            decision_rows,
             now,
         )
         .await;
 
         for (
-            candidate_index,
-            admission,
-            candidate,
-            decision_code,
-            decision_candidate,
-            oldest_overlapping_pending_published_at,
-        ) in decided
+            (
+                candidate_index,
+                admission,
+                candidate,
+                decision_code,
+                oldest_overlapping_pending_published_at,
+            ),
+            parked_explanation,
+        ) in decided.into_iter().zip(parked_explanations)
         {
             let candidate = candidate.as_ref();
             let candidate_scope = scored[candidate_index]
@@ -3676,12 +3770,7 @@ impl AppUseCase {
                 .map(|d| d.preference_score)
                 .unwrap_or(0);
             if let Some(outcome) = report.external_outcome.as_mut() {
-                outcome.reasons = vec![
-                    decision_candidate
-                        .auto_decision_summary
-                        .clone()
-                        .unwrap_or_else(|| decision_code.as_str().to_owned()),
-                ];
+                outcome.reasons = vec![decision_code.summary().to_owned()];
             }
 
             if rss_is_permanent_rejection(decision_code) {
@@ -3714,13 +3803,7 @@ impl AppUseCase {
                 continue;
             }
 
-            if matches!(
-                decision_code,
-                ReleaseAutoDecisionCode::PendingDelay
-                    | ReleaseAutoDecisionCode::MinimumAge
-                    | ReleaseAutoDecisionCode::ReleaseAgeUnknown
-                    | ReleaseAutoDecisionCode::DownloadClientUnavailable
-            ) {
+            if rss_decision_parks(decision_code) {
                 let delay = crate::acquisition_release_search::auto_candidate_delay_decision(
                     candidate,
                     &evaluation_context,
@@ -3790,7 +3873,7 @@ impl AppUseCase {
                         .or(candidate.source_kind),
                     release_size_bytes: candidate.size_bytes,
                     release_score: candidate_score,
-                    scoring_log_json: external::pending_explanation(&decision_candidate),
+                    scoring_log_json: parked_explanation,
                     indexer_source: Some(candidate.source.clone()),
                     indexer_id: candidate.indexer_id.clone(),
                     release_guid: candidate.guid.clone(),
@@ -3919,7 +4002,7 @@ impl AppUseCase {
             .map(|(_, kind)| *kind)
             .or(best.source_kind);
         if let Some(url) = source_hint.as_deref()
-            && !grabbed_urls.insert(url.to_string())
+            && !pass.grabbed_urls.insert(url.to_string())
         {
             return;
         }
@@ -4267,6 +4350,37 @@ impl AppUseCase {
 
                 report.releases_grabbed += 1;
             }
+            Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                // Nothing was sent, so this says nothing about the release:
+                // no failed attempt, no blocklist entry. The rest of the pass
+                // skips this indexer and the walk continues with the others.
+                // Everything up to the refused release is already decided and
+                // recorded, so only what follows it is walked again.
+                debug!(
+                    title = title.name.as_str(),
+                    release = best.title.as_str(),
+                    indexer_id = ?best.indexer_id,
+                    reason = err.reason().unwrap_or_default(),
+                    "RSS sync: grab refused by the indexer's monthly limit"
+                );
+                pass.mark_indexer_limit_refused(best.indexer_id.as_deref());
+                self.forget_rss_seen_guid(best).await;
+                Box::pin(self.try_grab_rss_release(
+                    reads,
+                    title,
+                    &wanted,
+                    &scored[best_index + 1..],
+                    _category,
+                    scope_override,
+                    dl_snapshot,
+                    queue,
+                    delay_profiles,
+                    pass,
+                    report,
+                    now,
+                ))
+                .await;
+            }
             Err(err) => {
                 warn!(
                     title = title.name.as_str(),
@@ -4308,7 +4422,8 @@ impl AppUseCase {
                     if let Some(route) =
                         crate::acquisition_workflow::DownloadRouteKey::for_candidate(best)
                     {
-                        grabbed_urls.insert(format!("__rss_failed_route:{route:?}"));
+                        pass.grabbed_urls
+                            .insert(format!("__rss_failed_route:{route:?}"));
                     }
                     // Walk the failed head again only to persist its temporary
                     // route-unavailable observation; the marker makes the
@@ -4323,7 +4438,7 @@ impl AppUseCase {
                         dl_snapshot,
                         queue,
                         delay_profiles,
-                        grabbed_urls,
+                        pass,
                         report,
                         now,
                     ))
@@ -4347,7 +4462,7 @@ impl AppUseCase {
                         dl_snapshot,
                         queue,
                         delay_profiles,
-                        grabbed_urls,
+                        pass,
                         report,
                         now,
                     ))
@@ -4414,12 +4529,34 @@ impl AppUseCase {
                     dl_snapshot,
                     queue,
                     delay_profiles,
-                    grabbed_urls,
+                    pass,
                     report,
                     now,
                 ))
                 .await;
             }
+        }
+    }
+}
+
+/// What one RSS grab pass remembers across the titles it walks.
+#[derive(Default)]
+pub(crate) struct RssPassState {
+    /// Download sources already submitted in this pass.
+    grabbed_urls: HashSet<String>,
+    /// Indexers whose monthly limit refuses a grab. Their remaining releases
+    /// are passed over for the rest of the pass and stay eligible.
+    limit_refused_indexers: HashSet<String>,
+}
+
+impl RssPassState {
+    fn indexer_limit_refused(&self, indexer_id: Option<&str>) -> bool {
+        indexer_id.is_some_and(|id| self.limit_refused_indexers.contains(id))
+    }
+
+    fn mark_indexer_limit_refused(&mut self, indexer_id: Option<&str>) {
+        if let Some(id) = indexer_id {
+            self.limit_refused_indexers.insert(id.to_string());
         }
     }
 }

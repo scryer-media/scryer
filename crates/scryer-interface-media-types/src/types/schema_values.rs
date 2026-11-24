@@ -274,6 +274,25 @@ pub enum MediaRequestStatusValue {
     Canceled,
 }
 
+/// Order of a media request list.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MediaRequestOrderValue {
+    /// Most recently changed first.
+    RecentlyUpdated,
+    /// Longest waiting first, by when the request was created.
+    OldestCreated,
+}
+
+impl MediaRequestOrderValue {
+    pub fn into_application(self) -> scryer_application::MediaRequestOrder {
+        match self {
+            Self::RecentlyUpdated => scryer_application::MediaRequestOrder::RecentlyUpdated,
+            Self::OldestCreated => scryer_application::MediaRequestOrder::OldestCreated,
+        }
+    }
+}
+
 impl MediaRequestStatusValue {
     pub fn from_domain(value: MediaRequestStatus) -> Self {
         match value {
@@ -875,6 +894,8 @@ pub enum DomainEventTypeValue {
     ListSyncFinished,
     /// A list was followed, changed, turned on or off, or unfollowed.
     ListSubscriptionChanged,
+    /// A lifecycle rule applied its actions and sent its own message.
+    LifecycleRuleNotified,
 }
 
 impl DomainEventTypeValue {
@@ -940,6 +961,7 @@ impl DomainEventTypeValue {
             DomainEventType::ListUnfollowed => Self::ListUnfollowed,
             DomainEventType::ListSyncFinished => Self::ListSyncFinished,
             DomainEventType::ListSubscriptionChanged => Self::ListSubscriptionChanged,
+            DomainEventType::LifecycleRuleNotified => Self::LifecycleRuleNotified,
         }
     }
 
@@ -1005,6 +1027,7 @@ impl DomainEventTypeValue {
             Self::ListUnfollowed => DomainEventType::ListUnfollowed,
             Self::ListSyncFinished => DomainEventType::ListSyncFinished,
             Self::ListSubscriptionChanged => DomainEventType::ListSubscriptionChanged,
+            Self::LifecycleRuleNotified => DomainEventType::LifecycleRuleNotified,
         }
     }
 }
@@ -1338,6 +1361,8 @@ pub enum ImportSkipReasonValue {
     ArchiveExtractionPluginRequired,
     /// Archive extraction exceeded its configured time limit.
     ArchiveExtractionTimedOut,
+    /// Archive extraction failed on every allowed attempt; retry the import to try again.
+    ArchiveExtractionBlocked,
     /// The title's folder must be resolved before the import can run.
     TitleFolderConflict,
 }
@@ -1364,6 +1389,7 @@ impl ImportSkipReasonValue {
                 Self::ArchiveExtractionPluginRequired
             }
             ImportSkipReason::ArchiveExtractionTimedOut => Self::ArchiveExtractionTimedOut,
+            ImportSkipReason::ArchiveExtractionBlocked => Self::ArchiveExtractionBlocked,
             ImportSkipReason::TitleFolderConflict => Self::TitleFolderConflict,
         }
     }

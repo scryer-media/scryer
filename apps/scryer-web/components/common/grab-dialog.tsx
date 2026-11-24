@@ -7,6 +7,7 @@ import {
   Search,
 } from "lucide-react";
 import { useClient } from "urql";
+import { useGrab } from "@/lib/hooks/use-grab";
 
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
@@ -37,11 +38,7 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
-import {
-  issueInteractiveReleaseCandidateTokenMutation,
-  queueIndexerSearchAssignmentMutation,
-  queueUnlinkedReleaseMutation,
-} from "@/lib/graphql/mutations";
+import { issueInteractiveReleaseCandidateTokenMutation } from "@/lib/graphql/mutations";
 import {
   catalogSearchTitlesQuery,
   indexerGrabClientsQuery,
@@ -105,6 +102,7 @@ export function GrabDialog({
   onGrabbed,
 }: GrabDialogProps) {
   const client = useClient();
+  const grab = useGrab();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const { confirmReplaceConflict, replaceConflictDialog } =
@@ -387,15 +385,14 @@ export function GrabDialog({
           sizeBytes: tokenized.sizeBytes ?? release.sizeBytes ?? null,
         },
         async (input) => {
-          const { data: queued, error: queueError } = await client
-            .mutation(queueIndexerSearchAssignmentMutation, {
+          const outcome = await grab({
+            indexerSearchAssignment: {
               input,
               routing,
               replacement: useReplacement,
-            })
-            .toPromise();
-          if (queueError) throw queueError;
-          return queued?.queueIndexerSearchAssignment;
+            },
+          });
+          return outcome.queued;
         },
         conflictMessage,
         confirmReplaceConflict,
@@ -408,6 +405,7 @@ export function GrabDialog({
     },
     [
       client,
+      grab,
       confirmReplaceConflict,
       episode,
       season,
@@ -420,20 +418,15 @@ export function GrabDialog({
 
   const grabUnlinked = React.useCallback(
     async (release: Release, searchId: string, downloadUrl: string) => {
-      const { data, error } = await client
-        .mutation(queueUnlinkedReleaseMutation, {
-          input: {
-            searchId,
-            downloadUrl,
-            downloadClientId: selectionFor(release).clientId,
-            category: selectionFor(release).category,
-          },
-        })
-        .toPromise();
-      if (error) throw error;
-      const payload = data?.queueUnlinkedRelease as
-        | { downloadId: string; clientName: string; sourceTitle: string }
-        | undefined;
+      const outcome = await grab({
+        unlinked: {
+          searchId,
+          downloadUrl,
+          downloadClientId: selectionFor(release).clientId,
+          category: selectionFor(release).category,
+        },
+      });
+      const payload = outcome.unlinked;
       if (!payload?.downloadId) throw new Error(t("status.queueFailed"));
       setGlobalStatus(
         t("grabDialog.status.unlinked", {
@@ -442,7 +435,7 @@ export function GrabDialog({
         }),
       );
     },
-    [client, selectionFor, setGlobalStatus, t],
+    [grab, selectionFor, setGlobalStatus, t],
   );
 
   const handleGrab = React.useCallback(

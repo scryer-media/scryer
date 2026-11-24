@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fs::File,
     sync::{Arc, Mutex},
 };
 
@@ -853,14 +852,14 @@ fn derive_nzb_file_name(request: &DownloadClientAddRequest) -> Option<String> {
     })
 }
 
-fn load_staged_nzb_payload(staged_nzb: &StagedNzbRef) -> AppResult<String> {
-    let file = File::open(&staged_nzb.compressed_path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open staged nzb artifact {}: {error}",
-            staged_nzb.compressed_path.display()
-        ))
-    })?;
-    let bytes = zstd::stream::decode_all(file).map_err(|error| {
+async fn load_staged_nzb_payload(staged_nzb: &StagedNzbRef) -> AppResult<String> {
+    let compressed = scryer_application::disk::Disk::process()
+        .read(&staged_nzb.compressed_path)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open staged nzb artifact: {error}"))
+        })?;
+    let bytes = zstd::stream::decode_all(compressed.as_slice()).map_err(|error| {
         AppError::Repository(format!(
             "failed to decompress staged nzb artifact {}: {error}",
             staged_nzb.compressed_path.display()
@@ -1165,7 +1164,7 @@ impl DownloadClient for WasmDownloadClient {
             DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl
         ) && let Some(staged_nzb) = request.staged_nzb.as_ref()
         {
-            nzb_bytes_base64 = Some(load_staged_nzb_payload(staged_nzb)?);
+            nzb_bytes_base64 = Some(load_staged_nzb_payload(staged_nzb).await?);
             nzb_file_name = derive_nzb_file_name(request);
             nzb_content_type = Some("application/x-nzb".to_string());
         }

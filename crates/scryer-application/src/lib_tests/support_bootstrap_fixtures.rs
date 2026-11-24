@@ -185,6 +185,7 @@ pub(super) async fn title_updated_events(app: &AppUseCase, title_id: &str) -> Ve
             title_id: Some(title_id.to_string()),
             facet: None,
             stream_id: None,
+            media_request_ids: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 100,
@@ -247,6 +248,7 @@ pub(super) fn bootstrap_with_user_repo(users: Arc<MockUserRepo>) -> (AppUseCase,
 }
 
 /// Same app as [`bootstrap`], with its title repository handed back.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn bootstrap_with_title_repo() -> (AppUseCase, User, Arc<MockTitleRepo>) {
     bootstrap_with_services(Arc::new(MockUserRepo::default()), None)
 }
@@ -314,6 +316,7 @@ fn bootstrap_with_services(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -347,6 +350,8 @@ pub(super) struct MediaRequestTestHarness {
     /// The list store, so list-originated requests can be followed back to
     /// their subscription.
     pub(super) lists: Arc<crate::lists::test_support::MemoryListStore>,
+    /// The settings store, so a test can make a write fail.
+    pub(super) settings: Arc<StoredSettingsRepo>,
 }
 
 pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
@@ -376,7 +381,11 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
     let download_client = Arc::new(StubDownloadClient::default());
     let indexer_client = Arc::new(MockIndexerClient);
     let libraries = titles.share_library_roots(MockLibraryRepo::default());
-    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let domain_events = Arc::new({
+        let mut domain_events = MockDomainEventRepo::default();
+        domain_events.titles = Some(titles.clone());
+        domain_events
+    });
     let media_requests = Arc::new(MockMediaRequestRepo {
         titles: Some(titles.clone()),
         ..MockMediaRequestRepo::with_domain_events(domain_events.clone())
@@ -405,7 +414,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         download_client,
         download_client_configs,
         release_attempts.clone(),
-        settings,
+        settings.clone(),
         quality_profiles.clone(),
         String::new(),
     )
@@ -453,6 +462,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             Arc::new(registry),
         ),
@@ -468,6 +478,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         request_rule_decisions,
         lifecycle_claims,
         lists,
+        settings,
     }
 }
 
@@ -498,6 +509,8 @@ pub(super) fn media_request_input(
         origin: Default::default(),
         list_rank: None,
         admission: Default::default(),
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 
@@ -636,6 +649,7 @@ pub(super) fn bootstrap_with_metadata_gateway_settings_and_titles(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -784,6 +798,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_queue_commands(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -847,6 +862,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_tracked_handle(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -910,6 +926,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_indexer(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -1001,6 +1018,7 @@ pub(super) fn bootstrap_with_search_settings_indexer_configs_and_management(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1073,6 +1091,7 @@ pub(super) fn bootstrap_with_settings_repo_and_profiles_and_libraries(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1090,6 +1109,8 @@ pub(super) fn synthetic_direct_nab_indexer_config(id: &str, provider_type: &str)
         rate_limit_seconds: None,
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         is_enabled: true,
         enable_interactive_search: true,
@@ -1167,6 +1188,7 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1223,6 +1245,7 @@ pub(super) fn bootstrap_with_delete_queue(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1387,6 +1410,7 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_repos(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1502,6 +1526,7 @@ pub(super) fn bootstrap_with_library_delete_repositories(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1606,6 +1631,7 @@ pub(super) fn bootstrap_with_scan_unmatched_and_metadata_tracking_and_repos(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -2031,6 +2057,8 @@ pub(super) fn cutoff_projection_test_profile(id: &str, cutoff_tier: &str) -> Qua
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),

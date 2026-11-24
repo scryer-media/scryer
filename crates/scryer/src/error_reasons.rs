@@ -57,8 +57,94 @@ pub const HTTP_WEBSOCKET_API_KEY_UNSUPPORTED: &str = "HTTP_WEBSOCKET_API_KEY_UNS
 /// Scryer web client proof is required for unauthenticated WebSocket access.
 pub const HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED: &str = "HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED";
 
+/// The MCP endpoint was sent an Origin it does not accept.
+pub const HTTP_MCP_ORIGIN_NOT_ALLOWED: &str = "HTTP_MCP_ORIGIN_NOT_ALLOWED";
+
+/// The MCP endpoint is turned off in the security settings.
+pub const HTTP_MCP_DISABLED: &str = "HTTP_MCP_DISABLED";
+
+/// The MCP endpoint accepts only an API key, and none was offered: no
+/// credentials, a session token or an OAuth access token.
+pub const HTTP_MCP_API_KEY_REQUIRED: &str = "HTTP_MCP_API_KEY_REQUIRED";
+
+/// The API key offered to the MCP endpoint is unknown, expired or revoked.
+pub const HTTP_MCP_API_KEY_INVALID: &str = "HTTP_MCP_API_KEY_INVALID";
+
+/// The MCP request body is larger than the endpoint accepts.
+pub const HTTP_MCP_REQUEST_TOO_LARGE: &str = "HTTP_MCP_REQUEST_TOO_LARGE";
+
+/// The MCP request body could not be read.
+pub const HTTP_MCP_REQUEST_BODY_UNREADABLE: &str = "HTTP_MCP_REQUEST_BODY_UNREADABLE";
+
+/// A GraphQL error behind a tool carried no code of its own, such as a parse
+/// or validation failure.
+pub const HTTP_MCP_GRAPHQL_ERROR: &str = "HTTP_MCP_GRAPHQL_ERROR";
+
+/// A tool call named a tool the endpoint does not serve.
+pub const HTTP_MCP_TOOL_UNKNOWN: &str = "HTTP_MCP_TOOL_UNKNOWN";
+
+/// A tool call's arguments are unknown, of the wrong type or out of range.
+pub const HTTP_MCP_ARGUMENTS_INVALID: &str = "HTTP_MCP_ARGUMENTS_INVALID";
+
+/// A log search pattern is not a valid regular expression, or compiles past
+/// the size limits.
+pub const HTTP_MCP_LOG_PATTERN_INVALID: &str = "HTTP_MCP_LOG_PATTERN_INVALID";
+
+/// A diagnostics tool could not gather what it reports.
+pub const HTTP_MCP_DIAGNOSTICS_FAILED: &str = "HTTP_MCP_DIAGNOSTICS_FAILED";
+
+/// A run tool named an operation the catalog does not hold.
+pub const HTTP_MCP_OPERATION_UNKNOWN: &str = "HTTP_MCP_OPERATION_UNKNOWN";
+
+/// An operation name differs between skills and the call named no skill.
+pub const HTTP_MCP_OPERATION_AMBIGUOUS: &str = "HTTP_MCP_OPERATION_AMBIGUOUS";
+
+/// A query was sent to the mutation tool, or a mutation to the query tool.
+pub const HTTP_MCP_OPERATION_KIND_MISMATCH: &str = "HTTP_MCP_OPERATION_KIND_MISMATCH";
+
+/// An operation's result is larger than one tool result may carry.
+pub const HTTP_MCP_RESULT_TOO_LARGE: &str = "HTTP_MCP_RESULT_TOO_LARGE";
+
+/// The served schema could not be read to describe an operation.
+pub const HTTP_MCP_SCHEMA_UNREADABLE: &str = "HTTP_MCP_SCHEMA_UNREADABLE";
+
+/// The operation list was filtered by a skill that has no served operation.
+pub const HTTP_MCP_SKILL_UNKNOWN: &str = "HTTP_MCP_SKILL_UNKNOWN";
+
+/// A mutation's `confirm_token` is not one this key holds: never issued,
+/// expired, already used or another key's.
+pub const HTTP_MCP_CONFIRMATION_UNKNOWN: &str = "HTTP_MCP_CONFIRMATION_UNKNOWN";
+
+/// A mutation's `confirm_token` was issued for a different operation or
+/// variables; it is spent.
+pub const HTTP_MCP_CONFIRMATION_MISMATCH: &str = "HTTP_MCP_CONFIRMATION_MISMATCH";
+
+/// A request that would be served without a login named a host outside the
+/// local-trust allowed-host list.
+pub const HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED: &str = "HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED";
+
 #[cfg(test)]
 const ALL: &[&str] = &[
+    HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED,
+    HTTP_MCP_ORIGIN_NOT_ALLOWED,
+    HTTP_MCP_CONFIRMATION_UNKNOWN,
+    HTTP_MCP_CONFIRMATION_MISMATCH,
+    HTTP_MCP_DISABLED,
+    HTTP_MCP_API_KEY_REQUIRED,
+    HTTP_MCP_API_KEY_INVALID,
+    HTTP_MCP_REQUEST_TOO_LARGE,
+    HTTP_MCP_REQUEST_BODY_UNREADABLE,
+    HTTP_MCP_GRAPHQL_ERROR,
+    HTTP_MCP_TOOL_UNKNOWN,
+    HTTP_MCP_ARGUMENTS_INVALID,
+    HTTP_MCP_LOG_PATTERN_INVALID,
+    HTTP_MCP_DIAGNOSTICS_FAILED,
+    HTTP_MCP_OPERATION_UNKNOWN,
+    HTTP_MCP_OPERATION_AMBIGUOUS,
+    HTTP_MCP_OPERATION_KIND_MISMATCH,
+    HTTP_MCP_RESULT_TOO_LARGE,
+    HTTP_MCP_SCHEMA_UNREADABLE,
+    HTTP_MCP_SKILL_UNKNOWN,
     HTTP_WEBSOCKET_API_KEY_UNSUPPORTED,
     HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED,
     HTTP_API_EXPLORER_DISABLED,

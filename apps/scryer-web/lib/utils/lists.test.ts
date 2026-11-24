@@ -687,6 +687,39 @@ test("required source parameters must be filled", () => {
   );
 });
 
+test("a new route starts on its library's saved monitoring", () => {
+  const libraries = [
+    {
+      id: "lib-series",
+      facet: "SERIES" as const,
+      isDefault: true,
+      defaultMonitorType: "ALL_EPISODES",
+      roots: [{ id: "root-a", isDefault: true }],
+    },
+    {
+      id: "lib-movies",
+      facet: "MOVIE" as const,
+      isDefault: true,
+      // Not a movie choice, so the fallback stands.
+      defaultMonitorType: "ALL_EPISODES",
+      roots: [{ id: "root-b", isDefault: true }],
+    },
+  ];
+
+  assert.equal(
+    defaultListRoute("SERIES", libraries, "FUTURE_EPISODES").monitorType,
+    "ALL_EPISODES",
+  );
+  assert.equal(
+    defaultListRoute("MOVIE", libraries, "MONITORED").monitorType,
+    "MONITORED",
+  );
+  assert.equal(
+    defaultListRoute("ANIME", libraries, "FUTURE_EPISODES").monitorType,
+    "FUTURE_EPISODES",
+  );
+});
+
 test("a follow draft needs a name, kinds, a selectable mode and a route per kind", () => {
   const libraries = [
     {
@@ -1110,6 +1143,8 @@ test("inputs built from query results carry no __typename at any depth", () => {
         useSeasonFolders: null,
         releaseNumbering: null,
         tags: ["from-list"],
+        requiredAudioLanguages: [],
+        preferredAudioLanguages: ["original", "jpn"],
       },
       {
         __typename: "ListRoutePayload",
@@ -1160,6 +1195,8 @@ test("inputs built from query results carry no __typename at any depth", () => {
       useSeasonFolders: null,
       releaseNumbering: null,
       tags: ["from-list"],
+      requiredAudioLanguages: [],
+      preferredAudioLanguages: ["original", "jpn"],
     },
     {
       kind: "SERIES",
@@ -1171,6 +1208,8 @@ test("inputs built from query results carry no __typename at any depth", () => {
       useSeasonFolders: true,
       releaseNumbering: "AUTO",
       tags: [],
+      requiredAudioLanguages: null,
+      preferredAudioLanguages: null,
     },
   ]);
   assert.deepEqual(update.filters, [

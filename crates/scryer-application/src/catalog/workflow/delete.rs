@@ -235,11 +235,11 @@ impl AppUseCase {
         .await
     }
 
-    /// Maintenance-policy variant of [`Self::delete_title`] with files on disk
+    /// Lifecycle-policy variant of [`Self::delete_title`] with files on disk
     /// (RFC 137 §9.6). The same fresh-manifest fingerprint check applies; the
     /// human typed confirmation is replaced by the typed policy authorization,
     /// and the actor recorded on the logical cleanup is the system actor the
-    /// action handler runs as. Only the maintenance action executor calls this.
+    /// action handler runs as. Only the lifecycle action executor calls this.
     pub(crate) async fn delete_title_by_policy(
         &self,
         actor: &User,
@@ -272,7 +272,7 @@ impl AppUseCase {
         // choke point's own guarantee for any caller that did not.
         let _location_guard = self
             .acquire_location_title_mutation(
-                &crate::location::ownership_guard::MAINTENANCE_DELETE_ENTRY,
+                &crate::location::ownership_guard::LIFECYCLE_DELETE_ENTRY,
                 &title.id,
             )
             .await?;
@@ -288,6 +288,10 @@ impl AppUseCase {
         .await?;
         let deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
 
+        // A list that added the title would add it again at its next sync,
+        // and the rule would delete it again. The exclusion goes first: if it
+        // cannot be written the title stays, and the next pass retries both.
+        self.exclude_title_from_lists_that_added_it(&title).await?;
         self.delete_title_logical_cleanup(
             &title,
             actor,
@@ -972,7 +976,7 @@ impl AppUseCase {
         let doomed = pending
             .into_iter()
             .filter_map(|record| {
-                crate::maintenance_rules::safety::queued_import_title_id(&record)
+                crate::lifecycle_rules::safety::queued_import_title_id(&record)
                     .filter(|owner| id_set.contains(owner.as_str()))
                     .map(|_| record.id)
             })
@@ -993,6 +997,7 @@ impl AppUseCase {
         {
             return Ok(false);
         }
+        self.prune_title_scoped_settings(&ids).await;
         if let Some(handle) = self.runtime.acquisition.tracked_download_handle.as_ref() {
             handle.forget_many(ids.clone(), Vec::new());
         }
@@ -1088,22 +1093,36 @@ impl AppUseCase {
         }
         // A title without downloads adds no events of its own while its
         // dependents go, so the history cleared above stays cleared.
+        let mut deleted = Vec::with_capacity(titles.len());
+        let mut outcome = Ok(());
         for title in titles {
-            if !cleared.contains(title.id.as_str()) {
-                self.purge_title_logical_dependents(
-                    title,
-                    false,
-                    actor.clone(),
-                    &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
-                )
-                .await?;
+            if !cleared.contains(title.id.as_str())
+                && let Err(error) = self
+                    .purge_title_logical_dependents(
+                        title,
+                        false,
+                        actor.clone(),
+                        &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
+                    )
+                    .await
+            {
+                outcome = Err(error);
+                break;
             }
-            self.delete_title_row(title, actor.clone(), true, Vec::new(), false)
-                .await?;
+            if let Err(error) = self
+                .delete_title_row_keeping_settings(title, actor.clone(), true, Vec::new(), false)
+                .await
+            {
+                outcome = Err(error);
+                break;
+            }
+            deleted.push(title.id.clone());
             self.release_lifecycle_claims_for_deleted_title(&title.id)
                 .await;
         }
-        Ok(())
+        // One prune for the titles whose rows went, failed or not.
+        self.prune_title_scoped_settings(&deleted).await;
+        outcome
     }
 
     async fn acquire_title_delete_guard(
@@ -1267,7 +1286,7 @@ impl AppUseCase {
         .await?;
         // Last, and only once the rows are gone: a lifecycle claim is a hold on
         // a title, and there is no title left to hold (spec 0003 FR-044).
-        // Releasing first would open a window in which a maintenance action
+        // Releasing first would open a window in which a lifecycle action
         // could act on a title whose claim had already been withdrawn.
         self.release_lifecycle_claims_for_deleted_title(&title.id)
             .await;
@@ -1275,7 +1294,60 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Remove the per-title settings rows ([`crate::settings::keys::TITLE_SCOPED_SETTING_KEYS`])
+    /// of titles whose rows are already gone, in bind-safe chunks. Like the
+    /// lifecycle-claim release, a failure is logged and left: the titles are
+    /// deleted either way, and a leftover row names a title that no longer
+    /// exists.
+    pub(crate) async fn prune_title_scoped_settings(&self, title_ids: &[String]) {
+        if title_ids.is_empty() {
+            return;
+        }
+        match self
+            .services
+            .config
+            .settings
+            .delete_values_for_keys_and_scope_ids(
+                crate::settings::keys::SETTINGS_SCOPE_SYSTEM,
+                crate::settings::keys::TITLE_SCOPED_SETTING_KEYS,
+                title_ids,
+            )
+            .await
+        {
+            Ok(0) => {}
+            Ok(deleted) => debug!(deleted, "pruned per-title settings of deleted titles"),
+            Err(error) => warn!(
+                error = %error,
+                titles = title_ids.len(),
+                "could not prune per-title settings of deleted titles"
+            ),
+        }
+    }
+
     pub(crate) async fn delete_title_row(
+        &self,
+        title: &scryer_domain::Title,
+        actor: DomainEventActor,
+        append_title_deleted_event: bool,
+        deleted_paths: Vec<String>,
+        record_recycle_purge: bool,
+    ) -> AppResult<()> {
+        self.delete_title_row_keeping_settings(
+            title,
+            actor,
+            append_title_deleted_event,
+            deleted_paths,
+            record_recycle_purge,
+        )
+        .await?;
+        self.prune_title_scoped_settings(std::slice::from_ref(&title.id))
+            .await;
+        Ok(())
+    }
+
+    /// `delete_title_row` without the per-title settings prune, for loops
+    /// over many titles that prune the deleted ones together afterwards.
+    pub(crate) async fn delete_title_row_keeping_settings(
         &self,
         title: &scryer_domain::Title,
         actor: DomainEventActor,
@@ -1623,7 +1695,7 @@ impl AppUseCase {
     }
 
     /// Delete one media file's disk paths (per `disk_deletion`) and catalog
-    /// row. Policy maintenance retains parent records; other deletions also
+    /// row. Policy lifecycle retains parent records; other deletions also
     /// remove any matching movie collection. The caller is responsible for
     /// the `ManageTitles` permission check.
     pub(crate) async fn delete_media_file_authorized(
@@ -2050,7 +2122,7 @@ impl AppUseCase {
     /// state that checking a whole season and deleting its files leaves behind;
     /// a partly deleted season stays monitored for the episodes it still has.
     /// The title is deliberately untouched — the same boundary
-    /// [`Self::unmonitor_maintenance_child`] keeps for scoped deletions.
+    /// [`Self::unmonitor_lifecycle_child`] keeps for scoped deletions.
     ///
     /// This is bookkeeping on top of deletions that already happened, so every
     /// failure here is logged and skipped: the run still reports the file
@@ -2725,10 +2797,11 @@ impl AppUseCase {
 /// title with no folder — is still on disk and must not be reported as gone.
 /// A read only; a path whose existence cannot be checked is not reported.
 async fn paths_no_longer_on_disk(paths: Vec<String>) -> Vec<String> {
+    let disk = crate::disk::Disk::process();
     let mut removed = Vec::with_capacity(paths.len());
     for path in paths {
         let on_disk = crate::stored_paths::stored_path_to_path_buf(&path);
-        if matches!(tokio::fs::try_exists(&on_disk).await, Ok(false)) {
+        if disk.follow(on_disk).await.exists() == Some(false) {
             removed.push(path);
         }
     }

@@ -13,6 +13,21 @@ export function isResolvableConflict(item: {
   );
 }
 
+/**
+ * A movie folder bound to a title that already owns another folder may simply
+ * be matched to the wrong title, so it can be matched again through the
+ * ordinary search and match flow. The other folder-ownership reasons cannot.
+ */
+export function canFixConflictMatch(item: {
+  facet: string;
+  reason: string;
+}): boolean {
+  return (
+    item.facet === "MOVIE" &&
+    item.reason === "title_already_owns_another_folder"
+  );
+}
+
 export type ConflictPolicy = "ADOPT_ALL" | "KEEP_ONE";
 export type ConflictLeftovers = "PRESERVE_ALL" | "MEDIA_ONLY";
 export type ConflictInput = {

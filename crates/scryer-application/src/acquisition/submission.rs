@@ -622,6 +622,10 @@ impl AppUseCase {
         // overlapping row hold the scope.
         let blocked_clients = self.blocked_download_clients().await;
 
+        // The earlier submission of this same release that this retry
+        // replaces. Its row is removed only once the retry is admitted, or
+        // once it is known not to go ahead, so a refused grab keeps it.
+        let mut replaced: Option<DownloadSubmission> = None;
         if let Some(existing) = existing {
             let snapshot = snapshot
                 .as_ref()
@@ -654,24 +658,12 @@ impl AppUseCase {
                     existing.download_id
                 )));
             }
-            self.services
-                .workflow
-                .download_submissions
-                .delete_by_client_item_id(&ClientJobLocator::from_submission(&existing))
-                .await?;
-            // The delete ends the submission's binding inside the store.
-            self.runtime
-                .acquisition
-                .invalidate_download_registry_observations();
             state.forget(existing.download_id);
-            self.runtime
-                .acquisition
-                .download_submission_guards
-                .store_title_state(&title_id, state.clone());
+            replaced = Some(existing);
         }
 
         let conflicts = if allow_concurrent || intent.request.purpose.is_additional_file() {
-            Vec::new()
+            Ok(Vec::new())
         } else if let Some(snapshot) = snapshot.as_ref() {
             Self::find_blocking_download_submissions_in_state(
                 &intent.request.title,
@@ -681,13 +673,28 @@ impl AppUseCase {
                 &state.episodes,
                 &state.accepted_download_ids,
                 &blocked_clients,
-            )?
+            )
         } else {
-            Vec::new()
+            Ok(Vec::new())
         };
+        let conflicts = match conflicts {
+            Ok(conflicts) => conflicts,
+            Err(error) => {
+                self.retire_replaced_submission(&mut replaced, &title_id, &state)
+                    .await?;
+                return Err(error);
+            }
+        };
+        // Admission spends a grab slot, so it waits until this submission is
+        // known to go ahead; but it must come before anything is cancelled or
+        // removed to make room for it, or a refused grab loses the download it
+        // replaces.
+        let mut grab_admitted = false;
         if !conflicts.is_empty() {
             match intent.conflict_policy {
                 SubmissionConflictPolicy::Abort | SubmissionConflictPolicy::Skip => {
+                    self.retire_replaced_submission(&mut replaced, &title_id, &state)
+                        .await?;
                     return Ok(CanonicalDownloadSubmissionOutcome::Conflict(
                         conflicts[0].clone(),
                     ));
@@ -695,6 +702,11 @@ impl AppUseCase {
                 SubmissionConflictPolicy::ReplaceEarly
                     if conflicts.iter().all(|conflict| conflict.replaceable) =>
                 {
+                    self.admit_indexer_monthly_grab(intent.request.indexer_id.as_deref())
+                        .await?;
+                    grab_admitted = true;
+                    self.retire_replaced_submission(&mut replaced, &title_id, &state)
+                        .await?;
                     self.replace_blocking_download_submissions(&conflicts)
                         .await?;
                     state.submissions = self
@@ -710,20 +722,30 @@ impl AppUseCase {
                         .into_iter()
                         .find(|conflict| !conflict.replaceable)
                         .expect("non-empty conflicts should contain a non-replaceable item");
+                    self.retire_replaced_submission(&mut replaced, &title_id, &state)
+                        .await?;
                     return Ok(CanonicalDownloadSubmissionOutcome::Conflict(conflict));
                 }
             }
         }
 
-        let download_id = intent.request.download_id.ok_or_else(|| {
-            AppError::validation_refused(crate::error_reasons::acquisition::CANONICAL_DOWNLOAD_SUBMISSION_REQUIRES_DOWNLOAD_ID, "canonical download submission requires a download id".to_string())
-        })?;
+        let Some(download_id) = intent.request.download_id else {
+            self.retire_replaced_submission(&mut replaced, &title_id, &state)
+                .await?;
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::CANONICAL_DOWNLOAD_SUBMISSION_REQUIRES_DOWNLOAD_ID, "canonical download submission requires a download id".to_string()));
+        };
         let source_kind = intent.request.source_kind;
         let source_hint = normalize_release_attempt_hint(intent.request.source_hint.as_deref());
         let mut request = DownloadClientAddRequest {
             download_id: Some(download_id),
             ..intent.request.clone()
         };
+        if !grab_admitted {
+            self.admit_indexer_monthly_grab(request.indexer_id.as_deref())
+                .await?;
+        }
+        self.retire_replaced_submission(&mut replaced, &title_id, &state)
+            .await?;
         // An HTTP release is resolved by its indexer and described to the
         // client as a structured block; there is no artifact to fetch.
         if let Some(listed) = intent.http_release.as_ref() {
@@ -1023,6 +1045,34 @@ impl AppUseCase {
                 newly_submitted: true,
             },
         ))
+    }
+
+    /// Removes the row of the earlier submission a retry replaces, if one is
+    /// still waiting to be removed. `state` already forgets it; it is cached
+    /// for the title once the row is gone.
+    async fn retire_replaced_submission(
+        &self,
+        replaced: &mut Option<DownloadSubmission>,
+        title_id: &str,
+        state: &CanonicalSubmissionTitleState,
+    ) -> AppResult<()> {
+        let Some(existing) = replaced.take() else {
+            return Ok(());
+        };
+        self.services
+            .workflow
+            .download_submissions
+            .delete_by_client_item_id(&ClientJobLocator::from_submission(&existing))
+            .await?;
+        // The delete ends the submission's binding inside the store.
+        self.runtime
+            .acquisition
+            .invalidate_download_registry_observations();
+        self.runtime
+            .acquisition
+            .download_submission_guards
+            .store_title_state(title_id, state.clone());
+        Ok(())
     }
 
     /// Withdraw the intent a refused grab recorded before submitting.

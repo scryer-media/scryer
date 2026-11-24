@@ -1,0 +1,20 @@
+# Download clients and indexers the import can create, and which need a secret
+# again. Read-only. Variables: as ExternalImportPreviewStatus.
+mutation ExternalImportPreviewSources($input: PreviewExternalImportInput!) {
+  previewExternalImport(input: $input) {
+    downloadClients {
+      dedupKey
+      name
+      supported
+      requiresPasswordOverride
+      apiKeyPresent
+    }
+    indexers {
+      dedupKey
+      name
+      supported
+      requiresApiKeyOverride
+      apiKeyPresent
+    }
+  }
+}

@@ -1,0 +1,122 @@
+export type LifecycleFileResult = {
+  fileId: string;
+  filePath: string | null;
+  completed: boolean;
+  error: string | null;
+};
+
+export type LifecycleFileResults = {
+  files: LifecycleFileResult[];
+  totalSizeBytes: number | null;
+  graceDeadline: string | null;
+  completedFileCount: number;
+  remainingFileCount: number;
+};
+
+/// Read the versioned scoped-deletion checkpoint embedded in an action-run
+/// detail payload. A sequence summary keeps its child delete journal in
+/// `deletion_outcomes`, so it is unwrapped here rather than displaying the
+/// internal journal as a second action-history row.
+export function parseLifecycleFileResults(
+  detail: string,
+): LifecycleFileResults | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(detail);
+  } catch {
+    return null;
+  }
+  const direct = parseLifecycleFileCheckpoint(value);
+  if (direct) return direct;
+  if (!isRecord(value) || !Array.isArray(value.deletion_outcomes)) {
+    return null;
+  }
+  const outcomes = value.deletion_outcomes.flatMap(
+    (outcome): LifecycleFileResults[] => {
+      if (!isRecord(outcome) || typeof outcome.detail !== "string") return [];
+      try {
+        const checkpoint = parseLifecycleFileCheckpoint(
+          JSON.parse(outcome.detail),
+        );
+        return checkpoint ? [checkpoint] : [];
+      } catch {
+        return [];
+      }
+    },
+  );
+  return combineLifecycleFileResults(outcomes);
+}
+
+function parseLifecycleFileCheckpoint(
+  value: unknown,
+): LifecycleFileResults | null {
+  if (!isRecord(value) || !Array.isArray(value.files)) {
+    return null;
+  }
+  const files = value.files.flatMap((file): LifecycleFileResult[] => {
+    if (
+      !isRecord(file) ||
+      typeof file.file_id !== "string" ||
+      typeof file.completed !== "boolean"
+    ) {
+      return [];
+    }
+    return [
+      {
+        fileId: file.file_id,
+        filePath: typeof file.file_path === "string" ? file.file_path : null,
+        completed: file.completed,
+        error: typeof file.error === "string" ? file.error : null,
+      },
+    ];
+  });
+  if (files.length === 0) {
+    return null;
+  }
+  const completedFileCount = files.filter((file) => file.completed).length;
+  return {
+    files,
+    totalSizeBytes:
+      typeof value.total_size_bytes === "number" &&
+      Number.isFinite(value.total_size_bytes)
+        ? value.total_size_bytes
+        : null,
+    graceDeadline:
+      typeof value.grace_deadline === "string" ? value.grace_deadline : null,
+    completedFileCount,
+    remainingFileCount: files.length - completedFileCount,
+  };
+}
+
+function combineLifecycleFileResults(
+  outcomes: LifecycleFileResults[],
+): LifecycleFileResults | null {
+  const files = outcomes.flatMap((outcome) => outcome.files);
+  if (files.length === 0) return null;
+  const graceDeadlines = new Set(
+    outcomes
+      .map((outcome) => outcome.graceDeadline)
+      .filter((deadline): deadline is string => deadline !== null),
+  );
+  const totalSizeBytes = outcomes.every(
+    (outcome) => outcome.totalSizeBytes !== null,
+  )
+    ? outcomes.reduce(
+        (total, outcome) => total + (outcome.totalSizeBytes ?? 0),
+        0,
+      )
+    : null;
+  const completedFileCount = files.filter((file) => file.completed).length;
+  return {
+    files,
+    totalSizeBytes,
+    graceDeadline:
+      graceDeadlines.size === 1 ? ([...graceDeadlines][0] ?? null) : null,
+    completedFileCount,
+    remainingFileCount: files.length - completedFileCount,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

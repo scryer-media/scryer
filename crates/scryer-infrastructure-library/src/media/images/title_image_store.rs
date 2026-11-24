@@ -1,5 +1,6 @@
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, SqlTx, StoreDatastore};
+use crate::workflow::stores::{
+    PreparedDomainEvent, append_prepared_domain_event_tx, prepare_domain_event,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -7,25 +8,10 @@ use scryer_application::{
     AppError, AppResult, TitleImageBlob, TitleImageKind, TitleImageRepository,
     TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantRecord, TitleImageVariantSpec,
 };
-use scryer_domain::{
-    DomainEvent, DomainEventActorKind, DomainEventStream, Id, MediaFacet, NewDomainEvent,
-};
-use scryer_infrastructure_sql::domain_event_payload::{
-    decode_domain_event_payload, derive_domain_event_projections, encode_domain_event_payload,
-};
+use scryer_domain::{DomainEvent, Id, NewDomainEvent};
+use std::sync::Arc;
 
 use super::{normalize_title_image_source_url, title_image_blob_digest};
-
-const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, event_type, payload_json";
-/// The insert half of an append; `RETURNING {DOMAIN_EVENT_COLUMNS}` is bolted
-/// on so the generated `sequence` comes back from the insert itself rather than
-/// from a follow-up `SELECT ... WHERE event_id = ?`.
-const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
-            event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
-            title_id, facet, correlation_id, causation_id, schema_version,
-            stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id, import_skip_reason
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 #[derive(Clone)]
 pub struct TitleImageStore {
@@ -62,6 +48,12 @@ impl TitleImageRepository for TitleImageStore {
         event: Option<NewDomainEvent>,
     ) -> AppResult<Option<DomainEvent>> {
         let title_id = title_id.to_string();
+        // Serialized and compressed here so the transaction only binds it.
+        let event = event
+            .as_ref()
+            .map(prepare_domain_event)
+            .transpose()?
+            .map(Arc::new);
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "upsert_title_image_source_result",
@@ -70,7 +62,7 @@ impl TitleImageRepository for TitleImageStore {
                 let result = result.clone();
                 let event = event.clone();
                 Box::pin(async move {
-                    upsert_title_image_source_result_tx(tx, &title_id, &result, event.as_ref())
+                    upsert_title_image_source_result_tx(tx, &title_id, &result, event.as_deref())
                         .await
                 })
             },
@@ -398,7 +390,7 @@ async fn upsert_title_image_source_result_tx(
     tx: &mut SqlTx<'_>,
     title_id: &str,
     result: &TitleImageSourceResult,
-    event: Option<&NewDomainEvent>,
+    event: Option<&PreparedDomainEvent>,
 ) -> AppResult<Option<DomainEvent>> {
     let now = Utc::now();
     let (remote_source_column, _) = title_image_source_columns(result.kind);
@@ -489,7 +481,7 @@ async fn upsert_title_image_source_result_tx(
     }
 
     if let Some(event) = event {
-        append_domain_event_tx(tx, event).await.map(Some)
+        append_prepared_domain_event_tx(tx, event).await.map(Some)
     } else {
         Ok(None)
     }
@@ -795,119 +787,6 @@ async fn fetch_optional_blob(
             })
         })
         .transpose()
-}
-
-pub(crate) async fn append_domain_event_tx(
-    tx: &mut SqlTx<'_>,
-    event: &NewDomainEvent,
-) -> AppResult<DomainEvent> {
-    let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
-    let event_type = event.payload.event_type().as_str();
-    let encoded_payload = encode_domain_event_payload(&payload).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to encode domain event {} ({event_type}): {error}",
-            event.event_id
-        ))
-    })?;
-    let projections = derive_domain_event_projections(event_type, &payload);
-    let inserted = SqlRuntime::fetch_optional(
-        SqlExec::Tx(tx),
-        &[
-            APPEND_DOMAIN_EVENT_INSERT_SQL,
-            " RETURNING ",
-            DOMAIN_EVENT_COLUMNS,
-        ]
-        .concat(),
-        &[
-            SqlArg::Text(event.event_id.clone()),
-            SqlArg::Timestamp(event.occurred_at),
-            SqlArg::Text(event.actor_kind.as_str().to_string()),
-            SqlArg::OptText(event.actor_user_id.clone()),
-            SqlArg::Text(event.actor_display_name.clone()),
-            SqlArg::OptText(event.title_id.clone()),
-            SqlArg::OptText(event.facet.as_ref().map(|facet| facet.as_str().to_string())),
-            SqlArg::OptText(event.correlation_id.clone()),
-            SqlArg::OptText(event.causation_id.clone()),
-            SqlArg::I32(event.schema_version),
-            SqlArg::Text(event.stream.kind().to_string()),
-            SqlArg::OptText(event.stream.identifier().map(str::to_string)),
-            SqlArg::Text(event_type.to_string()),
-            SqlArg::OptBytes(Some(encoded_payload)),
-            SqlArg::OptText(projections.import_status),
-            SqlArg::OptText(projections.media_file_delete_reason),
-            SqlArg::OptText(projections.download_id),
-            SqlArg::OptText(projections.import_skip_reason),
-        ],
-    )
-    .await?;
-    let row = inserted
-        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))?;
-    domain_event_from_row(&row)
-}
-
-fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
-    let event_id = row.text("event_id")?;
-    let event_type = row.text("event_type")?;
-    let stream_kind = row.text("stream_kind")?;
-    let encoded_payload = row.opt_bytes("payload_json")?.ok_or_else(|| {
-        AppError::Repository(format!(
-            "domain event {event_id} ({event_type}) payload is null"
-        ))
-    })?;
-    let decoded_payload = decode_domain_event_payload(&encoded_payload).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to decode domain event {event_id} ({event_type}): {error}"
-        ))
-    })?;
-    let payload = serde_json::from_value(decoded_payload).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to deserialize domain event {event_id} ({event_type}): {error}"
-        ))
-    })?;
-    Ok(DomainEvent {
-        sequence: row.i64("sequence")?,
-        event_id,
-        occurred_at: row.timestamp("occurred_at")?,
-        actor_kind: DomainEventActorKind::parse(row.text("actor_kind")?.as_str())
-            .unwrap_or(DomainEventActorKind::System),
-        actor_user_id: row.opt_text("actor_user_id")?,
-        actor_display_name: row.text("actor_display_name")?,
-        title_id: row.opt_text("title_id")?,
-        facet: row
-            .opt_text("facet")?
-            .as_deref()
-            .and_then(MediaFacet::parse),
-        correlation_id: row.opt_text("correlation_id")?,
-        causation_id: row.opt_text("causation_id")?,
-        schema_version: row.i32("schema_version")?,
-        stream: stream_from_parts(&stream_kind, row.opt_text("stream_id")?)?,
-        payload,
-    })
-}
-
-fn stream_from_parts(kind: &str, identifier: Option<String>) -> AppResult<DomainEventStream> {
-    match kind {
-        "global" => Ok(DomainEventStream::Global),
-        "title" => identifier
-            .map(|title_id| DomainEventStream::Title { title_id })
-            .ok_or_else(|| AppError::Repository("domain event missing title stream id".into())),
-        "library_scan" => identifier
-            .map(|session_id| DomainEventStream::LibraryScan { session_id })
-            .ok_or_else(|| {
-                AppError::Repository("domain event missing library scan stream id".into())
-            }),
-        "job_run" => identifier
-            .map(|run_id| DomainEventStream::JobRun { run_id })
-            .ok_or_else(|| AppError::Repository("domain event missing job run stream id".into())),
-        "download_queue_item" => identifier
-            .map(|item_id| DomainEventStream::DownloadQueueItem { item_id })
-            .ok_or_else(|| {
-                AppError::Repository("domain event missing download queue item stream id".into())
-            }),
-        other => Err(AppError::Repository(format!(
-            "unknown domain event stream kind: {other}"
-        ))),
-    }
 }
 
 #[cfg(test)]

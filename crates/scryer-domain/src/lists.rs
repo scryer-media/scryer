@@ -88,7 +88,7 @@ impl ListMode {
 /// What happens to a title the list added when the item leaves the list.
 ///
 /// There is deliberately no removal variant. Removing titles a list no longer
-/// wants is a maintenance rule with its own approval boundary; Lists only
+/// wants is a lifecycle rule with its own approval boundary; Lists only
 /// records the departure and exposes it as facts.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -210,6 +210,14 @@ pub struct ListRoute {
     pub release_numbering: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Required audio languages for new titles. `None` inherits the
+    /// library's and facet's; an empty list requires nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, for new titles. `None` inherits;
+    /// never an empty list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 /// A per-subscription item filter, re-evaluated on every sync.

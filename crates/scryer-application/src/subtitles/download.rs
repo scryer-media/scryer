@@ -7,6 +7,7 @@ use super::extraction::{
 };
 use super::language::normalize_subtitle_language_code;
 use super::provider::{SubtitleFile, SubtitleProvider};
+use crate::disk::{Access, Disk, Parents, Replace};
 use crate::{AppError, AppResult, ArchiveExtractorPluginProvider};
 
 #[derive(Clone, Default)]
@@ -217,24 +218,24 @@ fn save_subtitle_file(
 ) -> AppResult<(PathBuf, SubtitleFile)> {
     let dest = build_subtitle_path(video_path, language, &file.format, forced, hearing_impaired);
 
-    // Ensure parent directory exists
-    if let Some(parent) = dest.parent()
-        && !parent.exists()
-    {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            AppError::Repository(format!(
-                "cannot create subtitle directory {}: {e}",
-                parent.display()
-            ))
-        })?;
+    let disk = Disk::process();
+    if let Some(parent) = dest.parent() {
+        disk.create_dir_blocking(parent, Parents::Create)
+            .map_err(|e| {
+                AppError::Repository(format!(
+                    "cannot create subtitle directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
     }
 
-    std::fs::write(&dest, &file.content).map_err(|e| {
-        AppError::Repository(format!(
-            "cannot write subtitle file {}: {e}",
-            dest.display()
-        ))
-    })?;
+    disk.write_blocking(&dest, &file.content, Replace::Allowed, Access::Default)
+        .map_err(|e| {
+            AppError::Repository(format!(
+                "cannot write subtitle file {}: {e}",
+                dest.display()
+            ))
+        })?;
 
     tracing::info!(
         path = %dest.display(),

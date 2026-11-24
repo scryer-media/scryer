@@ -15,6 +15,13 @@ export type LayoutNodeInput = {
    * past the named neighbourhoods.
    */
   free?: boolean;
+  /**
+   * Half the width and height of what is drawn for the title, in layout
+   * units. No two titles' boxes overlap once the layout settles; a title
+   * without them takes no room.
+   */
+  halfWidth?: number;
+  halfHeight?: number;
 };
 
 export type LayoutEdgeInput = {
@@ -30,6 +37,9 @@ export type LayoutState = {
   free: Uint8Array;
   x: Float64Array;
   y: Float64Array;
+  /** Each title's half extents; see `LayoutNodeInput.halfWidth`. */
+  halfWidth: Float64Array;
+  halfHeight: Float64Array;
   centers: Map<number, LayoutPoint>;
   edges: Array<{ a: number; b: number; weight: number }>;
   /** Cooling factor: how far a node may move in one step. */
@@ -75,6 +85,8 @@ const HULL_PUSH = 0.35;
 const NEAREST_LINKED_REFRESH_STEPS = 10;
 /** Grid cell size for finding the outlines near a title. */
 const OUTLINE_CELL = 120;
+/** Passes per step that move overlapping titles apart. */
+const OVERLAP_PASSES = 3;
 const START_TEMPERATURE = 24;
 const SETTLE_TEMPERATURE = 6;
 const COOLING = 0.97;
@@ -119,6 +131,21 @@ export function clusterCenters(
 }
 
 /**
+ * The ring spots `createLayout` gives these nodes, known before it runs, so
+ * the frame can be fixed and the titles measured in layout units first. Only
+ * named neighbourhoods take a spot on the ring.
+ */
+export function layoutClusterCenters(
+  nodes: readonly LayoutNodeInput[],
+  allClusterIds: Iterable<number> = [],
+): Map<number, LayoutPoint> {
+  return clusterCenters([
+    ...allClusterIds,
+    ...nodes.filter((node) => !node.free).map((node) => node.clusterId),
+  ]);
+}
+
+/**
  * A layout over the given nodes and edges. Nodes found in `previous` keep that
  * position; the rest start beside their cluster's centre. When most nodes
  * already had a position the layout starts cool, so the next steps settle it
@@ -134,11 +161,7 @@ export function createLayout(
   previous: ReadonlyMap<string, LayoutPoint> = new Map(),
   allClusterIds: Iterable<number> = [],
 ): LayoutState {
-  // Only named neighbourhoods take a spot on the ring.
-  const centers = clusterCenters([
-    ...allClusterIds,
-    ...nodes.filter((node) => !node.free).map((node) => node.clusterId),
-  ]);
+  const centers = layoutClusterCenters(nodes, allClusterIds);
   const keys = nodes.map((node) => node.key);
   const clusterIds = nodes.map((node) => node.clusterId);
   const free = Uint8Array.from(nodes, (node) => (node.free ? 1 : 0));
@@ -196,6 +219,12 @@ export function createLayout(
     free,
     x,
     y,
+    halfWidth: Float64Array.from(nodes, (node) =>
+      Math.max(0, node.halfWidth ?? 0),
+    ),
+    halfHeight: Float64Array.from(nodes, (node) =>
+      Math.max(0, node.halfHeight ?? 0),
+    ),
     centers,
     edges: layoutEdges,
     temperature: settling ? SETTLE_TEMPERATURE : START_TEMPERATURE,
@@ -518,6 +547,7 @@ export function stepLayout(state: LayoutState, iterations: number): number {
         state.y[index] += (dy[index] / length) * limited;
       }
     }
+    separateOverlaps(state);
     state.steps += 1;
     state.temperature *= COOLING;
     ran += 1;
@@ -526,6 +556,86 @@ export function stepLayout(state: LayoutState, iterations: number): number {
     state.x[index] *= CLUSTER_RING_WIDTH;
   }
   return ran;
+}
+
+/**
+ * Moves overlapping titles apart, each by half the overlap, along whichever
+ * axis parts them sooner. Runs in the squeezed space `stepLayout` works in.
+ * Unlike the forces it is not held back by the temperature, so the settled
+ * layout leaves every title clear of the rest however densely they link.
+ * Titles are found through a grid as wide as the largest pair, so a pass
+ * stays linear in the node count.
+ */
+function separateOverlaps(state: LayoutState): void {
+  const count = state.keys.length;
+  let reach = 0;
+  for (let index = 0; index < count; index += 1) {
+    reach = Math.max(
+      reach,
+      state.halfWidth[index] / CLUSTER_RING_WIDTH,
+      state.halfHeight[index],
+    );
+  }
+  if (reach === 0) {
+    return;
+  }
+  const cell = 2 * reach;
+  for (let pass = 0; pass < OVERLAP_PASSES; pass += 1) {
+    const grid = new Map<string, number[]>();
+    for (let index = 0; index < count; index += 1) {
+      const key = `${Math.floor(state.x[index] / cell)}:${Math.floor(state.y[index] / cell)}`;
+      const bucket = grid.get(key);
+      if (bucket) {
+        bucket.push(index);
+      } else {
+        grid.set(key, [index]);
+      }
+    }
+    let parted = false;
+    for (let index = 0; index < count; index += 1) {
+      const cx = Math.floor(state.x[index] / cell);
+      const cy = Math.floor(state.y[index] / cell);
+      for (let ox = -1; ox <= 1; ox += 1) {
+        for (let oy = -1; oy <= 1; oy += 1) {
+          const bucket = grid.get(`${cx + ox}:${cy + oy}`);
+          if (!bucket) {
+            continue;
+          }
+          for (const other of bucket) {
+            if (other <= index) {
+              continue;
+            }
+            const ddx = state.x[other] - state.x[index];
+            const ddy = state.y[other] - state.y[index];
+            const overlapX =
+              (state.halfWidth[index] + state.halfWidth[other]) /
+                CLUSTER_RING_WIDTH -
+              Math.abs(ddx);
+            const overlapY =
+              state.halfHeight[index] + state.halfHeight[other] - Math.abs(ddy);
+            if (overlapX <= 0 || overlapY <= 0) {
+              continue;
+            }
+            parted = true;
+            // Compared in drawn units: the x axis is squeezed here.
+            if (overlapX * CLUSTER_RING_WIDTH <= overlapY) {
+              // Coincident titles part in a direction fixed by their order.
+              const half = (ddx < 0 ? -overlapX : overlapX) / 2;
+              state.x[index] -= half;
+              state.x[other] += half;
+            } else {
+              const half = (ddy < 0 ? -overlapY : overlapY) / 2;
+              state.y[index] -= half;
+              state.y[other] += half;
+            }
+          }
+        }
+      }
+    }
+    if (!parted) {
+      return;
+    }
+  }
 }
 
 export function layoutPositions(state: LayoutState): Map<string, LayoutPoint> {

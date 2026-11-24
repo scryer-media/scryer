@@ -237,6 +237,8 @@ export type TitleRecord = {
   mediaResolution?: string | null;
   mediaHdr?: string | null;
   mediaAudioCodec?: string | null;
+  /** US certification, such as `PG-13`, the value the request rule fact reads. */
+  certificationLabel?: string | null;
   ratings?: TitleRatingRecord | null;
   canonicalTags?: CanonicalMediaTag[];
   language?: string | null;
@@ -252,6 +254,8 @@ export type TitleRecord = {
   requiredAudioLanguagesOverride?: string[] | null;
   effectiveRequiredAudioLanguages?: string[];
   inheritsRequiredAudioLanguages?: boolean;
+  effectivePreferredAudioLanguages?: string[];
+  inheritsPreferredAudioLanguages?: boolean;
   metadataFetchedAt?: string | null;
   minAvailability?: string | null;
   movieAvailability?: MovieAvailabilityRecord | null;
@@ -315,6 +319,12 @@ export type LibraryRecord = {
   qualityProfileId?: string | null;
   requestQualityProfileIds?: string[];
   requestQualityProfileDefaultId?: string | null;
+  /**
+   * Audio languages a new title here inherits (the library's, else the
+   * facet's), present only where the query selected them.
+   */
+  inheritedRequiredAudioLanguages?: string[];
+  inheritedPreferredAudioLanguages?: string[];
   /** Effective settings, read only where the viewer may configure the library. */
   settings?: Pick<
     LibrarySettingsRecord,
@@ -365,6 +375,8 @@ export type MediaRequestRecord = {
   /// How long the requester asked the media to be kept, in days. Null means
   /// forever: there is no separate flag on the requester side.
   requestedLeaseDays?: number | null;
+  requestedRequiredAudioLanguages?: string[] | null;
+  requestedPreferredAudioLanguages?: string[] | null;
   /// What the approver granted. Null means forever, and it stays null until the
   /// request is approved.
   approvedLeaseDays?: number | null;
@@ -394,7 +406,6 @@ export type LibrarySettingsRecord = {
   metadataLanguage: string;
   useSeasonFoldersOverride: boolean | null;
   useSeasonFolders: boolean;
-  defaultMonitorType?: string | null;
   defaultMonitorTypeOverride?: string | null;
   qualityProfileIdOverride: string | null;
   qualityProfileId: string;

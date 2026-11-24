@@ -3,7 +3,7 @@ use super::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, DashboardActivityStats, DomainEventRepository,
+    AppError, AppResult, DashboardActivityStats, DomainEventRepository, TitleHistoryTitleScope,
     UnfinishedLibraryScanSession,
 };
 use scryer_domain::{
@@ -227,44 +227,30 @@ impl DomainEventRepository for DomainEventStore {
         .await
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
-        include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64> {
-        let (where_sql, args) = build_title_history_filter_sql(
-            &self.datastore,
-            event_types,
-            title_ids,
-            include_titleless,
-            download_id,
-        );
-        let row = SqlRuntime::fetch_optional(
-            self.datastore.read_exec(),
-            &format!("SELECT COUNT(*) AS count FROM domain_events{where_sql}"),
-            &args,
-        )
-        .await?
-        .ok_or_else(|| AppError::Repository("missing domain event count".into()))?;
-        row.i64("count")
-    }
-
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let page_size = if limit == 0 { 50 } else { limit.min(500) };
+        if let Some((sql, args)) = build_title_history_merged_page_sql(
+            event_types,
+            title_scope,
+            include_titleless,
+            download_id,
+            page_size,
+            offset,
+        ) {
+            return fetch_domain_events(self.datastore.read_exec(), &sql, &args).await;
+        }
         let (where_sql, mut args) = build_title_history_filter_sql(
             &self.datastore,
             event_types,
-            title_ids,
+            title_scope,
             include_titleless,
             download_id,
         );
@@ -433,7 +419,8 @@ mod title_history_filter_tests {
                  import_status TEXT,
                  media_file_delete_reason TEXT,
                  download_id TEXT,
-                 import_skip_reason TEXT
+                 import_skip_reason TEXT,
+                 media_request_id TEXT
              )",
         )
         .execute(&pool)
@@ -635,7 +622,7 @@ mod title_history_filter_tests {
             let page = store
                 .list_title_history_page_events(
                     filter,
-                    Some(&["title-1".into()]),
+                    Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
                     false,
                     None,
                     50,
@@ -646,9 +633,10 @@ mod title_history_filter_tests {
             assert_eq!(page, vec![first.clone()]);
             assert_eq!(
                 store
-                    .count_title_history_page_events(filter, None, false, None)
+                    .list_title_history_page_events(filter, None, false, None, 500, 0)
                     .await
-                    .unwrap(),
+                    .unwrap()
+                    .len() as i64,
                 1
             );
             assert!(
@@ -657,6 +645,248 @@ mod title_history_filter_tests {
                     .await
                     .unwrap()
                     .is_empty()
+            );
+        }
+    }
+
+    /// An append describes each event from the values it prepared instead of
+    /// decoding the row it just wrote, so what it returns has to be what a
+    /// read of that row returns.
+    #[tokio::test]
+    async fn appended_events_equal_their_stored_rows_across_types_and_replay() {
+        let store = store().await;
+        let read_back = |event_id: String| {
+            let store = store.clone();
+            async move {
+                super::super::core::fetch_domain_event_by_event_id(
+                    store.datastore.read_exec(),
+                    &event_id,
+                )
+                .await
+                .expect("stored event should load")
+                .expect("event should be stored")
+            }
+        };
+
+        let mut grabbed = event_with_payload(
+            "event-grabbed",
+            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                title: title_snapshot(),
+                source_title: Some("Synthetic.Release.1080p.WEB-DL".to_string()),
+                source_hint: Some("https://indexer.example/api".to_string()),
+                source_provider: Some("Configured Indexer".to_string()),
+                download_id: Some("download-1".to_string()),
+                episode_ids: vec!["episode-1".to_string(), "episode-2".to_string()],
+                release_facts: None,
+            }),
+        );
+        grabbed.title_id = None;
+        grabbed.facet = None;
+        grabbed.stream = DomainEventStream::Global;
+        grabbed.actor_kind = DomainEventActorKind::User;
+        grabbed.actor_user_id = Some("member-owner".to_string());
+        grabbed.actor_display_name = "Synthetic Member".to_string();
+        grabbed.correlation_id = Some("correlation-1".to_string());
+        grabbed.causation_id = Some("causation-1".to_string());
+
+        let mut ignored = download_ignored_event();
+        ignored.event_id = "event-ignored".to_string();
+        ignored.actor_kind = DomainEventActorKind::Anonymous;
+        ignored.stream = DomainEventStream::User {
+            user_id: "member-owner".to_string(),
+        };
+
+        let upgraded = event_with_payload(
+            "event-upgraded",
+            DomainEventPayload::MediaFileUpgraded(scryer_domain::MediaFileUpgradedEventData {
+                title: title_snapshot(),
+                media_updates: vec![],
+                episode_ids: vec!["episode-1".to_string()],
+                previous_file_id: Some("file-old".to_string()),
+                current_file_id: Some("file-new".to_string()),
+                old_score: Some(-120),
+                new_score: Some(340),
+                size_bytes: Some(5_000_000_000),
+                import_id: Some("import-1".to_string()),
+                source_ref: None,
+            }),
+        );
+
+        let mut completed = event_with_payload(
+            "event-completed",
+            DomainEventPayload::ImportCompleted(scryer_domain::ImportCompletedEventData {
+                title: title_snapshot(),
+                media_updates: vec![],
+                imported_count: 3,
+                import_id: Some("import-1".to_string()),
+                source_system: None,
+                source_ref: None,
+                source_title: Some("Synthetic.Release.1080p.WEB-DL".to_string()),
+                source_path: Some("/downloads/synthetic".to_string()),
+                dest_path: Some("/library/Synthetic Title".to_string()),
+                quality: None,
+                episode_ids: vec![],
+                size_bytes: None,
+                upgrade: true,
+            }),
+        );
+        completed.stream = DomainEventStream::JobRun {
+            run_id: "run-1".to_string(),
+        };
+
+        let events = vec![grabbed, ignored, upgraded, completed];
+        let appended = store
+            .append_many(events.clone())
+            .await
+            .expect("events should append");
+        assert_eq!(appended.len(), events.len());
+        for (event, stored) in events.iter().zip(&appended) {
+            assert_eq!(stored.event_id, event.event_id);
+            assert_eq!(*stored, read_back(event.event_id.clone()).await);
+        }
+        assert!(
+            appended
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence),
+            "a batch is stored in the order it was given"
+        );
+
+        // A replay returns the event as first stored, whatever it carries now.
+        for (event, stored) in events.iter().zip(&appended) {
+            let mut changed = event.clone();
+            changed.occurred_at += chrono::Duration::hours(1);
+            changed.actor_display_name = "Replayed".to_string();
+            assert_eq!(
+                store
+                    .append_once(changed)
+                    .await
+                    .expect("replay should succeed"),
+                *stored
+            );
+        }
+
+        let mut first_once = download_ignored_event();
+        first_once.event_id = "event-once".to_string();
+        let once = store
+            .append_once(first_once)
+            .await
+            .expect("a first append-once should store the event");
+        assert_eq!(once, read_back("event-once".to_string()).await);
+        assert!(once.sequence > appended[appended.len() - 1].sequence);
+    }
+
+    /// A batch large enough to be prepared in several blocking chunks through
+    /// shared zstd contexts stores, for every event, exactly the bytes and
+    /// projections a per-event encode with a fresh context produces, in order.
+    #[tokio::test]
+    async fn a_multi_chunk_batch_stores_what_per_event_encoding_stores() {
+        let store = store().await;
+        let events = (0..600)
+            .map(|index| {
+                let event_id = format!("event-batch-{index:04}");
+                let payload = match index % 5 {
+                    0 => DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                        title: title_snapshot(),
+                        source_title: Some(format!("Synthetic.Release.{index}.1080p.WEB-DL")),
+                        source_hint: None,
+                        source_provider: Some("Configured Indexer".to_string()),
+                        download_id: Some(format!("download-{index}")),
+                        episode_ids: (0..index % 7).map(|e| format!("episode-{e}")).collect(),
+                        release_facts: None,
+                    }),
+                    1 => DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                        title: Some(title_snapshot()),
+                        status: ImportStatus::Failed,
+                        import_id: None,
+                        source_system: None,
+                        source_ref: None,
+                        source_title: Some("x".repeat(index * 40)),
+                        source_path: None,
+                        dest_path: None,
+                        quality: None,
+                        reason: Some(format!("synthetic reason {index}")),
+                        skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
+                        episode_ids: Vec::new(),
+                    }),
+                    2 => DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                        title: title_snapshot(),
+                        media_updates: Vec::new(),
+                        file_id: Some(format!("file-{index}")),
+                        reason: MediaFileDeletedReason::UpgradeCleanup,
+                        episode_ids: Vec::new(),
+                    }),
+                    3 => DomainEventPayload::MediaFileUpgraded(
+                        scryer_domain::MediaFileUpgradedEventData {
+                            title: title_snapshot(),
+                            media_updates: vec![],
+                            episode_ids: vec![format!("episode-{index}")],
+                            previous_file_id: None,
+                            current_file_id: Some(format!("file-{index}")),
+                            old_score: Some(-(index as i32)),
+                            new_score: Some(index as i32),
+                            size_bytes: Some(index as i64 * 1_000_003),
+                            import_id: None,
+                            source_ref: None,
+                        },
+                    ),
+                    _ => download_ignored_event().payload,
+                };
+                event_with_payload(&event_id, payload)
+            })
+            .collect::<Vec<_>>();
+        let appended = store
+            .append_many(events.clone())
+            .await
+            .expect("events should append");
+        assert_eq!(appended.len(), events.len());
+        assert!(
+            appended
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            unreachable!("the test store is SQLite");
+        };
+        for (event, stored) in events.iter().zip(&appended) {
+            assert_eq!(stored.event_id, event.event_id);
+            let payload = serde_json::to_value(&event.payload).unwrap();
+            let expected_bytes =
+                scryer_infrastructure_sql::domain_event_payload::encode_domain_event_payload(
+                    &payload,
+                )
+                .unwrap();
+            let expected_projections =
+                scryer_infrastructure_sql::domain_event_payload::derive_domain_event_projections(
+                    event.payload.event_type().as_str(),
+                    &payload,
+                );
+            let row = sqlx::query(
+                "SELECT payload_json, import_status, media_file_delete_reason, download_id,
+                        import_skip_reason, media_request_id
+                   FROM domain_events WHERE event_id = ?1",
+            )
+            .bind(&event.event_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(row.get::<Vec<u8>, _>("payload_json"), expected_bytes);
+            assert_eq!(
+                scryer_infrastructure_sql::domain_event_payload::DomainEventProjections {
+                    import_status: row.get("import_status"),
+                    import_skip_reason: row.get("import_skip_reason"),
+                    media_file_delete_reason: row.get("media_file_delete_reason"),
+                    download_id: row.get("download_id"),
+                    media_request_id: row.get("media_request_id"),
+                },
+                expected_projections
+            );
+            assert_eq!(
+                stored.payload,
+                scryer_infrastructure_sql::domain_event_payload::decode_domain_event_payload(
+                    &expected_bytes
+                )
+                .map(|value| serde_json::from_value::<DomainEventPayload>(value).unwrap())
+                .unwrap()
             );
         }
     }
@@ -694,14 +924,17 @@ mod title_history_filter_tests {
 
         assert_eq!(
             store
-                .count_title_history_page_events(
+                .list_title_history_page_events(
                     Some(&[TitleHistoryEventType::DownloadIgnored]),
                     None,
                     false,
-                    None
+                    None,
+                    500,
+                    0
                 )
                 .await
-                .expect("filtered count should load"),
+                .expect("filtered count should load")
+                .len() as i64,
             1
         );
     }
@@ -753,9 +986,10 @@ mod title_history_filter_tests {
         );
         assert_eq!(
             store
-                .count_title_history_page_events(None, None, false, None)
+                .list_title_history_page_events(None, None, false, None, 500, 0)
                 .await
-                .expect("unfiltered count should load"),
+                .expect("unfiltered count should load")
+                .len() as i64,
             2
         );
 
@@ -774,7 +1008,14 @@ mod title_history_filter_tests {
         assert_eq!(grabs[0].event_id, "event-untitled-grab");
 
         let title_scoped = store
-            .list_title_history_page_events(None, Some(&["title-1".into()]), false, None, 50, 0)
+            .list_title_history_page_events(
+                None,
+                Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                false,
+                None,
+                50,
+                0,
+            )
             .await
             .expect("title-scoped page should load");
         assert_eq!(
@@ -785,9 +1026,17 @@ mod title_history_filter_tests {
         assert_eq!(title_scoped[0].event_id, "event-1");
         assert_eq!(
             store
-                .count_title_history_page_events(None, Some(&["title-1".into()]), false, None)
+                .list_title_history_page_events(
+                    None,
+                    Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                    false,
+                    None,
+                    500,
+                    0
+                )
                 .await
-                .expect("title-scoped count should load"),
+                .expect("title-scoped count should load")
+                .len() as i64,
             1
         );
 
@@ -795,15 +1044,30 @@ mod title_history_filter_tests {
         // the title list is the caller's library authorization rather than a
         // title the user chose, so the untitled grab comes back alongside.
         let authorization_scoped = store
-            .list_title_history_page_events(None, Some(&["title-1".into()]), true, None, 50, 0)
+            .list_title_history_page_events(
+                None,
+                Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                true,
+                None,
+                50,
+                0,
+            )
             .await
             .expect("authorization-scoped page should load");
         assert_eq!(authorization_scoped.len(), 2, "{authorization_scoped:?}");
         assert_eq!(
             store
-                .count_title_history_page_events(None, Some(&["title-1".into()]), true, None)
+                .list_title_history_page_events(
+                    None,
+                    Some(TitleHistoryTitleScope::Titles(&["title-1".into()])),
+                    true,
+                    None,
+                    500,
+                    0
+                )
                 .await
-                .expect("authorization-scoped count should load"),
+                .expect("authorization-scoped count should load")
+                .len() as i64,
             2
         );
     }
@@ -985,6 +1249,229 @@ mod title_history_filter_tests {
         assert_eq!(rows[2].get::<String, _>("download_id"), "download-1");
     }
 
+    /// The page read as one bounded walk per history type returns the rows of
+    /// the single filtered statement, in the same order, for every page it
+    /// takes over.
+    #[tokio::test]
+    async fn merged_history_page_matches_the_single_statement() {
+        let store = store().await;
+        for statement in [
+            "CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT NOT NULL)",
+            "INSERT INTO titles VALUES ('title-1', 'visible'), ('title-2', 'private')",
+        ] {
+            SqlRuntime::execute(store.datastore.read_exec(), statement, &[])
+                .await
+                .unwrap();
+        }
+        let rejection = |status, skip_reason| {
+            DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                title: None,
+                status,
+                import_id: None,
+                source_system: None,
+                source_ref: None,
+                source_title: None,
+                source_path: None,
+                dest_path: None,
+                quality: None,
+                reason: None,
+                skip_reason,
+                episode_ids: Vec::new(),
+            })
+        };
+        let deleted = |reason| {
+            DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                title: title_snapshot(),
+                media_updates: Vec::new(),
+                file_id: None,
+                reason,
+                episode_ids: Vec::new(),
+            })
+        };
+        let mut events = Vec::new();
+        for n in 0..140usize {
+            let payload = match n % 7 {
+                0 => download_ignored_event().payload,
+                1 => DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title_snapshot(),
+                    source_title: None,
+                    source_hint: None,
+                    source_provider: None,
+                    download_id: Some(format!("download-{}", n % 3)),
+                    episode_ids: Vec::new(),
+                    release_facts: None,
+                }),
+                2 => rejection(
+                    ImportStatus::Failed,
+                    Some(ImportSkipReason::PostDownloadRuleBlocked),
+                ),
+                3 => rejection(ImportStatus::Failed, None),
+                4 => rejection(ImportStatus::Skipped, Some(ImportSkipReason::DuplicateFile)),
+                5 => deleted(MediaFileDeletedReason::UpgradeCleanup),
+                // Grabs run more often than the rest, so the newest rows are
+                // not spread evenly over the types.
+                _ if n > 100 => DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title_snapshot(),
+                    source_title: None,
+                    source_hint: None,
+                    source_provider: None,
+                    download_id: None,
+                    episode_ids: Vec::new(),
+                    release_facts: None,
+                }),
+                _ => deleted(MediaFileDeletedReason::Deleted),
+            };
+            let mut event = event_with_payload(&format!("event-{n:03}"), payload);
+            match n % 5 {
+                0 | 1 => {}
+                2 | 3 => {
+                    event.title_id = Some("title-2".into());
+                    event.stream = DomainEventStream::Title {
+                        title_id: "title-2".into(),
+                    };
+                }
+                _ => {
+                    event.title_id = None;
+                    event.facet = None;
+                    event.stream = DomainEventStream::Global;
+                }
+            }
+            events.push(event);
+        }
+        store.append_many(events).await.expect("events append");
+
+        let every_type = [
+            TitleHistoryEventType::Grabbed,
+            TitleHistoryEventType::DownloadIgnored,
+            TitleHistoryEventType::ImportFailed,
+            TitleHistoryEventType::ImportSkipped,
+            TitleHistoryEventType::ImportRejectedByRule,
+            TitleHistoryEventType::FileRecycled,
+            TitleHistoryEventType::FileDeleted,
+            TitleHistoryEventType::DownloadCompleted,
+            TitleHistoryEventType::Rematched,
+        ];
+        let repeated = [
+            TitleHistoryEventType::Grabbed,
+            TitleHistoryEventType::FileDeleted,
+            TitleHistoryEventType::Grabbed,
+        ];
+        let two = [
+            TitleHistoryEventType::ImportFailed,
+            TitleHistoryEventType::FileRecycled,
+        ];
+        let visible = ["visible".to_string()];
+        let both = ["visible".to_string(), "private".to_string()];
+        let unknown = ["library-unknown".to_string()];
+        let type_choices: [Option<&[TitleHistoryEventType]>; 4] =
+            [None, Some(&every_type), Some(&repeated), Some(&two)];
+        let scope_choices = [
+            None,
+            Some(TitleHistoryTitleScope::Libraries(&visible)),
+            Some(TitleHistoryTitleScope::Libraries(&both)),
+            Some(TitleHistoryTitleScope::Libraries(&unknown)),
+        ];
+
+        let mut compared = 0usize;
+        let mut non_empty = 0usize;
+        for event_types in type_choices {
+            for title_scope in scope_choices {
+                for include_titleless in [false, true] {
+                    for (page_size, offset) in [
+                        (1, 0),
+                        (1, 1),
+                        (7, 3),
+                        (20, 19),
+                        (50, 0),
+                        (50, 120),
+                        (500, 0),
+                        (10, 1_000),
+                    ] {
+                        let (merged_sql, merged_args) = build_title_history_merged_page_sql(
+                            event_types,
+                            title_scope,
+                            include_titleless,
+                            None,
+                            page_size,
+                            offset,
+                        )
+                        .expect("a page of several history types is merged");
+                        let merged = fetch_domain_events(
+                            store.datastore.read_exec(),
+                            &merged_sql,
+                            &merged_args,
+                        )
+                        .await
+                        .expect("merged page");
+                        let (where_sql, mut args) = build_title_history_filter_sql(
+                            &store.datastore,
+                            event_types,
+                            title_scope,
+                            include_titleless,
+                            None,
+                        );
+                        args.push(SqlArg::I64(page_size as i64));
+                        args.push(SqlArg::I64(offset as i64));
+                        let single = fetch_domain_events(
+                            store.datastore.read_exec(),
+                            &format!(
+                                "SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events{where_sql} ORDER BY sequence DESC LIMIT {{}} OFFSET {{}}"
+                            ),
+                            &args,
+                        )
+                        .await
+                        .expect("single statement page");
+                        let label = format!(
+                            "{event_types:?} {title_scope:?} titleless={include_titleless} {page_size}/{offset}"
+                        );
+                        assert_eq!(merged, single, "{label}");
+                        // The store serves this page through the merged read.
+                        let served = store
+                            .list_title_history_page_events(
+                                event_types,
+                                title_scope,
+                                include_titleless,
+                                None,
+                                page_size,
+                                offset,
+                            )
+                            .await
+                            .expect("served page");
+                        assert_eq!(served, single, "{label}");
+                        compared += 1;
+                        if !single.is_empty() {
+                            non_empty += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(non_empty > compared / 2, "{non_empty} of {compared}");
+
+        // Pages narrowed by chosen titles or one download, and pages of one
+        // history type, stay on the single statement.
+        let chosen = ["title-1".to_string()];
+        for (event_types, title_scope, download_id) in [
+            (None, Some(TitleHistoryTitleScope::Titles(&chosen)), None),
+            (None, Some(TitleHistoryTitleScope::Libraries(&[])), None),
+            (None, None, Some("download-1")),
+            (Some(&repeated[..1]), None, None),
+            (Some(&[][..]), None, None),
+        ] {
+            assert!(
+                build_title_history_merged_page_sql(
+                    event_types,
+                    title_scope,
+                    false,
+                    download_id,
+                    50,
+                    0
+                )
+                .is_none()
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rule_rejections_filter_under_their_own_history_type_only() {
         let store = store().await;
@@ -1040,11 +1527,6 @@ mod title_history_filter_tests {
                     .map(|event| event.event_id)
                     .collect::<Vec<_>>();
                 ids.sort();
-                let count = store
-                    .count_title_history_page_events(Some(&[event_type]), None, false, None)
-                    .await
-                    .expect("history should count");
-                assert_eq!(count, ids.len() as i64);
                 ids
             }
         };

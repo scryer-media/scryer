@@ -45,7 +45,7 @@ async fn unbuildable_persisted_rules_hold_only_their_enforcing_scope() {
             revision.rego_source = "not valid rego {".into();
             harness
                 .request_rules
-                .add_revision(&revision, Utc::now())
+                .add_revision(&revision, Utc::now(), None)
                 .await
                 .unwrap();
             harness.app.rebuild_request_rules_engine().await.unwrap();
@@ -118,14 +118,19 @@ async fn request_rule_timeout_holds_an_armed_request_and_records_the_error() {
         limits,
     )
     .unwrap();
-    harness
-        .app
-        .services
-        .customization
-        .request_rules_engine
-        .write()
-        .unwrap()
-        .engine = engine;
+    {
+        let mut guard = harness
+            .app
+            .services
+            .customization
+            .request_rules_engine
+            .write()
+            .unwrap();
+        *guard = std::sync::Arc::new(crate::request_rules::RequestRulesEngineCache {
+            engine,
+            ..crate::request_rules::RequestRulesEngineCache::clone(&guard)
+        });
+    }
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     submit(&harness, &library_id, 9047, None).await;
     assert_eq!(
@@ -134,7 +139,6 @@ async fn request_rule_timeout_holds_an_armed_request_and_records_the_error() {
     );
     let traces = harness.request_rule_decisions.recorded().await;
     let trace = traces.last().unwrap();
-    assert_eq!(trace.mode, RequestRuleEvaluationMode::Enforce);
     assert_eq!(trace.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
     assert!(trace.votes_json.contains("error"), "{}", trace.votes_json);
     assert!(harness.titles.store.lock().await.is_empty());
@@ -244,6 +248,8 @@ approve if {
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
                 requested_lease_days: Some(Some(7)),
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await
@@ -441,16 +447,26 @@ impl crate::ports::RequestRuleSetRepository for ReadFailingRequestRuleStore {
         &self,
         rule_set: &scryer_domain::RequestRuleSet,
         revision: &scryer_domain::RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()> {
-        self.inner.create_rule_set(rule_set, revision).await
+        self.inner
+            .create_rule_set(rule_set, revision, builder_model_json)
+            .await
     }
 
     async fn add_revision(
         &self,
         revision: &scryer_domain::RequestRuleRevision,
         updated_at: chrono::DateTime<chrono::Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
-        self.inner.add_revision(revision, updated_at).await
+        self.inner
+            .add_revision(revision, updated_at, builder_model_json)
+            .await
+    }
+
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>> {
+        self.inner.get_builder_model(rule_set_id).await
     }
 
     async fn get_revision(
@@ -481,15 +497,14 @@ impl crate::ports::RequestRuleSetRepository for ReadFailingRequestRuleStore {
             .await
     }
 
-    async fn update_rule_set_evaluation_mode(
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<()> {
         self.inner
-            .update_rule_set_evaluation_mode(id, mode, enabled, updated_at)
+            .update_rule_set_enabled(id, enabled, updated_at)
             .await
     }
 
@@ -605,5 +620,160 @@ async fn an_older_rebuild_cannot_replace_a_failed_newer_disarm_refresh() {
     assert_eq!(
         traces.last().unwrap().fallback_reason.as_deref(),
         Some(FALLBACK_ERROR)
+    );
+}
+
+/// A requester holding Auto-Approve, so only the rules stand between the
+/// request and an approval.
+fn auto_approving_requester(harness: &mut MediaRequestTestHarness) {
+    harness.user.authorization.default_library =
+        scryer_domain::LibraryPermissionMask::from_permissions([
+            scryer_domain::LibraryPermission::Request,
+            scryer_domain::LibraryPermission::AutoApproveRequests,
+        ]);
+}
+
+#[tokio::test]
+async fn unassemblable_facts_hold_a_request_an_enabled_rule_might_deny() {
+    let mut harness = bootstrap_media_request_app();
+    auto_approving_requester(&mut harness);
+    let detail = create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    enable(&harness, &detail.rule_set.id).await;
+    harness.app = harness.app.clone().with_test_overrides(|services| {
+        services.with_external_account_store(Arc::new(UnreadableExternalAccounts))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9047))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        preflight.policy_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(preflight.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
+
+    submit(&harness, &library_id, 9047, None).await;
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Pending
+    );
+    assert!(harness.titles.store.lock().await.is_empty());
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.policy_outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        trace.effective_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(trace.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
+}
+
+#[tokio::test]
+async fn without_an_enabled_rule_the_permission_still_approves_when_facts_are_unreadable() {
+    let mut harness = bootstrap_media_request_app();
+    auto_approving_requester(&mut harness);
+    // A disabled rule is not consulted, so nothing reads the facts.
+    create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    harness.app = harness.app.clone().with_test_overrides(|services| {
+        services.with_external_account_store(Arc::new(UnreadableExternalAccounts))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9047))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
+    assert_eq!(
+        preflight.fallback_reason.as_deref(),
+        Some(crate::request_rules::FALLBACK_LIBRARY_PERMISSION)
+    );
+
+    submit(&harness, &library_id, 9047, None).await;
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Approved
+    );
+    assert!(harness.request_rule_decisions.recorded().await.is_empty());
+}
+
+const DENY_WITH_A_TAG: &str = r#"package rules
+import rego.v1
+
+deny if {
+	input.request.origin == "manual"
+}
+
+add_tags := ["auto-approved"] if {
+	input.request.origin == "manual"
+}
+"#;
+
+#[tokio::test]
+async fn a_denial_stands_without_reading_the_tag_registry() {
+    let mut harness = bootstrap_media_request_app();
+    auto_approving_requester(&mut harness);
+    let detail = create_rule(&harness, "Deny with a tag", DENY_WITH_A_TAG).await;
+    enable(&harness, &detail.rule_set.id).await;
+    harness.titles.fail_tag_reads.store(true, Ordering::SeqCst);
+    let reads_before = harness.titles.tag_reads.load(Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9047))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::Deny);
+    assert!(preflight.tags.is_empty());
+
+    let request_id = submit(&harness, &library_id, 9047, None).await;
+    assert_eq!(
+        harness.titles.tag_reads.load(Ordering::SeqCst),
+        reads_before
+    );
+    let rows = harness.media_requests.requests.lock().await;
+    let request = rows.iter().find(|row| row.id == request_id).unwrap();
+    assert_eq!(request.status, MediaRequestStatus::Rejected);
+    assert!(request.policy_tags.is_empty());
+    drop(rows);
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.policy_outcome, RequestDecisionOutcome::Deny);
+    assert_eq!(trace.effective_outcome, RequestDecisionOutcome::Deny);
+    assert_eq!(trace.fallback_reason, None);
+    // The trace still records what the rule asked for.
+    assert_eq!(trace.tags, vec!["auto-approved".to_string()]);
+}
+
+#[tokio::test]
+async fn a_request_waiting_for_a_person_keeps_its_reason_when_tags_are_unreadable() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Manual with tags", MANUAL_WITH_TWO_TAGS).await;
+    enable(&harness, &detail.rule_set.id).await;
+    harness.titles.fail_tag_reads.store(true, Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let request_id = submit(&harness, &library_id, 9047, None).await;
+    let rows = harness.media_requests.requests.lock().await;
+    let request = rows.iter().find(|row| row.id == request_id).unwrap();
+    assert_eq!(request.status, MediaRequestStatus::Pending);
+    assert!(request.policy_tags.is_empty());
+    drop(rows);
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.policy_outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        trace.effective_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(
+        trace.fallback_reason.as_deref(),
+        Some(crate::request_rules::FALLBACK_RULE_MANUAL)
     );
 }

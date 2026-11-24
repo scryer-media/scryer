@@ -882,12 +882,7 @@ async fn graphql_quality_profile_decision_pipeline_round_trip() {
                 .expect("stored scoring config");
         serde_json::from_str::<serde_json::Value>(&raw).expect("scoring config is JSON")
     };
-    let default_order = json!([
-        "QUALITY_TIER",
-        "REVISION",
-        "PREFERRED_LANGUAGE",
-        "OPTIONAL_LANGUAGES"
-    ]);
+    let default_order = json!(["QUALITY_TIER", "REVISION"]);
 
     let unset = gql(&ctx, save, input(None)).await;
     assert_no_errors(&unset);
@@ -936,6 +931,31 @@ async fn graphql_quality_profile_decision_pipeline_round_trip() {
         repeated["errors"][0]["extensions"]["reason"],
         "INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE",
         "a repeated step is refused with a code: {repeated}"
+    );
+
+    // The language steps are opt-in: the tier-first order with them is a
+    // chosen order, stored as given rather than as absent.
+    let tier_then_languages = json!([
+        "QUALITY_TIER",
+        "REVISION",
+        "PREFERRED_LANGUAGE",
+        "OPTIONAL_LANGUAGES"
+    ]);
+    let languages = gql(&ctx, save, input(Some(tier_then_languages.clone()))).await;
+    assert_no_errors(&languages);
+    assert_eq!(
+        criteria_of(&languages)["decisionPipeline"],
+        tier_then_languages
+    );
+    assert_eq!(criteria_of(&languages)["ignoreProperRepack"], false);
+    assert_eq!(
+        stored_config().await["decision_pipeline"],
+        json!([
+            "quality_tier",
+            "revision",
+            "preferred_language",
+            "optional_languages"
+        ])
     );
 
     let reset = gql(&ctx, save, input(Some(default_order.clone()))).await;

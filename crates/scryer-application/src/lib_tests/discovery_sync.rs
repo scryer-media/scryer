@@ -9092,6 +9092,8 @@ fn pending_movie_request(id: &str, tmdb_id: &str) -> scryer_domain::MediaRequest
         created_by_user_id: "requester-fixture".to_string(),
         created_at: now,
         updated_at: now,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 
@@ -10077,6 +10079,8 @@ async fn discovery_section_hides_pending_requests_only_when_asked() {
             origin: Default::default(),
             created_at: now,
             updated_at: now,
+            requested_required_audio_languages: None,
+            requested_preferred_audio_languages: None,
         });
     let section_id = "browse_genre_drama";
     let shown = fixture

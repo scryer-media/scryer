@@ -24,9 +24,9 @@ use async_graphql::dataloader::{DataLoader, Loader};
 use scryer_application::{
     AcquisitionScopeState, AppUseCase, CollectionEpisodeProgressSummary,
     CollectionMediaSizeSummary, EpisodeMediaAvailability, EpisodeMediaSizeSummary,
-    PrimaryCollectionSummary, RequestQualityProfileSettings, TitleEpisodeProgressSummary,
-    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
-    TitleRatingSummary,
+    LibraryAudioLanguageDefaults, PrimaryCollectionSummary, RequestQualityProfileSettings,
+    TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary,
+    TitleQualitySummary, TitleRatingSummary,
 };
 use scryer_domain::{Collection, Episode, Library, SeriesMovieLink, Title, User};
 
@@ -38,6 +38,35 @@ type GqlError = async_graphql::Error;
 struct LoaderCtx {
     app: AppUseCase,
     actor: User,
+    /// Library rows read once per request and shared by every request-default
+    /// loader, so sibling fields do not read the library again.
+    request_default_libraries:
+        tokio::sync::OnceCell<Result<Arc<HashMap<String, Library>>, GqlError>>,
+}
+
+impl LoaderCtx {
+    async fn request_default_libraries(&self) -> Result<Arc<HashMap<String, Library>>, GqlError> {
+        self.request_default_libraries
+            .get_or_init(|| async {
+                self.app
+                    .libraries_for_request_defaults()
+                    .await
+                    .map(Arc::new)
+                    .map_err(to_gql_error)
+            })
+            .await
+            .clone()
+    }
+}
+
+/// Converts per-library application outcomes into loader values.
+fn per_library_outcomes<T>(
+    outcomes: HashMap<String, scryer_application::AppResult<T>>,
+) -> HashMap<String, Result<T, GqlError>> {
+    outcomes
+        .into_iter()
+        .map(|(library_id, outcome)| (library_id, outcome.map_err(to_gql_error)))
+        .collect()
 }
 
 /// Coalescing window for batching key lookups within one request.
@@ -116,16 +145,61 @@ loader!(
     String,
     Result<RequestQualityProfileSettings, GqlError>,
     |ctx, keys| {
-        let mut settings = HashMap::with_capacity(keys.len());
-        for library_id in keys {
-            let outcome = ctx
-                .app
-                .request_quality_profile_settings_for_library(&ctx.actor, library_id)
-                .await
-                .map_err(to_gql_error);
-            settings.insert(library_id.clone(), outcome);
-        }
-        Ok(settings)
+        let libraries = ctx.request_default_libraries().await?;
+        let outcomes = ctx
+            .app
+            .request_quality_profile_settings_for_libraries(&ctx.actor, keys, &libraries)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(per_library_outcomes(outcomes))
+    }
+);
+
+loader!(
+    DefaultMonitorTypeLoader,
+    String,
+    Result<String, GqlError>,
+    |ctx, keys| {
+        let libraries = ctx.request_default_libraries().await?;
+        let outcomes = ctx
+            .app
+            .default_monitor_types_for_libraries(&ctx.actor, keys, &libraries)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(per_library_outcomes(outcomes))
+    }
+);
+
+loader!(
+    TitleQualityProfileIdLoader,
+    String,
+    Result<String, GqlError>,
+    |ctx, keys| {
+        let libraries = ctx.request_default_libraries().await?;
+        let outcomes = ctx
+            .app
+            .title_quality_profile_ids_for_libraries(&ctx.actor, keys, &libraries)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(per_library_outcomes(outcomes))
+    }
+);
+
+// One batch per request for every library a query lists; each library's
+// outcome is kept per key, as above.
+loader!(
+    LibraryAudioLanguageDefaultsLoader,
+    String,
+    Result<LibraryAudioLanguageDefaults, GqlError>,
+    |ctx, keys| {
+        Ok(ctx
+            .app
+            .library_audio_language_defaults(&ctx.actor, keys)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(|(library_id, outcome)| (library_id, outcome.map_err(to_gql_error)))
+            .collect())
     }
 );
 
@@ -196,6 +270,18 @@ loader!(
     |ctx, keys| {
         ctx.app
             .load_title_required_audio_overrides(keys)
+            .await
+            .map_err(to_gql_error)
+    }
+);
+
+loader!(
+    PreferredAudioOverrideLoader,
+    String,
+    Vec<String>,
+    |ctx, keys| {
+        ctx.app
+            .load_title_preferred_audio_overrides(keys)
             .await
             .map_err(to_gql_error)
     }
@@ -515,6 +601,20 @@ loader!(RatingsLoader, String, TitleRatingSummary, |ctx, keys| {
 });
 
 loader!(
+    ContentRatingsLoader,
+    String,
+    Vec<scryer_application::ContentRating>,
+    |ctx, keys| {
+        let ratings = ctx
+            .app
+            .list_title_content_ratings(&ctx.actor, keys)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(ratings.into_iter().collect())
+    }
+);
+
+loader!(
     ListMembershipsForTitleLoader,
     String,
     Vec<scryer_application::lists::TitleListMembership>,
@@ -540,6 +640,15 @@ loader!(
     }
 );
 
+// One read for every library a query lists. The libraries were already
+// resolved for the actor by the field that listed them.
+loader!(LibraryFullHashBackfillLoader, String, bool, |ctx, keys| {
+    ctx.app
+        .library_full_hash_backfill_enabled(keys)
+        .await
+        .map_err(to_gql_error)
+});
+
 // Keyed by queue item: one import listing covers every row of the queue.
 loader!(
     HeldSourcesOfferLoader,
@@ -561,12 +670,17 @@ pub struct RequestLoaders {
     pub title_for_management: DataLoader<TitleForManagementLoader>,
     pub library: DataLoader<LibraryLoader>,
     pub request_quality_profile_settings: DataLoader<RequestQualityProfileSettingsLoader>,
+    pub default_monitor_type: DataLoader<DefaultMonitorTypeLoader>,
+    pub title_quality_profile_id: DataLoader<TitleQualityProfileIdLoader>,
+    pub library_audio_language_defaults: DataLoader<LibraryAudioLanguageDefaultsLoader>,
+    pub library_full_hash_backfill: DataLoader<LibraryFullHashBackfillLoader>,
     pub collection: DataLoader<CollectionLoader>,
     pub episode: DataLoader<EpisodeLoader>,
     pub media_files_for_title: DataLoader<MediaFilesForTitleLoader>,
     pub collections_for_title: DataLoader<CollectionsForTitleLoader>,
     pub episodes_for_collection: DataLoader<EpisodesForCollectionLoader>,
     pub required_audio_override: DataLoader<RequiredAudioOverrideLoader>,
+    pub preferred_audio_override: DataLoader<PreferredAudioOverrideLoader>,
     pub title_metadata_language_override: DataLoader<TitleMetadataLanguageOverrideLoader>,
     pub library_metadata_language_override: DataLoader<LibraryMetadataLanguageOverrideLoader>,
     pub library_use_season_folders_override: DataLoader<LibraryUseSeasonFoldersOverrideLoader>,
@@ -581,6 +695,7 @@ pub struct RequestLoaders {
     pub episode_progress_summary: DataLoader<EpisodeProgressSummaryLoader>,
     pub collection_episode_progress: DataLoader<CollectionEpisodeProgressLoader>,
     pub ratings: DataLoader<RatingsLoader>,
+    pub content_ratings: DataLoader<ContentRatingsLoader>,
     pub movie_media_summary: DataLoader<MovieMediaSummaryLoader>,
     pub list_memberships_for_title: DataLoader<ListMembershipsForTitleLoader>,
     pub series_movie_links_for_title: DataLoader<SeriesMovieLinksForTitleLoader>,
@@ -594,7 +709,11 @@ pub struct RequestLoaders {
 
 impl RequestLoaders {
     pub fn new(app: AppUseCase, actor: User) -> Arc<Self> {
-        let ctx = Arc::new(LoaderCtx { app, actor });
+        let ctx = Arc::new(LoaderCtx {
+            app,
+            actor,
+            request_default_libraries: tokio::sync::OnceCell::new(),
+        });
         macro_rules! dl {
             ($loader:ident) => {
                 DataLoader::new($loader(ctx.clone()), tokio::spawn).delay(LOAD_DELAY)
@@ -605,12 +724,17 @@ impl RequestLoaders {
             title_for_management: dl!(TitleForManagementLoader),
             library: dl!(LibraryLoader),
             request_quality_profile_settings: dl!(RequestQualityProfileSettingsLoader),
+            default_monitor_type: dl!(DefaultMonitorTypeLoader),
+            title_quality_profile_id: dl!(TitleQualityProfileIdLoader),
+            library_audio_language_defaults: dl!(LibraryAudioLanguageDefaultsLoader),
+            library_full_hash_backfill: dl!(LibraryFullHashBackfillLoader),
             collection: dl!(CollectionLoader),
             episode: dl!(EpisodeLoader),
             media_files_for_title: dl!(MediaFilesForTitleLoader),
             collections_for_title: dl!(CollectionsForTitleLoader),
             episodes_for_collection: dl!(EpisodesForCollectionLoader),
             required_audio_override: dl!(RequiredAudioOverrideLoader),
+            preferred_audio_override: dl!(PreferredAudioOverrideLoader),
             title_metadata_language_override: dl!(TitleMetadataLanguageOverrideLoader),
             library_metadata_language_override: dl!(LibraryMetadataLanguageOverrideLoader),
             library_use_season_folders_override: dl!(LibraryUseSeasonFoldersOverrideLoader),
@@ -625,6 +749,7 @@ impl RequestLoaders {
             episode_progress_summary: dl!(EpisodeProgressSummaryLoader),
             collection_episode_progress: dl!(CollectionEpisodeProgressLoader),
             ratings: dl!(RatingsLoader),
+            content_ratings: dl!(ContentRatingsLoader),
             movie_media_summary: dl!(MovieMediaSummaryLoader),
             list_memberships_for_title: dl!(ListMembershipsForTitleLoader),
             series_movie_links_for_title: dl!(SeriesMovieLinksForTitleLoader),

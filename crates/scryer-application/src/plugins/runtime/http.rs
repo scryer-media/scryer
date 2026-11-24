@@ -70,6 +70,7 @@ async fn fetch_plugin_bytes_with_redirect_policy(
     label: &str,
     scope: impl Into<String>,
     redirect_policy: PluginRedirectPolicy,
+    max_bytes: u64,
 ) -> AppResult<FetchedPluginBytes> {
     let outbound_http = plugin_http_client(PluginHttpClientProfile::DefaultFetch)?;
     let scope = scope.into();
@@ -122,15 +123,50 @@ async fn fetch_plugin_bytes_with_redirect_policy(
         let response = response.error_for_status().map_err(|error| {
             AppError::Repository(format!("failed to download {label}: {error}"))
         })?;
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| AppError::Repository(format!("failed to read {label}: {error}")))?;
+        let bytes = read_plugin_body_bounded(response, max_bytes, label).await?;
         return Ok(FetchedPluginBytes {
-            bytes: bytes.to_vec(),
+            bytes,
             actual_url: target.url().to_string(),
         });
     }
+}
+
+/// The most bytes a fetch may transfer for a payload whose decoded size is
+/// held to `output_limit`.
+///
+/// The payload's encoding is known only once the fetch has settled on a URL,
+/// so the bound has to admit a compressed form of any payload the decoded
+/// limit admits. Zstandard and Brotli grow incompressible input by well under
+/// one part in a hundred plus a few framing bytes, so this leaves room for
+/// every encoder's output; an uncompressed payload is still held to
+/// `output_limit` exactly once it is read.
+fn plugin_transfer_limit(output_limit: u64) -> u64 {
+    output_limit
+        .saturating_add(output_limit / 64)
+        .saturating_add(64 * 1024)
+}
+
+/// Reads a plugin download within `max_bytes`, refusing it while it is read
+/// rather than after it is held whole.
+async fn read_plugin_body_bounded(
+    response: reqwest::Response,
+    max_bytes: u64,
+    label: &str,
+) -> AppResult<Vec<u8>> {
+    let limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    scryer_outbound_http::read_body_bounded(response, limit)
+        .await
+        .map_err(|error| match error {
+            scryer_outbound_http::BoundedBodyError::TooLarge { .. } => {
+                AppError::validation_refused(
+                    crate::error_reasons::plugins::PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES,
+                    format!("{label} payload exceeds maximum size of {max_bytes} bytes"),
+                )
+            }
+            scryer_outbound_http::BoundedBodyError::Read(error) => {
+                AppError::Repository(format!("failed to read {label}: {error}"))
+            }
+        })
 }
 
 fn plugin_redirect_location_url(

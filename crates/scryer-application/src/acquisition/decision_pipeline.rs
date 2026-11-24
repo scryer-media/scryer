@@ -12,12 +12,13 @@
 //! This module is the engine: the step ids ([`DecisionGate`]), a profile's
 //! ordered list of them ([`DecisionPipeline`]), the facts a step reads
 //! ([`Facts`], [`RankFacts`], [`SideFacts`]) and the walks over a pipeline
-//! ([`walk`], [`rank_key`], [`held_key`], [`wins_cutoff_escape`]). What each
+//! ([`walk`], [`rank_key`], [`held_key`]). What each
 //! step does lives on its [`PreferenceStep`] in
 //! [`crate::acquisition::decision_steps`], which is also where the list of
 //! what it takes to add a step is kept. Every consumer goes through the walks
 //! here or through the pipeline's own questions
-//! ([`DecisionPipeline::still_wants`], [`DecisionPipeline::passes_cutoff`],
+//! ([`DecisionPipeline::still_wants`],
+//! [`DecisionPipeline::passes_reached_cutoff`],
 //! [`DecisionPipeline::compares_revisions`]), so none of them needs to learn
 //! about a new step.
 
@@ -122,18 +123,14 @@ pub struct DecisionPipeline {
     len: usize,
 }
 
-/// The order a profile uses when it does not choose one: tier, revision,
-/// preferred language, optional languages.
+/// The order a profile uses when it does not choose one: tier, then revision,
+/// which is how every profile compared releases before orders were
+/// configurable. The language steps are opt-in.
 ///
 /// Deliberately an explicit list and not [`DecisionGate::ALL`]: a step added
 /// later is not in it, so profiles that never chose an order keep comparing
 /// exactly as they did before that step existed.
-const DEFAULT_GATES: &[DecisionGate] = &[
-    DecisionGate::QualityTier,
-    DecisionGate::Revision,
-    DecisionGate::PreferredLanguage,
-    DecisionGate::OptionalLanguages,
-];
+const DEFAULT_GATES: &[DecisionGate] = &[DecisionGate::QualityTier, DecisionGate::Revision];
 
 /// The same gate was listed twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,8 +142,8 @@ impl DecisionPipeline {
         Self::from_const_gates(&[])
     }
 
-    /// Quality tier, revision, preferred language, optional languages: the
-    /// order every profile ran before orders were configurable.
+    /// Quality tier, then revision: the order every profile ran before orders
+    /// were configurable.
     pub const DEFAULT: Self = Self::from_const_gates(DEFAULT_GATES);
 
     /// A pipeline from a list known at compile time. The list must not repeat
@@ -233,8 +230,7 @@ impl DecisionPipeline {
     ///
     /// The family's steps are asked in registry order, not in the pipeline's:
     /// a cutoff exception is a property of the step, not of where the profile
-    /// ranks it. (The queue's history cutoff, [`wins_cutoff_escape`], walks
-    /// in pipeline order instead.)
+    /// ranks it.
     pub(crate) fn passes_cutoff(
         &self,
         escape: CutoffEscape,
@@ -246,6 +242,15 @@ impl DecisionPipeline {
             .filter(|step| step.cutoff_escape() == escape && self.contains(step.id()))
             .find_map(|step| step.cutoff_verdict(candidate, held))
             .unwrap_or(false)
+    }
+
+    /// The one cutoff exception rule: whether `candidate` passes a cutoff
+    /// `held` has reached through any family, see [`Self::passes_cutoff`].
+    /// A file on disk and a recent grab at its cutoff both ask this.
+    pub(crate) fn passes_reached_cutoff(&self, candidate: &Facts<'_>, held: &Facts<'_>) -> bool {
+        CutoffEscape::FAMILIES
+            .into_iter()
+            .any(|escape| self.passes_cutoff(escape, candidate, held))
     }
 
     // ── The legacy revision switch ─────────────────────────────────────────
@@ -409,8 +414,9 @@ impl ReleaseDecidingStep {
 ///
 /// The one place a property a step reads is declared. Each source has exactly
 /// one builder: [`crate::admission::CandidateFacts::facts`] (a candidate),
-/// [`crate::admission::Incumbent::facts`] and
-/// [`crate::quality::landed_bar_memo::LandedBar::side`] (a file on disk),
+/// [`crate::admission::Incumbent::facts`],
+/// [`crate::quality::landed_bar_memo::LandedBar::side`] and
+/// [`crate::quality::canonical_context::IncumbentFacts::side`] (a file on disk),
 /// [`crate::admission::QueuedRelease::facts`] (a queued release) and
 /// [`SideFacts::of_decision`] (a scored search result). A step that reads a
 /// new property adds a field here and fills it in those builders.
@@ -496,22 +502,6 @@ pub(crate) fn walk(
         }
     }
     LadderOutcome::ReachedScore
-}
-
-/// Whether the candidate passes a reached cutoff on the family of gates
-/// `escape` names: those gates, compared in pipeline order, find it better.
-pub(crate) fn wins_cutoff_escape(
-    pipeline: &DecisionPipeline,
-    escape: CutoffEscape,
-    candidate: &Facts<'_>,
-    held: &Facts<'_>,
-) -> bool {
-    pipeline
-        .steps()
-        .filter(|step| step.cutoff_escape() == escape)
-        .map(|step| step.compare(candidate, held))
-        .find(|ordering| ordering.is_ne())
-        == Some(Ordering::Greater)
 }
 
 /// The values a search rank reads its steps from. See [`Facts`] for why this
@@ -673,15 +663,10 @@ mod tests {
 
     /// The default order is frozen: a step added later is not in it.
     #[test]
-    fn the_default_order_is_tier_revision_then_the_languages() {
+    fn the_default_order_is_tier_then_revision() {
         assert_eq!(
             DecisionPipeline::DEFAULT.gates(),
-            [
-                DecisionGate::QualityTier,
-                DecisionGate::Revision,
-                DecisionGate::PreferredLanguage,
-                DecisionGate::OptionalLanguages,
-            ]
+            [DecisionGate::QualityTier, DecisionGate::Revision]
         );
         assert!(DecisionPipeline::DEFAULT.is_default());
         assert_eq!(
@@ -783,6 +768,35 @@ mod tests {
                         let (long, _) = rank_pair(&extended, candidate, held);
                         assert_eq!(short[..slot], long[..slot], "{extended:?}");
                         assert!(short[slot..].iter().all(|ordinal| *ordinal == 0));
+                    }
+                }
+            }
+        }
+    }
+
+    /// A step's cutoff verdict carries its own guard: in every pipeline, a
+    /// candidate passes a reached cutoff through a family other than the
+    /// revision's only over a held file some step still wants something for.
+    #[test]
+    fn a_cutoff_escape_other_than_a_revision_needs_a_held_file_still_wanted() {
+        let sides = every_side();
+        for pipeline in every_pipeline() {
+            for candidate in &sides {
+                for held in &sides {
+                    for optional_wanted in [false, true] {
+                        let mut held = *held;
+                        held.side.language.optional_wanted = optional_wanted;
+                        for escape in CutoffEscape::FAMILIES {
+                            if escape == CutoffEscape::Revision
+                                || !pipeline.passes_cutoff(escape, candidate, &held)
+                            {
+                                continue;
+                            }
+                            assert!(
+                                pipeline.still_wants(&held.side),
+                                "{pipeline:?} {escape:?}: {candidate:?} against {held:?}"
+                            );
+                        }
                     }
                 }
             }

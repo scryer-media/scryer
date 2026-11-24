@@ -27,6 +27,7 @@ pub use model::{
     TitleSegmentKind, TokenAnnotations, TokenRange, TokenRole, VideoCodec,
 };
 pub use parse::SCORING_MODEL_VERSION;
+pub use sanitize::html_named_entity;
 pub use stereoscopy::{
     ParsedStereoscopy, StereoEncoding, StereoEvidence, StereoLayout, StereoPresentation,
     StereoSampling,

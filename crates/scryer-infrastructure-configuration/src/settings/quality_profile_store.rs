@@ -341,6 +341,8 @@ fn decode_quality_profile(
         min_score_to_grab: scoring_config.min_score_to_grab,
         cutoff_score: scoring_config.cutoff_score,
         min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
+        min_missing_episodes_for_pack: scoring_config.min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack: scoring_config.min_missing_percent_for_series_pack,
         decision_pipeline: scoring_config.decision_pipeline.unwrap_or_default(),
         facet_persona_overrides: scoring_config.facet_persona_overrides,
     };
@@ -419,6 +421,8 @@ async fn upsert_quality_profile_tx(
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
         min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+        min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack: criteria.min_missing_percent_for_series_pack,
         decision_pipeline,
         facet_persona_overrides: criteria.facet_persona_overrides,
     })
@@ -924,6 +928,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pack_thresholds_round_trip_and_read_absent_as_unset() {
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "pack-profile", "Pack Profile", None).await;
+        let mut profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(profiles[0].criteria.min_missing_episodes_for_pack, None);
+        assert_eq!(
+            profiles[0].criteria.min_missing_percent_for_series_pack,
+            None
+        );
+        assert_eq!(
+            profiles[0]
+                .criteria
+                .min_missing_episodes_for_pack_or_default(),
+            2
+        );
+        assert_eq!(
+            profiles[0]
+                .criteria
+                .min_missing_percent_for_series_pack_or_default(),
+            30
+        );
+
+        for (minimum, percent) in [(Some(1), Some(55)), (None, None)] {
+            profiles[0].criteria.min_missing_episodes_for_pack = minimum;
+            profiles[0].criteria.min_missing_percent_for_series_pack = percent;
+            store
+                .replace_quality_profiles(SCOPE, None, profiles.clone())
+                .await
+                .unwrap();
+            store.invalidate_cache();
+            let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+            assert_eq!(loaded[0].criteria.min_missing_episodes_for_pack, minimum);
+            assert_eq!(
+                loaded[0].criteria.min_missing_percent_for_series_pack,
+                percent
+            );
+            let raw: String = sqlx::query_scalar(
+                "SELECT scoring_config FROM quality_profiles WHERE id = 'pack-profile'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let value: JsonValue = serde_json::from_str(&raw).unwrap();
+            assert_eq!(
+                value
+                    .get("min_missing_episodes_for_pack")
+                    .and_then(JsonValue::as_u64),
+                minimum.map(u64::from)
+            );
+            assert_eq!(
+                value
+                    .get("min_missing_percent_for_series_pack")
+                    .and_then(JsonValue::as_u64),
+                percent.map(u64::from)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn revision_policy_survives_sqlite_save_reload_and_legacy_defaults() {
         let (store, pool) = fixture().await;
         insert_profile(&pool, "revision-profile", "Revision Profile", None).await;
@@ -1101,6 +1164,65 @@ mod tests {
             DecisionPipeline::try_from_gates([DecisionGate::QualityTier]).unwrap()
         );
         assert!(loaded[0].criteria.ignore_proper_repack);
+    }
+
+    /// A row written before decision orders existed carries only the
+    /// `ignore_proper_repack` switch. It loads as the default order, without
+    /// the revision gate when the switch is on, and saving it untouched writes
+    /// back exactly what was stored.
+    #[tokio::test]
+    async fn a_profile_stored_before_decision_orders_carries_its_revision_switch_over() {
+        use scryer_application::{DecisionGate, DecisionPipeline};
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "older-profile", "Older Profile", None).await;
+        let profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        store
+            .replace_quality_profiles(SCOPE, None, profiles)
+            .await
+            .unwrap();
+        let stored = async || -> JsonValue {
+            let raw: String = sqlx::query_scalar(
+                "SELECT scoring_config FROM quality_profiles WHERE id = 'older-profile'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            serde_json::from_str(&raw).unwrap()
+        };
+
+        for ignore in [false, true] {
+            sqlx::query(if ignore {
+                "UPDATE quality_profiles SET scoring_config = json_set(json_remove(scoring_config, '$.decision_pipeline'), '$.ignore_proper_repack', json('true')) WHERE id = 'older-profile'"
+            } else {
+                "UPDATE quality_profiles SET scoring_config = json_remove(scoring_config, '$.decision_pipeline', '$.ignore_proper_repack') WHERE id = 'older-profile'"
+            })
+            .execute(&pool)
+            .await
+            .unwrap();
+            let before = stored().await;
+            assert!(before.get("decision_pipeline").is_none());
+
+            store.invalidate_cache();
+            let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+            let criteria = &loaded[0].criteria;
+            assert_eq!(criteria.ignore_proper_repack, ignore);
+            assert_eq!(criteria.ignores_revision(), ignore);
+            assert_eq!(
+                criteria.decision_pipeline,
+                if ignore {
+                    DecisionPipeline::default_order().without(DecisionGate::Revision)
+                } else {
+                    DecisionPipeline::default_order()
+                }
+            );
+            assert_eq!(criteria.stored_decision_pipeline(), None);
+
+            store
+                .replace_quality_profiles(SCOPE, None, loaded)
+                .await
+                .unwrap();
+            assert_eq!(stored().await, before, "an untouched save rewrote the row");
+        }
     }
 
     #[tokio::test]

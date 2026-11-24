@@ -223,6 +223,11 @@ pub fn from_quality_profile_criteria(
         .copied()
         .map(QualityDecisionGateValue::from_application)
         .collect();
+    let min_missing_episodes_for_pack =
+        i32::try_from(criteria.min_missing_episodes_for_pack_or_default()).unwrap_or(i32::MAX);
+    let min_missing_percent_for_series_pack =
+        i32::try_from(criteria.min_missing_percent_for_series_pack_or_default())
+            .unwrap_or(i32::MAX);
     QualityProfileCriteriaPayload {
         quality_tiers: criteria.quality_tiers,
         archival_quality: criteria.archival_quality,
@@ -271,6 +276,8 @@ pub fn from_quality_profile_criteria(
         min_upgrade_score_delta: criteria
             .min_upgrade_score_delta
             .unwrap_or(scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+        min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack,
     }
 }
 
@@ -766,6 +773,8 @@ pub fn from_indexer_config_with_fields(
         rate_limit_seconds: config.rate_limit_seconds,
         rate_limit_burst: config.rate_limit_burst,
         max_queries_per_minute: config.max_queries_per_minute,
+        max_requests_per_month: config.max_requests_per_month.map(Long),
+        max_grabs_per_month: config.max_grabs_per_month.map(Long),
         disabled_until: config.disabled_until,
         rate_limited_until,
         is_enabled: config.is_enabled,
@@ -826,6 +835,7 @@ pub fn from_proxy_config(config: ProxyConfig) -> ProxyConfigPayload {
         tunnel_dns_servers: config.tunnel_dns_servers,
         tunnel_mtu: config.tunnel_mtu.map(i32::from),
         tunnel_keepalive_seconds: config.tunnel_keepalive_seconds.map(i32::from),
+        reach_through_proxy_config_id: config.reach_through_proxy_config_id.map(Into::into),
         host_key_fingerprint: config.host_key_fingerprint,
         host_key_pinned_at: config.host_key_pinned_at,
         is_enabled: config.is_enabled,
@@ -1034,6 +1044,18 @@ pub fn from_download_client_config_with_fields(
     config_fields: &[ConfigFieldDef],
     status: Option<&scryer_application::escalation_backoff::DownloadClientStatus>,
 ) -> DownloadClientConfigPayload {
+    // Without the provider's field definitions nothing says which stored
+    // values are secrets, so every stored string is redacted.
+    let fallback_fields = config_fields
+        .is_empty()
+        .then(|| {
+            scryer_application::download_client_stored_config_fallback_fields(
+                &config.client_type,
+                &config.config_json,
+            )
+        })
+        .flatten();
+    let config_fields = fallback_fields.as_deref().unwrap_or(config_fields);
     let base_url =
         scryer_application::resolve_download_client_base_url_from_config_json(&config.config_json);
     let stored_secret_keys =

@@ -348,7 +348,7 @@ async fn a_finished_sync_of_a_personal_list_is_told_only_to_its_owner() {
 }
 
 #[tokio::test]
-async fn maintenance_reads_list_facts_for_a_batch_of_titles() {
+async fn lifecycle_reads_list_facts_for_a_batch_of_titles() {
     use crate::lists::test_support::membership;
 
     let harness = bootstrap_media_request_app();
@@ -368,7 +368,7 @@ async fn maintenance_reads_list_facts_for_a_batch_of_titles() {
 
     let facts = harness
         .app
-        .maintenance_list_facts_or_unknown(&titles)
+        .lifecycle_list_facts_or_unknown(&titles)
         .await
         .lists
         .expect("list facts load");
@@ -387,7 +387,7 @@ async fn maintenance_reads_list_facts_for_a_batch_of_titles() {
 }
 
 #[tokio::test]
-async fn maintenance_list_facts_name_the_public_list_a_request_came_from() {
+async fn lifecycle_list_facts_name_the_public_list_a_request_came_from() {
     let harness = bootstrap_media_request_app();
     *harness.lists.subscriptions.lock().unwrap() = vec![subscription("public-list-one")];
     let mut listed = crate::lists::rejection::tests::rejected_request(
@@ -403,7 +403,7 @@ async fn maintenance_list_facts_name_the_public_list_a_request_came_from() {
         make_due_hydration_title("title-beta", MediaFacet::Movie, 9059),
     ];
 
-    let loaded = harness.app.maintenance_list_facts_or_unknown(&titles).await;
+    let loaded = harness.app.lifecycle_list_facts_or_unknown(&titles).await;
 
     let origins = loaded.origins.expect("request origins load");
     assert_eq!(
@@ -974,4 +974,167 @@ async fn a_list_request_whose_route_root_is_gone_still_approves() {
         .expect("title");
     assert_ne!(title.root_folder_id, "root-removed");
     assert_carries_route_layout(&title.tags);
+}
+
+fn list_audio_codes(codes: &[&str]) -> Vec<String> {
+    crate::normalize_required_audio_requirements(codes.iter().map(|code| code.to_string()))
+}
+
+#[tokio::test]
+async fn a_list_add_lands_the_route_audio_languages_on_the_title() {
+    let harness = bootstrap_media_request_app();
+    let (mut list, _) =
+        series_list_with_options(&harness, ListMode::Add, &[LibraryPermission::View]).await;
+    list.routes[0].required_audio_languages = Some(vec!["ja".to_string()]);
+    list.routes[0].preferred_audio_languages = Some(vec!["original".to_string(), "en".to_string()]);
+    *harness.lists.subscriptions.lock().unwrap() = vec![list.clone()];
+
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &series_item(9310),
+        false,
+    )
+    .await;
+    assert_eq!(
+        outcome.state,
+        ListMembershipState::Added,
+        "{:?}",
+        outcome.reason
+    );
+    let title_id = outcome.title_id.expect("title");
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&title_id)
+            .await
+            .unwrap(),
+        Some(list_audio_codes(&["ja"]))
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_title_preferred_audio_override(&title_id)
+            .await
+            .unwrap(),
+        Some(list_audio_codes(&["original", "en"]))
+    );
+}
+
+#[tokio::test]
+async fn an_inheriting_list_route_writes_no_audio_override() {
+    let harness = bootstrap_media_request_app();
+    let (list, _) =
+        series_list_with_options(&harness, ListMode::Add, &[LibraryPermission::View]).await;
+
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &series_item(9311),
+        false,
+    )
+    .await;
+    let title_id = outcome.title_id.expect("title");
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&title_id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_title_preferred_audio_override(&title_id)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_list_request_carries_the_route_audio_languages_through_approval() {
+    let harness = bootstrap_media_request_app();
+    let (mut list, _) =
+        series_list_with_options(&harness, ListMode::Hold, &[LibraryPermission::Request]).await;
+    list.routes[0].required_audio_languages = Some(Vec::new());
+    list.routes[0].preferred_audio_languages = Some(vec!["de".to_string()]);
+    *harness.lists.subscriptions.lock().unwrap() = vec![list.clone()];
+
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &series_item(9312),
+        false,
+    )
+    .await;
+    let request_id = outcome.request_id.expect("the hold files a request");
+    let pending = harness
+        .media_requests
+        .requests
+        .lock()
+        .await
+        .iter()
+        .find(|request| request.id == request_id)
+        .cloned()
+        .expect("request");
+    assert_eq!(pending.requested_required_audio_languages, Some(Vec::new()));
+    assert_eq!(
+        pending.requested_preferred_audio_languages,
+        Some(list_audio_codes(&["de"]))
+    );
+
+    let approved = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("approved");
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        Some(Vec::new()),
+        "the route's empty required list requires nothing"
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_title_preferred_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        Some(list_audio_codes(&["de"]))
+    );
+}
+
+#[tokio::test]
+async fn an_inheriting_list_route_files_a_request_without_audio_languages() {
+    let harness = bootstrap_media_request_app();
+    let (list, _) =
+        series_list_with_options(&harness, ListMode::Hold, &[LibraryPermission::Request]).await;
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &series_item(9313),
+        false,
+    )
+    .await;
+    let request_id = outcome.request_id.expect("request");
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request");
+    assert_eq!(request.requested_required_audio_languages, None);
+    assert_eq!(request.requested_preferred_audio_languages, None);
 }

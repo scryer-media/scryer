@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use scryer_application::disk::Disk;
 use scryer_application::{
     AppError, AppResult, ClientJobLocator, DownloadClient, DownloadClientAddRequest,
     DownloadClientObservation, DownloadGrabResult, ResolvedDownloadArtifact, torbox_refusal,
@@ -1096,16 +1097,16 @@ impl TorboxRuntime {
         loop {
             let folder = fetch::unique_job_folder(&base, &taken);
             let path = self.download_dir.join(&folder);
-            match tokio::fs::symlink_metadata(&path).await {
-                Ok(_) => {
+            match Disk::process().uncached(&path).await.exists() {
+                Some(true) => {
                     taken.insert(folder.to_lowercase());
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(folder),
-                Err(error) => {
+                Some(false) => return Ok(folder),
+                None => {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_UNREACHABLE,
                         format!(
-                            "the job folder {} could not be checked: {error}",
+                            "the job folder {} could not be checked: it could not be read",
                             path.display()
                         ),
                     ));

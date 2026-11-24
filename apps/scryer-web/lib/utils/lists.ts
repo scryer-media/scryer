@@ -26,6 +26,7 @@ import type {
   TitleListMembership,
 } from "../types/lists.ts";
 import type { ExternalId, Facet } from "../types/titles.ts";
+import { defaultMonitorTypesForFacet } from "./default-monitor-type.ts";
 import {
   allOf,
   anyOf,
@@ -731,14 +732,20 @@ export type ListRouteLibrary = {
   facet: Facet;
   isDefault: boolean;
   qualityProfileId?: string | null;
+  /** The library's saved monitoring for new titles. */
+  defaultMonitorType?: string | null;
   roots: Array<{ id: string; isDefault: boolean }>;
 };
 
-/** A new route for a kind, seeded from that kind's default library. */
+/**
+ * A new route for a kind, seeded from that kind's default library. The route
+ * starts on that library's saved monitoring, and on `fallbackMonitorType` when
+ * the library has none the kind accepts.
+ */
 export function defaultListRoute(
   kind: Facet,
   libraries: readonly ListRouteLibrary[],
-  monitorType: string,
+  fallbackMonitorType: string,
 ): ListRoute {
   const candidates = libraries.filter((library) => library.facet === kind);
   const library = candidates.find((entry) => entry.isDefault) ?? candidates[0];
@@ -749,12 +756,17 @@ export function defaultListRoute(
     libraryId: library?.id ?? "",
     qualityProfileId: null,
     rootFolderId: root?.id ?? null,
-    monitorType,
+    monitorType:
+      defaultMonitorTypesForFacet(kind).find(
+        (value) => value === library?.defaultMonitorType,
+      ) ?? fallbackMonitorType,
     // Null follows the instance default when the title is added.
     minAvailability: null,
     useSeasonFolders: kind === "MOVIE" ? null : true,
     releaseNumbering: kind === "MOVIE" ? null : "AUTO",
     tags: [],
+    requiredAudioLanguages: null,
+    preferredAudioLanguages: null,
   };
 }
 
@@ -880,6 +892,12 @@ export function listRouteInput(route: ListRoute): ListRouteInput {
     useSeasonFolders: route.useSeasonFolders,
     releaseNumbering: route.releaseNumbering,
     tags: [...route.tags],
+    requiredAudioLanguages: route.requiredAudioLanguages
+      ? [...route.requiredAudioLanguages]
+      : null,
+    preferredAudioLanguages: route.preferredAudioLanguages?.length
+      ? [...route.preferredAudioLanguages]
+      : null,
   };
 }
 

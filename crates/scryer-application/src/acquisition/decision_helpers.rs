@@ -80,17 +80,23 @@ pub(crate) enum CutoffScope {
 /// of it has. Taking the best member would call a season satisfied on the
 /// strength of one good episode.
 ///
-/// Ordering is by resolution, descending, read with the same parser
-/// `quality_tier_index` normalizes through. Tiers are resolution-only today, so
-/// for every label that names a resolution this agrees with a profile lookup;
-/// a label that names none ranks last here while the profile would simply not
-/// list it. When Part 5 makes tiers `(source, resolution)` this needs the
-/// profile — which the callers cannot supply yet, because they resolve the
-/// profile *from* this value.
+/// Ordering is the profile's own tier order, [`quality_tier_index`], which is
+/// also what the cutoff is measured in: a profile that ranks 720p above 1080p
+/// finds a season holding both only as good as its 1080p member. A quality
+/// the profile does not list ranks below every listed one.
+///
+/// [`quality_tier_index`]: crate::quality_profile::quality_tier_index
 pub(crate) fn analyzed_cutoff_quality_for_scope<'a, F: CutoffFile>(
     existing_files: &'a [F],
     scope: &CutoffScope,
+    criteria: &crate::QualityProfileCriteria,
 ) -> Option<&'a str> {
+    let rank = |quality: &str| {
+        crate::admission::tier_sort_key(crate::quality_profile::quality_tier_index(
+            criteria,
+            Some(quality),
+        ))
+    };
     match scope {
         CutoffScope::Episodes(episode_ids) => {
             if episode_ids.is_empty() {
@@ -98,35 +104,41 @@ pub(crate) fn analyzed_cutoff_quality_for_scope<'a, F: CutoffFile>(
             }
             let mut weakest: Option<&'a str> = None;
             for episode_id in episode_ids {
-                let member = best_cutoff_quality_for(existing_files, |file| {
+                let member = best_cutoff_quality_for(existing_files, &rank, |file| {
                     file.episode_id == Some(episode_id.as_str())
                 })?;
-                // `resolution_rank` is lower-is-better, so the weakest member is
-                // the one with the highest rank.
+                // The rank is lower-is-better, so the weakest member is the one
+                // with the highest rank.
                 weakest = Some(match weakest {
-                    Some(current) if resolution_rank(current) >= resolution_rank(member) => current,
+                    Some(current) if rank(current) >= rank(member) => current,
                     _ => member,
                 });
             }
             weakest
         }
-        CutoffScope::Episode(episode_id) => best_cutoff_quality_for(existing_files, |file| {
-            file.episode_id == Some(episode_id.as_str())
-        }),
-        CutoffScope::SeriesMovieLink(link_id) => best_cutoff_quality_for(existing_files, |file| {
-            file.series_movie_link_ids
-                .iter()
-                .any(|candidate| candidate == link_id)
-        }),
-        CutoffScope::Title => best_cutoff_quality_for(existing_files, |file| {
+        CutoffScope::Episode(episode_id) => {
+            best_cutoff_quality_for(existing_files, &rank, |file| {
+                file.episode_id == Some(episode_id.as_str())
+            })
+        }
+        CutoffScope::SeriesMovieLink(link_id) => {
+            best_cutoff_quality_for(existing_files, &rank, |file| {
+                file.series_movie_link_ids
+                    .iter()
+                    .any(|candidate| candidate == link_id)
+            })
+        }
+        CutoffScope::Title => best_cutoff_quality_for(existing_files, &rank, |file| {
             file.episode_id.is_none() && file.series_movie_link_ids.is_empty()
         }),
     }
 }
 
-/// The best quality among the primary files a predicate selects.
+/// The best quality among the primary files a predicate selects, by `rank`
+/// (lower is better), the most recent file breaking a tie.
 fn best_cutoff_quality_for<'a, F: CutoffFile>(
     existing_files: &'a [F],
+    rank: &impl Fn(&str) -> usize,
     matches: impl Fn(&CutoffFileFacts<'a>) -> bool,
 ) -> Option<&'a str> {
     existing_files
@@ -139,8 +151,8 @@ fn best_cutoff_quality_for<'a, F: CutoffFile>(
             (!quality.is_empty()).then_some((file, quality))
         })
         .min_by(|(left_file, left), (right_file, right)| {
-            resolution_rank(left)
-                .cmp(&resolution_rank(right))
+            rank(left)
+                .cmp(&rank(right))
                 .then_with(|| right_file.created_at.cmp(left_file.created_at))
         })
         .map(|(_, quality)| quality)
@@ -181,20 +193,6 @@ impl CutoffFile for crate::MediaFileCutoffSummary {
             primary: true,
         }
     }
-}
-
-/// Position of a quality in the resolution ordering; **lower is better**, so it
-/// composes with `quality_tier_index` without an inversion.
-///
-/// Reads the label through [`crate::quality_profile::resolution_lines`], the
-/// same parser the profile lookup normalizes with, so the two cannot disagree
-/// about what a label says. A label that names no resolution ranks last, which
-/// is the only honest answer — but it is now genuinely rare rather than "any
-/// label that does not end in `p`", which used to bury `1080i` and every
-/// Sonarr-style compound below 480p.
-fn resolution_rank(quality: &str) -> u32 {
-    crate::quality_profile::resolution_lines(Some(quality))
-        .map_or(u32::MAX, |lines| u32::MAX - lines)
 }
 
 impl AppUseCase {
@@ -277,33 +275,59 @@ impl AppUseCase {
         let profile = self
             .resolve_quality_profile_for_title_with_category(title, category_hint)
             .await?;
+        Ok(upgrade_context_for_profile(profile, analyzed_quality))
+    }
 
-        // **The cutoff is a fact about files.** It used to fall back to parsing
-        // the anchor state row's `grabbed_release` when no file supplied a
-        // quality, which is wrong twice over: a grab that has not landed says
-        // nothing about what the scope holds, and for a multi-member scope
-        // `analyzed_cutoff_quality_for_scope` returns `None` the moment *one*
-        // member is empty — so a season with eleven 1080p episodes and a missing
-        // twelfth read the first episode's grabbed release, reported "cutoff
-        // reached", and the pack that would have filled E12 was never evaluated.
-        //
-        // "A release for this scope is already in flight" is a real question, and
-        // it now has a real answer: D18's queued pseudo-incumbents, which compare
-        // the in-flight release on the full tier → revision → score ladder
-        // instead of asking whether it happened to clear the cutoff.
-        //
-        // A score-first profile has no quality half: its cutoff is
-        // `cutoff_score` alone, and none means upgrades never stop on a cutoff.
-        let cutoff_reached = profile.criteria.quality_cutoff_met(analyzed_quality);
+    /// [`Self::resolve_upgrade_context_for_title_with_category_and_quality`]
+    /// with the scope's cutoff quality taken from `existing_files` under the
+    /// resolved profile's own tier order; see
+    /// [`analyzed_cutoff_quality_for_scope`].
+    pub(crate) async fn resolve_upgrade_context_for_scope<F: CutoffFile>(
+        &self,
+        title: &Title,
+        category_hint: Option<&str>,
+        existing_files: &[F],
+        scope: &CutoffScope,
+    ) -> AppResult<ResolvedUpgradeContext> {
+        let profile = self
+            .resolve_quality_profile_for_title_with_category(title, category_hint)
+            .await?;
+        let analyzed_quality =
+            analyzed_cutoff_quality_for_scope(existing_files, scope, &profile.criteria);
+        Ok(upgrade_context_for_profile(profile, analyzed_quality))
+    }
+}
 
-        // The same-tier delta belongs to the profile that judges the title.
-        let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
+fn upgrade_context_for_profile(
+    profile: QualityProfile,
+    analyzed_quality: Option<&str>,
+) -> ResolvedUpgradeContext {
+    // **The cutoff is a fact about files.** It used to fall back to parsing
+    // the anchor state row's `grabbed_release` when no file supplied a
+    // quality, which is wrong twice over: a grab that has not landed says
+    // nothing about what the scope holds, and for a multi-member scope
+    // `analyzed_cutoff_quality_for_scope` returns `None` the moment *one*
+    // member is empty — so a season with eleven 1080p episodes and a missing
+    // twelfth read the first episode's grabbed release, reported "cutoff
+    // reached", and the pack that would have filled E12 was never evaluated.
+    //
+    // "A release for this scope is already in flight" is a real question, and
+    // it now has a real answer: D18's queued pseudo-incumbents, which compare
+    // the in-flight release on the full tier → revision → score ladder
+    // instead of asking whether it happened to clear the cutoff.
+    //
+    // A profile without a quality-tier step has no quality half: its cutoff
+    // is `cutoff_score` alone, and without one the first file satisfies the
+    // scope.
+    let cutoff_reached = profile.criteria.quality_cutoff_met(analyzed_quality);
 
-        Ok(ResolvedUpgradeContext {
-            profile,
-            thresholds,
-            cutoff_reached,
-        })
+    // The same-tier delta belongs to the profile that judges the title.
+    let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
+
+    ResolvedUpgradeContext {
+        profile,
+        thresholds,
+        cutoff_reached,
     }
 }
 

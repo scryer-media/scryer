@@ -310,6 +310,10 @@ export function mediaRequestMonitorSelectionId(requestId: string): string {
   return selectorId("media-request-monitor-selection", requestId);
 }
 
+export function mediaRequestAudioLanguagesId(requestId: string): string {
+  return selectorId("media-request-audio-languages", requestId);
+}
+
 export function mediaRequestMonitorOptionId(
   scope: string,
   monitorType: string,
@@ -369,12 +373,19 @@ export const APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID =
 /// button. The approver picks from the registry rather than typing, so the
 /// free-text field these ids used to name no longer exists.
 export const APPROVE_MEDIA_REQUEST_TAGS_PREFIX = "approve-media-request";
+export const APPROVE_MEDIA_REQUEST_AUDIO_PREFIX = "approve-media-request-audio";
 export const APPROVE_MEDIA_REQUEST_TAGS_ID = "approve-media-request-tags";
 export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID =
   "approve-media-request-tags-add";
 
 export function approveMediaRequestLeaseOptionId(value: string): string {
   return selectorId("approve-media-request-lease-option", value);
+}
+
+/// The "suggested by a rule" marker beside an approve-dialog field a rule's
+/// shaping prefilled, keyed by the shaping head (`SET_QUALITY_PROFILE`, ...).
+export function approveMediaRequestSuggestedId(head: string): string {
+  return selectorId("approve-media-request-suggested", head);
 }
 
 /// Mirrors `TitleTagsPicker`'s own remove-button id exactly — the picker keeps
@@ -444,16 +455,8 @@ export function settingsRequestRuleDeleteId(ruleSetId: string): string {
   return selectorId("settings-request-rule-delete", ruleSetId);
 }
 
-export function settingsRequestRuleLibraryId(libraryId: string): string {
-  return selectorId("settings-request-rule-library", libraryId);
-}
-
 export function settingsRequestTemplateId(templateId: string): string {
   return selectorId("settings-request-template", templateId);
-}
-
-export function settingsRequestUserId(userId: string): string {
-  return selectorId("settings-request-user", userId);
 }
 
 export function settingsRequestPreviewTitleResultId(key: string): string {

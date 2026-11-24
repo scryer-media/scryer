@@ -51,7 +51,9 @@ export function shouldListServerAccounts({
   if (!canManageConnections || !connectionId) {
     return false;
   }
-  return provider === "JELLYFIN" || (provider === "EMBY" && embyMode === "LOCAL");
+  return (
+    provider === "JELLYFIN" || (provider === "EMBY" && embyMode === "LOCAL")
+  );
 }
 
 export type ServerAccountOption = {

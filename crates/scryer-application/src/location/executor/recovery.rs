@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::disk::{Disk, EntryKind};
+
 /// How often a waiting transfer probes its disconnected storage.
 ///
 /// A brief hiccup (a switch reboot, an SMB session renegotiating) should
@@ -105,11 +107,10 @@ impl StorageWatch {
             for path in paths {
                 let mut parent = path.parent()?;
                 loop {
-                    match std::fs::metadata(parent) {
-                        Ok(metadata) if metadata.is_dir() => break,
-                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                            parent = parent.parent()?;
-                        }
+                    let reading = Disk::process().follow_blocking(parent);
+                    match reading.exists() {
+                        _ if reading.is(EntryKind::Directory) => break,
+                        Some(false) => parent = parent.parent()?,
                         _ => return None,
                     }
                 }
@@ -141,8 +142,7 @@ impl StorageWatch {
             let _done = Done(probing);
             anchors.iter().all(|(path, expected)| {
                 volume_identity(path).is_ok_and(|actual| &actual == expected)
-                    && std::fs::read_dir(path)
-                        .is_ok_and(|mut entries| entries.next().transpose().is_ok())
+                    && Disk::process().has_entries_blocking(path).is_ok()
             })
         });
         match tokio::time::timeout(Self::PROBE_TIMEOUT, probe).await {
@@ -153,6 +153,9 @@ impl StorageWatch {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+// disk-guard: the identity is the mount's filesystem id and source, which the
+// owner does not report.
+#[allow(clippy::disallowed_methods)]
 fn volume_identity(path: &Path) -> io::Result<String> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
@@ -187,9 +190,8 @@ fn volume_identity(path: &Path) -> io::Result<String> {
 
 #[cfg(windows)]
 fn volume_identity(path: &Path) -> io::Result<String> {
-    // `MetadataExt::volume_serial_number` is still unstable (`windows_by_handle`);
-    // the transfer module already reads the same serial through a stable call.
-    crate::location::transfer::windows_file_identity(path)
+    crate::disk::Disk::process()
+        .windows_file_numbers_blocking(path)
         .map(|(volume_serial, _file_index)| volume_serial.to_string())
         .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "volume identity unavailable"))
 }

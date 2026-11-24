@@ -1,10 +1,10 @@
-//! Projections for the request-rule surface (spec 0003 §7).
+//! Projections for the request-rule surface.
 //!
 //! Three of these are load-bearing rather than mechanical:
 //!
 //! - [`from_request_rule_decision`] takes a `redacted` flag and, when it is set,
 //!   returns the trace **without its votes**. That is the same rule the
-//!   pre-flight enforces by having no vote field at all (FR-020), applied to a
+//!   pre-flight enforces by having no vote field at all, applied to a
 //!   stored decision read back by the person it was about. `reasons` survives
 //!   the redaction, because a requester who is told "denied" and nothing else
 //!   has been told nothing.
@@ -26,11 +26,12 @@ use scryer_application::request_rules::{
 use scryer_application::{MediaRequestMetadataSnapshot, RequestPreflight};
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
+    RequestDecisionOutcome, RequestRuleDecisionRecord,
 };
 use scryer_rules::request::{
     REQUEST_INPUT_SCHEMA_VERSION, RequestVote, certification_rank_for_label,
 };
+use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue};
 
 /// Revision numbers, lease windows, and counts are stored as `i64` but are small
 /// by construction; saturating keeps a corrupt row from panicking a read.
@@ -39,15 +40,6 @@ fn to_graphql_int(value: i64) -> i32 {
 }
 
 // ── Enum projections ────────────────────────────────────────────────────────
-
-pub fn request_rule_evaluation_mode_value(
-    mode: RequestRuleEvaluationMode,
-) -> RequestRuleEvaluationModeValue {
-    match mode {
-        RequestRuleEvaluationMode::Disabled => RequestRuleEvaluationModeValue::Disabled,
-        RequestRuleEvaluationMode::Enforce => RequestRuleEvaluationModeValue::Enforce,
-    }
-}
 
 pub fn request_decision_outcome_value(
     outcome: RequestDecisionOutcome,
@@ -75,6 +67,25 @@ pub fn request_vote_value(vote: RequestVote) -> RequestVoteValue {
         RequestVote::Deny => RequestVoteValue::Deny,
         RequestVote::Manual => RequestVoteValue::Manual,
         RequestVote::Abstain => RequestVoteValue::Abstain,
+    }
+}
+
+pub fn request_action_head_value(head: RequestActionHead) -> RequestActionHeadValue {
+    match head {
+        RequestActionHead::Approve => RequestActionHeadValue::Approve,
+        RequestActionHead::Deny => RequestActionHeadValue::Deny,
+        RequestActionHead::Manual => RequestActionHeadValue::Manual,
+        RequestActionHead::SetQualityProfile => RequestActionHeadValue::SetQualityProfile,
+        RequestActionHead::SetLeaseDays => RequestActionHeadValue::SetLeaseDays,
+        RequestActionHead::SetMonitor => RequestActionHeadValue::SetMonitor,
+        RequestActionHead::SetRequiredAudioLanguages => {
+            RequestActionHeadValue::SetRequiredAudioLanguages
+        }
+        RequestActionHead::SetPreferredAudioLanguages => {
+            RequestActionHeadValue::SetPreferredAudioLanguages
+        }
+        RequestActionHead::AddTags => RequestActionHeadValue::AddTags,
+        RequestActionHead::Notify => RequestActionHeadValue::Notify,
     }
 }
 
@@ -107,8 +118,10 @@ fn lifecycle_claim_state_value(state: LifecycleClaimState) -> LifecycleClaimStat
 pub fn from_request_rule_set(
     rule_set: &scryer_domain::RequestRuleSet,
     decision_count: u64,
+    declared_actions: Option<RequestDeclaredActions>,
 ) -> RequestRuleSet {
     RequestRuleSet {
+        declared_actions,
         id: ID::from(rule_set.id.clone()),
         name: rule_set.name.clone(),
         description: rule_set.description.clone(),
@@ -132,20 +145,155 @@ pub fn from_request_rule_revision(
         rule_set_id: ID::from(revision.rule_set_id),
         revision_number: to_graphql_int(revision.revision_number),
         rego_source: scryer_rules::strip_editor_source(&revision.rego_source),
-        matcher_content_hash: revision.matcher_content_hash,
+        source_content_hash: revision.source_content_hash,
         created_by: revision.created_by.map(ID::from),
         created_at: revision.created_at,
     }
 }
 
+/// What a source can do, projected. Lease days saturate like every other
+/// small stored integer.
+pub fn from_request_declared_actions(
+    declared: scryer_rules::request_actions::RequestDeclaredActions,
+) -> RequestDeclaredActions {
+    RequestDeclaredActions {
+        heads: declared
+            .heads
+            .into_iter()
+            .map(request_action_head_value)
+            .collect(),
+        quality_profiles: declared.quality_profiles,
+        lease_days: declared
+            .lease_days
+            .into_iter()
+            .map(to_graphql_int)
+            .collect(),
+        monitors: declared.monitors,
+        required_audio_languages: declared.required_audio_languages,
+        preferred_audio_languages: declared.preferred_audio_languages,
+        add_tags: declared.add_tags,
+        notifications: declared.notifications,
+    }
+}
+
+/// `with_declared_actions` is the caller's look-ahead: the scan parses the
+/// source, so it runs only when a selection asks for the rule set's.
 pub fn from_request_rule_set_detail(
     detail: AppRuleSetDetail,
     decision_count: u64,
+    with_declared_actions: bool,
 ) -> RequestRuleSetDetail {
+    let declared_actions = with_declared_actions
+        .then(|| detail.declared_actions())
+        .flatten()
+        .map(from_request_declared_actions);
     RequestRuleSetDetail {
-        rule_set: from_request_rule_set(&detail.rule_set, decision_count),
+        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions),
         revision: from_request_rule_revision(detail.revision),
+        builder_model: detail.builder_model.map(async_graphql::Json),
     }
+}
+
+// ── Shaping ─────────────────────────────────────────────────────────────────
+
+fn shaped_text(shaped: &scryer_application::ShapedValue) -> Option<RequestShapedText> {
+    match &shaped.value {
+        RequestHeadValue::Text(value) => Some(RequestShapedText {
+            value: value.clone(),
+            rule_set_name: shaped.rule_set_name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn shaped_number(shaped: &scryer_application::ShapedValue) -> Option<RequestShapedNumber> {
+    match &shaped.value {
+        RequestHeadValue::Number(value) => Some(RequestShapedNumber {
+            value: to_graphql_int(*value),
+            rule_set_name: shaped.rule_set_name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn shaped_text_list(shaped: &scryer_application::ShapedValue) -> Option<RequestShapedTextList> {
+    match &shaped.value {
+        RequestHeadValue::List(value) => Some(RequestShapedTextList {
+            value: value.clone(),
+            rule_set_name: shaped.rule_set_name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// Project arbitrated shaping, or `None` when the rules changed nothing.
+///
+/// `with_notifications` is false on every requester surface: a notification
+/// is written for the people told about the request, not the requester.
+pub fn from_arbitrated_shaping(
+    shaping: &scryer_application::ArbitratedShaping,
+    with_notifications: bool,
+) -> Option<RequestShaping> {
+    let value = |head| shaping.value(head);
+    let projected = RequestShaping {
+        quality_profile: value(RequestActionHead::SetQualityProfile).and_then(shaped_text),
+        lease_days: value(RequestActionHead::SetLeaseDays).and_then(shaped_number),
+        monitor: value(RequestActionHead::SetMonitor).and_then(shaped_text),
+        required_audio_languages: value(RequestActionHead::SetRequiredAudioLanguages)
+            .and_then(shaped_text_list),
+        preferred_audio_languages: value(RequestActionHead::SetPreferredAudioLanguages)
+            .and_then(shaped_text_list),
+        notifications: if with_notifications {
+            shaping
+                .notifications
+                .iter()
+                .filter_map(shaped_text)
+                .collect()
+        } else {
+            Vec::new()
+        },
+        conflicts: shaping
+            .conflicts
+            .iter()
+            .map(|refusal| request_action_head_value(refusal.head))
+            .collect(),
+        invalid: shaping
+            .invalid
+            .iter()
+            .map(|refusal| request_action_head_value(refusal.head))
+            .collect(),
+    };
+    (projected != RequestShaping::default()).then_some(projected)
+}
+
+/// The shaping a stored trace recorded. An unreadable document reads as no
+/// shaping, like an unreadable vote table: the outcome columns stay true.
+fn stored_shaping(shaping_json: Option<&str>) -> Option<scryer_application::ArbitratedShaping> {
+    shaping_json.and_then(|json| serde_json::from_str(json).ok())
+}
+
+/// One rule's shaping, attributed to that rule, as a preview shows it.
+fn preview_shaping(
+    result: &AppPreviewResult,
+    rule_set_name: &str,
+) -> scryer_application::ArbitratedShaping {
+    let attributed = |value: RequestHeadValue| scryer_application::ShapedValue {
+        value,
+        rule_set_id: result.rule_set_id.clone(),
+        rule_set_name: rule_set_name.to_string(),
+    };
+    let mut shaping = scryer_application::ArbitratedShaping::default();
+    for head in RequestActionHead::shaping() {
+        if let Some(value) = result.shaping.get(head) {
+            shaping.values.insert(head, attributed(value));
+        }
+    }
+    if let Some(text) = &result.notify {
+        shaping
+            .notifications
+            .push(attributed(RequestHeadValue::Text(text.clone())));
+    }
+    shaping
 }
 
 // ── Decision traces ─────────────────────────────────────────────────────────
@@ -228,11 +376,13 @@ pub fn from_request_rule_decision(
 ) -> RequestRuleDecision {
     let votes = stored_votes(&record.votes_json);
     let reasons = reasons_from_votes(&votes);
+    let shaping = stored_shaping(record.shaping_json.as_deref())
+        .and_then(|shaping| from_arbitrated_shaping(&shaping, !redacted));
     RequestRuleDecision {
+        shaping,
         id: Some(ID::from(record.id)),
         request_id: Some(ID::from(record.request_id)),
         evaluated_at: record.evaluated_at,
-        mode: request_rule_evaluation_mode_value(record.mode),
         effective_outcome: request_decision_outcome_value(record.effective_outcome),
         policy_outcome: request_decision_outcome_value(record.policy_outcome),
         fallback_reason: record.fallback_reason,
@@ -281,15 +431,13 @@ fn preview_fallback_reason(result: &AppPreviewResult) -> Option<String> {
     }
 }
 
-/// `mode` is the stored rule set's mode, or `DISABLED` for an unsaved draft —
-/// an unsaved matcher is not enabled, because it is not stored.
 pub fn from_request_rule_preview_result(
     result: AppPreviewResult,
     rule_set_name: String,
-    mode: RequestRuleEvaluationMode,
 ) -> RequestRulePreviewPayload {
     let outcome = request_decision_outcome_value(preview_outcome(result.vote));
     let fallback_reason = preview_fallback_reason(&result);
+    let shaping = from_arbitrated_shaping(&preview_shaping(&result, &rule_set_name), true);
     let reasons: Vec<RequestPreflightReason> = result
         .reasons
         .iter()
@@ -318,12 +466,11 @@ pub fn from_request_rule_preview_result(
 
     RequestRulePreviewPayload {
         rule_set_id: result.rule_set_id,
-        matcher_content_hash: result.matcher_content_hash,
+        source_content_hash: result.source_content_hash,
         decision: RequestRuleDecision {
             id: None,
             request_id: None,
             evaluated_at: result.evaluated_at,
-            mode: request_rule_evaluation_mode_value(mode),
             effective_outcome: outcome,
             policy_outcome: outcome,
             fallback_reason,
@@ -331,6 +478,7 @@ pub fn from_request_rule_preview_result(
             reasons,
             tags: result.tags,
             input_schema_version: to_graphql_int(i64::from(REQUEST_INPUT_SCHEMA_VERSION)),
+            shaping,
         },
         metadata_partial: result.metadata_partial,
         undefined_tags: result.undefined_tags,
@@ -355,8 +503,10 @@ pub fn from_request_preflight(preflight: RequestPreflight) -> RequestPreflightPa
             .collect(),
         tags: preflight.tags,
         metadata_partial: preflight.metadata_partial,
-        evaluation_mode: request_rule_evaluation_mode_value(preflight.evaluation_mode),
         fallback_reason: preflight.fallback_reason,
+        // The requester's own surface: values and conflicts, never a
+        // notification.
+        shaping: from_arbitrated_shaping(&preflight.shaping, false),
     }
 }
 
@@ -399,6 +549,30 @@ pub fn from_media_request_lease(
 
 // ── Submit-time metadata snapshot ───────────────────────────────────────────
 
+/// Content ratings as the API shows them, for a request snapshot and a library
+/// title alike.
+pub fn content_rating_payloads(
+    content_ratings: &[scryer_application::ContentRating],
+) -> Vec<DiscoveryContentRatingPayload> {
+    content_ratings
+        .iter()
+        .map(|rating| DiscoveryContentRatingPayload {
+            country: rating.country.clone(),
+            certifications: rating
+                .certifications
+                .iter()
+                .map(|certification| DiscoveryContentCertificationPayload {
+                    value: certification.value.clone(),
+                    source: certification.source.clone(),
+                    release_type: certification.release_type,
+                })
+                .collect(),
+            age_rating: rating.age_rating,
+            age_rating_source: rating.age_rating_source.clone(),
+        })
+        .collect()
+}
+
 pub fn from_media_request_metadata(
     snapshot: &MediaRequestMetadataSnapshot,
 ) -> MediaRequestMetadataPayload {
@@ -407,24 +581,7 @@ pub fn from_media_request_metadata(
         partial: snapshot.partial,
         missing: snapshot.missing.clone(),
         genres: snapshot.genres.clone(),
-        content_ratings: snapshot
-            .content_ratings
-            .iter()
-            .map(|rating| DiscoveryContentRatingPayload {
-                country: rating.country.clone(),
-                certifications: rating
-                    .certifications
-                    .iter()
-                    .map(|certification| DiscoveryContentCertificationPayload {
-                        value: certification.value.clone(),
-                        source: certification.source.clone(),
-                        release_type: certification.release_type,
-                    })
-                    .collect(),
-                age_rating: rating.age_rating,
-                age_rating_source: rating.age_rating_source.clone(),
-            })
-            .collect(),
+        content_ratings: content_rating_payloads(&snapshot.content_ratings),
         age_rating: snapshot_age_rating(snapshot).map(to_graphql_int),
         certification_rank: certification_label
             .as_deref()
@@ -478,7 +635,7 @@ pub(crate) fn project_media_request_policy(
 /// The one conversion from the submit input to the application's draft.
 ///
 /// The pre-flight query and the submit mutation both go through this, which is
-/// what makes FR-021 — identical drafts yield identical decisions — a property
+/// what makes "identical drafts yield identical decisions" a property
 /// of the code: the two cannot disagree about what a draft *is*.
 pub fn submit_media_request_input_into_application(
     input: SubmitMediaRequestInput,
@@ -521,6 +678,8 @@ pub fn submit_media_request_input_into_application(
         // Omitted means forever, which is what Scryer granted before leases
         // existed. The service validates the range.
         requested_lease_days: input.requested_lease_days.map(i64::from),
+        requested_required_audio_languages: input.requested_required_audio_languages,
+        requested_preferred_audio_languages: input.requested_preferred_audio_languages,
         external_ids: input
             .external_ids
             .into_iter()
@@ -561,6 +720,8 @@ pub fn request_rule_sample_into_application(
             .monitor_type
             .map(|value| value.as_tag_value().to_string()),
         lease_days,
+        required_audio_languages: sample.required_audio_languages,
+        preferred_audio_languages: sample.preferred_audio_languages,
     })
 }
 
@@ -588,24 +749,26 @@ mod tests {
             id: "decision-1".to_string(),
             request_id: "request-1".to_string(),
             evaluated_at: Utc::now(),
-            mode: RequestRuleEvaluationMode::Enforce,
             effective_outcome: RequestDecisionOutcome::Deny,
             policy_outcome: RequestDecisionOutcome::Deny,
             fallback_reason: None,
             votes_json: votes_json.to_string(),
             tags: vec!["kids".to_string()],
+            shaping_json: None,
             input_hash: "hash".to_string(),
             input_schema_version: 1,
             created_at: Utc::now(),
         }
     }
 
+    // Recorded by an earlier build, when each vote still carried a `mode`;
+    // such rows must keep loading.
     const VOTES: &str = r#"[
         {"rule_set_id":"a","rule_set_name":"Family ratings only","revision_number":3,
          "content_hash":"h","mode":"enforce","vote":"deny","held":false,
          "reason_codes":["policy_denied"],"tags":["kids"]},
         {"rule_set_id":"b","rule_set_name":"Quota","revision_number":1,
-         "content_hash":"h","mode":"shadow","held":false,
+         "content_hash":"h","mode":"enforce","held":false,
          "reason_codes":[],"tags":[],"error":"policy evaluation exceeded its time budget"}
     ]"#;
 
@@ -673,6 +836,95 @@ mod tests {
         assert!(
             reference.0.get("sections").is_some(),
             "the request contract should expose its sections"
+        );
+    }
+
+    /// The API names every head exactly as the head table does, so the web
+    /// can key its builder descriptors and its translations on either.
+    #[test]
+    fn every_head_is_named_as_the_head_table_names_it() {
+        use async_graphql::resolver_utils::EnumType;
+        for head in RequestActionHead::ALL {
+            let value = request_action_head_value(head);
+            let item = RequestActionHeadValue::items()
+                .iter()
+                .find(|item| item.value == value)
+                .expect("every head has an API value");
+            assert_eq!(item.name, head.spec().id, "{head:?}");
+        }
+        assert_eq!(
+            RequestActionHeadValue::items().len(),
+            RequestActionHead::ALL.len()
+        );
+    }
+
+    fn arbitrated() -> scryer_application::ArbitratedShaping {
+        let mut shaping = scryer_application::ArbitratedShaping::default();
+        shaping.values.insert(
+            RequestActionHead::SetLeaseDays,
+            scryer_application::ShapedValue {
+                value: RequestHeadValue::Number(30),
+                rule_set_id: "a".to_string(),
+                rule_set_name: "Short leases".to_string(),
+            },
+        );
+        shaping.conflicts.push(scryer_application::ShapingRefusal {
+            head: RequestActionHead::SetQualityProfile,
+            rule_set_ids: vec!["a".to_string(), "b".to_string()],
+        });
+        shaping.notifications.push(scryer_application::ShapedValue {
+            value: RequestHeadValue::Text("Kids' library request".to_string()),
+            rule_set_id: "a".to_string(),
+            rule_set_name: "Short leases".to_string(),
+        });
+        shaping
+    }
+
+    #[test]
+    fn a_stored_shaping_reads_back_and_a_requester_never_sees_a_notification() {
+        let mut stored = record(VOTES);
+        stored.shaping_json = Some(serde_json::to_string(&arbitrated()).unwrap());
+
+        let full = from_request_rule_decision(stored.clone(), false)
+            .shaping
+            .expect("shaping recorded");
+        assert_eq!(
+            full.lease_days,
+            Some(RequestShapedNumber {
+                value: 30,
+                rule_set_name: "Short leases".to_string(),
+            })
+        );
+        assert_eq!(
+            full.conflicts,
+            vec![RequestActionHeadValue::SetQualityProfile]
+        );
+        assert_eq!(full.notifications.len(), 1);
+
+        let redacted = from_request_rule_decision(stored, true)
+            .shaping
+            .expect("values survive redaction");
+        assert!(redacted.notifications.is_empty());
+        assert!(redacted.lease_days.is_some());
+    }
+
+    #[test]
+    fn no_shaping_and_unreadable_shaping_both_read_as_null() {
+        assert!(
+            from_request_rule_decision(record(VOTES), false)
+                .shaping
+                .is_none()
+        );
+        let mut unreadable = record(VOTES);
+        unreadable.shaping_json = Some("{not json".to_string());
+        assert!(
+            from_request_rule_decision(unreadable, false)
+                .shaping
+                .is_none()
+        );
+        assert!(
+            from_arbitrated_shaping(&scryer_application::ArbitratedShaping::default(), true)
+                .is_none()
         );
     }
 }

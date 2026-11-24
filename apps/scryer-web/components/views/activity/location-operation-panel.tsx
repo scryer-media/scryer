@@ -36,7 +36,7 @@ import {
 import {
   librariesQuery,
   locationOperationRetrySelectionQuery,
-  locationTransferTitleDetailQuery,
+  locationTransferTitleOutcomeQuery,
 } from "@/lib/graphql/queries";
 import { useLocationTransfer } from "@/lib/hooks/use-location-transfer";
 import {
@@ -62,6 +62,10 @@ import {
   detailLines,
 } from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
+import {
+  locationTitleRefusalMessage,
+  type RefusalSegment,
+} from "@/lib/utils/location-title-refusal";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { LoadingMark } from "@/components/common/loading-mark";
 
@@ -860,6 +864,10 @@ function TitleRow({
   const client = useClient();
   const [expanded, setExpanded] = React.useState(false);
   const [detail, setDetail] = React.useState<string | null>(null);
+  const [refusal, setRefusal] = React.useState<{
+    reason: string;
+    segments: RefusalSegment[];
+  } | null>(null);
   const [failed, setFailed] = React.useState(false);
   // A completed title may still have something to say — the merge the plan
   // promised, a companion kept under a new name — so its detail is fetched
@@ -870,7 +878,7 @@ function TitleRow({
     let active = true;
     client
       .query(
-        locationTransferTitleDetailQuery,
+        locationTransferTitleOutcomeQuery,
         { id: operationId, titleId: row.titleId },
         { requestPolicy: "network-only" },
       )
@@ -878,7 +886,15 @@ function TitleRow({
       .then((result) => {
         if (!active) return;
         setFailed(Boolean(result.error));
-        setDetail(result.data?.locationTransferTitleDetail ?? null);
+        const outcome = result.data?.locationTransferTitleOutcome ?? null;
+        setDetail(outcome?.detail ?? null);
+        const reason = outcome?.refusalReason ?? null;
+        const segments = locationTitleRefusalMessage(
+          reason,
+          outcome?.refusalFacts ?? null,
+          t,
+        );
+        setRefusal(reason && segments ? { reason, segments } : null);
       })
       .catch(() => {
         if (active) setFailed(true);
@@ -886,7 +902,7 @@ function TitleRow({
     return () => {
       active = false;
     };
-  }, [client, expanded, operationId, row.titleId, row.state, showsDetail]);
+  }, [client, expanded, operationId, row.titleId, row.state, showsDetail, t]);
   const path = row.currentFile ? splitTransferPath(row.currentFile) : null;
   const recording = row.recording ?? 0;
   return (
@@ -1010,7 +1026,24 @@ function TitleRow({
           >
             {row.hasException && (
               <div className="mb-3 space-y-1 text-[var(--scry-warning-text)]">
-                {detail ? (
+                {refusal ? (
+                  <p
+                    id={`transfer-refusal-${row.titleId}`}
+                    data-reason-code={refusal.reason}
+                  >
+                    {refusal.segments.map((segment, index) =>
+                      segment.kind === "path" ? (
+                        <span key={index} className="inline-flex max-w-full">
+                          <FilePath path={segment.path} />
+                        </span>
+                      ) : (
+                        <React.Fragment key={index}>
+                          {segment.text}
+                        </React.Fragment>
+                      ),
+                    )}
+                  </p>
+                ) : detail ? (
                   detailLines(detail).map((line, index) => (
                     <p key={index}>{line}</p>
                   ))

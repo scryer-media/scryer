@@ -1,5 +1,4 @@
-//! Read models for the request-rule GraphQL surface (spec 0003 FR-016, FR-020,
-//! FR-044).
+//! Read models for the request-rule GraphQL surface.
 //!
 //! Nothing in this module decides anything. Every method is a read plus the
 //! authorization that read requires, and it exists because the repositories the
@@ -9,7 +8,7 @@
 //! Two properties are enforced here rather than remembered at each call site:
 //!
 //! 1. **A requester never sees the vote table.** The same redaction the
-//!    pre-flight applies (FR-020) applies to a stored decision read back by the
+//!    pre-flight applies also applies to a stored decision read back by the
 //!    person it was about: outcome, fallback reason, reasons, and tags, never
 //!    the per-rule votes. [`RequestRuleDecisionView::redacted`] carries that
 //!    judgement to the projection so the projection cannot forget to ask.
@@ -39,7 +38,7 @@ pub struct RequestRuleDecisionView {
     pub record: RequestRuleDecisionRecord,
     /// True when the caller reached the trace as the *requester* rather than as
     /// a manager of the request's library. The projection then drops the votes,
-    /// mirroring the pre-flight's redaction (FR-020).
+    /// mirroring the pre-flight's redaction.
     pub redacted: bool,
 }
 
@@ -57,6 +56,23 @@ pub struct MediaRequestPolicyFacts {
     /// The name of the public list that submitted the request, while that
     /// list is still followed. Personal lists are never named here.
     pub public_list_name: Option<String>,
+}
+
+/// Which of the facts read from other tables a projection will show. A fact
+/// left out is not read and comes back empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaRequestPolicySelection {
+    /// The latest decision trace of each request.
+    pub decision: bool,
+    /// The name of the public list behind each list-submitted request.
+    pub public_list_name: bool,
+}
+
+impl MediaRequestPolicySelection {
+    pub const ALL: Self = Self {
+        decision: true,
+        public_list_name: true,
+    };
 }
 
 impl AppUseCase {
@@ -82,8 +98,9 @@ impl AppUseCase {
 
     /// How many decisions each of `rule_set_ids` took part in.
     ///
-    /// One count per rule set rather than a batched query: the authoring list is
-    /// tens of rows, and the port's count is a single indexed scan per rule.
+    /// Counted from the rule set links written with each decision: one grouped
+    /// statement per bind-safe chunk of ids, served by the rule set index. A
+    /// rule set with no decision maps to zero.
     pub async fn request_rule_decision_counts(
         &self,
         actor: &User,
@@ -91,17 +108,19 @@ impl AppUseCase {
     ) -> AppResult<HashMap<String, u64>> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        let mut counts = HashMap::with_capacity(rule_set_ids.len());
-        for rule_set_id in rule_set_ids {
-            let count = self
-                .services
-                .customization
-                .request_rule_decisions
-                .count_for_rule_set(rule_set_id)
-                .await?;
-            counts.insert(rule_set_id.clone(), count);
-        }
-        Ok(counts)
+        let counts = self
+            .services
+            .customization
+            .request_rule_decisions
+            .count_for_rule_sets(rule_set_ids)
+            .await?;
+        Ok(rule_set_ids
+            .iter()
+            .map(|rule_set_id| {
+                let count = counts.get(rule_set_id.trim()).copied().unwrap_or(0);
+                (rule_set_id.clone(), count)
+            })
+            .collect())
     }
 
     /// The latest decision recorded for one request.
@@ -144,7 +163,7 @@ impl AppUseCase {
                 .any(|requester| requester.user_id == actor.id)
         {
             return Err(AppError::unauthorized_reason(
-                crate::error_reasons::request_rules::MAY_NOT_READ_REQUEST_S_DECISION,
+                crate::error_reasons::request_rules::DECISION_READ_FORBIDDEN,
                 "You may not read this request's decision".to_string(),
             ));
         }
@@ -165,14 +184,17 @@ impl AppUseCase {
     /// requests, keyed by request id.
     ///
     /// The caller has already established that it may see these rows; this only
-    /// decides how much *policy* detail each one carries. Two bounded costs:
-    /// one batched claim read for the requests that created a title, and one
-    /// trace read per request that actually recorded a decision — so a list of
-    /// requests submitted before request rules existed costs nothing extra.
+    /// decides how much *policy* detail each one carries. Three bounded costs,
+    /// each one read for the whole batch: the claims of the requests that
+    /// created a title, the traces of the requests that recorded a decision,
+    /// and the lists behind list-submitted requests. The last two are read only
+    /// when `selection` asks for them, and a list of requests submitted before
+    /// request rules existed costs nothing extra.
     pub async fn media_request_policy_facts(
         &self,
         actor: &User,
         requests: &[MediaRequest],
+        selection: MediaRequestPolicySelection,
     ) -> AppResult<HashMap<String, MediaRequestPolicyFacts>> {
         let mut facts: HashMap<String, MediaRequestPolicyFacts> =
             HashMap::with_capacity(requests.len());
@@ -214,35 +236,75 @@ impl AppUseCase {
             }
         };
 
-        let mut public_list_names: HashMap<String, Option<String>> = HashMap::new();
-        for request in requests {
-            if let scryer_domain::MediaRequestOrigin::PublicList { subscription_id } =
-                &request.origin
-                && !public_list_names.contains_key(subscription_id)
-            {
-                let name = match self
-                    .services
-                    .lists
-                    .subscriptions
-                    .get_by_id(subscription_id)
-                    .await
-                {
-                    Ok(subscription) => subscription
-                        .filter(|subscription| {
-                            subscription.scope == scryer_domain::ListScope::Public
-                        })
-                        .map(|subscription| subscription.name),
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            "could not read the list behind a media request projection"
-                        );
-                        None
+        let subscription_ids: Vec<String> = if selection.public_list_name {
+            requests
+                .iter()
+                .filter_map(|request| match &request.origin {
+                    scryer_domain::MediaRequestOrigin::PublicList { subscription_id } => {
+                        Some(subscription_id.clone())
                     }
-                };
-                public_list_names.insert(subscription_id.clone(), name);
+                    _ => None,
+                })
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let public_list_names: HashMap<String, String> = if subscription_ids.is_empty() {
+            HashMap::new()
+        } else {
+            match self
+                .services
+                .lists
+                .subscriptions
+                .get_by_ids(&subscription_ids)
+                .await
+            {
+                Ok(subscriptions) => subscriptions
+                    .into_iter()
+                    .filter(|subscription| subscription.scope == scryer_domain::ListScope::Public)
+                    .map(|subscription| (subscription.id, subscription.name))
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "could not read the lists behind a media request projection"
+                    );
+                    HashMap::new()
+                }
             }
-        }
+        };
+
+        let decided_request_ids: Vec<String> = if selection.decision {
+            requests
+                .iter()
+                .filter(|request| request.decision_id.is_some())
+                .map(|request| request.id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut decisions = if decided_request_ids.is_empty() {
+            HashMap::new()
+        } else {
+            match self
+                .services
+                .customization
+                .request_rule_decisions
+                .latest_for_requests(&decided_request_ids)
+                .await
+            {
+                Ok(decisions) => decisions,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "could not read the decision traces for a media request projection"
+                    );
+                    HashMap::new()
+                }
+            }
+        };
 
         for request in requests {
             let mut entry = MediaRequestPolicyFacts {
@@ -250,25 +312,12 @@ impl AppUseCase {
                 public_list_name: request
                     .origin
                     .subscription_id()
-                    .and_then(|id| public_list_names.get(id).cloned().flatten()),
+                    .and_then(|id| public_list_names.get(id).cloned()),
                 ..MediaRequestPolicyFacts::default()
             };
 
             if request.decision_id.is_some() {
-                match self
-                    .services
-                    .customization
-                    .request_rule_decisions
-                    .latest_for_request(&request.id)
-                    .await
-                {
-                    Ok(record) => entry.decision = record,
-                    Err(error) => tracing::warn!(
-                        request_id = %request.id,
-                        error = %error,
-                        "could not read the decision trace for a media request projection"
-                    ),
-                }
+                entry.decision = decisions.remove(&request.id);
             }
 
             entry.lease_claim = request

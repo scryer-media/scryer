@@ -243,6 +243,9 @@ pub(crate) enum ReleaseAutoDecisionCode {
     ProperForOldFile,
     AlreadyActive,
     QueuedBetterOrEqual,
+    /// The release beats the one downloading for its scope, but an automatic
+    /// grab is not submitted beside a download the client is still working.
+    QueuedItemBlocksUpgrade,
     DbBlocklisted,
     PendingDelay,
     MinimumAge,
@@ -302,6 +305,7 @@ impl ReleaseAutoDecisionCode {
             "proper_for_old_file" => Some(Self::ProperForOldFile),
             "already_active" => Some(Self::AlreadyActive),
             "queued_better_or_equal" => Some(Self::QueuedBetterOrEqual),
+            "queued_item_blocks_upgrade" => Some(Self::QueuedItemBlocksUpgrade),
             "db_blocklisted" => Some(Self::DbBlocklisted),
             "pending_delay" => Some(Self::PendingDelay),
             "minimum_age" => Some(Self::MinimumAge),
@@ -342,6 +346,7 @@ impl ReleaseAutoDecisionCode {
             Self::ProperForOldFile => "proper_for_old_file",
             Self::AlreadyActive => "already_active",
             Self::QueuedBetterOrEqual => "queued_better_or_equal",
+            Self::QueuedItemBlocksUpgrade => "queued_item_blocks_upgrade",
             Self::DbBlocklisted => "db_blocklisted",
             Self::PendingDelay => "pending_delay",
             Self::MinimumAge => "minimum_age",
@@ -400,6 +405,9 @@ impl ReleaseAutoDecisionCode {
             // different operator situations.
             Self::QueuedBetterOrEqual => {
                 "a release already downloading for this scope is equal or better"
+            }
+            Self::QueuedItemBlocksUpgrade => {
+                "a worse release is still downloading for this scope; this one waits until it leaves the queue"
             }
             Self::DbBlocklisted => "release is blocklisted from prior failures",
             Self::PendingDelay => "release is eligible but held by a delay profile",
@@ -1752,7 +1760,82 @@ pub(crate) fn annotate_auto_decision(
     candidate.auto_decision_summary = Some(code.summary().to_string());
 }
 
+/// Whether `candidate` already carries the annotation
+/// [`annotate_auto_decision`] gives `code`, so that its own explanation is
+/// [`release_decision_explanation_for`] with that code.
+pub(crate) fn candidate_carries_auto_decision(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> bool {
+    candidate.auto_eligible == Some(code.is_eligible())
+        && candidate.auto_decision_code.as_deref() == Some(code.as_str())
+        && candidate.auto_decision_summary.as_deref() == Some(code.summary())
+}
+
 pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) -> Option<String> {
+    serde_json::to_string(&decision_explanation_value(candidate)).ok()
+}
+
+/// The explanation a release decision records, serialized once into the
+/// form the store compresses as it is.
+#[cfg(test)]
+pub(crate) fn release_decision_explanation(
+    candidate: &IndexerSearchResult,
+) -> crate::ReleaseDecisionExplanation {
+    crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value(candidate))
+}
+
+/// The explanation `candidate` records once annotated with `code` — what
+/// [`annotate_auto_decision`] on a copy of the candidate and then serializing
+/// its explanation produce — without copying the candidate.
+pub(crate) fn release_decision_explanation_for(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> crate::ReleaseDecisionExplanation {
+    crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value_for(candidate, code))
+}
+
+/// [`release_decision_explanation_for`] as a value.
+pub(crate) fn decision_explanation_value_for(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> serde_json::Value {
+    explanation_value(
+        candidate,
+        AutoDecisionAnnotation {
+            eligible: Some(code.is_eligible()),
+            code: Some(code.as_str()),
+            summary: Some(code.summary()),
+        },
+    )
+}
+
+/// The `auto_decision` fields an explanation records, as
+/// [`annotate_auto_decision`] sets them on a candidate.
+struct AutoDecisionAnnotation<'a> {
+    eligible: Option<bool>,
+    code: Option<&'a str>,
+    summary: Option<&'a str>,
+}
+
+impl<'a> AutoDecisionAnnotation<'a> {
+    fn of(candidate: &'a IndexerSearchResult) -> Self {
+        Self {
+            eligible: candidate.auto_eligible,
+            code: candidate.auto_decision_code.as_deref(),
+            summary: candidate.auto_decision_summary.as_deref(),
+        }
+    }
+}
+
+fn decision_explanation_value(candidate: &IndexerSearchResult) -> serde_json::Value {
+    explanation_value(candidate, AutoDecisionAnnotation::of(candidate))
+}
+
+fn explanation_value(
+    candidate: &IndexerSearchResult,
+    auto_decision: AutoDecisionAnnotation<'_>,
+) -> serde_json::Value {
     let quality = candidate.quality_profile_decision.as_ref();
     let scoring_log = quality
         .map(|decision| {
@@ -1779,7 +1862,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "parse_hints": &parsed.parse_hints,
         })
     });
-    let payload = serde_json::json!({
+    serde_json::json!({
         "candidate": {
             "source": candidate.source.as_str(),
             "source_kind": candidate.source_kind.map(|kind| kind.as_str()),
@@ -1789,9 +1872,9 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "external_id_conflicts": candidate.extra.get(EXTERNAL_ID_CONFLICTS_EXTRA_KEY),
         },
         "auto_decision": {
-            "eligible": candidate.auto_eligible,
-            "code": candidate.auto_decision_code.as_deref(),
-            "summary": candidate.auto_decision_summary.as_deref(),
+            "eligible": auto_decision.eligible,
+            "code": auto_decision.code,
+            "summary": auto_decision.summary,
             "decided_by": quality
                 .and_then(|decision| decision.decided_by)
                 .map(crate::ReleaseDecidingStep::as_str),
@@ -1804,9 +1887,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "scoring_log": scoring_log,
         },
         "parsed": parsed,
-    });
-
-    serde_json::to_string(&payload).ok()
+    })
 }
 
 /// Sonarr-style episode anchoring for numbering-scoped subjects: an episode or
@@ -1928,32 +2009,26 @@ pub(crate) fn scope_still_wants_language(
         .is_some_and(|incumbent| pipeline.still_wants(&incumbent.facts().side))
 }
 
-/// The language escape from the cutoff: the candidate is a step up in audio
-/// language over the file that set the cutoff.
+/// The escape from the cutoff over the file that set it, by the rule a
+/// recent grab at its cutoff also follows:
+/// [`crate::DecisionPipeline::passes_reached_cutoff`].
 ///
-/// A better preferred rank always counts. More optional languages count only
-/// when the incumbent is still wanted for them, which is when the profile's
-/// libraries keep searching for optional languages; otherwise an optional
-/// language improves a file when one turns up but is not worth going past the
-/// cutoff for.
-///
-/// Each half applies only while its gate is in the profile's pipeline: a
-/// language the profile does not compare cannot be an upgrade.
-fn candidate_is_language_upgrade(
+/// For the language steps: a better preferred rank always counts. More
+/// optional languages count only when the incumbent is still wanted for them,
+/// which is when the profile's libraries keep searching for optional
+/// languages; otherwise an optional language improves a file when one turns
+/// up but is not worth going past the cutoff for. A step the profile's
+/// pipeline does not run opens no escape.
+fn candidate_escapes_reached_cutoff(
     candidate: crate::admission::CandidateFacts,
     subject: &crate::admission::AdmissionSubject,
 ) -> bool {
     let pipeline = &candidate.pipeline;
-    let Some(incumbent) = subject.best_incumbent_record(pipeline) else {
-        return false;
-    };
-    let held = incumbent.facts();
-    pipeline.still_wants(&held.side)
-        && pipeline.passes_cutoff(
-            crate::decision_pipeline::CutoffEscape::Language,
-            &candidate.facts(),
-            &held,
-        )
+    subject
+        .best_incumbent_record(pipeline)
+        .is_some_and(|incumbent| {
+            pipeline.passes_reached_cutoff(&candidate.facts(), &incumbent.facts())
+        })
 }
 
 /// The one cutoff gate.
@@ -2003,7 +2078,7 @@ pub(crate) fn cutoff_refusal(
     // that still lacks its preferred language (or, when configured, an
     // optional one) lets a release that brings it through to the ladder, and
     // nothing else. The ladder still decides whether it lands.
-    if candidate_is_language_upgrade(candidate, subject) {
+    if candidate_escapes_reached_cutoff(candidate, subject) {
         return None;
     }
     Some(ReleaseAutoDecisionCode::CutoffReached)
@@ -2093,7 +2168,9 @@ pub(crate) fn automatic_candidate_delay_decision(
             .incumbents()
             .iter()
             .any(|incumbent| revision_upgrade_over(candidate_facts, incumbent)),
-        preferred_protocol_highest_quality: candidate_facts.tier_index == Some(0),
+        // The profile's best tier only counts while the profile ranks by tier.
+        preferred_protocol_highest_quality: profile.criteria.tier_cutoff_applies()
+            && candidate_facts.tier_index == Some(0),
         oldest_overlapping_pending_published_at,
     };
     crate::delay_profile::grab_time_delay_decision_with_context(
@@ -2371,8 +2448,12 @@ fn evaluate_auto_candidate_recording(
     // for one episode takes that episode, or a double episode that holds it,
     // never a season. The season and collection searches own packs and their
     // missing-episode threshold. An operator-started search and the feed are
-    // not single-episode searches and are left alone.
-    if !context.user_invoked
+    // not single-episode searches and are left alone. A profile whose pack
+    // minimum is one missing episode asks for exactly the pack this refuses,
+    // so the refusal stands only while the minimum is above one; the title,
+    // numbering, monitoring, quality and upgrade checks still apply.
+    if !context.thresholds.allows_pack_for_one_missing_episode()
+        && !context.user_invoked
         && !context.is_rss_lane
         && matches!(
             context.subject.submission_scope,
@@ -2590,6 +2671,9 @@ fn evaluate_auto_candidate_recording(
             crate::admission::AdmissionRejectionReason::QueuedEqualOrBetter { .. }
             | crate::admission::AdmissionRejectionReason::QueuedSameRelease { .. } => {
                 ReleaseAutoDecisionCode::QueuedBetterOrEqual
+            }
+            crate::admission::AdmissionRejectionReason::QueuedItemBlocksUpgrade { .. } => {
+                ReleaseAutoDecisionCode::QueuedItemBlocksUpgrade
             }
             _ => ReleaseAutoDecisionCode::UpgradeRejected,
         };
@@ -2952,7 +3036,10 @@ impl AppUseCase {
         // `DbBlocklisted` reads the per-title blocklist (the single, removable
         // exclusion source), never the failed-attempt history.
         let db_blocklist = self
-            .load_title_release_blocklist_signatures(&title.id)
+            .load_title_release_blocklist_signatures(
+                &title.id,
+                crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+            )
             .await;
 
         let dl_snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
@@ -2970,16 +3057,12 @@ impl AppUseCase {
             None
         };
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
+            .resolve_upgrade_context_for_scope(
                 title,
                 Some(subject.category.as_str()),
-                analyzed_cutoff_quality,
+                &existing_files,
+                &cutoff_scope,
             )
             .await
         {
@@ -4151,6 +4234,67 @@ mod tests {
     use scryer_domain::{MediaFacet, TaggedAlias, Title};
 
     #[test]
+    fn cyrillic_bare_season_pack_preserves_neutral_title_identity() {
+        let mut title = spelling_title("Зарвик", "rus");
+        title.facet = MediaFacet::Series;
+        title.year = Some(2026);
+        title.imdb_id = None;
+        title.external_ids.clear();
+        title.aliases.clear();
+        let evidence = canonical_title_evidence(&title);
+        for marker in ["[S1]", "[S01]", "S1", "S01"] {
+            let raw = format!("Зарвик {marker} (2026) WEBRip 1080p-GRP RUS");
+            let anchors = context_free_identity_anchor_keys(&raw);
+            assert!(
+                anchors.contains(&"зарвик".to_string()),
+                "{raw}: {anchors:?}"
+            );
+            assert!(
+                candidate_title_match(&make_candidate(&raw, None), &evidence).is_some(),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "Зарвик [S1] (2017) WEBRip 1080p-GRP RUS",
+            "Новые Зарвик [S1] (2026) WEBRip 1080p-GRP RUS",
+            "Зарвик Возвращение [S1] (2026) WEBRip 1080p-GRP RUS",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_none(),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_number_in_the_show_name_does_not_refuse_its_releases() {
+        let mut title = spelling_title(
+            "The 140 Lanterns Who Really, Really, Really, Really, REALLY Glow",
+            "eng",
+        );
+        title.facet = MediaFacet::Anime;
+        title.year = Some(2023);
+        title.imdb_id = None;
+        let evidence = canonical_title_evidence(&title);
+        for raw in [
+            "The.140.Lanterns.Who.Really.Really.Really.Really.REALLY.Glow.S02E01.1080p.BluRay.Dual-Audio.Opus.2.0.x265-GroupTag",
+            "The 140 Lanterns Who Really, Really, Really, Really, REALLY Glow S02E01 1080p WEB H264-GroupTag",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_some(),
+                "{raw}"
+            );
+        }
+        assert!(
+            candidate_title_match(
+                &make_candidate("The.140.S02E01.1080p.BluRay.x265-GroupTag", None),
+                &evidence
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn movie_availability_preserves_non_overridable_refusals() {
         for code in [
             ReleaseAutoDecisionCode::MinimumSeeders,
@@ -4970,6 +5114,141 @@ mod tests {
         }
     }
 
+    /// The recorded explanation is the serializer's own output, and that
+    /// output is already what parse-then-serialize would store, so the store
+    /// may compress it as it is.
+    #[test]
+    fn recorded_decision_explanation_is_already_canonical() {
+        let titles = [
+            "Synthetic.Show.S02E07.1080p.WEB-DL.DDP5.1.H.264-SYNTH",
+            "Synthetic Film 2026 2160p UHD BluRay REMUX HDR \"Cut\" \\ é-ÆON",
+            "Synthetic.Show.S01.COMPLETE.720p.HDTV.x264-PARITY",
+            "",
+        ];
+        for (index, title) in titles.iter().enumerate() {
+            let mut candidate = make_candidate(title, None);
+            candidate.guid = Some(format!("synthetic-guid-{index}\u{1}\t\n"));
+            candidate.download_url = Some(" ".to_string());
+            candidate.auto_eligible = Some(index % 2 == 0);
+            candidate.auto_decision_code = Some("quality_blocked".to_string());
+            candidate.extra.insert(
+                EXTERNAL_ID_CONFLICTS_EXTRA_KEY.to_string(),
+                serde_json::json!({"tvdb": [index, -1.5, 1e300, 0.1, u64::MAX], "z": null, "a": "é"}),
+            );
+            candidate.quality_profile_decision = Some(crate::QualityProfileDecision {
+                release_score: -40 + index as i32,
+                scoring_log: (0..index * 3)
+                    .map(|step| crate::ScoringEntry {
+                        code: format!("synthetic_rule_{step}"),
+                        delta: step as i32 * 7 - 10,
+                        source: crate::ScoringSource::Builtin,
+                        kind: crate::ScoringEntryKind::ScoreContribution,
+                    })
+                    .collect(),
+                allowed: index % 2 == 1,
+                block_codes: vec!["synthetic_block".to_string()],
+                preference_score: 12,
+                tier_index: None,
+                size_fit_penalty: 0,
+                revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
+            });
+            for candidate in [candidate.clone(), make_candidate(title, None)] {
+                let serialized = serialize_decision_explanation(&candidate)
+                    .expect("explanation should serialize");
+                let recorded = release_decision_explanation(&candidate);
+                assert_eq!(recorded.as_str(), serialized);
+                assert_eq!(recorded.canonical_text(), Some(serialized.as_str()));
+                let reparsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(serde_json::to_string(&reparsed).unwrap(), serialized);
+            }
+        }
+    }
+
+    /// Building the explanation from the borrowed candidate and the decision
+    /// code records exactly what annotating a copy of the candidate and then
+    /// serializing it recorded.
+    #[test]
+    fn explanation_for_a_code_matches_annotating_a_copy() {
+        let codes = [
+            ReleaseAutoDecisionCode::Eligible,
+            ReleaseAutoDecisionCode::QualityBlocked,
+            ReleaseAutoDecisionCode::PendingDelay,
+            ReleaseAutoDecisionCode::MinimumAge,
+            ReleaseAutoDecisionCode::ReleaseAgeUnknown,
+            ReleaseAutoDecisionCode::DownloadClientUnavailable,
+            ReleaseAutoDecisionCode::UpgradeRejected,
+            ReleaseAutoDecisionCode::DbBlocklisted,
+            ReleaseAutoDecisionCode::SubtitlesOnly,
+        ];
+        let titles = [
+            "Synthetic.Show.S02E07.1080p.WEB-DL.DDP5.1.H.264-SYNTH",
+            "Synthetic Film 2026 2160p UHD BluRay REMUX HDR \"Cut\" \\ é-ÆON",
+            "",
+        ];
+        let mut candidates = Vec::new();
+        for (index, title) in titles.iter().enumerate() {
+            candidates.push(make_candidate(title, None));
+            let mut varied = make_candidate(title, None);
+            varied.guid = Some(format!("synthetic-guid-{index}"));
+            // Stale annotations the code must replace.
+            varied.auto_eligible = Some(index % 2 == 0);
+            varied.auto_decision_code = Some("synthetic_stale_code".to_string());
+            varied.auto_decision_summary = Some("synthetic stale summary".to_string());
+            varied.extra.insert(
+                EXTERNAL_ID_CONFLICTS_EXTRA_KEY.to_string(),
+                serde_json::json!({"tvdb": [index, -1.5, 0.1], "a": "é"}),
+            );
+            varied.quality_profile_decision = Some(crate::QualityProfileDecision {
+                release_score: -40 + index as i32,
+                scoring_log: (0..index * 2)
+                    .map(|step| crate::ScoringEntry {
+                        code: format!("synthetic_rule_{step}"),
+                        delta: step as i32 * 7 - 10,
+                        source: crate::ScoringSource::Builtin,
+                        kind: crate::ScoringEntryKind::ScoreContribution,
+                    })
+                    .collect(),
+                allowed: index % 2 == 1,
+                block_codes: vec!["synthetic_block".to_string()],
+                preference_score: 12,
+                tier_index: None,
+                size_fit_penalty: 0,
+                revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
+            });
+            candidates.push(varied);
+        }
+        for candidate in &candidates {
+            for code in codes {
+                let mut annotated = candidate.clone();
+                annotate_auto_decision(&mut annotated, code);
+                let expected = release_decision_explanation(&annotated);
+                let built = release_decision_explanation_for(candidate, code);
+                assert_eq!(built.as_str(), expected.as_str(), "code {}", code.as_str());
+                assert_eq!(built.canonical_text(), expected.canonical_text());
+                assert_eq!(
+                    decision_explanation_value_for(candidate, code),
+                    decision_explanation_value(&annotated)
+                );
+                // A candidate that already carries the annotation shares one
+                // text between its review park and its decision row.
+                assert!(candidate_carries_auto_decision(&annotated, code));
+                assert_eq!(
+                    serialize_decision_explanation(&annotated).as_deref(),
+                    Some(release_decision_explanation_for(&annotated, code).as_str())
+                );
+                if candidate.auto_decision_code.is_some() {
+                    assert!(!candidate_carries_auto_decision(candidate, code));
+                }
+            }
+        }
+    }
+
     fn make_media_file(release_title: &str, episode_id: Option<&str>) -> TitleMediaFile {
         TitleMediaFile {
             analysis_details: Default::default(),
@@ -5690,6 +5969,22 @@ mod tests {
         coverage_scope: Option<SubmissionScope>,
         user_invoked: bool,
     ) -> ReleaseAutoDecisionCode {
+        single_episode_decision_with_pack_minimum(
+            release,
+            wanted_episode,
+            coverage_scope,
+            user_invoked,
+            None,
+        )
+    }
+
+    fn single_episode_decision_with_pack_minimum(
+        release: &str,
+        wanted_episode: u32,
+        coverage_scope: Option<SubmissionScope>,
+        user_invoked: bool,
+        min_missing_episodes_for_pack: Option<u32>,
+    ) -> ReleaseAutoDecisionCode {
         let mut title = make_title();
         title.name = "Synthetic Show".to_string();
         title.facet = MediaFacet::Series;
@@ -5707,8 +6002,9 @@ mod tests {
         ));
         candidate.quality_profile_decision = Some(allowed_quality_decision(2400));
         candidate.coverage_scope = coverage_scope;
-        let profile = QualityProfile::default();
-        let thresholds = AcquisitionThresholds::default();
+        let mut profile = QualityProfile::default();
+        profile.criteria.min_missing_episodes_for_pack = min_missing_episodes_for_pack;
+        let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
         let now = Utc::now();
         let db_blocklist = crate::app_usecase_discovery::TitleReleaseBlocklistSignatures::default();
         let no_minimum_seeders = HashMap::new();
@@ -5732,6 +6028,59 @@ mod tests {
             unmonitored_episode_ids: &HashSet::new(),
         };
         evaluate_auto_candidate(&candidate, &context)
+    }
+
+    #[test]
+    fn a_pack_minimum_of_one_lets_a_single_episode_search_take_a_pack() {
+        let release = "Synthetic.Show.S01E01-E03.1080p.WEB-DL-SYNTH";
+        let triple = Some(SubmissionScope::EpisodeSet {
+            episode_ids: vec!["ep-1".into(), "ep-2".into(), "ep-3".into()],
+        });
+        let season = Some(SubmissionScope::Collection {
+            collection_id: "season-1".to_string(),
+        });
+        // Unset and the stored default both refuse, as before the setting.
+        for minimum in [None, Some(2), Some(5)] {
+            assert_eq!(
+                single_episode_decision_with_pack_minimum(
+                    release,
+                    1,
+                    triple.clone(),
+                    false,
+                    minimum
+                ),
+                ReleaseAutoDecisionCode::PackForSingleEpisode,
+                "minimum {minimum:?}"
+            );
+        }
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(release, 1, triple.clone(), false, Some(1)),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(
+                "Synthetic.Show.S01.1080p.WEB-DL-SYNTH",
+                1,
+                season,
+                false,
+                Some(1)
+            ),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        // The identity checks ahead of the pack gate still decide.
+        let foreign = "Another.Show.S01E01-E03.1080p.WEB-DL-SYNTH";
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, Some(1)),
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, None),
+        );
+        assert_ne!(
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, Some(1)),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(release, 7, triple, false, Some(1)),
+            ReleaseAutoDecisionCode::EpisodeMismatch,
+        );
     }
 
     #[test]
@@ -7277,11 +7626,16 @@ mod tests {
             analyzed_cutoff_quality_for_scope(
                 &existing,
                 &CutoffScope::Episode("episode-1".to_string()),
+                &crate::QualityProfileCriteria::default(),
             ),
             Some("720p")
         );
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &CutoffScope::Title),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &CutoffScope::Title,
+                &crate::QualityProfileCriteria::default()
+            ),
             Some("1080p")
         );
     }
@@ -7310,25 +7664,90 @@ mod tests {
             |ids: &[&str]| CutoffScope::Episodes(ids.iter().map(|id| (*id).to_string()).collect());
 
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &members(&["episode-1", "episode-2"])),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &members(&["episode-1", "episode-2"]),
+                &crate::QualityProfileCriteria::default()
+            ),
             Some("720p"),
             "the season is only as good as its worst episode"
         );
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &members(&["episode-1"])),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &members(&["episode-1"]),
+                &crate::QualityProfileCriteria::default()
+            ),
             Some("1080p")
         );
         assert_eq!(
             analyzed_cutoff_quality_for_scope(
                 &existing,
-                &members(&["episode-1", "episode-2", "episode-3"])
+                &members(&["episode-1", "episode-2", "episode-3"]),
+                &crate::QualityProfileCriteria::default(),
             ),
             None,
             "a missing member means the season has not reached any cutoff"
         );
         assert_eq!(
-            analyzed_cutoff_quality_for_scope(&existing, &members(&[])),
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &members(&[]),
+                &crate::QualityProfileCriteria::default()
+            ),
             None
+        );
+    }
+
+    /// The members are ranked in the profile's own tier order, not by
+    /// resolution: a profile that ranks 720p above 1080p finds a season
+    /// holding both only as good as its 1080p member, which is below its
+    /// cutoff, so that member can still be upgraded.
+    #[test]
+    fn a_pack_scope_ranks_its_members_in_the_profile_tier_order() {
+        use crate::acquisition::decision_helpers::{
+            CutoffScope, analyzed_cutoff_quality_for_scope,
+        };
+
+        let mut first = make_media_file("Nightfall.S01E01.720p.WEB-DL", Some("episode-1"));
+        first.quality_label = Some("720p".to_string());
+        let mut second = make_media_file("Nightfall.S01E02.1080p.WEB-DL", Some("episode-2"));
+        second.quality_label = Some("1080p".to_string());
+        let mut alternate = make_media_file("Nightfall.S01E02.2160p.WEB-DL", Some("episode-2"));
+        alternate.quality_label = Some("2160p".to_string());
+        alternate.role = crate::MediaFileRole::Additional;
+        let existing = vec![first, second, alternate];
+        let criteria = crate::QualityProfileCriteria {
+            quality_tiers: vec!["2160P".into(), "720P".into(), "1080P".into()],
+            cutoff_tier: Some("720P".into()),
+            ..Default::default()
+        };
+        let season = CutoffScope::Episodes(vec!["episode-1".into(), "episode-2".into()]);
+
+        let weakest = analyzed_cutoff_quality_for_scope(&existing, &season, &criteria);
+        assert_eq!(weakest, Some("1080p"));
+        assert!(!criteria.quality_cutoff_met(weakest));
+        // Under resolution order the season read as 720p, which is at cutoff.
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(
+                &existing,
+                &season,
+                &crate::QualityProfileCriteria::default()
+            ),
+            Some("720p")
+        );
+        // Within one member the profile's best wins too.
+        let mut held_720 = make_media_file("Nightfall.S01E03.720p.WEB-DL", Some("episode-3"));
+        held_720.quality_label = Some("720p".to_string());
+        let mut held_1080 = make_media_file("Nightfall.S01E03.1080p.WEB-DL", Some("episode-3"));
+        held_1080.quality_label = Some("1080p".to_string());
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(
+                &[held_1080, held_720],
+                &CutoffScope::Episode("episode-3".into()),
+                &criteria,
+            ),
+            Some("720p")
         );
     }
 
@@ -7353,6 +7772,7 @@ mod tests {
             analyzed_cutoff_quality_for_scope(
                 &existing,
                 &CutoffScope::Episode("episode-1".to_string()),
+                &crate::QualityProfileCriteria::default(),
             ),
             Some("2160p")
         );
@@ -7499,6 +7919,19 @@ mod tests {
             .unwrap()
         }
 
+        /// Tier and revision first, then the languages. The language steps
+        /// are opt-in, so a test about them under a tier-first order
+        /// chooses this.
+        fn tier_then_languages() -> crate::DecisionPipeline {
+            crate::DecisionPipeline::try_from_gates([
+                crate::DecisionGate::QualityTier,
+                crate::DecisionGate::Revision,
+                crate::DecisionGate::PreferredLanguage,
+                crate::DecisionGate::OptionalLanguages,
+            ])
+            .unwrap()
+        }
+
         fn holding(revision: i32, days_ago: i64) -> AdmissionSubject {
             AdmissionSubject::new(
                 AdmissionScope::Title,
@@ -7574,20 +8007,16 @@ mod tests {
         /// and what the file keeps instead is the language escape below.
         #[test]
         fn a_file_missing_the_preferred_language_still_reaches_its_cutoff() {
+            let order = tier_then_languages();
             let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
-            assert!(incumbent_at_cutoff(
-                true,
-                &english,
-                Some(500),
-                &DEFAULT_ORDER
-            ));
-            assert!(incumbent_at_cutoff(true, &english, None, &DEFAULT_ORDER));
-            assert!(!incumbent_at_cutoff(false, &english, None, &DEFAULT_ORDER));
-            assert!(scope_still_wants_language(&english, &DEFAULT_ORDER));
+            assert!(incumbent_at_cutoff(true, &english, Some(500), &order));
+            assert!(incumbent_at_cutoff(true, &english, None, &order));
+            assert!(!incumbent_at_cutoff(false, &english, None, &order));
+            assert!(scope_still_wants_language(&english, &order));
             let german = speaking(crate::AudioLanguageRank::for_test(0, 0));
-            assert!(!scope_still_wants_language(&german, &DEFAULT_ORDER));
+            assert!(!scope_still_wants_language(&german, &order));
             // A language the profile does not compare is never wanted.
-            let without_languages = crate::DecisionPipeline::default_order()
+            let without_languages = order
                 .without(crate::DecisionGate::PreferredLanguage)
                 .without(crate::DecisionGate::OptionalLanguages);
             assert!(!scope_still_wants_language(&english, &without_languages));
@@ -7598,7 +8027,7 @@ mod tests {
         /// score.
         #[test]
         fn a_same_language_candidate_is_refused_at_cutoff_while_language_is_wanted() {
-            for pipeline in [DEFAULT_ORDER, language_ahead_of_tier()] {
+            for pipeline in [tier_then_languages(), language_ahead_of_tier()] {
                 let english_rank = crate::AudioLanguageRank::for_test(1, 0);
                 let english = speaking(english_rank);
                 for candidate in [
@@ -7628,7 +8057,7 @@ mod tests {
         /// either order, and goes on to the ladder.
         #[test]
         fn a_better_language_candidate_escapes_the_cutoff() {
-            for pipeline in [DEFAULT_ORDER, language_ahead_of_tier()] {
+            for pipeline in [tier_then_languages(), language_ahead_of_tier()] {
                 let english = speaking(crate::AudioLanguageRank::for_test(1, 0));
                 let german = crate::AudioLanguageRank::for_test(0, 0);
                 let candidate = CandidateFacts::new(Some(1), 0, 600)
@@ -7663,7 +8092,9 @@ mod tests {
             let candidate = CandidateFacts::new(Some(1), 0, 600)
                 .with_language(crate::AudioLanguageRank::for_test(0, 0))
                 .with_revision_policy(Some("GRP"), false)
-                .with_pipeline(DEFAULT_ORDER.without(crate::DecisionGate::PreferredLanguage));
+                .with_pipeline(
+                    tier_then_languages().without(crate::DecisionGate::PreferredLanguage),
+                );
             assert_eq!(
                 cutoff_refusal(candidate, &english, true, true, &now()),
                 Some(ReleaseAutoDecisionCode::CutoffReached)
@@ -7715,12 +8146,239 @@ mod tests {
                 let subject = speaking(held);
                 let candidate = CandidateFacts::new(Some(1), 0, 600)
                     .with_language(crate::AudioLanguageRank::for_test(0, 1))
-                    .with_revision_policy(Some("GRP"), false);
+                    .with_revision_policy(Some("GRP"), false)
+                    .with_pipeline(tier_then_languages());
                 let expected = (!keep_searching).then_some(ReleaseAutoDecisionCode::CutoffReached);
                 assert_eq!(
                     cutoff_refusal(candidate, &subject, true, true, &now()),
                     expected,
                     "keep searching: {keep_searching}"
+                );
+            }
+        }
+
+        /// The delay profile's "highest quality" bypass reads the profile's
+        /// best tier only while the profile ranks by tier at all.
+        #[test]
+        fn the_highest_quality_delay_bypass_needs_the_tier_step() {
+            let title = make_title();
+            let mut candidate = make_candidate("Nightfall.2022.2160p.WEB-DL-GRP", None);
+            candidate.published_at = Some(now().to_rfc3339());
+            let delay = crate::delay_profile::DelayProfile {
+                id: "delay".into(),
+                name: "Delay".into(),
+                usenet_delay_minutes: 60,
+                bypass_if_highest_quality: true,
+                ..Default::default()
+            };
+            let empty = AdmissionSubject::new(AdmissionScope::Title, []);
+            let holds = |pipeline: crate::DecisionPipeline| {
+                let mut profile = QualityProfile::default();
+                profile.criteria.decision_pipeline = pipeline;
+                automatic_candidate_delay_decision(
+                    &candidate,
+                    &title,
+                    &empty,
+                    &profile,
+                    std::slice::from_ref(&delay),
+                    false,
+                    None,
+                    &now(),
+                )
+                .expect("the delay profile applies")
+                .should_hold()
+            };
+            assert!(!holds(DEFAULT_ORDER), "the best tier bypasses the delay");
+            assert!(
+                holds(DEFAULT_ORDER.without(crate::DecisionGate::QualityTier)),
+                "without a tier step the tier does not decide the bypass"
+            );
+        }
+
+        /// A recent grab at its cutoff and the same release landed at its
+        /// cutoff let exactly the same candidates past: whatever the order of
+        /// the profile's steps, and whether or not optional languages are
+        /// still wanted.
+        ///
+        /// The queue is read through the admission gate, so the cutoff shows
+        /// only where its ladder would otherwise admit; the test counts those
+        /// cases on both sides so it cannot pass vacuously.
+        #[test]
+        fn a_queued_grab_and_a_landed_file_at_cutoff_share_one_escape_rule() {
+            use crate::DecisionGate::{
+                OptionalLanguages, PreferredLanguage, QualityTier, Revision,
+            };
+            let pipelines = [
+                DEFAULT_ORDER,
+                tier_then_languages(),
+                language_ahead_of_tier(),
+                crate::DecisionPipeline::try_from_gates([OptionalLanguages, PreferredLanguage])
+                    .unwrap(),
+                crate::DecisionPipeline::try_from_gates([
+                    OptionalLanguages,
+                    PreferredLanguage,
+                    QualityTier,
+                    Revision,
+                ])
+                .unwrap(),
+                crate::DecisionPipeline::try_from_gates([QualityTier, OptionalLanguages]).unwrap(),
+                crate::DecisionPipeline::try_from_gates([Revision]).unwrap(),
+                crate::DecisionPipeline::score_only(),
+            ];
+            let language = |preferred_rank, optional_hits, optional_wanted: bool| {
+                let rank = crate::AudioLanguageRank::for_test(preferred_rank, optional_hits);
+                crate::AudioLanguageRank {
+                    wanted: rank.wanted || optional_wanted,
+                    optional_wanted,
+                    ..rank
+                }
+            };
+            let policy = crate::admission::AdmissionPolicy {
+                allow_upgrades: true,
+                min_delta: 0,
+                cutoff_score: None,
+                manual_override: false,
+                applies_to_queue: true,
+            };
+            let (mut escaped, mut held_back) = (0, 0);
+            for pipeline in pipelines {
+                for held_language in [
+                    language(1, 0, false),
+                    language(1, 0, true),
+                    language(0, 0, false),
+                    language(0, 0, true),
+                ] {
+                    for held_revision in [0, 1] {
+                        let queued_at = |history_cutoff_reached| {
+                            AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![
+                                crate::admission::QueuedRelease {
+                                    missing_history: true,
+                                    blocks_submission: false,
+                                    history_cutoff_reached,
+                                    release_group: Some("GRP".into()),
+                                    title: "Sample.Title.2024.1080p.WEB-DL-GRP".to_string(),
+                                    covers: Vec::new(),
+                                    tier_index: Some(1),
+                                    revision: held_revision,
+                                    score: 900,
+                                    language: held_language,
+                                    release_key: None,
+                                },
+                            ])
+                        };
+                        let (queued_at_cutoff, queued_below_cutoff) =
+                            (queued_at(true), queued_at(false));
+                        let landed = AdmissionSubject::new(
+                            AdmissionScope::Title,
+                            holding(held_revision, 1).incumbents().iter().cloned().map(
+                                |mut incumbent| {
+                                    incumbent.language = held_language;
+                                    (incumbent, true)
+                                },
+                            ),
+                        );
+                        for tier in [0, 1, 2] {
+                            for revision in [0, 1, 2] {
+                                for (preferred_rank, optional_hits) in
+                                    [(0, 0), (0, 1), (1, 1), (2, 1)]
+                                {
+                                    for score in [900, 2_000] {
+                                        for ignore_proper_repack in [false, true] {
+                                            let candidate =
+                                                CandidateFacts::new(Some(tier), revision, score)
+                                                    .with_language(language(
+                                                        preferred_rank,
+                                                        optional_hits,
+                                                        false,
+                                                    ))
+                                                    .with_revision_policy(
+                                                        Some("GRP"),
+                                                        ignore_proper_repack,
+                                                    )
+                                                    .with_pipeline(pipeline);
+                                            let admitted = |subject: &AdmissionSubject| {
+                                                crate::admission::evaluate_admission(
+                                                    subject, candidate, &policy,
+                                                )
+                                                .is_admitted()
+                                            };
+                                            if !admitted(&queued_below_cutoff) {
+                                                continue;
+                                            }
+                                            let landed_escapes = cutoff_refusal(
+                                                candidate,
+                                                &landed,
+                                                true,
+                                                false,
+                                                &now(),
+                                            )
+                                            .is_none();
+                                            if landed_escapes {
+                                                escaped += 1;
+                                            } else {
+                                                held_back += 1;
+                                            }
+                                            assert_eq!(
+                                                admitted(&queued_at_cutoff),
+                                                landed_escapes,
+                                                "{pipeline:?}: candidate tier {tier} revision {revision} \
+                                                 language ({preferred_rank}, {optional_hits}) score {score} \
+                                                 ignore {ignore_proper_repack} against {held_language:?} \
+                                                 revision {held_revision}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                escaped > 0 && held_back > 0,
+                "{escaped} escaped, {held_back} held back"
+            );
+
+            // The two cases the queue used to let through on its own: more
+            // optional languages ahead of a worse preferred one, and more
+            // optional languages a profile no longer searches for.
+            let optional_first =
+                crate::DecisionPipeline::try_from_gates([OptionalLanguages, PreferredLanguage])
+                    .unwrap();
+            for (held_language, candidate_language) in [
+                (language(0, 0, true), language(1, 1, false)),
+                (language(0, 0, false), language(0, 1, false)),
+            ] {
+                let mut grab = crate::admission::QueuedRelease {
+                    missing_history: true,
+                    blocks_submission: false,
+                    history_cutoff_reached: true,
+                    release_group: Some("GRP".into()),
+                    title: "Sample.Title.2024.1080p.WEB-DL-GRP".to_string(),
+                    covers: Vec::new(),
+                    tier_index: Some(1),
+                    revision: 0,
+                    score: 900,
+                    language: held_language,
+                    release_key: None,
+                };
+                let candidate = CandidateFacts::new(Some(1), 0, 900)
+                    .with_language(candidate_language)
+                    .with_revision_policy(Some("GRP"), false)
+                    .with_pipeline(optional_first);
+                let at_cutoff = AdmissionSubject::new(AdmissionScope::Title, [])
+                    .with_queued(vec![grab.clone()]);
+                assert!(
+                    !crate::admission::evaluate_admission(&at_cutoff, candidate, &policy)
+                        .is_admitted(),
+                    "{held_language:?} against {candidate_language:?}"
+                );
+                grab.history_cutoff_reached = false;
+                let below =
+                    AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![grab]);
+                assert!(
+                    crate::admission::evaluate_admission(&below, candidate, &policy).is_admitted(),
+                    "below its cutoff the ladder admits {candidate_language:?}"
                 );
             }
         }

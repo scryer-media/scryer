@@ -114,6 +114,9 @@ async fn apply_result_marks_verified_already_present_skip_imported() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(apply_import_result(&app, &mut td, result, 0).await);
@@ -179,6 +182,9 @@ async fn unavailable_artifact_evidence_keeps_already_present_import_retryable() 
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -224,6 +230,9 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     // First pass imported one file: pending, behind the first backoff step.
@@ -279,6 +288,388 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
     );
 }
 
+fn unverified_partial_pack_app() -> AppUseCase {
+    // One of three monitored episodes imported: the pack does not verify
+    // until the rest land.
+    build_app(
+        vec![build_title("title-1", "Quiet Harbour", MediaFacet::Series)],
+        vec![build_collection("season-1", "title-1", "1")],
+        vec![
+            build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+            build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+            build_episode("ep-3", "title-1", "season-1", "1", "3", None),
+        ],
+        vec![build_artifact("dl-1", "ep-1", "quiet.harbour.s01e01.mkv")],
+    )
+}
+
+fn pass_result(
+    decision: ImportDecision,
+    skip_reason: Option<ImportSkipReason>,
+    release_title: &str,
+    episode_ids: &[&str],
+) -> ImportResult {
+    ImportResult {
+        import_id: "import-1".to_string(),
+        decision,
+        skip_reason,
+        title_id: Some("title-1".to_string()),
+        source_system: Some("nzbget".to_string()),
+        source_ref: Some("dl-1".to_string()),
+        source_title: Some(release_title.to_string()),
+        source_path: format!("/downloads/{release_title}"),
+        dest_path: None,
+        quality: None,
+        episode_ids: episode_ids.iter().map(|id| id.to_string()).collect(),
+        file_size_bytes: None,
+        link_type: None,
+        error_message: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
+        release_burned: false,
+        started_at: Utc::now(),
+        completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
+    }
+}
+
+/// Runs one pass the way the executor measures it: successes read before and
+/// after the pass records `recorded`, then the pass result applied with that
+/// progress. Returns the progress and whether the download verified.
+async fn apply_pass_recording(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    recorded: ImportArtifact,
+    result: ImportResult,
+) -> (ImportPassProgress, bool) {
+    let before = recorded_import_successes(app, td, None)
+        .await
+        .expect("artifact evidence before the pass");
+    app.services
+        .workflow
+        .import_artifacts
+        .insert_artifact(recorded)
+        .await
+        .expect("record pass artifact");
+    let after = recorded_import_successes(app, td, None)
+        .await
+        .expect("artifact evidence after the pass");
+    let progress = import_pass_progress(&before, &after);
+    let verified = apply_import_pass_result(app, td, result, progress, None, None).await;
+    (progress, verified)
+}
+
+/// A repeat pass that writes another success row for a source and episode
+/// that had already landed is not progress: the execution backoff keeps
+/// growing instead of restarting at its first step.
+#[tokio::test]
+async fn repeat_success_row_for_the_same_source_does_not_reset_backoff() {
+    let app = unverified_partial_pack_app();
+    let release = "Quiet.Harbour.S01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    td.import_execution_retry = Some(crate::tracked_downloads::ImportExecutionRetryState {
+        attempts: 1,
+        next_retry_at: Utc::now(),
+    });
+
+    let scheduled_from = Utc::now();
+    let (progress, verified) = apply_pass_recording(
+        &app,
+        &mut td,
+        build_artifact_with_result(
+            "dl-1",
+            Some("ep-1"),
+            "quiet.harbour.s01e01.mkv",
+            "already_present",
+        ),
+        pass_result(ImportDecision::Imported, None, release, &["ep-1"]),
+    )
+    .await;
+    let scheduled_until = Utc::now();
+
+    assert!(!verified);
+    assert_eq!(progress.success_rows_this_pass, 1);
+    assert_eq!(progress.new_units_this_pass, 0);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    let retry = td
+        .import_execution_retry
+        .clone()
+        .expect("unverified import keeps its backoff");
+    assert_eq!(retry.attempts, 2);
+    let second_step = crate::tracked_downloads::import_execution_retry_delay(2);
+    assert!(retry.next_retry_at >= scheduled_from + second_step);
+    assert!(retry.next_retry_at <= scheduled_until + second_step);
+}
+
+/// A pass that lands a source file with no earlier success is progress and
+/// restarts the execution backoff.
+#[tokio::test]
+async fn success_for_a_new_source_resets_backoff() {
+    let app = unverified_partial_pack_app();
+    let release = "Quiet.Harbour.S01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    td.import_execution_retry = Some(crate::tracked_downloads::ImportExecutionRetryState {
+        attempts: 3,
+        next_retry_at: Utc::now(),
+    });
+
+    let (progress, verified) = apply_pass_recording(
+        &app,
+        &mut td,
+        build_artifact("dl-1", "ep-2", "quiet.harbour.s01e02.mkv"),
+        pass_result(ImportDecision::Imported, None, release, &["ep-2"]),
+    )
+    .await;
+
+    assert!(!verified);
+    assert_eq!(progress.success_rows_this_pass, 1);
+    assert_eq!(progress.new_units_this_pass, 1);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert_eq!(
+        td.import_execution_retry
+            .as_ref()
+            .map(|retry| retry.attempts),
+        Some(1)
+    );
+}
+
+/// When the expected episodes cannot be resolved, a pass that recorded a
+/// success row with no rejections is still accepted, even when that row only
+/// repeats an earlier success for the same source.
+#[tokio::test]
+async fn repeat_already_present_pass_keeps_unresolved_fallback_acceptance() {
+    let app = build_app(
+        vec![build_title("title-1", "Lantern Cove", MediaFacet::Series)],
+        vec![],
+        vec![],
+        vec![build_artifact_with_result(
+            "dl-1",
+            None,
+            "Lantern.Cove.S01E01.mkv",
+            "imported",
+        )],
+    );
+    let release = "Lantern.Cove.S01E01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    assert!(matches!(
+        expected_episode_units(&app, &td).await,
+        ExpectedEpisodeResolution::Unresolved
+    ));
+
+    let (progress, verified) = apply_pass_recording(
+        &app,
+        &mut td,
+        build_artifact_with_result("dl-1", None, "Lantern.Cove.S01E01.mkv", "already_present"),
+        pass_result(
+            ImportDecision::Skipped,
+            Some(ImportSkipReason::AlreadyImported),
+            release,
+            &[],
+        ),
+    )
+    .await;
+
+    assert_eq!(progress.success_rows_this_pass, 1);
+    assert_eq!(progress.new_units_this_pass, 0);
+    assert!(verified);
+    assert_eq!(td.state, TrackedDownloadState::Imported);
+}
+
+/// Asserts a download stopped retrying at the stalled-pass limit, with the
+/// coded reason on the queue item and no retry scheduled.
+fn assert_blocked_at_retry_limit(td: &TrackedDownload) {
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked, "{td:?}");
+    assert!(td.import_execution_retry.is_none(), "{td:?}");
+    assert_eq!(
+        td.stalled_import_passes,
+        crate::tracked_downloads::IMPORT_STALLED_PASS_LIMIT
+    );
+    assert_eq!(
+        td.client_item.attention_reason_code.as_deref(),
+        Some(crate::error_reasons::import::RETRY_LIMIT_REACHED)
+    );
+    assert_eq!(
+        crate::tracked_downloads::ImportBlockedReason::after_import(td),
+        crate::tracked_downloads::ImportBlockedReason::RetryLimitReached
+    );
+}
+
+/// The same per-file error a retry cannot change (the episode path's
+/// `MEDIA_ROOT_REQUIRED` refusal) is retried behind the backoff, and the
+/// download stops at the stalled-pass limit instead of retrying forever. The
+/// operator's retry starts the count again.
+#[tokio::test]
+async fn deterministic_failed_execution_blocks_at_the_retry_limit() {
+    let app = build_app(
+        vec![build_title("title-1", "Lantern Cove", MediaFacet::Series)],
+        vec![build_collection("season-1", "title-1", "1")],
+        vec![build_episode("ep-1", "title-1", "season-1", "1", "1", None)],
+        Vec::new(),
+    );
+    let mut td = build_tracked_download("title-1", "series", "Lantern.Cove.S01E01.1080p.WEB-DL");
+    let result = failed_execution_result(
+        "0 imported, 0 skipped, 0 rejected, 1 failed. Last error: cannot safely upgrade \
+         Lantern Cove because no configured media root could be resolved",
+    );
+    let limit = crate::tracked_downloads::IMPORT_STALLED_PASS_LIMIT;
+
+    for attempt in 1..limit {
+        assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
+        assert_eq!(
+            td.state,
+            TrackedDownloadState::ImportPending,
+            "pass {attempt}"
+        );
+        assert_eq!(td.stalled_import_passes, attempt, "pass {attempt}");
+        assert_eq!(
+            td.import_execution_retry
+                .as_ref()
+                .map(|retry| retry.attempts),
+            Some(attempt),
+            "pass {attempt}"
+        );
+    }
+    assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
+    assert_blocked_at_retry_limit(&td);
+
+    td.reset_for_import_retry();
+    assert_eq!(td.stalled_import_passes, 0);
+    assert!(!apply_import_result(&app, &mut td, result, 0).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert_eq!(td.stalled_import_passes, 1);
+}
+
+/// A transient outcome (the source briefly unreadable) keeps retrying behind
+/// the backoff, never counts toward the limit and never blocks.
+#[tokio::test]
+async fn transient_failed_execution_never_counts_toward_the_retry_limit() {
+    let app = build_app(
+        vec![build_title("title-1", "Lantern Cove", MediaFacet::Series)],
+        vec![build_collection("season-1", "title-1", "1")],
+        vec![build_episode("ep-1", "title-1", "season-1", "1", "1", None)],
+        Vec::new(),
+    );
+    let mut td = build_tracked_download("title-1", "series", "Lantern.Cove.S01E01.1080p.WEB-DL");
+    let mut result = failed_execution_result("the source share is not reachable right now");
+    result.skip_reason = Some(ImportSkipReason::SourceUnavailable);
+
+    for attempt in 1..=10u32 {
+        assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
+        assert_eq!(
+            td.state,
+            TrackedDownloadState::ImportPending,
+            "pass {attempt}"
+        );
+        assert_eq!(td.stalled_import_passes, 0, "pass {attempt}");
+    }
+}
+
+/// A pack that can never verify (two of its three monitored episodes are not
+/// in the download) writes another success row for the one episode it holds
+/// on every pass. Each pass imports nothing new, so the download stops at the
+/// stalled-pass limit.
+#[tokio::test]
+async fn unverifiable_partial_import_blocks_at_the_retry_limit() {
+    let app = unverified_partial_pack_app();
+    let release = "Lantern.Cove.S01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    let limit = crate::tracked_downloads::IMPORT_STALLED_PASS_LIMIT;
+
+    for attempt in 1..=limit {
+        let (progress, verified) = apply_pass_recording(
+            &app,
+            &mut td,
+            build_artifact_with_result(
+                "dl-1",
+                Some("ep-1"),
+                "quiet.harbour.s01e01.mkv",
+                "already_present",
+            ),
+            pass_result(ImportDecision::Imported, None, release, &["ep-1"]),
+        )
+        .await;
+        assert!(!verified, "pass {attempt}");
+        assert_eq!(progress.new_units_this_pass, 0, "pass {attempt}");
+        if attempt < limit {
+            assert_eq!(
+                td.state,
+                TrackedDownloadState::ImportPending,
+                "pass {attempt}"
+            );
+            assert_eq!(
+                td.import_execution_retry
+                    .as_ref()
+                    .map(|retry| retry.attempts),
+                Some(attempt),
+                "pass {attempt}"
+            );
+        }
+    }
+    assert_blocked_at_retry_limit(&td);
+}
+
+/// A title with no catalogued episodes, an earlier success row, and an empty
+/// download folder. Nothing can verify it, so each pass counts and the
+/// download stops at the stalled-pass limit instead of retrying forever.
+#[tokio::test]
+async fn empty_folder_for_unresolved_title_blocks_at_the_retry_limit() {
+    let app = build_app(
+        vec![build_title("title-1", "Lantern Cove", MediaFacet::Series)],
+        vec![],
+        vec![],
+        vec![build_artifact_with_result(
+            "dl-1",
+            None,
+            "Lantern.Cove.S01E01.mkv",
+            "imported",
+        )],
+    );
+    let release = "Lantern.Cove.S01E01.1080p.WEB-DL";
+    let empty_download = tempfile::tempdir().expect("empty download dir");
+    let completed = build_completed_download(
+        release,
+        &empty_download.path().to_string_lossy(),
+        Some("series"),
+    );
+    let mut td = build_tracked_download("title-1", "series", release);
+    assert!(matches!(
+        expected_episode_units(&app, &td).await,
+        ExpectedEpisodeResolution::Unresolved
+    ));
+    let no_video = pass_result(
+        ImportDecision::Skipped,
+        Some(ImportSkipReason::NoVideoFiles),
+        release,
+        &[],
+    );
+    let limit = crate::tracked_downloads::IMPORT_STALLED_PASS_LIMIT;
+
+    for attempt in 1..=limit {
+        assert!(
+            !apply_import_result_with_completed(
+                &app,
+                &mut td,
+                no_video.clone(),
+                0,
+                Some(&completed),
+                None,
+            )
+            .await
+        );
+        if attempt < limit {
+            assert_eq!(
+                td.state,
+                TrackedDownloadState::ImportPending,
+                "pass {attempt}"
+            );
+            assert!(td.no_video_import_retry.is_none(), "pass {attempt}");
+        }
+    }
+    assert_blocked_at_retry_limit(&td);
+}
+
 #[tokio::test(start_paused = true)]
 async fn verified_import_mark_retries_without_rolling_back_import() {
     let marker = Arc::new(MarkingDownloadClient::new(3));
@@ -322,6 +713,9 @@ async fn verified_import_mark_retries_without_rolling_back_import() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(apply_import_result(&app, &mut td, result, 0).await);
@@ -368,6 +762,9 @@ async fn verified_import_mark_stops_after_bounded_permanent_failures() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     schedule_non_destructive_import_mark(&app, &td, &result, None);
@@ -438,6 +835,9 @@ async fn verified_import_mark_uses_completed_client_identity() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(
@@ -579,6 +979,9 @@ async fn apply_result_keeps_rejected_already_imported_result_blocked() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -929,6 +1332,9 @@ async fn apply_result_does_not_verify_unresolved_identity_rejection_as_imported(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -960,6 +1366,9 @@ async fn apply_result_blocks_cancelled_import_for_manual_review() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -1009,6 +1418,9 @@ async fn apply_result_blocks_post_download_rule_error_hold_for_operator_review()
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         assert!(
@@ -1053,6 +1465,9 @@ async fn apply_result_keeps_ambiguous_obfuscated_episode_blocked_with_actionable
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -1089,6 +1504,9 @@ async fn apply_result_keeps_retrying_no_video_import_after_unchanged_checks() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -1148,6 +1566,9 @@ async fn apply_result_blocks_no_video_import_once_slow_retries_reach_the_ceiling
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     // The first check records the unchanged source signature; then jump the
@@ -1199,6 +1620,9 @@ async fn apply_result_resets_no_video_retry_when_source_signature_changes() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -1231,11 +1655,14 @@ fn failed_execution_result(error_message: &str) -> ImportResult {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     }
 }
 
 #[tokio::test]
-async fn apply_result_retries_failed_execution_with_capped_backoff_and_never_blocks() {
+async fn apply_result_retries_failed_execution_with_capped_backoff_until_the_limit() {
     let app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
     // Deliberately NOT one of the allow-listed transient phrases: the phase
@@ -1283,6 +1710,10 @@ async fn apply_result_retries_failed_execution_with_capped_backoff_and_never_blo
         );
         assert!(td.no_video_import_retry.is_none());
     }
+    // The pass after the fifth reaches the stalled-pass limit and blocks.
+    assert!(!apply_import_result(&app, &mut td, result, 0).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert!(td.import_execution_retry.is_none());
 }
 
 #[tokio::test]

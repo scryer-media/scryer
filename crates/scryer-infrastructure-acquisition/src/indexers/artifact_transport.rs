@@ -355,7 +355,7 @@ impl IndexerArtifactTransport {
         // indexer-owned grab below need it, and a misconfigured proxy must fail
         // the same way whichever path ends up resolving the artifact.
         let route = self.proxy_route(&config).await?;
-        if route.proxy().is_some() && !same_origin(&config, download_url) {
+        if route.proxy().is_some() && !artifact_domain_matches(&config.base_url, download_url) {
             return Err(AppError::validation_refused(
                 crate::error_reasons::ACQUISITION_DOWNLOAD_ORIGIN_MISMATCH,
                 "Proxied download URL does not match the assigned indexer origin.",
@@ -468,7 +468,7 @@ impl IndexerArtifactTransport {
         let destination_cooldown_key = DestinationKey::from(config.rate_limit_domain_key());
         let tally = self.tally(Some(&config));
         let route = self.proxy_route(&config).await?;
-        if route.proxy().is_some() && !same_origin(&config, download_url) {
+        if route.proxy().is_some() && !artifact_domain_matches(&config.base_url, download_url) {
             return Err(AppError::validation_refused(
                 crate::error_reasons::ACQUISITION_DOWNLOAD_ORIGIN_MISMATCH,
                 "Proxied download URL does not match the assigned indexer origin.",
@@ -541,14 +541,30 @@ impl IndexerArtifactTransport {
     ) -> AppResult<ResolvedDownloadArtifact> {
         let provider = proxy.provider_type;
         let name = solver::solver_provider_name(provider);
-        prepare_plugin_http_target(url, "indexer download artifact", policy)
-            .await
-            .map_err(|_| {
-                AppError::DownloadSubmitUnavailable(
-                    "Scryer refused an unsafe download artifact destination.".into(),
-                )
-            })?;
-        let headers = solver::SolvedSessionCache::shared().session_headers(&proxy.id, url);
+        // A solver reached through a proxy or tunnel takes every fetch Scryer
+        // makes for it through that route too: the first attempt with any
+        // cached clearance, and the fetch after a solve. Each hop is then
+        // checked as a transport-proxied hop is, since the name may only
+        // resolve at the far end. Without a route nothing here changes.
+        let route = transport_proxy::solver_reach_through(proxy).map_err(|message| {
+            solver::SolverHealthLedger::shared().record_failure(&proxy.id, &message);
+            AppError::DownloadSubmitUnavailable(message)
+        })?;
+        let egress = match route {
+            Some(route) => ArtifactEgress::TransportProxy(route),
+            None => {
+                prepare_plugin_http_target(url, "indexer download artifact", policy)
+                    .await
+                    .map_err(|_| {
+                        AppError::DownloadSubmitUnavailable(
+                            "Scryer refused an unsafe download artifact destination.".into(),
+                        )
+                    })?;
+                ArtifactEgress::Direct
+            }
+        };
+        let headers = solver::SolvedSessionCache::shared()
+            .session_headers(&solver::solved_session_scope(proxy), url);
         let timeout =
             scryer_outbound_http::effective_proxy_request_timeout(proxy.request_timeout_seconds);
         match self
@@ -562,7 +578,7 @@ impl IndexerArtifactTransport {
                 Some(destination_cooldown_key.clone()),
                 tally,
                 hint.clone(),
-                ArtifactEgress::Direct,
+                egress,
             )
             .await
         {
@@ -573,13 +589,20 @@ impl IndexerArtifactTransport {
             Err(_) => {}
         }
         if !headers.is_empty() {
-            solver::SolvedSessionCache::shared().invalidate(&proxy.id, url);
+            solver::SolvedSessionCache::shared()
+                .invalidate(&solver::solved_session_scope(proxy), url);
         }
-        let solver_http =
-            OutboundHttpClient::new(proxy_reqwest_client(), RateLimitRegistry::indexers());
+        let solver_client = match route {
+            Some(route) => self.proxy_client(route).map_err(|message| {
+                transport_proxy::record_transport_proxy_failure(route, &message);
+                AppError::DownloadSubmitUnavailable(message)
+            })?,
+            None => proxy_reqwest_client(),
+        };
+        let solver_http = OutboundHttpClient::new(solver_client, RateLimitRegistry::indexers());
         let response = tokio::time::timeout(
             timeout,
-            solver_http.send_with_rate_limit_and_dispatch_observer(
+            solver_http.send_with_rate_limit_and_async_dispatch_observer(
                 RequestPolicy::no_retry("indexer_solver", "indexer_artifact_solver")
                     .without_redirects(),
                 || {
@@ -595,12 +618,16 @@ impl IndexerArtifactTransport {
                 },
                 |_| async {},
                 |_| {
-                    // The solver replays this request against the indexer, so
-                    // it is one indexer request regardless of the POST's origin.
-                    tally
-                        .try_note_sent_call(scryer_application::CALL_SOLVER)
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    let tally = &tally;
+                    async move {
+                        // The solver replays this request against the indexer,
+                        // so its send consumes one indexer request slot.
+                        tally
+                            .try_note_sent_call_async(scryer_application::CALL_SOLVER)
+                            .await
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             ),
         )
@@ -612,6 +639,11 @@ impl IndexerArtifactTransport {
             )
         })?
         .map_err(|error| {
+            if matches!(&error, OutboundHttpError::DispatchRejected)
+                && let Some(quota_error) = tally.take_dispatch_error()
+            {
+                return quota_error;
+            }
             if matches!(error, OutboundHttpError::Transport { .. }) {
                 tally.note_result(IndexerRequestResult::NoResponse);
             }
@@ -633,7 +665,11 @@ impl IndexerArtifactTransport {
             tally.note_result(IndexerRequestResult::NoResponse);
             AppError::DownloadSubmitUnavailable(e.message(provider).into())
         })?;
-        solver::SolvedSessionCache::shared().store_solution(&proxy.id, url, &solution);
+        solver::SolvedSessionCache::shared().store_solution(
+            &solver::solved_session_scope(proxy),
+            url,
+            &solution,
+        );
         let solution_status = solution.status.unwrap_or(status.as_u16());
         tally.note_response(&CapturedIndexerHttpResponse {
             status: solution_status,
@@ -675,7 +711,7 @@ impl IndexerArtifactTransport {
                     Some(destination_cooldown_key),
                     tally,
                     hint,
-                    ArtifactEgress::Direct,
+                    egress,
                 )
                 .await;
         }
@@ -722,6 +758,161 @@ impl IndexerArtifactTransport {
         classify(name, fetched.2.as_deref(), fetched.1.as_ref(), body, hint)
     }
 
+    /// HTTP links advertise a permitted fallback, but HTTPS always gets the first
+    /// attempt. Both attempts retain the same egress policy. The HTTPS attempt
+    /// is on an address the indexer did not advertise, so it counts as a
+    /// request only when a connection was made.
+    #[expect(clippy::too_many_arguments, reason = "retain the artifact hop policy")]
+    async fn fetch_hop(
+        &self,
+        name: &str,
+        current: &url::Url,
+        session_headers: &[(String, String)],
+        deadline: Instant,
+        policy: &PluginEgressPolicy,
+        indexer_base_url: Option<&str>,
+        destination_cooldown_key: Option<DestinationKey>,
+        tally: &IndexerRequestTally,
+        egress: ArtifactEgress<'_>,
+    ) -> AppResult<reqwest::Response> {
+        let mut upgraded = current.clone();
+        let upgrade = current.scheme() == "http";
+        if upgrade {
+            upgraded
+                .set_scheme("https")
+                .expect("HTTP URL supports HTTPS");
+        }
+        let attempts = std::iter::once(&upgraded).chain(upgrade.then_some(current));
+        for (attempt, target) in attempts.enumerate() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let probing_https = upgrade && attempt == 0;
+            // Leave time for the advertised HTTP endpoint if TLS is unavailable.
+            let attempt_timeout = if probing_https {
+                remaining.div_f32(2.0).min(Duration::from_secs(5))
+            } else {
+                remaining
+            };
+            let attempt_deadline = Instant::now() + attempt_timeout;
+            let (client, hop_url) = self
+                .hop_target(target, attempt_timeout, policy, egress)
+                .await?;
+            let remaining = attempt_deadline.saturating_duration_since(Instant::now());
+            // The probe bounds the wait for HTTPS headers, not the lifetime of
+            // a successful response body (including a later streaming handoff).
+            let mut builder = client
+                .get(hop_url)
+                .timeout(deadline.saturating_duration_since(Instant::now()));
+            for (key, value) in session_headers {
+                builder = builder.header(key, value);
+            }
+            let request_policy =
+                RequestPolicy::no_retry("indexer_artifact", "indexer_artifact_fetch")
+                    .without_redirects();
+            let request_policy = match destination_cooldown_key.clone() {
+                Some(destination) => request_policy.with_destination_cooldown_key(destination),
+                None => request_policy,
+            };
+            // The probe's dispatch, held until its outcome says whether a
+            // connection was made.
+            let probe_dispatch = std::sync::Mutex::new(None::<(bool, String)>);
+            let result = timeout(
+                remaining,
+                self.outbound_http
+                    .send_with_rate_limit_and_async_dispatch_observer(
+                        request_policy,
+                        || {
+                            builder
+                                .try_clone()
+                                .expect("artifact GET requests are cloneable")
+                        },
+                        |_| async {},
+                        |actual_url| {
+                            let probe_dispatch = &probe_dispatch;
+                            async move {
+                                let indexer_request = indexer_base_url
+                                    .map(|base| artifact_domain_matches(base, actual_url.as_str()))
+                                    .unwrap_or(true);
+                                let admitted = if probing_https {
+                                    let admitted = tally
+                                        .try_admit_probe_async(
+                                            indexer_request.then_some(actual_url.as_str()),
+                                        )
+                                        .await;
+                                    if admitted && let Ok(mut dispatch) = probe_dispatch.lock() {
+                                        *dispatch = Some((indexer_request, actual_url.to_string()));
+                                    }
+                                    admitted
+                                } else if indexer_request {
+                                    tally.try_note_sent_async(actual_url.as_str()).await
+                                } else {
+                                    tally.try_note_auxiliary_sent_call("external_redirect")
+                                };
+                                admitted
+                                    .then_some(())
+                                    .ok_or(OutboundHttpError::DispatchRejected)
+                            }
+                        },
+                    ),
+            )
+            .await;
+            let never_connected = matches!(
+                &result,
+                Ok(Err(OutboundHttpError::Transport { source, .. })) if source.is_connect()
+            );
+            if let Some((indexer_request, url)) = probe_dispatch
+                .into_inner()
+                .ok()
+                .flatten()
+                .filter(|_| !never_connected)
+            {
+                if indexer_request {
+                    tally.note_probe_reached(&url);
+                } else {
+                    tally.note_auxiliary_probe_reached("external_redirect");
+                }
+            }
+            match result {
+                // TLS answered only to send the request back to plain HTTP on
+                // the same host. Following it would probe HTTPS again and end
+                // as a redirect loop, so the advertised HTTP link is used.
+                Ok(Ok(response))
+                    if probing_https
+                        && https_redirects_back_to_http(
+                            response.status(),
+                            response
+                                .headers()
+                                .get(reqwest::header::LOCATION)
+                                .and_then(|value| value.to_str().ok()),
+                            response.url(),
+                            current,
+                        ) =>
+                {
+                    tally.note_result(IndexerRequestResult::HttpStatus(response.status().as_u16()));
+                }
+                Ok(Ok(response)) => return Ok(response),
+                Ok(Err(OutboundHttpError::Transport { source, .. }))
+                    if probing_https && (source.is_connect() || source.is_timeout()) =>
+                {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+                Err(_) if probing_https => {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+                Ok(Err(error)) => {
+                    return Err(map_artifact_outbound_error_via(name, tally, error, egress));
+                }
+                Err(_) => break,
+            }
+        }
+        tally.note_result(IndexerRequestResult::NoResponse);
+        Err(AppError::DownloadSubmitUnavailable(
+            "The download artifact fetch timed out.".into(),
+        ))
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "redirect hops retain the explicit egress, deadline, session, and accounting policy"
@@ -744,13 +935,8 @@ impl IndexerArtifactTransport {
                 "Download artifact URL is invalid.",
             )
         })?;
-        let origin = (
-            original.scheme().to_string(),
-            original.host_str().map(str::to_string),
-            original.port_or_known_default(),
-        );
         let deadline = Instant::now() + request_timeout;
-        let mut current = original;
+        let mut current = original.clone();
         let mut visited = HashSet::from([current.clone()]);
         for hops in 0..=5 {
             if current.scheme() == "magnet" && is_valid_magnet_uri(current.as_str()) {
@@ -762,72 +948,24 @@ impl IndexerArtifactTransport {
                     "Download artifact redirects must use HTTP(S) or magnet URLs.",
                 ));
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let (hop_client, hop_url) =
-                self.hop_target(&current, remaining, policy, egress).await?;
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let same = origin.0 == hop_url.scheme()
-                && origin
-                    .1
-                    .as_deref()
-                    .zip(hop_url.host_str())
-                    .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
-                && origin.2 == hop_url.port_or_known_default();
-            let mut builder = hop_client.get(hop_url.clone()).timeout(remaining);
-            if same {
-                for (k, v) in session_headers {
-                    builder = builder.header(k, v);
-                }
-            }
-            let request_policy =
-                RequestPolicy::no_retry("indexer_artifact", "indexer_artifact_fetch")
-                    .without_redirects();
-            let request_policy = match destination_cooldown_key.clone() {
-                Some(destination) => request_policy.with_destination_cooldown_key(destination),
-                None => request_policy,
+            let headers = if artifact_session_origin_matches(&original, &current) {
+                session_headers
+            } else {
+                &[]
             };
-            let response = timeout(
-                remaining,
-                self.outbound_http
-                    .send_with_rate_limit_and_dispatch_observer(
-                        request_policy,
-                        || {
-                            builder
-                                .try_clone()
-                                .expect("artifact GET requests are cloneable")
-                        },
-                        |_| async {},
-                        |actual_url| {
-                            let indexer_request = indexer_base_url
-                                .and_then(|base| same_url_origin(base, actual_url))
-                                .unwrap_or(true);
-                            let admitted = if indexer_request {
-                                tally.try_note_sent(actual_url.as_str())
-                            } else {
-                                tally.try_note_auxiliary_sent_call("external_redirect")
-                            };
-                            admitted
-                                .then_some(())
-                                .ok_or(OutboundHttpError::DispatchRejected)
-                        },
-                    ),
-            )
-            .await
-            .map_err(|_| {
-                tally.note_result(IndexerRequestResult::NoResponse);
-                AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
-            })?
-            .map_err(|error| map_artifact_outbound_error_via(name, tally, error, egress))?;
+            let response = self
+                .fetch_hop(
+                    name,
+                    &current,
+                    headers,
+                    deadline,
+                    policy,
+                    indexer_base_url,
+                    destination_cooldown_key.clone(),
+                    tally,
+                    egress,
+                )
+                .await?;
             let mut captured = CapturedIndexerHttpResponse {
                 status: response.status().as_u16(),
                 headers: response
@@ -859,7 +997,7 @@ impl IndexerArtifactTransport {
                     .ok_or_else(|| {
                         AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REDIRECT_MISSING_LOCATION, "Download artifact redirect was missing a location.")
                     })?;
-                let next = current
+                let next = response.url()
                     .join(loc)
                     .or_else(|_| url::Url::parse(loc))
                     .map_err(|_| {
@@ -949,55 +1087,19 @@ impl IndexerArtifactTransport {
                     "Download artifact redirects must use HTTP(S) URLs.",
                 ));
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let (hop_client, hop_url) =
-                self.hop_target(&current, remaining, policy, egress).await?;
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let request_policy =
-                RequestPolicy::no_retry("indexer_artifact", "indexer_artifact_fetch")
-                    .without_redirects();
-            let request_policy = match destination_cooldown_key.clone() {
-                Some(destination) => request_policy.with_destination_cooldown_key(destination),
-                None => request_policy,
-            };
-            let response = timeout(
-                remaining,
-                self.outbound_http
-                    .send_with_rate_limit_and_dispatch_observer(
-                        request_policy,
-                        || hop_client.get(hop_url.clone()).timeout(remaining),
-                        |_| async {},
-                        |actual_url| {
-                            let indexer_request = indexer_base_url
-                                .and_then(|base| same_url_origin(base, actual_url))
-                                .unwrap_or(true);
-                            let admitted = if indexer_request {
-                                tally.try_note_sent(actual_url.as_str())
-                            } else {
-                                tally.try_note_auxiliary_sent_call("external_redirect")
-                            };
-                            admitted
-                                .then_some(())
-                                .ok_or(OutboundHttpError::DispatchRejected)
-                        },
-                    ),
-            )
-            .await
-            .map_err(|_| {
-                tally.note_result(IndexerRequestResult::NoResponse);
-                AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
-            })?
-            .map_err(|error| map_artifact_outbound_error_via(name, &tally, error, egress))?;
+            let response = self
+                .fetch_hop(
+                    name,
+                    &current,
+                    &[],
+                    deadline,
+                    policy,
+                    indexer_base_url,
+                    destination_cooldown_key.clone(),
+                    &tally,
+                    egress,
+                )
+                .await?;
             if !response.status().is_success() {
                 tally.note_response(&CapturedIndexerHttpResponse {
                     status: response.status().as_u16(),
@@ -1019,7 +1121,7 @@ impl IndexerArtifactTransport {
                     .ok_or_else(|| {
                         AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REDIRECT_MISSING_LOCATION, "Download artifact redirect was missing a location.")
                     })?;
-                let next = current
+                let next = response.url()
                     .join(location)
                     .or_else(|_| url::Url::parse(location))
                     .map_err(|_| {
@@ -1079,6 +1181,11 @@ fn map_artifact_outbound_error_via(
     error: OutboundHttpError,
     egress: ArtifactEgress<'_>,
 ) -> AppError {
+    if matches!(&error, OutboundHttpError::DispatchRejected)
+        && let Some(quota_error) = tally.take_dispatch_error()
+    {
+        return quota_error;
+    }
     if let ArtifactEgress::TransportProxy(proxy) = egress
         && let OutboundHttpError::Transport { source, .. } = &error
         && !source.is_timeout()
@@ -1170,32 +1277,66 @@ async fn read_body(mut response: reqwest::Response, max: usize) -> Result<Vec<u8
     }
     Ok(out)
 }
-fn same_origin(config: &IndexerConfig, raw: &str) -> bool {
+fn artifact_domain_matches(base: &str, raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
-    let Ok(base) = url::Url::parse(&config.base_url) else {
+    let Ok(base) = url::Url::parse(base) else {
         return false;
     };
-    matches!(url.scheme(), "http" | "https")
-        && url.scheme() == base.scheme()
-        && url.port_or_known_default() == base.port_or_known_default()
-        && url
-            .host_str()
-            .zip(base.host_str())
-            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+    if !matches!(url.scheme(), "http" | "https") || !matches!(base.scheme(), "http" | "https") {
+        return false;
+    }
+    let (Some(host), Some(base_host)) = (url.host_str(), base.host_str()) else {
+        return false;
+    };
+    let host = host.trim_end_matches('.');
+    let base_host = base_host.trim_end_matches('.');
+    if host == base_host {
+        return true;
+    }
+    // IP literals and single-label names never acquire sibling trust. The PSL
+    // includes private suffixes so separate tenants remain separate domains.
+    if !matches!(url.host(), Some(url::Host::Domain(_)))
+        || !matches!(base.host(), Some(url::Host::Domain(_)))
+    {
+        return false;
+    }
+    psl::domain(host.as_bytes())
+        .zip(psl::domain(base_host.as_bytes()))
+        .is_some_and(|(a, b)| a == b)
 }
 
-fn same_url_origin(base: &str, actual: &reqwest::Url) -> Option<bool> {
-    let base = url::Url::parse(base).ok()?;
-    Some(
-        base.scheme() == actual.scheme()
-            && base.port_or_known_default() == actual.port_or_known_default()
-            && base
-                .host_str()
-                .zip(actual.host_str())
-                .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b)),
-    )
+/// Whether an HTTPS probe of the HTTP link `advertised` was answered with a
+/// redirect to plain HTTP on the advertised host and port.
+fn https_redirects_back_to_http(
+    status: reqwest::StatusCode,
+    location: Option<&str>,
+    probed: &url::Url,
+    advertised: &url::Url,
+) -> bool {
+    status.is_redirection()
+        && location
+            .and_then(|location| probed.join(location).ok())
+            .is_some_and(|next| {
+                next.scheme() == "http"
+                    && next.host() == advertised.host()
+                    && next.port_or_known_default() == advertised.port_or_known_default()
+            })
+}
+
+fn artifact_session_origin_matches(original: &url::Url, actual: &url::Url) -> bool {
+    if original.origin() == actual.origin() {
+        return true;
+    }
+    if original.scheme() != "http" {
+        return false;
+    }
+    let mut upgraded = original.clone();
+    upgraded
+        .set_scheme("https")
+        .expect("HTTP URL supports HTTPS");
+    upgraded.origin() == actual.origin()
 }
 fn rate_limited(headers: Option<&serde_json::Value>) -> AppError {
     let retry_after = solver::retry_after_from_solution_headers(headers);
@@ -1346,15 +1487,41 @@ pub(crate) fn nzb_header_passwords(
     }
     passwords
 }
+/// Whether the first 4 KiB read as an NZB document.
+///
+/// The check is on bytes, not text: an older NZB declares a single-byte
+/// encoding such as ISO-8859-1, and a multi-byte UTF-8 character may straddle
+/// the 4 KiB cut, so neither may decide. A UTF-8 byte order mark and leading
+/// whitespace, comments and processing instructions before the root are
+/// skipped, as an XML reader does.
 fn looks_nzb(bytes: &[u8]) -> bool {
-    std::str::from_utf8(&bytes[..bytes.len().min(4096)])
-        .ok()
-        .is_some_and(|s| {
-            let s = s.trim_start().to_ascii_lowercase();
-            (s.starts_with("<?xml") && s.contains("<nzb"))
-                || s.starts_with("<nzb")
-                || s.contains("<!doctype nzb")
-        })
+    let head = &bytes[..bytes.len().min(4096)];
+    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    let head = head.trim_ascii_start().to_ascii_lowercase();
+    let contains = |needle: &[u8]| head.windows(needle.len()).any(|window| window == needle);
+    (head.starts_with(b"<?xml") && contains(b"<nzb"))
+        || skip_xml_prolog_misc(&head).starts_with(b"<nzb")
+        || contains(b"<!doctype nzb")
+}
+
+/// Skip whitespace, comments and processing instructions (the XML
+/// declaration among them) at the start of `head`.
+fn skip_xml_prolog_misc(mut head: &[u8]) -> &[u8] {
+    loop {
+        head = head.trim_ascii_start();
+        let (open, close): (&[u8], &[u8]) = if head.starts_with(b"<!--") {
+            (b"<!--", b"-->")
+        } else if head.starts_with(b"<?") {
+            (b"<?", b"?>")
+        } else {
+            return head;
+        };
+        let body = &head[open.len()..];
+        match body.windows(close.len()).position(|window| window == close) {
+            Some(end) => head = &body[end + close.len()..],
+            None => return head,
+        }
+    }
 }
 // BitTorrent fixes the info hash: SHA-1 for v1 metadata, SHA-256 for v2.
 #[allow(clippy::disallowed_methods)]
@@ -1496,6 +1663,311 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    #[test]
+    fn artifact_domain_trust_uses_registrable_domains() {
+        for (base, target, allowed) in [
+            (
+                "https://api.nzbgeek.info/api",
+                "http://api.nzbgeek.info/get",
+                true,
+            ),
+            (
+                "https://api.fixture.co.uk/api",
+                "http://downloads.fixture.co.uk/get",
+                true,
+            ),
+            (
+                "https://fixture.co.uk",
+                "https://nested.downloads.fixture.co.uk:8443/get",
+                true,
+            ),
+            (
+                "https://API.FIXTURE.CO.UK.",
+                "https://downloads.fixture.co.uk/get",
+                true,
+            ),
+            (
+                "https://api.fixture.co.uk",
+                "https://other.co.uk/get",
+                false,
+            ),
+            (
+                "https://api.fixture.co.uk",
+                "https://fixture.co.uk.attacker.test/get",
+                false,
+            ),
+            (
+                "https://api.fixture.co.uk",
+                "https://notfixture.co.uk/get",
+                false,
+            ),
+            (
+                "https://first.github.io",
+                "https://second.github.io/get",
+                false,
+            ),
+            (
+                "https://first.github.io",
+                "https://downloads.first.github.io/get",
+                true,
+            ),
+            ("https://127.0.0.1:8443", "http://127.0.0.1/get", true),
+            ("https://127.0.0.1", "http://127.0.0.2/get", false),
+            ("https://[::1]", "http://[::1]/get", true),
+            ("https://[::1]", "http://[::2]/get", false),
+            ("https://indexer", "http://indexer/get", true),
+            ("https://indexer", "http://downloads.indexer/get", false),
+            ("https://co.uk", "http://other.co.uk/get", false),
+            ("https://fixture.test", "ftp://fixture.test/get", false),
+        ] {
+            assert_eq!(
+                artifact_domain_matches(base, target),
+                allowed,
+                "{base} -> {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn https_probe_falls_back_only_when_sent_back_to_the_advertised_http_host() {
+        let advertised = url::Url::parse("http://api.fixture.test/grab?id=1").unwrap();
+        let probed = url::Url::parse("https://api.fixture.test/grab?id=1").unwrap();
+        let found = reqwest::StatusCode::FOUND;
+        for (status, location, back) in [
+            (found, Some("http://api.fixture.test/grab?id=1"), true),
+            (found, Some("http://api.fixture.test/other"), true),
+            (found, Some("http://API.fixture.test:80/other"), true),
+            (found, Some("/final"), false),
+            (found, Some("https://api.fixture.test/final"), false),
+            (found, Some("http://downloads.fixture.test/grab"), false),
+            (found, Some("http://api.fixture.test:8080/grab"), false),
+            (found, Some("magnet:?xt=urn:btih:0"), false),
+            (found, None, false),
+            (
+                reqwest::StatusCode::OK,
+                Some("http://api.fixture.test/grab"),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                https_redirects_back_to_http(status, location, &probed, &advertised),
+                back,
+                "{status} {location:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_headers_follow_https_upgrade_but_not_sibling_hosts_or_other_ports() {
+        let original = url::Url::parse("http://api.fixture.test/grab").unwrap();
+        let upgraded = url::Url::parse("https://api.fixture.test/grab").unwrap();
+        let redirected = upgraded.join("/final").unwrap();
+        assert!(artifact_session_origin_matches(&original, &redirected));
+        assert!(artifact_session_origin_matches(
+            &original,
+            &original.join("/final").unwrap()
+        ));
+        for target in [
+            "https://downloads.fixture.test/final",
+            "https://api.fixture.test:8443/final",
+            "http://api.fixture.test:8080/final",
+        ] {
+            assert!(!artifact_session_origin_matches(
+                &original,
+                &url::Url::parse(target).unwrap()
+            ));
+        }
+        assert!(!artifact_session_origin_matches(&upgraded, &original));
+        let custom = url::Url::parse("http://api.fixture.test:8080/grab").unwrap();
+        assert!(artifact_session_origin_matches(
+            &custom,
+            &url::Url::parse("https://api.fixture.test:8080/final").unwrap()
+        ));
+    }
+
+    /// Reject CONNECT immediately, then serve HTTP only through this proxy.
+    /// The target need not resolve locally; a direct fallback cannot pass.
+    struct ArtifactProxyFixture {
+        endpoint: String,
+        requests: Arc<Mutex<Vec<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for ArtifactProxyFixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl ArtifactProxyFixture {
+        async fn start(status: u16) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&requests);
+            let task = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    timeout(Duration::from_secs(30), async {
+                        let mut request = Vec::new();
+                        while !request.ends_with(b"\r\n\r\n") {
+                            assert!(request.len() < 8192);
+                            request.push(stream.read_u8().await.unwrap());
+                        }
+                        let request = String::from_utf8(request).unwrap();
+                        let first = request.lines().next().unwrap().to_string();
+                        let connect = first.starts_with("CONNECT ");
+                        recorded.lock().unwrap().push(first);
+                        let status = if connect { 502 } else { status };
+                        let body = if status == 200 { "<nzb></nzb>" } else { "" };
+                        let response = format!(
+                            "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nContent-Type: application/x-nzb\r\nConnection: close\r\n\r\n{body}",
+                            body.len(),
+                        );
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                        stream.shutdown().await.unwrap();
+                    }).await.expect("proxy request must complete");
+                }
+            });
+            Self {
+                endpoint,
+                requests,
+                task,
+            }
+        }
+
+        fn transport(&self, stats: Arc<CountingStats>) -> IndexerArtifactTransport {
+            let mut proxy = test_proxy(&self.endpoint, true);
+            proxy.provider_type = scryer_domain::ProxyProviderType::Http;
+            proxy.protocol = None;
+            let mut transport = transport_with_config_and_proxy(
+                stats,
+                test_config("https://api.fixture.test/api", Some("solver")),
+                proxy,
+            );
+            transport.outbound_http = OutboundHttpClient::new(
+                generic_reqwest_client(),
+                RateLimitRegistry::isolated_indexers(),
+            );
+            transport
+        }
+    }
+
+    async fn artifact_bytes(
+        transport: &IndexerArtifactTransport,
+        streaming: bool,
+        url: &str,
+    ) -> AppResult<Vec<u8>> {
+        timeout(Duration::from_secs(30), async {
+            if streaming {
+                let Some(ArtifactFetchResponse::Http(response)) =
+                    transport.fetch_response(Some("indexer"), url).await?
+                else {
+                    panic!("expected streaming artifact")
+                };
+                Ok(response.response.bytes().await.unwrap().to_vec())
+            } else {
+                let ResolvedDownloadArtifact::Nzb { bytes, .. } =
+                    transport.resolve(Some("indexer"), url, None).await?
+                else {
+                    panic!("expected buffered NZB")
+                };
+                Ok(bytes)
+            }
+        })
+        .await
+        .expect("artifact request must complete")
+    }
+
+    #[tokio::test]
+    async fn both_artifact_paths_upgrade_then_fall_back_through_assigned_proxy() {
+        for streaming in [false, true] {
+            for host in ["api.fixture.test", "downloads.fixture.test"] {
+                let proxy = ArtifactProxyFixture::start(200).await;
+                let stats = Arc::new(CountingStats::default());
+                let transport = proxy.transport(Arc::clone(&stats));
+                let bytes = artifact_bytes(
+                    &transport,
+                    streaming,
+                    &format!("http://{host}/grab?id=fixture"),
+                )
+                .await
+                .unwrap();
+                assert_eq!(bytes, b"<nzb></nzb>");
+                assert_eq!(
+                    *proxy.requests.lock().unwrap(),
+                    vec![
+                        format!("CONNECT {host}:443 HTTP/1.1"),
+                        format!("GET http://{host}/grab?id=fixture HTTP/1.1"),
+                    ]
+                );
+                assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn both_artifact_paths_do_not_downgrade_explicit_https() {
+        for streaming in [false, true] {
+            let proxy = ArtifactProxyFixture::start(200).await;
+            assert!(
+                artifact_bytes(
+                    &proxy.transport(Arc::new(CountingStats::default())),
+                    streaming,
+                    "https://downloads.fixture.test/grab"
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(
+                *proxy.requests.lock().unwrap(),
+                ["CONNECT downloads.fixture.test:443 HTTP/1.1"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn both_artifact_paths_reject_unrelated_domains_before_proxy_dispatch() {
+        for streaming in [false, true] {
+            let proxy = ArtifactProxyFixture::start(200).await;
+            let error = artifact_bytes(
+                &proxy.transport(Arc::new(CountingStats::default())),
+                streaming,
+                "http://other.test/grab",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::ACQUISITION_DOWNLOAD_ORIGIN_MISMATCH)
+            );
+            assert!(proxy.requests.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn both_artifact_paths_preserve_rate_limits_and_proxy_failures() {
+        for streaming in [false, true] {
+            for status in [429, 502] {
+                let proxy = ArtifactProxyFixture::start(status).await;
+                let error = artifact_bytes(
+                    &proxy.transport(Arc::new(CountingStats::default())),
+                    streaming,
+                    "http://downloads.fixture.test/grab",
+                )
+                .await
+                .unwrap_err();
+                if status == 429 {
+                    assert!(matches!(error, AppError::TemporaryUnavailable { .. }));
+                } else {
+                    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
+                }
+                assert_eq!(proxy.requests.lock().unwrap().len(), 2);
+            }
+        }
+    }
 
     #[test]
     fn nzb_header_passwords_drop_protection_markers_and_keep_literal_values() {
@@ -1869,9 +2341,13 @@ mod tests {
             Err(AppError::DownloadSubmitUnavailable(_))
         ));
         let recorded = recorder.0.lock().unwrap();
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, "no_response");
-        assert_eq!(recorded[0].1.load(Ordering::Relaxed), 1);
+        assert!(!recorded.is_empty());
+        // A stalled HTTPS probe may consume the deadline before HTTP is sent.
+        // Every dispatched attempt, including the fallback, has no response.
+        for (outcome, count) in recorded.iter() {
+            assert_eq!(outcome, "no_response");
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+        }
     }
 
     /// A dead grab link is the operator's to fix by searching again, so the
@@ -1949,10 +2425,7 @@ mod tests {
             let super::ArtifactFetchResponse::Http(response) = response else {
                 panic!("HTTP response");
             };
-            assert!(
-                recorder.0.lock().unwrap().is_empty(),
-                "tally must stay pending through handoff"
-            );
+            assert_request_outcomes(&recorder, &[]);
             let temp = tempfile::tempdir().unwrap();
             let store: Arc<dyn scryer_application::StagedNzbStore> = Arc::new(
                 crate::downloads::staged_nzb_store::FileSystemStagedNzbStore::new(temp.path())
@@ -2008,6 +2481,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -2058,6 +2533,8 @@ mod tests {
     fn test_proxy(base_url: &str, is_enabled: bool) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2135,6 +2612,9 @@ mod tests {
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())
+        }
+        async fn count_solvers_reaching_through(&self, _: &str, _: bool) -> AppResult<u64> {
+            Ok(0)
         }
     }
 
@@ -2221,8 +2701,193 @@ mod tests {
         assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
     }
 
+    /// An HTTP proxy that stands in for the route a solver is reached through.
+    /// It refuses CONNECT, so the HTTPS-first probe falls back; answers a solve
+    /// POST with a clearance cookie; serves the NZB only to a GET that presents
+    /// that cookie; and challenges every other GET. Neither the indexer nor the
+    /// solver name resolves, so only this proxy can answer.
+    struct RoutedSolverFixture {
+        endpoint: String,
+        requests: Arc<Mutex<Vec<(String, bool)>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for RoutedSolverFixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl RoutedSolverFixture {
+        async fn start(target: &'static str) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&requests);
+            let task = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    timeout(Duration::from_secs(30), async {
+                        let mut head = Vec::new();
+                        while !head.ends_with(b"\r\n\r\n") {
+                            assert!(head.len() < 8192);
+                            head.push(stream.read_u8().await.unwrap());
+                        }
+                        let head = String::from_utf8(head).unwrap();
+                        let content_length = head
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let mut body = vec![0u8; content_length];
+                        stream.read_exact(&mut body).await.unwrap();
+                        let first = head.lines().next().unwrap().to_string();
+                        let cleared = head.lines().any(|line| {
+                            line.to_ascii_lowercase().starts_with("cookie:")
+                                && line.contains("cf_clearance=synthetic")
+                        });
+                        recorded.lock().unwrap().push((first.clone(), cleared));
+                        let (status, content_type, body) = if first.starts_with("CONNECT ") {
+                            (502, "text/plain", String::new())
+                        } else if first.starts_with("POST ") {
+                            (
+                                200,
+                                "application/json",
+                                serde_json::json!({
+                                    "status": "ok",
+                                    "solution": {
+                                        "url": target,
+                                        "status": 503,
+                                        "headers": { "content-type": "text/html" },
+                                        "cookies": [{ "name": "cf_clearance", "value": "synthetic" }],
+                                        "userAgent": "Synthetic UA",
+                                        "response": "<html>Just a moment</html>"
+                                    }
+                                })
+                                .to_string(),
+                            )
+                        } else if cleared {
+                            (200, "application/x-nzb", "<nzb></nzb>".to_string())
+                        } else {
+                            (
+                                403,
+                                "text/html",
+                                "<html><title>Just a moment...</title></html>".to_string(),
+                            )
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n{body}",
+                            body.len(),
+                        );
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                        stream.shutdown().await.unwrap();
+                    })
+                    .await
+                    .expect("route request must complete");
+                }
+            });
+            Self {
+                endpoint,
+                requests,
+                task,
+            }
+        }
+
+        fn lines(&self) -> Vec<(String, bool)> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
     #[tokio::test]
-    async fn assigned_solver_rejects_full_origin_mismatch_before_artifact_http() {
+    async fn a_routed_solver_fetches_solves_and_reuses_clearance_through_its_route() {
+        const TARGET: &str = "http://api.routed-fixture.test/grab?id=fixture";
+        let route_proxy = RoutedSolverFixture::start(TARGET).await;
+        let mut route = test_proxy(&route_proxy.endpoint, true);
+        route.id = "route".into();
+        route.provider_type = scryer_domain::ProxyProviderType::Http;
+        route.protocol = None;
+        let mut solver = test_proxy("http://solver.invalid:8191", true);
+        solver.id = "routed-artifact-solver".into();
+        solver.reach_through_proxy_config_id = Some(route.id.clone());
+        solver.reach_through = Some(Box::new(route));
+        let stats = Arc::new(CountingStats::default());
+        let mut config = test_config("https://api.routed-fixture.test/api", Some("solver"));
+        config.proxy_config_id = Some(solver.id.clone());
+        let mut transport = transport_with_config_and_proxy(Arc::clone(&stats), config, solver);
+        transport.outbound_http = OutboundHttpClient::new(
+            generic_reqwest_client(),
+            RateLimitRegistry::isolated_indexers(),
+        );
+
+        for _ in 0..2 {
+            let resolved = timeout(
+                Duration::from_secs(30),
+                transport.resolve(Some("indexer"), TARGET, None),
+            )
+            .await
+            .expect("artifact request must complete")
+            .expect("the routed solver should resolve the artifact");
+            let ResolvedDownloadArtifact::Nzb { bytes, .. } = resolved else {
+                panic!("expected buffered NZB");
+            };
+            assert_eq!(bytes, b"<nzb></nzb>");
+        }
+
+        let connect = "CONNECT api.routed-fixture.test:443 HTTP/1.1".to_string();
+        let get = format!("GET {TARGET} HTTP/1.1");
+        assert_eq!(
+            route_proxy.lines(),
+            vec![
+                // The first attempt, HTTPS first, both through the route.
+                (connect.clone(), false),
+                (get.clone(), false),
+                // The solve POST dials the solver through the route.
+                (
+                    "POST http://solver.invalid:8191/v1 HTTP/1.1".to_string(),
+                    false
+                ),
+                // The fetch after the solve presents the clearance.
+                (connect.clone(), false),
+                (get.clone(), true),
+                // The next artifact reuses the cached clearance, still routed.
+                (connect, false),
+                (get, true),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_solver_whose_route_is_unresolved_never_fetches_an_artifact() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let mut solver = test_proxy(&server.uri(), true);
+        solver.reach_through_proxy_config_id = Some("route-gone".into());
+        let stats = Arc::new(CountingStats::default());
+        let transport = transport_with_config_and_proxy(
+            Arc::clone(&stats),
+            test_config(&server.uri(), Some("solver")),
+            solver,
+        );
+        let result = transport
+            .resolve(Some("indexer"), &format!("{}/grab", server.uri()), None)
+            .await;
+        match result {
+            Err(AppError::DownloadSubmitUnavailable(_)) => {}
+            Err(other) => panic!("an unresolved route must refuse as unavailable, got {other}"),
+            Ok(_) => panic!("an unresolved route must refuse"),
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn assigned_solver_rejects_other_host_before_artifact_http() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200))
@@ -2239,15 +2904,14 @@ mod tests {
             test_proxy(&server.uri(), true),
         );
         let result = transport
-            .resolve(Some("indexer"), "http://127.0.0.1:1/grab", None)
+            .resolve(Some("indexer"), "http://127.0.0.2:1/grab", None)
             .await;
         let Err(error) = result else {
-            panic!("full origin mismatch must fail");
+            panic!("host mismatch must fail");
         };
-        assert!(
-            error
-                .to_string()
-                .contains("does not match the assigned indexer origin")
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::ACQUISITION_DOWNLOAD_ORIGIN_MISMATCH)
         );
         assert!(server.received_requests().await.unwrap().is_empty());
         assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
@@ -2264,10 +2928,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
-            .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("Location", format!("{}/final", external.uri())),
-            )
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "Location",
+                format!("{}/final", external.uri().replace("127.0.0.1", "localhost")),
+            ))
             .mount(&server)
             .await;
         let stats = Arc::new(CountingStats {
@@ -2485,6 +3149,8 @@ mod tests {
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
         let proxy = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2574,6 +3240,8 @@ mod tests {
                 OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
             let now = Utc::now();
             let proxy = scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: "solver".into(),
                 name: "fixture solver".into(),
                 provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2669,6 +3337,8 @@ mod tests {
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
         let proxy = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2747,6 +3417,8 @@ mod tests {
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
         let proxy = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2812,7 +3484,7 @@ mod tests {
         assert_eq!(
             stats.sent.load(Ordering::SeqCst),
             3,
-            "two direct grabs plus one solver-relayed grab each spend indexer quota"
+            "two HTTP grabs and one solver-relayed grab each count as dispatches; the HTTPS probes never connect"
         );
         drop(tally);
         assert_request_outcomes(
@@ -2877,6 +3549,90 @@ mod tests {
                 matches!(error, AppError::NewznabQuotaExceeded { code: actual, .. } if actual == code)
             );
         }
+    }
+
+    /// A UTF-8 NZB whose 2-byte character starts at byte 4095, so a 4 KiB cut
+    /// splits it.
+    fn nzb_with_character_across_the_probe_cut() -> Vec<u8> {
+        let mut bytes =
+            br#"<?xml version="1.0" encoding="utf-8"?><nzb><head><meta type="name">"#.to_vec();
+        bytes.resize(4095, b'a');
+        bytes.extend_from_slice("\u{e9}</meta></head><file/></nzb>".as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn nzbs_that_are_not_strict_utf8_or_open_with_a_prolog_classify_as_nzb() {
+        let latin1 = b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\"><head><meta type=\"poster\">Andr\xe9</meta></head><file poster=\"Andr\xe9 &lt;a@example.invalid&gt;\" date=\"1\" subject=\"Synthetic.Caf\xe9.mkv yEnc (1/1)\"><groups><group>alt.binaries.test</group></groups><segments><segment bytes=\"1\" number=\"1\">a@example.invalid</segment></segments></file></nzb>".to_vec();
+        let straddling = nzb_with_character_across_the_probe_cut();
+        let mut bom = b"\xef\xbb\xbf".to_vec();
+        bom.extend_from_slice(br#"<?xml version="1.0" encoding="utf-8"?><nzb><file/></nzb>"#);
+        let comment = b"<!-- generated by a synthetic indexer -->\n<nzb><file/></nzb>".to_vec();
+        let whitespace = b" \r\n\t<nzb><file/></nzb>".to_vec();
+        let bom_comment =
+            b"\xef\xbb\xbf\n<!-- a --><?pi x?>  <!-- b -->\n<NZB><file/></NZB>".to_vec();
+
+        // The two fixtures that a strict UTF-8 read of the probe window refuses.
+        assert!(std::str::from_utf8(&latin1[..latin1.len().min(4096)]).is_err());
+        assert!(std::str::from_utf8(&straddling[..4096]).is_err());
+
+        for (label, bytes) in [
+            ("latin-1", latin1),
+            ("straddling character", straddling),
+            ("byte order mark", bom),
+            ("leading comment", comment),
+            ("leading whitespace", whitespace),
+            ("byte order mark and prolog", bom_comment),
+        ] {
+            assert!(super::looks_nzb(&bytes), "{label}");
+            let artifact = classify("fixture", None, None, bytes.clone(), None)
+                .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+            assert!(
+                matches!(&artifact, ResolvedDownloadArtifact::Nzb { bytes: kept, .. } if *kept == bytes),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn html_rss_and_newznab_errors_still_do_not_classify_as_nzb() {
+        for (label, bytes) in [
+            ("html", b"<!DOCTYPE html><html><body>Login required</body></html>".to_vec()),
+            ("html with bom", b"\xef\xbb\xbf<!DOCTYPE html><html></html>".to_vec()),
+            ("html after a comment", b"<!-- nzb --><html><nzb></html>".to_vec()),
+            ("latin-1 html", b"<html><body>Caf\xe9 <nzb></body></html>".to_vec()),
+            (
+                "rss",
+                br#"<?xml version="1.0"?><rss version="2.0"><channel><title>feed</title></channel></rss>"#.to_vec(),
+            ),
+            (
+                "newznab error",
+                br#"<?xml version="1.0"?><error code="100" description="Incorrect user credentials"/>"#.to_vec(),
+            ),
+            ("unterminated comment", b"<!-- <nzb>".to_vec()),
+            ("plain text", b"nzb not found".to_vec()),
+        ] {
+            assert!(!super::looks_nzb(&bytes), "{label}");
+            let error = classify("fixture", None, None, bytes, None)
+                .expect_err(label);
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_TYPE_UNSUPPORTED),
+                "{label}: {error:?}"
+            );
+        }
+        let error = classify(
+            "fixture",
+            None,
+            Some(&serde_json::json!({"content-type": "application/x-nzb"})),
+            b"<html><body>Login required</body></html>".to_vec(),
+            None,
+        )
+        .expect_err("an html page served as an NZB is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::ACQUISITION_RESOLVED_NZB_INVALID)
+        );
     }
 
     #[test]

@@ -468,6 +468,10 @@ struct HealthCheckSummaryItem {
     source: String,
     status: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    facts: std::collections::BTreeMap<&'static str, u64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -909,7 +913,13 @@ impl AppUseCase {
 
             // The library is gone once the run finishes, so a library grant
             // cannot be checked again; the run's own actor passed it at start.
-            JobKey::TitleDeletion | JobKey::LibraryDeletion | JobKey::TitleRename => Ok(true),
+            JobKey::TitleDeletion
+            | JobKey::LibraryDeletion
+            | JobKey::TitleRename
+            | JobKey::ReleaseGrab => Ok(true),
+            // Only the user who asked for the search sees it, and the search
+            // was checked against their grants when it started.
+            JobKey::AcquisitionSearch => Ok(true),
             JobKey::MediaFileRescore
             | JobKey::MediaFileDeletion
             | JobKey::RecycleBinRestore
@@ -1019,6 +1029,8 @@ impl AppUseCase {
                     | JobKey::TitleDeletion
                     | JobKey::LibraryDeletion
                     | JobKey::TitleRename
+                    | JobKey::ReleaseGrab
+                    | JobKey::AcquisitionSearch
                     | JobKey::MediaFileDeletion
                     | JobKey::MediaFileRescore
                     | JobKey::RecycleBinRestore
@@ -1374,6 +1386,7 @@ impl AppUseCase {
             JobKey::ProwlarrSync => self.prowlarr_sync_tick_has_work().await,
             JobKey::StagedNzbPrune => self.staged_nzb_prune_tick_has_work().await,
             JobKey::ListSync => self.list_sync_tick_has_work().await,
+            JobKey::FullHashBackfill => self.full_hash_backfill_tick_has_work().await,
             _ => return true,
         };
         if !has_work {
@@ -1385,6 +1398,18 @@ impl AppUseCase {
                 .await;
         }
         has_work
+    }
+
+    /// Whether the full-hash queue holds any file the job may read. Files in
+    /// libraries with the backfill off are not in it. A failed read says yes,
+    /// so the run records the failure.
+    pub(crate) async fn full_hash_backfill_tick_has_work(&self) -> bool {
+        self.services
+            .library
+            .media_files
+            .list_media_files_missing_full_hash(None, 1)
+            .await
+            .map_or(true, |page| !page.is_empty())
     }
 
     /// Whether a Prowlarr sync would sync anything: the same parents the job
@@ -2103,6 +2128,8 @@ impl AppUseCase {
                                 source: result.source.clone(),
                                 status: result.status.as_str().to_string(),
                                 message: result.message.clone(),
+                                reason: result.reason,
+                                facts: result.facts.iter().copied().collect(),
                             })
                             .collect(),
                     })
@@ -2162,8 +2189,20 @@ impl AppUseCase {
                     serde_json::to_string(&CountSummary { count }).ok(),
                 ))
             }
-            JobKey::MaintenanceRuleEvaluation => {
-                let report = self.run_maintenance_rule_evaluation_job().await?;
+            JobKey::LifecycleRuleEvaluation if run.trigger_source != JobTriggerSource::Manual => {
+                // Each rule evaluates on its own schedule; the instance-wide
+                // tick keeps only the lease clock.
+                let report = self.run_lifecycle_lease_reconciliation_job().await;
+                Ok(JobExecutionOutcome::new(
+                    Some(format!(
+                        "{} request lease(s) expired, {} started; rules run on their own schedules",
+                        report.leases_expired, report.leases_activated
+                    )),
+                    serde_json::to_string(&report).ok(),
+                ))
+            }
+            JobKey::LifecycleRuleEvaluation => {
+                let report = self.run_lifecycle_rule_evaluation_job().await?;
                 let summary_json = serde_json::to_string(&report).ok();
                 // Lease bookkeeping runs whether or not the gate is open, so it
                 // is reported on both paths: an operator reading "nothing was
@@ -2175,7 +2214,7 @@ impl AppUseCase {
                 if !report.gate_enabled {
                     return Ok(JobExecutionOutcome::new(
                         Some(format!(
-                            "Maintenance evaluation is disabled by the instance gate; nothing was evaluated ({lease_text})"
+                            "Lifecycle evaluation is disabled by the instance gate; nothing was evaluated ({lease_text})"
                         )),
                         summary_json,
                     ));
@@ -2195,37 +2234,6 @@ impl AppUseCase {
                             "{summary_text}; {} rule(s) failed and their candidates were held",
                             report.rules_failed
                         )),
-                        summary_json,
-                    ))
-                } else {
-                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
-                }
-            }
-            JobKey::LifecycleActionHandling => {
-                let report = self.run_lifecycle_action_handling_job().await?;
-                let summary_json = serde_json::to_string(&report).ok();
-                if !report.gates_enabled {
-                    return Ok(JobExecutionOutcome::new(
-                        Some(
-                            "Both instance effect gates are off; no maintenance actions executed"
-                                .to_string(),
-                        ),
-                        summary_json,
-                    ));
-                }
-                let summary_text = format!(
-                    "Considered {} candidate(s) across {} armed rule(s): {} executed, {} already satisfied, {} held, {} canceled, {} failed",
-                    report.candidates_considered,
-                    report.rules_eligible,
-                    report.executed,
-                    report.already_satisfied,
-                    report.held,
-                    report.canceled,
-                    report.failed,
-                );
-                if report.failed > 0 {
-                    Ok(JobExecutionOutcome::warning(
-                        Some(summary_text),
                         summary_json,
                     ))
                 } else {
@@ -2335,6 +2343,10 @@ impl AppUseCase {
                 crate::error_reasons::jobs::RECYCLE_PURGE_JOBS_INVALID,
                 "recycle purge jobs must be started from the recycle bin mutation",
             )),
+            JobKey::ReleaseGrab => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::RELEASE_GRAB_JOBS_INVALID,
+                "release grab jobs must be started from the grab mutation",
+            )),
             JobKey::AcquisitionSearch => Err(AppError::validation_refused(
                 crate::error_reasons::jobs::ACQUISITION_SEARCH_JOBS_INVALID,
                 "acquisition search jobs must be started from the acquisition search mutation",
@@ -2350,6 +2362,10 @@ impl AppUseCase {
             JobKey::SourceImport => Err(AppError::validation_refused(
                 crate::source_import::refusal::INVALID_REQUEST,
                 "source imports must be started from setup",
+            )),
+            JobKey::ExternalRuleImport => Err(AppError::validation_refused(
+                crate::rule_import::refusal::INVALID_REQUEST,
+                "rule imports must be started from the rule import mutation",
             )),
         }
     }

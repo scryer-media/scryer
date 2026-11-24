@@ -500,6 +500,21 @@ impl scryer_infrastructure_library_search::fuzzy::TitleTermSource for GatedTermS
     async fn projection_stamp(&self) -> AppResult<ProjectionStamp> {
         self.inner.projection_stamp().await
     }
+
+    fn dialect(&self) -> scryer_infrastructure_library_search::fuzzy::TermSourceDialect {
+        self.inner.dialect()
+    }
+    async fn contains_ranks(
+        &self,
+        term_ids: &[i64],
+        lenient_query: &str,
+        facets: &[&str],
+        lanes: scryer_infrastructure_library_search::fuzzy::ContainsLaneRanks,
+    ) -> AppResult<Vec<(String, i64)>> {
+        self.inner
+            .contains_ranks(term_ids, lenient_query, facets, lanes)
+            .await
+    }
 }
 
 #[tokio::test]
@@ -837,6 +852,7 @@ async fn fuzzy_lookup_timing_over_a_library_sized_catalog() {
                 typo_distance: Some(4),
                 match_term: &name.match_term,
                 romanization_keys: &[],
+                romanization_scripts: &[],
                 collation_keys: &[],
                 limit: 256,
             },
@@ -895,6 +911,21 @@ impl scryer_infrastructure_library_search::fuzzy::TitleTermSource for CountingTe
         self.stamps
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.projection_stamp().await
+    }
+
+    fn dialect(&self) -> scryer_infrastructure_library_search::fuzzy::TermSourceDialect {
+        self.inner.dialect()
+    }
+    async fn contains_ranks(
+        &self,
+        term_ids: &[i64],
+        lenient_query: &str,
+        facets: &[&str],
+        lanes: scryer_infrastructure_library_search::fuzzy::ContainsLaneRanks,
+    ) -> AppResult<Vec<(String, i64)>> {
+        self.inner
+            .contains_ranks(term_ids, lenient_query, facets, lanes)
+            .await
     }
 }
 

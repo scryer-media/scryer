@@ -3,6 +3,9 @@
 //! Run with `SCRYER_PARSER_CORPUS_REPORT_DIR=/tmp/parser-corpus-report` to retain
 //! every mismatch as JSON, including when the assertion output is abbreviated.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 

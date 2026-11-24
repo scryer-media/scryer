@@ -1067,11 +1067,70 @@ mod bounded_decompression_tests {
 #[cfg(test)]
 mod plugin_http_client_tests {
     use super::{
-        PLUGIN_HTTP_MAX_VALIDATED_REDIRECTS, PluginHttpClientProfile, PluginRedirectPolicy,
-        combined_plugin_catalog_probe_error, fetch_plugin_bytes_with_redirect_policy,
-        plugin_http_client, plugin_redirect_location_url,
+        MANUAL_PLUGIN_WASM_OUTPUT_LIMIT, PLUGIN_CATALOG_JSON_OUTPUT_LIMIT,
+        PLUGIN_HTTP_MAX_VALIDATED_REDIRECTS, PLUGIN_SIGNATURE_BUNDLE_OUTPUT_LIMIT,
+        PluginHttpClientProfile, PluginRedirectPolicy, combined_plugin_catalog_probe_error,
+        fetch_plugin_bytes_with_redirect_policy, plugin_http_client, plugin_redirect_location_url,
+        plugin_transfer_limit, read_plugin_body_bounded,
     };
     use crate::AppError;
+
+    async fn plugin_download_response(body: Vec<u8>) -> (wiremock::MockServer, reqwest::Response) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/plugin.wasm.zst"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+        let response = scryer_outbound_http::generic_reqwest_client()
+            .get(format!("{}/plugin.wasm.zst", server.uri()))
+            .send()
+            .await
+            .expect("mock download answers");
+        (server, response)
+    }
+
+    #[tokio::test]
+    async fn plugin_download_within_its_bound_reads_whole() {
+        let (_server, response) = plugin_download_response(vec![7; 4096]).await;
+        let bytes = read_plugin_body_bounded(response, 4096, "test plugin artifact")
+            .await
+            .expect("a body at the bound is read");
+        assert_eq!(bytes.len(), 4096);
+    }
+
+    #[tokio::test]
+    async fn plugin_download_past_its_bound_is_refused_with_the_payload_size_reason() {
+        let (_server, response) = plugin_download_response(vec![7; 4097]).await;
+        let error = read_plugin_body_bounded(response, 4096, "test plugin artifact")
+            .await
+            .expect_err("a body past the bound is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::plugins::PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES)
+        );
+    }
+
+    #[test]
+    fn plugin_transfer_bound_admits_any_compressed_form_of_an_accepted_payload() {
+        for limit in [
+            PLUGIN_SIGNATURE_BUNDLE_OUTPUT_LIMIT,
+            PLUGIN_CATALOG_JSON_OUTPUT_LIMIT,
+            MANUAL_PLUGIN_WASM_OUTPUT_LIMIT,
+            1,
+        ] {
+            // Zstandard's worst case for incompressible input (its
+            // `ZSTD_COMPRESSBOUND`, plus room for the frame header and
+            // checksum), the larger of the two encoders the catalog uses.
+            let zstd_bound =
+                limit + limit / 256 + (128 * 1024_u64).saturating_sub(limit) / 2048 + 64;
+            assert!(plugin_transfer_limit(limit) >= zstd_bound, "{limit}");
+        }
+        assert_eq!(plugin_transfer_limit(u64::MAX), u64::MAX);
+    }
 
     #[test]
     fn plugin_http_client_profiles_are_cached() {
@@ -1099,6 +1158,7 @@ mod plugin_http_client_tests {
             "test plugin artifact",
             "test-plugin-artifact",
             PluginRedirectPolicy::Reject,
+            MANUAL_PLUGIN_WASM_OUTPUT_LIMIT,
         )
         .await
         .expect_err("private plugin artifact URL should be rejected");

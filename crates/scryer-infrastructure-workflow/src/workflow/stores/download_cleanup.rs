@@ -21,6 +21,8 @@ fn cleanup_record(row: &SqlRow) -> AppResult<DownloadCleanupRecord> {
         facet: blank_to_none(row.opt_text("facet")?),
         source_title: blank_to_none(row.opt_text("source_title")?),
         previous_failure_retry_seconds: None,
+        library_holds_payload: false,
+        library_file_unsettled: Vec::new(),
     })
 }
 
@@ -176,13 +178,16 @@ const CLEANUP_SEED_SQL_TEMPLATE: &str = "SELECT d.id, COALESCE(st.tracked_state,
      ORDER BY d.created_at, d.id LIMIT {}";
 
 /// Any identity state row changing moves the latest one's `updated_at` to at
-/// least that bound, so this covers the latest-state input exactly.
+/// least that bound, so this covers the latest-state input exactly. The
+/// branches are `UNION ALL`: `IN` ignores duplicates, and a plain `UNION`
+/// lets SQLite merge the branches in id order, scanning every table instead of
+/// searching each date index.
 const CLEANUP_SEED_CHANGED_FILTER: &str = "d.id IN (
            SELECT changed.canonical_download_id FROM download_identity_states changed
             WHERE changed.updated_at >= {}
-           UNION SELECT changed.id FROM download_submissions changed
+           UNION ALL SELECT changed.id FROM download_submissions changed
             WHERE changed.tracked_state_at >= {}
-           UNION SELECT changed.id FROM downloads changed
+           UNION ALL SELECT changed.id FROM downloads changed
             WHERE changed.created_at >= {})
        AND ";
 
@@ -297,8 +302,12 @@ impl DownloadSubmissionStore {
         }
         // A full page may have left eligible rows behind, so the bound stays
         // where it was until a pass drains its candidate set; every seed
-        // transaction above has committed by now.
-        if drained {
+        // transaction above has committed by now. A narrowed pass that seeded
+        // nothing leaves the stored bound where it is: the next narrowed pass
+        // then rereads a wider window, never a narrower one, and the full pass
+        // that the stale `full_scan_at` forces records the advance.
+        let idle_narrowed_pass = since.is_some() && seeds.is_empty();
+        if drained && !idle_narrowed_pass {
             let full_scan_at = match (&since, &watermark) {
                 (Some(_), Some(watermark)) => watermark.full_scan_at,
                 _ => started,

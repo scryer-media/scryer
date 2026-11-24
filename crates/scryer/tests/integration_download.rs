@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -118,6 +120,8 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
             let now = chrono::Utc::now();
             let proxy = proxies
                 .create(scryer_domain::ProxyConfig {
+                    reach_through_proxy_config_id: None,
+                    reach_through: None,
                     id: scryer_domain::Id::new().0,
                     name: "fixture solver".into(),
                     provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -163,6 +167,8 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: true,

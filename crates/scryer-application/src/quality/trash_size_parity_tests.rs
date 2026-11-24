@@ -4,6 +4,7 @@ use super::pack_test_support::pack_entries;
 use crate::quality_profile::{
     CoverageSizeBasis, QualityProfile, apply_size_requirement, evaluate_profile_requirements,
 };
+use crate::scoring_weights::ScoringPersona;
 use std::collections::BTreeMap;
 
 #[derive(serde::Deserialize)]
@@ -69,18 +70,36 @@ fn bundled_size_curve_matches_frozen_byte_boundaries() {
             size_entries.len(),
             "duplicate size contributions"
         );
-        assert_eq!(
-            actual,
-            case.entries
-                .keys()
-                .map(|code| (code.clone(), 0))
-                .collect::<BTreeMap<_, _>>(),
-            "profile={} title={} size={:?} basis={:?}",
+        let context = format!(
+            "profile={} title={} size={:?} basis={:?} actual={actual:?}",
             case.profile,
             case.title,
             case.size_bytes,
             case.basis()
         );
+        // The band codes are frozen. Only an oversize penalty may move a delta
+        // off zero: Balanced or Efficient curve, known runtime, whole-release
+        // basis.
+        assert!(
+            actual.keys().eq(case.entries.keys()),
+            "{context} expected={:?}",
+            case.entries
+        );
+        let penalized_persona = match profile.criteria.scoring_persona {
+            ScoringPersona::Balanced | ScoringPersona::Compatible | ScoringPersona::Efficient => {
+                true
+            }
+            ScoringPersona::Audiophile => false,
+        };
+        let may_penalize = penalized_persona
+            && case.total_runtime.is_some_and(|minutes| minutes > 0)
+            && !actual.contains_key("size_pack_member_basis");
+        for delta in actual.values() {
+            assert!(
+                *delta == 0 || (may_penalize && (-1200..0).contains(delta)),
+                "{context}"
+            );
+        }
     }
 }
 

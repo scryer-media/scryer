@@ -4,6 +4,7 @@ use super::backup_bundle::{
     LEGACY_BACKUP_PLAINTEXT_EXTENSION,
 };
 use super::*;
+use crate::disk::{Access, Disk, EntryKind, Parents, PathReading, Remove, Replace, Staging};
 use crate::domain_events::DomainEventActor;
 use crate::scripts::schedule::{
     ScheduleError, parse_local_time_of_day, resolve_local_scheduled_time,
@@ -139,59 +140,47 @@ fn auto_backup_is_invalid_for_current_version(info: &BackupInfo) -> bool {
 fn normalize_backup_info(mut info: BackupInfo, backup_dir: &Path) -> BackupInfo {
     let path = bundle_path(backup_dir, &info.filename);
     let now_utc = chrono::Utc::now();
+    let size = match Disk::process().follow_blocking(&path) {
+        PathReading::Known { len, .. } => Some(len.unwrap_or(0)),
+        _ => None,
+    };
+    info.size_bytes = size.unwrap_or(0);
     match info.status {
-        BackupStatus::Ready => match std::fs::metadata(&path) {
-            Ok(metadata) => {
-                info.size_bytes = metadata.len();
-                if auto_backup_is_invalid_for_current_version(&info) {
-                    info.status = BackupStatus::Invalid;
-                    if info.error_message.is_none() {
-                        info.error_message =
-                            Some(AUTO_BACKUP_INVALID_VERSION_ERROR_MESSAGE.to_string());
-                    }
-                }
-            }
-            Err(_) => {
-                info.size_bytes = 0;
-                info.status = BackupStatus::Failed;
+        BackupStatus::Ready if size.is_some() => {
+            if auto_backup_is_invalid_for_current_version(&info) {
+                info.status = BackupStatus::Invalid;
                 if info.error_message.is_none() {
-                    info.error_message = Some("backup bundle file is missing".to_string());
-                }
-            }
-        },
-        BackupStatus::Creating => {
-            info.size_bytes = std::fs::metadata(&path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
-            if is_stale_creating_backup(&info, now_utc) {
-                info.status = BackupStatus::Failed;
-                if info.error_message.is_none() {
-                    info.error_message = Some(backup_timeout_error_message());
+                    info.error_message =
+                        Some(AUTO_BACKUP_INVALID_VERSION_ERROR_MESSAGE.to_string());
                 }
             }
         }
-        BackupStatus::Invalid => {
-            info.size_bytes = std::fs::metadata(&path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
+        BackupStatus::Ready => {
+            info.status = BackupStatus::Failed;
+            if info.error_message.is_none() {
+                info.error_message = Some("backup bundle file is missing".to_string());
+            }
         }
-        BackupStatus::Failed => {
-            info.size_bytes = std::fs::metadata(&path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
+        BackupStatus::Creating if is_stale_creating_backup(&info, now_utc) => {
+            info.status = BackupStatus::Failed;
+            if info.error_message.is_none() {
+                info.error_message = Some(backup_timeout_error_message());
+            }
         }
+        BackupStatus::Creating | BackupStatus::Invalid | BackupStatus::Failed => {}
     }
     info
 }
 
 fn list_backup_files(backup_dir: &Path) -> Vec<BackupInfo> {
+    let disk = Disk::process();
     let mut entries = Vec::new();
-    let Ok(read_dir) = std::fs::read_dir(backup_dir) else {
+    let Ok(listed) = disk.list_blocking(backup_dir) else {
         return entries;
     };
 
-    for entry in read_dir.flatten() {
-        let path = entry.path();
+    for entry in listed {
+        let path = entry.path;
         let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
@@ -202,7 +191,8 @@ fn list_backup_files(backup_dir: &Path) -> Vec<BackupInfo> {
             continue;
         }
 
-        match std::fs::read(&path)
+        match disk
+            .read_blocking(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<BackupInfo>(&bytes).ok())
         {
@@ -221,19 +211,15 @@ fn list_backup_files(backup_dir: &Path) -> Vec<BackupInfo> {
 
 fn write_backup_metadata(backup_dir: &Path, info: &BackupInfo) -> AppResult<()> {
     let path = metadata_path(backup_dir, &info.filename);
-    let temp_path = path.with_extension("metadata.json.tmp");
     let payload = serde_json::to_vec_pretty(info).map_err(|error| {
         AppError::Repository(format!("failed to encode backup metadata: {error}"))
     })?;
-
-    std::fs::write(&temp_path, payload).map_err(|error| {
-        AppError::Repository(format!("failed to write backup metadata: {error}"))
-    })?;
-    ensure_owner_only_permissions(&temp_path)?;
-    std::fs::rename(&temp_path, &path).map_err(|error| {
-        AppError::Repository(format!("failed to finalize backup metadata: {error}"))
-    })?;
-    ensure_owner_only_permissions(&path)?;
+    let (replace, access) = (Replace::Allowed, Access::OwnerOnly);
+    Disk::process()
+        .write_staged_blocking(&path, &payload, replace, access, Staging::Fixed, false)
+        .map_err(|error| {
+            AppError::Repository(format!("failed to write backup metadata: {error}"))
+        })?;
     Ok(())
 }
 
@@ -339,47 +325,28 @@ fn has_creating_backup_for_trigger(entries: &[BackupInfo], trigger: BackupTrigge
 fn remove_backup_artifacts(backup_dir: &Path, filename: &str) -> AppResult<bool> {
     let bundle = bundle_path(backup_dir, filename);
     let metadata = metadata_path(backup_dir, filename);
-    let bundle_exists = bundle.exists();
-    let metadata_exists = metadata.exists();
-    if !bundle_exists && !metadata_exists {
-        return Ok(false);
-    }
-
+    let disk = Disk::process();
+    // Only what resolves to something is removed; a path that cannot be read
+    // is left alone.
+    let bundle_exists = disk.follow_blocking(&bundle).exists() == Some(true);
+    let metadata_exists = disk.follow_blocking(&metadata).exists() == Some(true);
     if bundle_exists {
-        std::fs::remove_file(&bundle).map_err(|error| {
-            AppError::Repository(format!("failed to delete backup bundle: {error}"))
-        })?;
+        disk.remove_blocking(&bundle, Remove::File)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to delete backup bundle: {error}"))
+            })?;
     }
     if metadata_exists {
-        std::fs::remove_file(&metadata).map_err(|error| {
-            AppError::Repository(format!("failed to delete backup metadata: {error}"))
-        })?;
+        disk.remove_blocking(&metadata, Remove::File)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to delete backup metadata: {error}"))
+            })?;
     }
-
-    Ok(true)
+    Ok(bundle_exists || metadata_exists)
 }
 
 fn cleanup_partial_backup_bundle(backup_dir: &Path, filename: &str) {
-    let _ = std::fs::remove_file(bundle_path(backup_dir, filename));
-}
-
-#[cfg(unix)]
-fn ensure_owner_only_permissions(path: &Path) -> AppResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    if !path.exists() {
-        return Ok(());
-    }
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|error| {
-        AppError::Repository(format!("failed to set backup permissions: {error}"))
-    })?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_owner_only_permissions(_path: &Path) -> AppResult<()> {
-    Ok(())
+    let _ = Disk::process().remove_blocking(&bundle_path(backup_dir, filename), Remove::File);
 }
 
 fn validate_backup_passphrase(passphrase: &str) -> AppResult<()> {
@@ -419,9 +386,15 @@ async fn export_backup_file(
         })
         .await?;
 
-    let size_bytes = std::fs::metadata(&output_path)
-        .map_err(|error| AppError::Repository(format!("failed to stat backup bundle: {error}")))?
-        .len();
+    let PathReading::Known {
+        len: Some(size_bytes),
+        ..
+    } = Disk::process().follow(&output_path).await
+    else {
+        return Err(AppError::Repository(
+            "failed to stat backup bundle".to_string(),
+        ));
+    };
     let summary = outcome.summary;
 
     Ok(BackupInfo {
@@ -452,6 +425,17 @@ where
         .map_err(|_| AppError::Repository(backup_timeout_error_message()))?
 }
 
+/// The stored-credential salt a bundle carries. A restore rebuilds a salt
+/// equal to the registration secret from that secret alone, so the bundle
+/// leaves it out; an explicit `SCRYER_JWT_SIGNING_SECRET` would otherwise also
+/// key the restored instance's sessions.
+fn backup_jwt_signing_secret(
+    jwt_signing_salt: &str,
+    smg_registration_secret: Option<&str>,
+) -> Option<String> {
+    (smg_registration_secret != Some(jwt_signing_salt)).then(|| jwt_signing_salt.to_string())
+}
+
 impl AppUseCase {
     async fn collect_backup_export_secrets(&self) -> AppResult<BackupExportSecrets> {
         let encryption_master_key = self
@@ -464,10 +448,14 @@ impl AppUseCase {
                 AppError::validation_refused(crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_CONFIGURED_ENCRYPTION_MASTER_KEY, "backup export requires a configured encryption master key")
             })?;
 
+        let smg_registration_secret = self.services.config.smg_registration_secret.clone();
         Ok(BackupExportSecrets {
             encryption_master_key,
-            jwt_signing_secret: self.auth.jwt_signing_salt.clone(),
-            smg_registration_secret: self.services.config.smg_registration_secret.clone(),
+            jwt_signing_secret: backup_jwt_signing_secret(
+                &self.auth.jwt_signing_salt,
+                smg_registration_secret.as_deref(),
+            ),
+            smg_registration_secret,
             smg_gateway_url: self.services.config.smg_gateway_url.clone(),
         })
     }
@@ -478,9 +466,12 @@ impl AppUseCase {
         encrypted: bool,
     ) -> AppResult<PreparedBackupRequest> {
         let dir = self.effective_backup_dir().await?;
-        std::fs::create_dir_all(&dir).map_err(|error| {
-            AppError::Repository(format!("failed to create backup directory: {error}"))
-        })?;
+        Disk::process()
+            .create_dir(&dir, Parents::Create)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("failed to create backup directory: {error}"))
+            })?;
 
         let datastore_info = self.services.config.system_info.datastore_info().await?;
         let queued = creating_backup_info(
@@ -708,7 +699,7 @@ impl AppUseCase {
         }
 
         let bundle = bundle_path(&backup_dir, filename);
-        if !bundle.is_file() {
+        if Disk::process().follow(&bundle).await.kind() != Some(EntryKind::File) {
             return Err(AppError::not_found_reason(
                 crate::error_reasons::security::BACKUP_BUNDLE_NOT_FOUND,
                 "backup bundle could not be found",
@@ -998,6 +989,22 @@ pub async fn start_background_auto_backup_scheduler(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn backup_leaves_out_a_signing_salt_the_registration_secret_rebuilds() {
+        assert_eq!(
+            backup_jwt_signing_secret("registration-secret", Some("registration-secret")),
+            None
+        );
+        assert_eq!(
+            backup_jwt_signing_secret("explicit-secret", Some("registration-secret")),
+            Some("explicit-secret".to_string())
+        );
+        assert_eq!(
+            backup_jwt_signing_secret("local-file-salt", None),
+            Some("local-file-salt".to_string())
+        );
+    }
 
     fn backup_info(
         filename: &str,

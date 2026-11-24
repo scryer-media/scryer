@@ -68,11 +68,13 @@ export const updateListProviderAppMutation = `mutation UpdateListProviderApp($pr
 export const personalListRouteOptionsQuery = `query PersonalListRouteOptions {
   qualityProfileSettings { profiles { id name } }
   manageableLibraries: libraries(permission: MANAGE_TITLES) {
-    id facet name slug isDefault qualityProfileId
+    id facet name slug isDefault qualityProfileId defaultMonitorType
+    inheritedRequiredAudioLanguages inheritedPreferredAudioLanguages
     roots { id path isDefault }
   }
   requestableLibraries: libraries(permission: REQUEST) {
-    id facet name slug isDefault requestQualityProfileIds requestQualityProfileDefaultId
+    id facet name slug isDefault requestQualityProfileIds requestQualityProfileDefaultId defaultMonitorType
+    inheritedRequiredAudioLanguages inheritedPreferredAudioLanguages
     roots { id path isDefault }
   }
 }`;

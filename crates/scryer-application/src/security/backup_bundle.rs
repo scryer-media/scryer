@@ -1,14 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use aws_lc_rs::rand::{SystemRandom, generate};
 use serde::{Deserialize, Serialize};
-use tempfile::TempDir;
 
+use crate::disk::{
+    Access, Disk, EntryKind, Open, Parents, PathReading, Remove, Replace, ScratchDir, Staged,
+};
 use crate::{AppError, AppResult};
 
 pub const BACKUP_FORMAT_VERSION: &str = "scryer-backup-bundle-v2";
@@ -117,73 +119,36 @@ struct EncryptedBundleHeaderV1 {
     metadata: BackupEncryptionMetadataV1,
 }
 
+/// A backup written beside its destination and renamed into place by
+/// [`Self::finish`]; dropped unfinished, it leaves the destination as it was.
 struct AtomicOutputWriter {
-    temp_file: tempfile::NamedTempFile,
-    writer: BufWriter<File>,
-    final_path: PathBuf,
+    writer: BufWriter<Staged>,
 }
 
 impl AtomicOutputWriter {
     fn new(path: &Path) -> AppResult<Self> {
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(parent).map_err(|error| {
-            AppError::Repository(format!("failed to create {}: {error}", parent.display()))
-        })?;
-        let temp_file = tempfile::Builder::new()
-            .prefix(".scryer-backup-")
-            .tempfile_in(parent)
+        let staged = Disk::process()
+            .stage_blocking(path, Parents::Create, Access::OwnerOnly)
             .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to create staged backup output in {}: {error}",
-                    parent.display()
-                ))
+                AppError::Repository(format!("failed to create staged backup output: {error}"))
             })?;
-        ensure_owner_only_permissions(temp_file.path())?;
-        let writer = BufWriter::new(temp_file.reopen().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to open staged backup output {}: {error}",
-                temp_file.path().display()
-            ))
-        })?);
         Ok(Self {
-            temp_file,
-            writer,
-            final_path: path.to_path_buf(),
+            writer: BufWriter::new(staged),
         })
     }
 
-    fn finish(mut self) -> AppResult<()> {
-        self.writer.flush().map_err(|error| {
+    fn finish(self) -> AppResult<()> {
+        let staged = self.writer.into_inner().map_err(|error| {
             AppError::Repository(format!(
-                "failed to flush staged backup output {}: {error}",
-                self.temp_file.path().display()
+                "failed to flush staged backup output: {}",
+                error.error()
             ))
         })?;
-        let file = self.writer.into_inner().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to finalize staged backup output {}: {error}",
-                self.temp_file.path().display()
-            ))
-        })?;
-        file.sync_all().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to sync staged backup output {}: {error}",
-                self.temp_file.path().display()
-            ))
-        })?;
-        drop(file);
-
-        self.temp_file.persist(&self.final_path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to persist staged backup output to {}: {}",
-                self.final_path.display(),
-                error.error
-            ))
-        })?;
-        ensure_owner_only_permissions(&self.final_path)?;
+        staged
+            .commit_durable_blocking(Replace::Allowed)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to persist staged backup output: {error}"))
+            })?;
         Ok(())
     }
 }
@@ -560,6 +525,13 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "title_search_meta",
         classification: BackupTableClassification::Rebuild,
     },
+    // Derived from three `titles` columns by triggers on `titles`. Clearing
+    // `titles` empties it through the cascade and importing the title rows
+    // refills it, so exporting it as well would write every row twice.
+    BackupTableCatalogEntry {
+        table: "title_release_days",
+        classification: BackupTableClassification::Rebuild,
+    },
     BackupTableCatalogEntry {
         table: "blocklist",
         classification: BackupTableClassification::Export,
@@ -598,6 +570,14 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "title_credits",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "title_content_ratings",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "title_awards",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -849,6 +829,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
+        table: "indexer_monthly_usage",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "indexer_search_candidates",
         classification: BackupTableClassification::ResetOnRestore,
     },
@@ -893,6 +877,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "download_client_status",
         classification: BackupTableClassification::Export,
+    },
+    // Each row names scratch on this host's library roots; a restored
+    // instance starts with no extraction it did not make itself.
+    BackupTableCatalogEntry {
+        table: "archive_extractions",
+        classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
         table: "proxy_configs",
@@ -973,27 +963,27 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "login_verification_challenges",
         classification: BackupTableClassification::Ignore,
     },
-    // Maintenance rules and exclusions are user intent. Evaluation,
+    // Lifecycle rules and exclusions are user intent. Evaluation,
     // candidate, and action rows preserve grace periods and the audit trail,
     // so they cannot be regenerated without changing lifecycle semantics.
     BackupTableCatalogEntry {
-        table: "maintenance_rule_sets",
+        table: "lifecycle_rule_sets",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_set_libraries",
+        table: "lifecycle_rule_set_libraries",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_revisions",
+        table: "lifecycle_rule_revisions",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_exclusions",
+        table: "lifecycle_rule_exclusions",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_evaluation_runs",
+        table: "lifecycle_evaluation_runs",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -1009,22 +999,22 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     // terminal membership is the once-per-match latch, so every part of this
     // sequence safety state must remain with its candidate history.
     BackupTableCatalogEntry {
-        table: "maintenance_action_steps",
+        table: "lifecycle_action_steps",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_action_step_attempts",
+        table: "lifecycle_action_step_attempts",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_action_job_receipts",
+        table: "lifecycle_action_job_receipts",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_sequence_terminal_memberships",
+        table: "lifecycle_sequence_terminal_memberships",
         classification: BackupTableClassification::Export,
     },
-    // Request rules are user intent in exactly the way maintenance rules are,
+    // Request rules are user intent in exactly the way lifecycle rules are,
     // and their revisions are what a stored decision points at: dropping them
     // would leave every trace naming a rule revision that no longer exists.
     BackupTableCatalogEntry {
@@ -1046,8 +1036,20 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "request_rule_decisions",
         classification: BackupTableClassification::Export,
     },
+    // Staged request metadata is a short-lived copy of an SMG read; a
+    // request row carries its own, and a restored instance stages again.
+    BackupTableCatalogEntry {
+        table: "media_request_staged_metadata",
+        classification: BackupTableClassification::Rebuild,
+    },
+    // Which rule sets voted on each decision, written with the decision and
+    // read for a rule set's decision count; it goes with the trace.
+    BackupTableCatalogEntry {
+        table: "request_rule_decision_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
     // A lifecycle claim is what holds media against deletion. Losing one on a
-    // restore would silently expose a leased title to the next maintenance
+    // restore would silently expose a leased title to the next lifecycle
     // pass, so it is exported like the candidates and action runs above.
     BackupTableCatalogEntry {
         table: "lifecycle_claims",
@@ -1149,6 +1151,17 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "media_server_audience_reads",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    // Audience favourites are re-read the same way, with a read state per
+    // account; a restored instance answers the favourite facts only after
+    // its own next read.
+    BackupTableCatalogEntry {
+        table: "media_server_audience_favorites",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "media_server_audience_favorite_reads",
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
@@ -1392,6 +1405,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "user_ui_tours",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "users",
         classification: BackupTableClassification::Export,
     },
@@ -1592,7 +1609,8 @@ impl BackupBundleManifest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackupInstanceSecrets {
     encryption_master_key: String,
-    jwt_signing_secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    jwt_signing_secret: Option<String>,
     smg_registration_secret: Option<String>,
     smg_gateway_url: Option<String>,
 }
@@ -1614,11 +1632,9 @@ impl BackupInstanceSecrets {
             "SCRYER_ENCRYPTION_KEY",
             &self.encryption_master_key,
         );
-        push_env_assignment(
-            &mut output,
-            "SCRYER_JWT_SIGNING_SECRET",
-            &self.jwt_signing_secret,
-        );
+        if let Some(value) = self.jwt_signing_secret.as_deref() {
+            push_env_assignment(&mut output, "SCRYER_JWT_SIGNING_SECRET", value);
+        }
         if let Some(value) = self.smg_registration_secret.as_deref() {
             push_env_assignment(&mut output, "SCRYER_SMG_REGISTRATION_SECRET", value);
         }
@@ -1632,7 +1648,10 @@ impl BackupInstanceSecrets {
 #[derive(Clone, Debug)]
 pub struct BackupExportSecrets {
     pub encryption_master_key: String,
-    pub jwt_signing_secret: String,
+    /// The stored-credential salt, carried only when the restored instance
+    /// could not rebuild it from the registration secret the bundle also
+    /// carries. Writing it would pin the restore to it for sessions too.
+    pub jwt_signing_secret: Option<String>,
     pub smg_registration_secret: Option<String>,
     pub smg_gateway_url: Option<String>,
 }
@@ -1653,9 +1672,24 @@ pub struct BackupExportOutcome {
 }
 
 pub struct BackupBundleStaging {
-    staging: TempDir,
+    staging: Arc<ScratchDir>,
     row_counts: BTreeMap<String, u64>,
     part_checksums: BTreeMap<String, String>,
+}
+
+/// The tables directory of a staged export, for blocking work that writes
+/// into it. Every clone keeps the whole staging directory on disk, so it is
+/// removed only once the last holder is gone: an export dropped while a
+/// blocking write is still running never leaves that write's file behind.
+#[derive(Clone)]
+pub struct BackupStagingTablesDir {
+    staging: Arc<ScratchDir>,
+}
+
+impl BackupStagingTablesDir {
+    pub fn path(&self) -> PathBuf {
+        self.staging.path().join(TABLES_DIRNAME)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1719,16 +1753,17 @@ impl PreparedBackupBundleDirectory {
 
 impl BackupBundleStaging {
     pub fn new() -> AppResult<Self> {
-        let staging = tempfile::tempdir().map_err(|error| {
+        let disk = Disk::process();
+        let staging = disk.scratch_dir_blocking("scry-bs-").map_err(|error| {
             AppError::Repository(format!("failed to create backup staging dir: {error}"))
         })?;
-        let tables_dir = staging.path().join(TABLES_DIRNAME);
-        std::fs::create_dir_all(&tables_dir).map_err(|error| {
-            AppError::Repository(format!("failed to create tables staging dir: {error}"))
-        })?;
+        disk.create_dir_blocking(&staging.path().join(TABLES_DIRNAME), Parents::Create)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to create tables staging dir: {error}"))
+            })?;
 
         Ok(Self {
-            staging,
+            staging: Arc::new(staging),
             row_counts: BTreeMap::new(),
             part_checksums: BTreeMap::new(),
         })
@@ -1736,6 +1771,14 @@ impl BackupBundleStaging {
 
     pub fn tables_dir(&self) -> PathBuf {
         self.staging.path().join(TABLES_DIRNAME)
+    }
+
+    /// A handle on the tables directory that keeps the staging directory
+    /// alive for as long as it is held; see [`BackupStagingTablesDir`].
+    pub fn shared_tables_dir(&self) -> BackupStagingTablesDir {
+        BackupStagingTablesDir {
+            staging: Arc::clone(&self.staging),
+        }
     }
 
     pub fn record_table_part(
@@ -1750,7 +1793,38 @@ impl BackupBundleStaging {
         Ok(())
     }
 
-    pub fn finish(mut self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
+    pub fn finish(self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
+        self.finish_unless_abandoned(request, &FinishGate::default())
+    }
+
+    /// [`Self::finish`] on the blocking pool, so compressing and encrypting
+    /// the bundle never holds an async worker. When the caller stops waiting
+    /// (a timeout drops this future), the bundle is not committed to its
+    /// output path; a commit already under way completes before the drop
+    /// returns, so the caller's failure handling always sees the final state.
+    pub async fn finish_off_runtime(
+        self,
+        request: BackupBundleExportRequest,
+    ) -> AppResult<BackupExportOutcome> {
+        let gate = Arc::new(FinishGate::default());
+        let abandon_on_drop = AbandonFinishOnDrop(Some(Arc::clone(&gate)));
+        let joined =
+            tokio::task::spawn_blocking(move || self.finish_unless_abandoned(request, &gate)).await;
+        abandon_on_drop.disarm();
+        match joined {
+            Ok(result) => result,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => Err(AppError::Repository(format!(
+                "backup bundle export task failed: {error}"
+            ))),
+        }
+    }
+
+    fn finish_unless_abandoned(
+        mut self,
+        request: BackupBundleExportRequest,
+        gate: &FinishGate,
+    ) -> AppResult<BackupExportOutcome> {
         if request.passphrase.trim().is_empty() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_NON_EMPTY_PASSWORD,
@@ -1782,11 +1856,48 @@ impl BackupBundleStaging {
         let writer = AtomicOutputWriter::new(&request.output_path)?;
         let writer = AeadChunkWriter::new(writer, &request.passphrase)?;
         let writer = write_bundle_payload(self.staging.path(), writer)?.finish()?;
+        let abandoned = gate
+            .abandoned
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *abandoned {
+            return Err(AppError::Repository(
+                "backup bundle export was abandoned before it was committed".into(),
+            ));
+        }
         writer.finish()?;
+        drop(abandoned);
 
         Ok(BackupExportOutcome {
             summary: manifest.summary(),
         })
+    }
+}
+
+/// Whether the caller of [`BackupBundleStaging::finish_off_runtime`] stopped
+/// waiting. The commit holds the lock, so abandoning waits for a commit that
+/// has already started instead of racing it.
+#[derive(Default)]
+struct FinishGate {
+    abandoned: std::sync::Mutex<bool>,
+}
+
+struct AbandonFinishOnDrop(Option<Arc<FinishGate>>);
+
+impl AbandonFinishOnDrop {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for AbandonFinishOnDrop {
+    fn drop(&mut self) {
+        if let Some(gate) = self.0.take() {
+            *gate
+                .abandoned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        }
     }
 }
 
@@ -1803,7 +1914,7 @@ pub fn inspect_backup_bundle(
 }
 
 pub struct BackupBundleRestorePayload {
-    extracted: TempDir,
+    extracted: ScratchDir,
     manifest: BackupBundleManifest,
 }
 
@@ -1825,13 +1936,17 @@ impl BackupBundleRestorePayload {
     }
 
     pub fn persist_extracted_dir(&self, target_root: &Path) -> AppResult<()> {
-        if target_root.exists() {
-            std::fs::remove_dir_all(target_root).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to clear prepared backup directory {}: {error}",
-                    target_root.display()
-                ))
-            })?;
+        let disk = Disk::process();
+        // Only a path that resolves to something is cleared; a dangling link
+        // or a path that cannot be read is left alone.
+        if disk.follow_blocking(target_root).exists() == Some(true) {
+            disk.remove_blocking(target_root, Remove::Tree)
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to clear prepared backup directory {}: {error}",
+                        target_root.display()
+                    ))
+                })?;
         }
         copy_directory_contents(self.extracted.path(), target_root)
     }
@@ -1870,9 +1985,11 @@ fn push_env_assignment(output: &mut String, key: &str, value: &str) {
 }
 
 fn write_json_file(path: &Path, value: &impl Serialize) -> AppResult<()> {
-    let file = File::create(path).map_err(|error| {
-        AppError::Repository(format!("failed to create {}: {error}", path.display()))
-    })?;
+    let file = Disk::process()
+        .open_blocking(path, Open::create())
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create {}: {error}", path.display()))
+        })?;
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, value).map_err(|error| {
         AppError::Repository(format!("failed to serialize {}: {error}", path.display()))
@@ -1880,12 +1997,14 @@ fn write_json_file(path: &Path, value: &impl Serialize) -> AppResult<()> {
 }
 
 fn checksum_hex(path: impl AsRef<Path>) -> AppResult<String> {
-    let file = File::open(path.as_ref()).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open {} for checksum: {error}",
-            path.as_ref().display()
-        ))
-    })?;
+    let file = Disk::process()
+        .open_blocking(path.as_ref(), Open::read())
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open {} for checksum: {error}",
+                path.as_ref().display()
+            ))
+        })?;
     let mut file = crate::RestoreReader::new(file);
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -1938,26 +2057,153 @@ fn write_bundle_payload<W: Write>(_stage_dir: &Path, _writer: W) -> AppResult<W>
 }
 
 #[cfg(feature = "runtime-backups")]
-fn extract_bundle_to_tempdir(bundle_path: &Path, passphrase: Option<&str>) -> AppResult<TempDir> {
-    let tempdir = tempfile::tempdir().map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create restore staging directory: {error}"
-        ))
-    })?;
+fn extract_bundle_to_tempdir(
+    bundle_path: &Path,
+    passphrase: Option<&str>,
+) -> AppResult<ScratchDir> {
+    let tempdir = Disk::process()
+        .scratch_dir_blocking("scry-rs-")
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to create restore staging directory: {error}"
+            ))
+        })?;
 
     let payload_reader = open_bundle_payload_reader(bundle_path, passphrase)?;
     let decoder = zstd::Decoder::new(crate::RestoreReader::new(payload_reader))
         .map_err(|error| map_streaming_bundle_error(error, "backup payload is not valid zstd"))?;
-    let mut archive = tar::Archive::new(crate::RestoreReader::new(decoder));
-    archive.unpack(tempdir.path()).map_err(|error| {
-        map_streaming_bundle_error(error, "backup payload is not a valid tar archive")
+    let archive = tar::Archive::new(crate::RestoreReader::new(decoder));
+    let capacity = crate::disk::capacity::StorageCapacity::process();
+    unpack_bundle_entries(archive, tempdir.path(), |path| {
+        capacity.refresh_blocking(path)
     })?;
 
     Ok(tempdir)
 }
 
+/// Entries a backup payload may hold. A bundle carries the manifest, the
+/// instance secrets, the tables directory and one file per restorable table,
+/// a few hundred in all.
+#[cfg(feature = "runtime-backups")]
+const MAX_BUNDLE_ENTRIES: u64 = 4_000;
+
+/// Payload bytes written between two free-space checks of the scratch volume.
+#[cfg(feature = "runtime-backups")]
+const SCRATCH_SPACE_CHECK_EVERY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Free space a restore leaves on the scratch volume: 5% of it, at most 1 GiB.
+#[cfg(feature = "runtime-backups")]
+fn scratch_reserve_bytes(total_bytes: u64) -> u64 {
+    (total_bytes / 20).min(1024 * 1024 * 1024)
+}
+
+/// Unpacks a backup payload into `dst` the way `tar::Archive::unpack` does,
+/// directories last and every entry through `unpack_in` so nothing lands
+/// outside `dst`, while refusing a payload that has more entries than a
+/// bundle holds, holds anything but regular files and directories, or would
+/// leave the scratch volume short of its reserve. `scratch_space` reads the
+/// free space of the volume holding `dst`.
+#[cfg(feature = "runtime-backups")]
+// disk-guard: the payload is unpacked into the owner's scratch directory; the
+// owner has no archive extraction.
+#[allow(clippy::disallowed_methods)]
+fn unpack_bundle_entries<R: Read>(
+    mut archive: tar::Archive<R>,
+    dst: &Path,
+    mut scratch_space: impl FnMut(&Path) -> io::Result<crate::helpers::FilesystemSpace>,
+) -> AppResult<()> {
+    use crate::error_reasons::security as reasons;
+    let invalid = |error: io::Error| {
+        map_streaming_bundle_error(error, "backup payload is not a valid tar archive")
+    };
+    // As tar does: a canonical root keeps long Windows paths creatable.
+    let dst = dst.canonicalize().unwrap_or_else(|_| dst.to_path_buf());
+    let mut entries_seen: u64 = 0;
+    let mut written_since_check: Option<u64> = None;
+    let mut directories = Vec::new();
+    for entry in archive.entries().map_err(invalid)? {
+        let mut entry = entry.map_err(invalid)?;
+        entries_seen += 1;
+        if entries_seen > MAX_BUNDLE_ENTRIES {
+            return Err(AppError::validation_refused_with_facts(
+                reasons::BACKUP_BUNDLE_TOO_MANY_ENTRIES,
+                format!("backup payload has more than {MAX_BUNDLE_ENTRIES} entries"),
+                vec![crate::RefusalFact::new(
+                    "maxEntries",
+                    MAX_BUNDLE_ENTRIES.to_string(),
+                )],
+            ));
+        }
+        match entry.header().entry_type() {
+            tar::EntryType::Directory => {
+                directories.push(entry);
+                continue;
+            }
+            tar::EntryType::Regular => {}
+            _ => {
+                return Err(AppError::validation_refused(
+                    reasons::BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED,
+                    "backup payload holds an entry that is not a regular file or directory",
+                ));
+            }
+        }
+        let size = entry.size();
+        if written_since_check
+            .is_none_or(|written| written.saturating_add(size) >= SCRATCH_SPACE_CHECK_EVERY_BYTES)
+        {
+            ensure_scratch_room(&dst, size, &mut scratch_space)?;
+            written_since_check = Some(0);
+        }
+        entry.unpack_in(&dst).map_err(invalid)?;
+        written_since_check = written_since_check.map(|written| written.saturating_add(size));
+    }
+    directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
+    for mut directory in directories {
+        directory.unpack_in(&dst).map_err(invalid)?;
+    }
+    Ok(())
+}
+
+/// Refuses when writing `pending` more bytes would leave the scratch volume
+/// below its reserve. A free-space call that fails does not stop the restore:
+/// it goes ahead as it did before this check existed.
+#[cfg(feature = "runtime-backups")]
+fn ensure_scratch_room(
+    dst: &Path,
+    pending: u64,
+    scratch_space: &mut impl FnMut(&Path) -> io::Result<crate::helpers::FilesystemSpace>,
+) -> AppResult<()> {
+    let space = match scratch_space(dst) {
+        Ok(space) => space,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "restore scratch free-space check failed; unpacking without it"
+            );
+            return Ok(());
+        }
+    };
+    let reserve = scratch_reserve_bytes(space.total_bytes);
+    if space.available_bytes.saturating_sub(pending) < reserve {
+        return Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::security::BACKUP_BUNDLE_SCRATCH_SPACE_LOW,
+            format!(
+                "unpacking this backup would leave less than {reserve} bytes free for restore scratch space"
+            ),
+            vec![
+                crate::RefusalFact::new("reserveBytes", reserve.to_string()),
+                crate::RefusalFact::new("availableBytes", space.available_bytes.to_string()),
+            ],
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(not(feature = "runtime-backups"))]
-fn extract_bundle_to_tempdir(_bundle_path: &Path, _passphrase: Option<&str>) -> AppResult<TempDir> {
+fn extract_bundle_to_tempdir(
+    _bundle_path: &Path,
+    _passphrase: Option<&str>,
+) -> AppResult<ScratchDir> {
     Err(AppError::Repository(
         "backup bundle payload support is not compiled into this target".into(),
     ))
@@ -1968,12 +2214,14 @@ fn open_bundle_payload_reader(
     bundle_path: &Path,
     passphrase: Option<&str>,
 ) -> AppResult<Box<dyn Read>> {
-    let input = File::open(bundle_path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open bundle {}: {error}",
-            bundle_path.display()
-        ))
-    })?;
+    let input = Disk::process()
+        .open_blocking(bundle_path, Open::read())
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open bundle {}: {error}",
+                bundle_path.display()
+            ))
+        })?;
     let mut reader = BufReader::new(input);
     let mut prefix = [0_u8; ENCRYPTED_BUNDLE_MAGIC.len()];
     let read = reader.read(&mut prefix).map_err(|error| {
@@ -2173,12 +2421,14 @@ where
 
 fn load_manifest(root: &Path) -> AppResult<BackupBundleManifest> {
     let path = root.join(MANIFEST_FILENAME);
-    let file = File::open(&path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::security::BACKUP_MANIFEST_MISSING,
-            format!("backup manifest missing: {error}"),
-        )
-    })?;
+    let file = Disk::process()
+        .open_blocking(&path, Open::read())
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_MANIFEST_MISSING,
+                format!("backup manifest missing: {error}"),
+            )
+        })?;
     serde_json::from_reader(BufReader::new(file)).map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::security::BACKUP_MANIFEST_INVALID,
@@ -2189,12 +2439,14 @@ fn load_manifest(root: &Path) -> AppResult<BackupBundleManifest> {
 
 fn load_instance_secrets(root: &Path) -> AppResult<BackupInstanceSecrets> {
     let path = root.join(INSTANCE_SECRETS_FILENAME);
-    let file = File::open(&path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_MISSING,
-            format!("backup secrets payload missing: {error}"),
-        )
-    })?;
+    let file = Disk::process()
+        .open_blocking(&path, Open::read())
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_MISSING,
+                format!("backup secrets payload missing: {error}"),
+            )
+        })?;
     serde_json::from_reader(BufReader::new(file)).map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_INVALID,
@@ -2214,41 +2466,40 @@ fn expected_bundle_parts(manifest: &BackupBundleManifest) -> BTreeSet<String> {
 
 fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
     crate::check_restore_deadline()?;
-    std::fs::create_dir_all(target).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create prepared backup directory {}: {error}",
-            target.display()
-        ))
-    })?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(target, Parents::Create)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to create prepared backup directory {}: {error}",
+                target.display()
+            ))
+        })?;
 
-    for entry in std::fs::read_dir(source).map_err(|error| {
+    for entry in disk.list_blocking(source).map_err(|error| {
         AppError::Repository(format!(
             "failed to read prepared backup directory {}: {error}",
             source.display()
         ))
     })? {
-        let entry = entry.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect prepared backup directory {}: {error}",
-                source.display()
-            ))
-        })?;
-        let file_type = entry.file_type().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect prepared backup entry {}: {error}",
-                entry.path().display()
-            ))
-        })?;
+        let Some(kind) = entry.reading.kind() else {
+            return Err(AppError::Repository(format!(
+                "failed to inspect prepared backup entry {}",
+                entry.path.display()
+            )));
+        };
         crate::check_restore_deadline()?;
-        let destination = target.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_directory_contents(&entry.path(), &destination)?;
-        } else if file_type.is_file() {
+        let Some(name) = entry.path.file_name() else {
+            continue;
+        };
+        let destination = target.join(name);
+        if kind == EntryKind::Directory {
+            copy_directory_contents(&entry.path, &destination)?;
+        } else if kind == EntryKind::File {
             let copy = (|| -> std::io::Result<()> {
-                let source = File::open(entry.path())?;
+                let source = disk.open_blocking(&entry.path, Open::read())?;
                 let permissions = source.metadata()?.permissions();
                 let mut source = crate::RestoreReader::new(source);
-                let mut target = File::create(&destination)?;
+                let mut target = disk.open_blocking(&destination, Open::create())?;
                 std::io::copy(&mut source, &mut target)?;
                 target.set_permissions(permissions)
             })();
@@ -2261,7 +2512,7 @@ fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
         } else {
             return Err(AppError::validation_refused(crate::error_reasons::security::PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY, format!(
                 "prepared backup directory contains unsupported entry {}",
-                entry.path().display()
+                entry.path.display()
             )));
         }
     }
@@ -2280,7 +2531,8 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
         ));
     }
 
-    let canonical_root = root.canonicalize().map_err(|error| {
+    let disk = Disk::process();
+    let canonical_root = disk.canonicalize_blocking(root).map_err(|error| {
         AppError::Repository(format!(
             "failed to resolve extracted backup root {}: {error}",
             root.display()
@@ -2305,29 +2557,37 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
             ));
         }
 
-        let canonical_part = root.join(part_path).canonicalize().map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
-                format!("backup part path is invalid: {part}: {error}"),
-            )
-        })?;
+        let canonical_part =
+            disk.canonicalize_blocking(&root.join(part_path))
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                        format!("backup part path is invalid: {part}: {error}"),
+                    )
+                })?;
         if !canonical_part.starts_with(&canonical_root) {
             return Err(AppError::validation_refused(
                 crate::error_reasons::security::BACKUP_PART_PATH_ESCAPES_BUNDLE_ROOT,
                 format!("backup part path escapes the bundle root: {part}"),
             ));
         }
-        let metadata = std::fs::metadata(&canonical_part).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::security::BACKUP_PART_PATH_UNREADABLE,
-                format!("backup part path is unreadable: {part}: {error}"),
-            )
-        })?;
-        if !metadata.is_file() {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
-                format!("backup part path must be a regular file: {part}"),
-            ));
+        match disk.follow_blocking(&canonical_part) {
+            PathReading::Known {
+                kind: EntryKind::File,
+                ..
+            } => {}
+            PathReading::Known { .. } => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                    format!("backup part path must be a regular file: {part}"),
+                ));
+            }
+            _ => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_PART_PATH_UNREADABLE,
+                    format!("backup part path is unreadable: {part}"),
+                ));
+            }
         }
 
         let actual_checksum = checksum_hex(&canonical_part)?;
@@ -2363,25 +2623,6 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
             ),
         ));
     }
-
-    Ok(())
-}
-
-fn ensure_owner_only_permissions(path: &Path) -> AppResult<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let permissions = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, permissions).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to set permissions on {}: {error}",
-                path.display()
-            ))
-        })?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
 
     Ok(())
 }
@@ -2620,6 +2861,8 @@ mod tests {
             "title_metadata_rating_sources",
             "title_metadata_external_ratings",
             "title_credits",
+            "title_content_ratings",
+            "title_awards",
         ] {
             let classification = BACKUP_TABLE_CATALOG
                 .iter()
@@ -2644,13 +2887,36 @@ mod tests {
     fn env_file_writer_escapes_multiline_values() {
         let secrets = BackupInstanceSecrets {
             encryption_master_key: "enc".into(),
-            jwt_signing_secret: "jwt".into(),
+            jwt_signing_secret: Some("jwt".into()),
             smg_registration_secret: Some("reg".into()),
             smg_gateway_url: Some("https://smg.example/graphql".into()),
         };
 
         let env_file = secrets.to_env_file();
         assert!(env_file.contains("SCRYER_ENCRYPTION_KEY=\"enc\""));
+        assert!(env_file.contains("SCRYER_JWT_SIGNING_SECRET=\"jwt\""));
+    }
+
+    #[test]
+    fn env_file_leaves_out_an_absent_signing_secret() {
+        let secrets = BackupInstanceSecrets {
+            encryption_master_key: "enc".into(),
+            jwt_signing_secret: None,
+            smg_registration_secret: Some("reg".into()),
+            smg_gateway_url: None,
+        };
+
+        let env_file = secrets.to_env_file();
+        assert!(!env_file.contains("SCRYER_JWT_SIGNING_SECRET"));
+        assert!(env_file.contains("SCRYER_SMG_REGISTRATION_SECRET=\"reg\""));
+
+        let encoded = serde_json::to_string(&secrets).expect("encode secrets");
+        assert!(!encoded.contains("jwt_signing_secret"));
+        let older: BackupInstanceSecrets = serde_json::from_str(
+            r#"{"encryption_master_key":"enc","jwt_signing_secret":"jwt","smg_registration_secret":null,"smg_gateway_url":null}"#,
+        )
+        .expect("decode older secrets");
+        assert_eq!(older.jwt_signing_secret.as_deref(), Some("jwt"));
     }
 
     #[test]
@@ -2767,6 +3033,271 @@ mod tests {
 
         assert!(
             matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("tables/titles.ndjson"))
+        );
+    }
+
+    /// Finishing on the blocking pool writes a bundle that restores exactly as
+    /// the inline finish does.
+    #[cfg(feature = "runtime-backups")]
+    #[tokio::test]
+    async fn finishing_off_the_runtime_writes_the_same_restorable_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inline_path = temp.path().join("inline.scryer-backup.enc");
+        let blocking_path = temp.path().join("blocking.scryer-backup.enc");
+        test_bundle_staging(4096)
+            .expect("staging")
+            .finish(test_export_request(&inline_path, "backup-passphrase"))
+            .expect("inline finish");
+        test_bundle_staging(4096)
+            .expect("staging")
+            .finish_off_runtime(test_export_request(&blocking_path, "backup-passphrase"))
+            .await
+            .expect("blocking finish");
+
+        let inline = prepare_backup_restore_payload(&inline_path, Some("backup-passphrase"))
+            .expect("inline bundle restores");
+        let blocking = prepare_backup_restore_payload(&blocking_path, Some("backup-passphrase"))
+            .expect("blocking bundle restores");
+        assert_eq!(blocking.manifest().row_counts, inline.manifest().row_counts);
+        assert_eq!(
+            blocking.manifest().part_checksums,
+            inline.manifest().part_checksums
+        );
+    }
+
+    /// A finish whose caller has stopped waiting never commits the bundle.
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn an_abandoned_finish_does_not_commit_the_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bundle_path = temp.path().join("abandoned.scryer-backup.enc");
+        let gate = FinishGate::default();
+        *gate.abandoned.lock().unwrap() = true;
+
+        test_bundle_staging(64)
+            .expect("staging")
+            .finish_unless_abandoned(
+                test_export_request(&bundle_path, "backup-passphrase"),
+                &gate,
+            )
+            .expect_err("an abandoned finish must fail");
+
+        assert!(!bundle_path.exists());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn payload_tar(
+        build: impl FnOnce(&mut tar::Builder<Vec<u8>>),
+    ) -> tar::Archive<Cursor<Vec<u8>>> {
+        let mut builder = tar::Builder::new(Vec::new());
+        build(&mut builder);
+        tar::Archive::new(Cursor::new(builder.into_inner().expect("finish tar")))
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn append_entry(
+        builder: &mut tar::Builder<Vec<u8>>,
+        kind: tar::EntryType,
+        path: &str,
+        len: u64,
+    ) {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_size(len);
+        header.set_mode(if kind == tar::EntryType::Directory {
+            0o755
+        } else {
+            0o644
+        });
+        if matches!(kind, tar::EntryType::Symlink | tar::EntryType::Link) {
+            header.set_link_name("manifest.json").expect("link name");
+        }
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, io::repeat(b'x').take(len))
+            .expect("append entry");
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn fresh_dir(temp: &tempfile::TempDir, name: &str) -> PathBuf {
+        let dir = temp.path().join(name);
+        std::fs::create_dir(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn roomy_scratch(_: &Path) -> io::Result<crate::helpers::FilesystemSpace> {
+        Ok(crate::helpers::FilesystemSpace {
+            total_bytes: 1 << 40,
+            available_bytes: 1 << 39,
+        })
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_unpacks_its_files_and_directories() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archive = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 12);
+            append_entry(builder, tar::EntryType::Directory, TABLES_DIRNAME, 0);
+            append_entry(builder, tar::EntryType::Regular, "tables/titles.ndjson", 7);
+        });
+
+        unpack_bundle_entries(archive, temp.path(), roomy_scratch).expect("unpack payload");
+
+        assert_eq!(
+            std::fs::read(temp.path().join(MANIFEST_FILENAME)).expect("manifest"),
+            vec![b'x'; 12]
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("tables/titles.ndjson")).expect("table"),
+            vec![b'x'; 7]
+        );
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_past_the_entry_limit_is_refused() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let at_limit = payload_tar(|builder| {
+            for index in 0..MAX_BUNDLE_ENTRIES {
+                append_entry(builder, tar::EntryType::Directory, &format!("d{index}"), 0);
+            }
+        });
+        unpack_bundle_entries(at_limit, &fresh_dir(&temp, "at-limit"), roomy_scratch)
+            .expect("a payload at the limit unpacks");
+
+        let past_limit = payload_tar(|builder| {
+            for index in 0..=MAX_BUNDLE_ENTRIES {
+                append_entry(builder, tar::EntryType::Directory, &format!("d{index}"), 0);
+            }
+        });
+        let error = unpack_bundle_entries(past_limit, &fresh_dir(&temp, "past"), roomy_scratch)
+            .expect_err("a payload past the limit is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::BACKUP_BUNDLE_TOO_MANY_ENTRIES)
+        );
+        assert_eq!(
+            error.refusal_facts(),
+            &[crate::RefusalFact::new("maxEntries", "4000")]
+        );
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_with_links_is_refused() {
+        for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let archive = payload_tar(|builder| {
+                append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 4);
+                append_entry(builder, kind, "linked.json", 0);
+            });
+            let error = unpack_bundle_entries(archive, temp.path(), roomy_scratch)
+                .expect_err("a link entry is refused");
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::security::BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED),
+                "{kind:?}"
+            );
+            assert!(temp.path().join("linked.json").symlink_metadata().is_err());
+        }
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_entry_outside_the_scratch_directory_is_not_written() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dst = temp.path().join("scratch");
+        std::fs::create_dir(&dst).expect("scratch dir");
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_old();
+        let name = b"../escaped.json";
+        header.as_old_mut().name[..name.len()].copy_from_slice(name);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(3);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append(&header, &b"abc"[..])
+            .expect("append raw entry");
+        let archive = tar::Archive::new(Cursor::new(builder.into_inner().expect("finish tar")));
+
+        unpack_bundle_entries(archive, &dst, roomy_scratch).expect("unpack skips the entry");
+
+        assert!(temp.path().join("escaped.json").symlink_metadata().is_err());
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_stops_before_the_scratch_reserve_and_checks_every_16_mib() {
+        let gib = 1024 * 1024 * 1024_u64;
+        let tight = |_: &Path| {
+            Ok(crate::helpers::FilesystemSpace {
+                total_bytes: 100 * gib,
+                available_bytes: gib + 100,
+            })
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fits = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 50);
+        });
+        unpack_bundle_entries(fits, &fresh_dir(&temp, "fits"), tight)
+            .expect("an entry that keeps the reserve unpacks");
+
+        let too_big = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 200);
+        });
+        let error = unpack_bundle_entries(too_big, &fresh_dir(&temp, "too-big"), tight)
+            .expect_err("an entry that eats into the reserve is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::BACKUP_BUNDLE_SCRATCH_SPACE_LOW)
+        );
+        assert!(
+            error
+                .refusal_facts()
+                .contains(&crate::RefusalFact::new("reserveBytes", gib.to_string()))
+        );
+        assert!(
+            temp.path()
+                .join("too-big")
+                .join(MANIFEST_FILENAME)
+                .symlink_metadata()
+                .is_err()
+        );
+
+        let mut checks = 0;
+        let twenty_mib = payload_tar(|builder| {
+            for index in 0..20 {
+                append_entry(
+                    builder,
+                    tar::EntryType::Regular,
+                    &format!("part{index}"),
+                    1 << 20,
+                );
+            }
+        });
+        unpack_bundle_entries(twenty_mib, &fresh_dir(&temp, "cadence"), |path| {
+            checks += 1;
+            roomy_scratch(path)
+        })
+        .expect("unpack twenty mebibytes");
+        assert_eq!(checks, 2);
+
+        let failing = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 5);
+        });
+        unpack_bundle_entries(failing, &fresh_dir(&temp, "unprobed"), |_| {
+            Err(io::Error::other("synthetic capacity failure"))
+        })
+        .expect("a failed free-space call does not stop the restore");
+        assert!(
+            temp.path()
+                .join("unprobed")
+                .join(MANIFEST_FILENAME)
+                .is_file()
         );
     }
 
@@ -2986,11 +3517,14 @@ mod tests {
         std::fs::write(&output_path, b"known-good").expect("seed output");
 
         let mut writer = AtomicOutputWriter::new(&output_path).expect("create atomic writer");
+        let staged_path = writer.writer.get_ref().path().to_path_buf();
+        let staged = staged_path.file_name().unwrap().to_string_lossy();
+        assert!(staged.starts_with('.'), "{staged}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let mode = std::fs::metadata(writer.temp_file.path())
+            let mode = std::fs::metadata(&staged_path)
                 .expect("temp metadata")
                 .permissions()
                 .mode()
@@ -3008,6 +3542,7 @@ mod tests {
             std::fs::read(&output_path).expect("read preserved output"),
             b"known-good"
         );
+        assert!(!staged_path.exists(), "unfinished output is removed");
     }
 
     #[test]
@@ -3229,7 +3764,7 @@ mod tests {
     fn test_export_secrets() -> BackupExportSecrets {
         BackupExportSecrets {
             encryption_master_key: "master-key".to_string(),
-            jwt_signing_secret: "jwt-secret".to_string(),
+            jwt_signing_secret: Some("jwt-secret".to_string()),
             smg_registration_secret: Some("smg-secret".to_string()),
             smg_gateway_url: None,
         }
@@ -3237,7 +3772,7 @@ mod tests {
 
     #[cfg(feature = "runtime-backups")]
     fn write_test_payload(path: &Path, payload_size: usize) -> AppResult<()> {
-        let file = File::create(path).map_err(|error| {
+        let file = std::fs::File::create(path).map_err(|error| {
             AppError::Repository(format!("failed to create test payload: {error}"))
         })?;
         let mut writer = BufWriter::new(file);
