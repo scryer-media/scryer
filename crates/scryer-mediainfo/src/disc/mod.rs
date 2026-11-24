@@ -1,4 +1,4 @@
-//! Native inspection of intact mastered optical-disc images.
+//! Inspection of intact mastered optical-disc images.
 
 mod clip_info;
 mod cpi;

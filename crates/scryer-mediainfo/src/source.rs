@@ -241,6 +241,28 @@ impl<R: MediaSource> MediaSource for BoundedSource<R> {
     }
 }
 
+/// Byte budget for bounded payload probing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeBudget {
+    remaining: u64,
+}
+
+impl ProbeBudget {
+    pub(crate) fn new(limit: u64) -> Self {
+        Self { remaining: limit }
+    }
+
+    pub(crate) fn exhausted(&self) -> bool {
+        self.remaining == 0
+    }
+
+    pub(crate) fn consume(&mut self, amount: usize) -> usize {
+        let taken = amount.min(self.remaining as usize);
+        self.remaining -= taken as u64;
+        taken
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +348,13 @@ mod tests {
         std::fs::write(&replacement, b"replaced").unwrap();
         std::fs::rename(&replacement, &path).unwrap();
         assert!(!source.unchanged(&path).unwrap());
+    }
+
+    #[test]
+    fn probe_budget_clamps_consumption() {
+        let mut budget = ProbeBudget::new(5);
+        assert_eq!(budget.consume(3), 3);
+        assert_eq!(budget.consume(8), 2);
+        assert!(budget.exhausted());
     }
 }

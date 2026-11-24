@@ -489,11 +489,11 @@ fn inspect_program_packets(
             );
             continue;
         }
-        let Some(crate::ps::PesPayload {
+        let Some(crate::container::ps::PesPayload {
             mut payload,
             timestamp,
             timestamps_valid,
-        }) = crate::ps::pes_payload(body)
+        }) = crate::container::ps::pes_payload(body)
         else {
             program_warning(
                 result,
