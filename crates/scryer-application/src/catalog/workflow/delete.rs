@@ -1816,7 +1816,7 @@ impl AppUseCase {
                 {
                     Ok(remaining) if remaining.is_empty() => {
                         if let Err(error) = self
-                            .set_title_monitored(&actor, &title.id, false)
+                            .set_title_monitored(actor, &title.id, false)
                             .await
                         {
                             tracing::warn!(
@@ -2048,35 +2048,6 @@ impl AppUseCase {
         let mut deleted_episode_ids = std::collections::BTreeSet::new();
         let mut failed_episode_ids = std::collections::BTreeSet::new();
         let mut promotions = PrimaryPromotionBatch::default();
-        let all_episode_ids = items
-            .iter()
-            .flat_map(|item| item.episode_ids.iter().cloned())
-            .collect::<std::collections::BTreeSet<_>>();
-        let downloaded_deleted_episode_ids = match self
-            .services
-            .library
-            .media_files
-            .list_live_media_files_for_episode_ids(
-                &title_id,
-                &all_episode_ids.iter().cloned().collect::<Vec<_>>(),
-            )
-            .await
-        {
-            Ok(scoped) => scoped
-                .iter()
-                .filter(|scoped| scoped.media_file.has_acquisition_provenance())
-                .flat_map(|scoped| scoped.episode_ids.iter().cloned())
-                .collect::<std::collections::BTreeSet<_>>(),
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    title_id = %title_id,
-                    "failed to verify episode-file acquisition provenance; left episodes monitored"
-                );
-                std::collections::BTreeSet::new()
-            }
-        };
-
         for item in &items {
             let _ = self
                 .update_episode_file_deletion_progress(
@@ -2141,51 +2112,12 @@ impl AppUseCase {
             .difference(&failed_episode_ids)
             .cloned()
             .collect::<std::collections::BTreeSet<_>>();
-        let (unmonitored_episode_ids, unmonitored_collection_ids) =
-            if delete_from_disk
-                && self
-                    .unmonitor_deleted_episodes_enabled()
-                    .await
-                    .unwrap_or(false)
-            {
-                let candidate_ids = fully_deleted_episode_ids
-                    .intersection(&downloaded_deleted_episode_ids)
-                    .cloned()
-                    .collect::<std::collections::BTreeSet<_>>();
-                match self
-                    .services
-                    .library
-                    .media_files
-                    .list_live_media_files_for_episode_ids(
-                        &title_id,
-                        &candidate_ids.iter().cloned().collect::<Vec<_>>(),
-                    )
-                    .await
-                {
-                    Ok(remaining) => {
-                        let covered = remaining
-                            .iter()
-                            .flat_map(|scoped| scoped.episode_ids.iter().cloned())
-                            .collect::<std::collections::BTreeSet<_>>();
-                        let fully_lost = candidate_ids
-                            .difference(&covered)
-                            .cloned()
-                            .collect::<std::collections::BTreeSet<_>>();
-                        self.unmonitor_deleted_episodes(&actor, &title_id, &fully_lost)
-                            .await
-                    }
-                    Err(error) => {
-                        warn!(
-                            error = %error,
-                            title_id = %title_id,
-                            "failed to verify remaining episode coverage; left episodes monitored"
-                        );
-                        (Vec::new(), Vec::new())
-                    }
-                }
-            } else {
-                (Vec::new(), Vec::new())
-            };
+        let (unmonitored_episode_ids, unmonitored_collection_ids) = if delete_from_disk {
+            self.unmonitor_deleted_episodes(&actor, &title_id, &fully_deleted_episode_ids)
+                .await
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         info!(
             title_id = %title_id,
