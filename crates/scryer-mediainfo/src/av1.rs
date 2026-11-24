@@ -1,6 +1,6 @@
 //! AV1 sequence and metadata OBUs. Picture tiles are skipped without decoding.
 use crate::types::RawTrack;
-use scryer_media_types::{
+use scryer_media_model::{
     ColorMetadata, ContentLight, MasteringDisplay, ProbeReport, ProbeStatus, ProbeWarning,
     Provenance, Rational, StreamMetadata,
 };

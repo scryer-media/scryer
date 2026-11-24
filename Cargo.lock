@@ -6280,10 +6280,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "scryer-media-types"
+name = "scryer-media-model"
 version = "0.23.1"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "scryer-media-types"
+version = "0.23.1"
+dependencies = [
+ "scryer-media-model",
 ]
 
 [[package]]
@@ -6295,6 +6302,7 @@ dependencies = [
  "mp4parse",
  "ogg",
  "riff",
+ "scryer-media-model",
  "scryer-media-types",
  "scuffle-h264",
  "scuffle-h265",

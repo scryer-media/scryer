@@ -74,7 +74,7 @@ struct StreamState {
     track: Option<RawTrack>,
     bit_rate_bps: Option<i64>,
     frame_rate_fps: Option<f64>,
-    declared_frame_rate: Option<scryer_media_types::Rational>,
+    declared_frame_rate: Option<scryer_media_model::Rational>,
     language_index: Option<usize>,
     aspect_x: Option<u32>,
     aspect_y: Option<u32>,
@@ -84,7 +84,7 @@ struct StreamState {
 #[derive(Debug, Clone, Copy)]
 struct AsfFrameTiming {
     summary_fps: f64,
-    observed_rate: scryer_media_types::Rational,
+    observed_rate: scryer_media_model::Rational,
     variable: bool,
 }
 
@@ -147,11 +147,11 @@ pub(crate) fn parse_asf_source(
 
     let languages = state.languages;
     let original_languages = state.original_languages;
-    let mut details = scryer_media_types::AnalysisDetails::default();
+    let mut details = scryer_media_model::AnalysisDetails::default();
     if state.header_nesting_exhausted {
-        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.budget_exhausted = true;
-        details.report.warnings.push(scryer_media_types::ProbeWarning {
+        details.report.warnings.push(scryer_media_model::ProbeWarning {
             code: "asf_header_nesting_limit".into(),
             message: "Header extension nesting exceeded the inspection limit; nested metadata was not inspected".into(),
             ..Default::default()
@@ -166,7 +166,7 @@ pub(crate) fn parse_asf_source(
             track.metadata.id = Some(stream_number.to_string());
             track.bit_rate_bps = stream.bit_rate_bps.or(track.bit_rate_bps);
             if stream.bit_rate_bps.is_some() {
-                track.metadata.bitrate_provenance = scryer_media_types::Provenance::Container;
+                track.metadata.bitrate_provenance = scryer_media_model::Provenance::Container;
             }
             track.frame_rate_fps = stream.frame_rate_fps.or(track.frame_rate_fps).or_else(|| {
                 probed_frame_rates
@@ -180,7 +180,7 @@ pub(crate) fn parse_asf_source(
                     .zip(stream.aspect_y)
                     .filter(|(x, y)| !stream.aspect_conflict && *x > 0 && *y > 0)
                     .and_then(|(x, y)| {
-                        scryer_media_types::Rational::new(i64::from(x), u64::from(y))
+                        scryer_media_model::Rational::new(i64::from(x), u64::from(y))
                     });
                 if let Some(aspect) = aspect {
                     track.metadata.sample_aspect_ratio = Some(aspect);
@@ -189,7 +189,7 @@ pub(crate) fn parse_asf_source(
                         .zip(track.height)
                         .filter(|(width, height)| *width > 0 && *height > 0)
                         .and_then(|(width, height)| {
-                            scryer_media_types::Rational::new(
+                            scryer_media_model::Rational::new(
                                 aspect.numerator * i64::from(width),
                                 aspect.denominator * height as u64,
                             )
@@ -198,11 +198,11 @@ pub(crate) fn parse_asf_source(
                     || stream.aspect_x.is_some()
                     || stream.aspect_y.is_some()
                 {
-                    details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                    details.report.status = scryer_media_model::ProbeStatus::Incomplete;
                     details
                         .report
                         .warnings
-                        .push(scryer_media_types::ProbeWarning {
+                        .push(scryer_media_model::ProbeWarning {
                         code: "asf_aspect_incomplete".into(),
                         message:
                             "Stream pixel aspect attributes are incomplete, invalid, or conflicting"
@@ -227,7 +227,7 @@ pub(crate) fn parse_asf_source(
                 .filter(|language| !language.is_empty())
                 .cloned();
             if track.metadata.original_language.is_some() {
-                track.metadata.language_provenance = scryer_media_types::Provenance::Container;
+                track.metadata.language_provenance = scryer_media_model::Provenance::Container;
             }
             tracks.push(track);
         }
@@ -242,7 +242,7 @@ pub(crate) fn parse_asf_source(
             .markers
             .iter()
             .enumerate()
-            .map(|(index, (time, title))| scryer_media_types::Chapter {
+            .map(|(index, (time, title))| scryer_media_model::Chapter {
                 id: index.to_string(),
                 title: title.clone(),
                 start_seconds: *time as f64 / 10_000_000.0 - preroll_ms as f64 / 1000.0,
@@ -253,10 +253,10 @@ pub(crate) fn parse_asf_source(
     if state.marker_inventory_incomplete
         || (!state.markers.is_empty() && state.preroll_ms.is_none())
     {
-        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.budget_exhausted |=
             state.chapters.unwrap_or_default() as usize > state.markers.len();
-        details.report.warnings.push(scryer_media_types::ProbeWarning {
+        details.report.warnings.push(scryer_media_model::ProbeWarning {
             code: "asf_chapters_incomplete".into(),
             message: "Marker inventory reached its limit, contains undecodable text, or lacks presentation timing metadata".into(),
             ..Default::default()
@@ -529,7 +529,7 @@ fn parse_extended_stream_properties(
     if average_frame_time != 0 {
         stream.frame_rate_fps = Some(10_000_000.0 / average_frame_time as f64);
         stream.declared_frame_rate =
-            scryer_media_types::Rational::new(10_000_000, average_frame_time);
+            scryer_media_model::Rational::new(10_000_000, average_frame_time);
     }
     stream.language_index = Some(language_index);
 
@@ -848,7 +848,7 @@ fn derive_frame_rate(timestamps: &[u32]) -> Option<AsfFrameTiming> {
     }
     Some(AsfFrameTiming {
         summary_fps: frame_rate,
-        observed_rate: scryer_media_types::Rational::new(
+        observed_rate: scryer_media_model::Rational::new(
             i64::try_from(timestamps.len() - 1)
                 .ok()?
                 .checked_mul(1_000)?,
@@ -1059,7 +1059,7 @@ mod tests {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
             .unwrap();
         assert_eq!(audio.codec.as_deref(), Some("mp3"));
         assert_eq!(audio.channels, Some(1));
@@ -1078,7 +1078,7 @@ mod tests {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
             .unwrap();
         assert_eq!(audio.codec.as_deref(), Some("aac"));
         assert_eq!(audio.channels, Some(6));
@@ -1098,17 +1098,17 @@ mod tests {
                 .details
                 .streams
                 .iter()
-                .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+                .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
                 .unwrap();
             assert_eq!(video.metadata.bit_depth, Some(8), "{fixture}");
             assert_eq!(
                 video.metadata.sample_aspect_ratio,
-                scryer_media_types::Rational::new(1, 1),
+                scryer_media_model::Rational::new(1, 1),
                 "{fixture}"
             );
             assert_eq!(
                 video.metadata.display_aspect_ratio,
-                scryer_media_types::Rational::new(20, 11),
+                scryer_media_model::Rational::new(20, 11),
                 "{fixture}"
             );
             assert_eq!(
@@ -1361,18 +1361,18 @@ mod tests {
             if x == Some(4) {
                 assert_eq!(
                     video.metadata.sample_aspect_ratio,
-                    scryer_media_types::Rational::new(4, 3)
+                    scryer_media_model::Rational::new(4, 3)
                 );
                 assert_eq!(
                     video.metadata.display_aspect_ratio,
-                    scryer_media_types::Rational::new(80, 33)
+                    scryer_media_model::Rational::new(80, 33)
                 );
             } else {
                 assert!(video.metadata.sample_aspect_ratio.is_none());
                 assert!(video.metadata.display_aspect_ratio.is_none());
             }
             assert_eq!(
-                parsed.details.report.status == scryer_media_types::ProbeStatus::Incomplete,
+                parsed.details.report.status == scryer_media_model::ProbeStatus::Incomplete,
                 incomplete
             );
         }
@@ -1453,7 +1453,7 @@ mod tests {
         assert_eq!(timing.summary_fps, 25.0);
         assert_eq!(
             timing.observed_rate,
-            scryer_media_types::Rational::new(25, 1).unwrap()
+            scryer_media_model::Rational::new(25, 1).unwrap()
         );
         assert!(!timing.variable);
         assert!(derive_frame_rate(&[0, 40, 100]).unwrap().variable);
@@ -1538,7 +1538,7 @@ mod tests {
             if exhausted {
                 assert_eq!(
                     result.details.report.status,
-                    scryer_media_types::ProbeStatus::Incomplete
+                    scryer_media_model::ProbeStatus::Incomplete
                 );
             }
         }
@@ -1597,7 +1597,7 @@ mod tests {
         assert_eq!(stream.frame_rate_fps, Some(25.0));
         assert_eq!(
             stream.declared_frame_rate,
-            scryer_media_types::Rational::new(25, 1)
+            scryer_media_model::Rational::new(25, 1)
         );
         assert_eq!(stream.language_index, Some(1));
     }

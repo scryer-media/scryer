@@ -1,4 +1,4 @@
-use scryer_media_types::{Chapter, DiscSegment, DiscTitle, ProbeReport, ProbeStatus, ProbeWarning};
+use scryer_media_model::{Chapter, DiscSegment, DiscTitle, ProbeReport, ProbeStatus, ProbeWarning};
 
 use super::image::ImageError;
 
@@ -495,8 +495,8 @@ fn dvd_terminal_post_command(command: &[u8]) -> bool {
     }
 }
 
-fn dvd_streams(data: &[u8], pgc: &[u8]) -> Result<Vec<scryer_media_types::StreamDetail>> {
-    use scryer_media_types::{Provenance, Rational, StreamDetail, StreamKind};
+fn dvd_streams(data: &[u8], pgc: &[u8]) -> Result<Vec<scryer_media_model::StreamDetail>> {
+    use scryer_media_model::{Provenance, Rational, StreamDetail, StreamKind};
     let attributes = data
         .get(0x200..0x318)
         .ok_or(ImageError::Malformed("short DVD stream attributes"))?;

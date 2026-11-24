@@ -1,6 +1,6 @@
 //! Bounded SEI and MPEG user-data inventory; no picture or caption decoding.
 use crate::types::RawTrack;
-use scryer_media_types::{
+use scryer_media_model::{
     CaptionService, ContentLight, MasteringDisplay, ProbeReport, ProbeStatus, ProbeWarning,
 };
 

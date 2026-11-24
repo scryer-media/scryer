@@ -1,6 +1,6 @@
 //! Structured AVC/HEVC signaling from the existing native SPS parsers.
 use crate::types::RawTrack;
-use scryer_media_types::{
+use scryer_media_model::{
     ColorMetadata, ProbeReport, ProbeWarning, Provenance, Rational, StreamMetadata,
 };
 use std::io::Cursor;
@@ -180,7 +180,7 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8], report: &mut ProbeReport
         return;
     }
     if data.len() > 1024 * 1024 {
-        report.status = scryer_media_types::ProbeStatus::Incomplete;
+        report.status = scryer_media_model::ProbeStatus::Incomplete;
         report.budget_exhausted = true;
         report.warnings.push(ProbeWarning {
             code: "sps_enrichment_limit".into(),

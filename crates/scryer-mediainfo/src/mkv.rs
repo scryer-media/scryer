@@ -280,7 +280,7 @@ pub(crate) fn parse_mkv_source(
         }
     }
     apply_unique_audio_prefix_channel_fallback(&mut scanner, &mut tracks);
-    let mut sample_report = scryer_media_types::ProbeReport::default();
+    let mut sample_report = scryer_media_model::ProbeReport::default();
     let mut caption_services = Vec::new();
     if !profile.skips_deep_probes()
         && tracks.iter().any(|track| {
@@ -324,11 +324,11 @@ pub(crate) fn parse_mkv_source(
             return Err(error);
         }
         if budget_stopped_enrichment {
-            sample_report.status = scryer_media_types::ProbeStatus::Incomplete;
+            sample_report.status = scryer_media_model::ProbeStatus::Incomplete;
             sample_report.budget_exhausted = true;
             sample_report
                 .warnings
-                .push(scryer_media_types::ProbeWarning {
+                .push(scryer_media_model::ProbeWarning {
                     code: "mkv_video_enrichment_budget".into(),
                     message:
                         "Video enrichment stopped when the media byte or I/O-operation budget was exhausted"
@@ -336,11 +336,11 @@ pub(crate) fn parse_mkv_source(
                     ..Default::default()
                 });
         } else if samples_left == 0 || end < scanner.file_len {
-            sample_report.status = scryer_media_types::ProbeStatus::Incomplete;
+            sample_report.status = scryer_media_model::ProbeStatus::Incomplete;
             sample_report.budget_exhausted = true;
             sample_report
                 .warnings
-                .push(scryer_media_types::ProbeWarning {
+                .push(scryer_media_model::ProbeWarning {
                     code: "video_enrichment_sample_limit".into(),
                     message: "Video enrichment sampled at most 16 blocks within an 8 MiB prefix"
                         .into(),
@@ -360,7 +360,7 @@ pub(crate) fn parse_mkv_source(
     } else {
         Default::default()
     };
-    if sample_report.status == scryer_media_types::ProbeStatus::Incomplete {
+    if sample_report.status == scryer_media_model::ProbeStatus::Incomplete {
         details.report.status = sample_report.status;
     }
     details.report.budget_exhausted |= sample_report.budget_exhausted;
@@ -368,9 +368,9 @@ pub(crate) fn parse_mkv_source(
     if frame_rate_probe.is_some()
         || (!profile.skips_deep_probes() && primary_video_signals.nondefault_timestamp_scale)
     {
-        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.budget_exhausted |= deep_probe.frame_timing_budget_exhausted;
-        details.report.warnings.push(scryer_media_types::ProbeWarning {
+        details.report.warnings.push(scryer_media_model::ProbeWarning {
             code: "mkv_frame_timing_sampled".into(),
             message: "Frame timing observes at most 12 timestamps or 24 blocks within a 32 MiB prefix; laced, nondefault track-scale, or inconclusive samples remain unknown".into(),
             stream_id: primary_video_track_num.map(|number| number.to_string()),
@@ -778,8 +778,8 @@ fn parse_mkv_track_entry(payload: &[u8]) -> Option<ParsedMkvTrack> {
     })
 }
 
-fn mkv_stream_metadata(payload: &[u8], track_number: u64) -> scryer_media_types::StreamMetadata {
-    use scryer_media_types::{
+fn mkv_stream_metadata(payload: &[u8], track_number: u64) -> scryer_media_model::StreamMetadata {
+    use scryer_media_model::{
         ContentLight, MasteringDisplay, Provenance, Rational, StreamMetadata,
     };
     fn children(mut bytes: &[u8], mut visit: impl FnMut(u32, &[u8])) {
@@ -1675,8 +1675,8 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         depth: usize,
         tracks: &mut [RawTrack],
         samples_left: &mut usize,
-        report: &mut scryer_media_types::ProbeReport,
-        captions: &mut Vec<scryer_media_types::CaptionService>,
+        report: &mut scryer_media_model::ProbeReport,
+        captions: &mut Vec<scryer_media_model::CaptionService>,
     ) -> Result<(), MediaInfoError> {
         if depth > 10 || *samples_left == 0 {
             return Ok(());
@@ -2616,7 +2616,7 @@ fn audio_header_probe_bytes(codec_name: &str) -> usize {
 
 #[derive(Debug, Clone, Copy)]
 struct MkvFrameTiming {
-    rate: scryer_media_types::Rational,
+    rate: scryer_media_model::Rational,
     variable: bool,
 }
 
@@ -2640,7 +2640,7 @@ fn observe_frame_timing(timestamps: &[u64], timestamp_scale_ns: f64) -> Option<M
     let numerator = i64::try_from(deltas.len())
         .ok()?
         .checked_mul(1_000_000_000)?;
-    let rate = scryer_media_types::Rational::new(numerator, span)?;
+    let rate = scryer_media_model::Rational::new(numerator, span)?;
     if !is_plausible_frame_rate(Some(rate.numerator as f64 / rate.denominator as f64)) {
         return None;
     }
@@ -3410,19 +3410,19 @@ mod tests {
         let timing = observe_frame_timing(&[0, 120, 40, 80, 160], 1_000_000.0).unwrap();
         assert_eq!(
             timing.rate,
-            scryer_media_types::Rational::new(25, 1).unwrap()
+            scryer_media_model::Rational::new(25, 1).unwrap()
         );
         assert!(!timing.variable);
         let rounded = observe_frame_timing(&[0, 33, 67, 100], 1_000_000.0).unwrap();
         assert_eq!(
             rounded.rate,
-            scryer_media_types::Rational::new(30, 1).unwrap()
+            scryer_media_model::Rational::new(30, 1).unwrap()
         );
         assert!(!rounded.variable);
         let variable = observe_frame_timing(&[0, 40, 80, 160], 1_000_000.0).unwrap();
         assert_eq!(
             variable.rate,
-            scryer_media_types::Rational::new(75, 4).unwrap()
+            scryer_media_model::Rational::new(75, 4).unwrap()
         );
         assert!(variable.variable);
         assert!(observe_frame_timing(&[0, 120, 40, 80, 240], 1_000_000.0).is_none());
@@ -3649,7 +3649,7 @@ mod tests {
                 assert_eq!(video.frame_rate_fps, Some(25.0));
                 assert_eq!(
                     video.metadata.declared_frame_rate,
-                    scryer_media_types::Rational::new(25, 1)
+                    scryer_media_model::Rational::new(25, 1)
                 );
                 if track_scale == Some(2.0) {
                     assert!(video.metadata.observed_frame_rate.is_none());
@@ -3657,7 +3657,7 @@ mod tests {
                 } else {
                     assert_eq!(
                         video.metadata.observed_frame_rate,
-                        scryer_media_types::Rational::new(75, 4)
+                        scryer_media_model::Rational::new(75, 4)
                     );
                     assert_eq!(video.metadata.variable_frame_rate, Some(true));
                 }
@@ -4111,7 +4111,7 @@ mod tests {
         assert!(analysis.details.report.budget_exhausted);
         assert_eq!(
             analysis.details.report.status,
-            scryer_media_types::ProbeStatus::Incomplete
+            scryer_media_model::ProbeStatus::Incomplete
         );
         assert!(
             analysis.details.report.bytes_read > 0,

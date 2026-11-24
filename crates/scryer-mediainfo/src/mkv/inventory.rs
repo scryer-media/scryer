@@ -1,6 +1,6 @@
 //! Supplemental container inventory. Attachment payloads and media blocks are skipped.
 use super::*;
-use scryer_media_types::{
+use scryer_media_model::{
     AnalysisDetails, Attachment, Chapter, ProbeStatus, ProbeWarning, Provenance,
 };
 
@@ -603,10 +603,10 @@ mod tests {
     fn video(with_rate: bool) -> RawTrack {
         RawTrack {
             kind: TrackKind::Video,
-            metadata: scryer_media_types::StreamMetadata {
+            metadata: scryer_media_model::StreamMetadata {
                 id: Some("1".into()),
                 declared_frame_rate: with_rate
-                    .then(|| scryer_media_types::Rational::new(25, 1).unwrap()),
+                    .then(|| scryer_media_model::Rational::new(25, 1).unwrap()),
                 ..Default::default()
             },
             ..Default::default()

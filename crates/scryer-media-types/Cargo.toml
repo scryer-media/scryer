@@ -4,4 +4,4 @@ version = "0.23.1"
 edition.workspace = true
 
 [dependencies]
-serde = { workspace = true }
+scryer-media-model = { path = "../scryer-media-model" }

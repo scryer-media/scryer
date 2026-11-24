@@ -1,4 +1,4 @@
-use scryer_media_types::StreamMetadata;
+use scryer_media_model::StreamMetadata;
 
 fn u16le(data: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
@@ -109,7 +109,7 @@ pub(crate) fn enrich_private_header(
     }
     if track.bit_rate_bps.is_none() && header.bitrate.is_some() {
         track.bit_rate_bps = header.bitrate;
-        track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
+        track.metadata.bitrate_provenance = scryer_media_model::Provenance::Bitstream;
     }
     header.warning
 }

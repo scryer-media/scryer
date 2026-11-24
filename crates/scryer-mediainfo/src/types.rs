@@ -44,7 +44,7 @@ pub(crate) struct RawTrack {
     /// Set to `true` when SMPTE ST 2094-40 (HDR10+) dynamic metadata is found
     /// in the video bitstream.
     pub has_hdr10plus: bool,
-    pub metadata: scryer_media_types::StreamMetadata,
+    pub metadata: scryer_media_model::StreamMetadata,
 }
 
 /// Parsed container-level metadata.
@@ -58,5 +58,5 @@ pub(crate) struct RawContainer {
     pub num_chapters: Option<i32>,
     /// All tracks found in the container.
     pub tracks: Vec<RawTrack>,
-    pub details: scryer_media_types::AnalysisDetails,
+    pub details: scryer_media_model::AnalysisDetails,
 }

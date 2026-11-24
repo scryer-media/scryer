@@ -5,7 +5,7 @@ use crate::{
     source::MediaSource,
     types::{RawContainer, RawTrack, TrackKind},
 };
-use scryer_media_types::{AnalysisDetails, ProbeReport, ProbeStatus, Provenance};
+use scryer_media_model::{AnalysisDetails, ProbeReport, ProbeStatus, Provenance};
 use std::collections::BTreeMap;
 use std::io::SeekFrom;
 
@@ -65,7 +65,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
                 (ticks > 0 && ticks < 90_000 * 86_400).then_some(ticks as f64 / 90_000.0)
             });
         if pes.invalid_timestamps {
-            report.warnings.push(scryer_media_types::ProbeWarning {
+            report.warnings.push(scryer_media_model::ProbeWarning {
                 code: "program_invalid_timestamps".into(),
                 message: "Sampled PES timestamps are invalid; stream duration remains unknown"
                     .into(),
@@ -81,7 +81,7 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
             track.codec_name = None;
         }
         if track.codec_name.is_none() {
-            report.warnings.push(scryer_media_types::ProbeWarning {
+            report.warnings.push(scryer_media_model::ProbeWarning {
                 code: "program_codec_unknown".into(),
                 message: "Bounded PES sampling did not identify the elementary codec".into(),
                 stream_id: track.metadata.id.clone(),

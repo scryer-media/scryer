@@ -987,11 +987,11 @@ mod media_registry_discovery_tests {
             // Probe-only suffixes and disc companions are never import candidates.
             assert_eq!(
                 files.iter().any(|file| file.path() == path),
-                entry.is_standalone_video(),
+                scryer_media_types::formats::is_standalone_video_format(entry),
                 "{}",
                 entry.extension
             );
-            if entry.is_standalone_video() {
+            if scryer_media_types::formats::is_standalone_video_format(entry) {
                 assert_eq!(
                     import_video_destination_extension(&path, None),
                     entry.extension

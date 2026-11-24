@@ -15,7 +15,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::Instant;
 
-use scryer_media_types::{
+use scryer_media_model::{
     ANALYSIS_REVISION, AnalysisDetails, DiscMetadata, DiscSelection, DiscTitle, ProbeReport,
     ProbeStatus, Provenance,
 };
@@ -676,7 +676,7 @@ fn select_title(disc: &mut DiscMetadata) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_media_types::DiscSegment;
+    use scryer_media_model::DiscSegment;
     fn title(id: &str, seconds: f64, clip: &str) -> DiscTitle {
         DiscTitle {
             id: id.into(),
@@ -695,11 +695,11 @@ mod tests {
         first
             .details
             .streams
-            .push(scryer_media_types::StreamDetail {
-                kind: scryer_media_types::StreamKind::Audio,
+            .push(scryer_media_model::StreamDetail {
+                kind: scryer_media_model::StreamKind::Audio,
                 codec: Some("pcm_bluray".into()),
                 channels: Some(6),
-                metadata: scryer_media_types::StreamMetadata {
+                metadata: scryer_media_model::StreamMetadata {
                     channel_layout: Some("5.1".into()),
                     sample_bit_depth: Some(24),
                     ..Default::default()
@@ -715,7 +715,7 @@ mod tests {
         first
             .details
             .streams
-            .push(scryer_media_types::StreamDetail {
+            .push(scryer_media_model::StreamDetail {
                 codec: Some("hevc".into()),
                 ..Default::default()
             });

@@ -123,7 +123,7 @@ pub(crate) fn parse_ts_source(
     let layout = detect_ts_packet_layout(&mut file)?;
     let es_entries = parse_program_map(&mut file, layout)?;
     let mut tracks: Vec<RawTrack> = es_entries.iter().map(build_track).collect();
-    let mut report = scryer_media_types::ProbeReport::default();
+    let mut report = scryer_media_model::ProbeReport::default();
     let mut caption_services = Vec::new();
 
     if profile != AnalysisProfile::ContentProbe {
@@ -141,9 +141,9 @@ pub(crate) fn parse_ts_source(
             if !crate::source::MediaSource::exhausted(file.get_ref()) {
                 return Err(error);
             }
-            report.status = scryer_media_types::ProbeStatus::Incomplete;
+            report.status = scryer_media_model::ProbeStatus::Incomplete;
             report.budget_exhausted = true;
-            report.warnings.push(scryer_media_types::ProbeWarning {
+            report.warnings.push(scryer_media_model::ProbeWarning {
                 code: "ts_probe_read_budget".into(),
                 message:
                     "Stream probing stopped when the media byte or I/O-operation budget was exhausted"
@@ -175,25 +175,25 @@ pub(crate) fn parse_ts_source(
     let duration_provenance = if profile == AnalysisProfile::ContentProbe
         && duration_seconds.is_some()
     {
-        report.status = scryer_media_types::ProbeStatus::Incomplete;
-        report.warnings.push(scryer_media_types::ProbeWarning {
+        report.status = scryer_media_model::ProbeStatus::Incomplete;
+        report.warnings.push(scryer_media_model::ProbeWarning {
             code: "content_probe_duration_estimate".into(),
             message: "Discovery uses the selected video's timestamp span; the final frame duration has not been inspected".into(),
             ..Default::default()
         });
-        scryer_media_types::Provenance::Estimated
+        scryer_media_model::Provenance::Estimated
     } else if duration_seconds.is_some() {
-        scryer_media_types::Provenance::Observed
+        scryer_media_model::Provenance::Observed
     } else {
-        scryer_media_types::Provenance::Unknown
+        scryer_media_model::Provenance::Unknown
     };
-    let mut programs: Vec<scryer_media_types::Program> = Vec::new();
+    let mut programs: Vec<scryer_media_model::Program> = Vec::new();
     for entry in &es_entries {
         let id = u32::from(entry.program_id);
         if let Some(program) = programs.iter_mut().find(|program| program.id == id) {
             program.stream_ids.push(entry.pid.to_string());
         } else {
-            programs.push(scryer_media_types::Program {
+            programs.push(scryer_media_model::Program {
                 id,
                 stream_ids: vec![entry.pid.to_string()],
                 duration_seconds: (selected_program == Some(id))
@@ -209,7 +209,7 @@ pub(crate) fn parse_ts_source(
         .map(|duration| (file_size as f64 * 8.0 / duration) as u64);
 
     Ok(RawContainer {
-        details: scryer_media_types::AnalysisDetails {
+        details: scryer_media_model::AnalysisDetails {
             duration_provenance,
             overall_bitrate_bps,
             programs,
@@ -465,10 +465,10 @@ fn build_track(es: &EsEntry) -> RawTrack {
     let (kind, codec_name) = classify_stream_type(es.stream_type, &es.descriptors);
 
     RawTrack {
-        metadata: scryer_media_types::StreamMetadata {
+        metadata: scryer_media_model::StreamMetadata {
             id: Some(es.pid.to_string()),
             program_id: Some(u32::from(es.program_id)),
-            language_provenance: scryer_media_types::Provenance::Container,
+            language_provenance: scryer_media_model::Provenance::Container,
             ..Default::default()
         },
         kind,
@@ -655,8 +655,8 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
     es_entries: &[EsEntry],
     tracks: &mut [RawTrack],
     layout: TsPacketLayout,
-    report: &mut scryer_media_types::ProbeReport,
-    captions: &mut Vec<scryer_media_types::CaptionService>,
+    report: &mut scryer_media_model::ProbeReport,
+    captions: &mut Vec<scryer_media_model::CaptionService>,
 ) -> Result<Option<u64>, MediaInfoError> {
     let mut states = Vec::new();
     let mut state_by_pid = [None; TS_PID_COUNT];
@@ -753,7 +753,7 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
             packets_scanned >= STREAM_PROBE_PACKET_LIMIT,
         );
         report.budget_exhausted |= state.metadata_report.budget_exhausted;
-        if state.metadata_report.status == scryer_media_types::ProbeStatus::Incomplete {
+        if state.metadata_report.status == scryer_media_model::ProbeStatus::Incomplete {
             report.status = state.metadata_report.status;
         }
         report.warnings.append(&mut state.metadata_report.warnings);
@@ -818,8 +818,8 @@ struct TsStreamProbeState {
     buffer: Vec<u8>,
     pts_values: Vec<u64>,
     complete: bool,
-    metadata_report: scryer_media_types::ProbeReport,
-    caption_services: Vec<scryer_media_types::CaptionService>,
+    metadata_report: scryer_media_model::ProbeReport,
+    caption_services: Vec<scryer_media_model::CaptionService>,
 }
 
 impl TsStreamProbeState {
@@ -880,8 +880,8 @@ impl TsStreamProbeState {
         if !self.complete || stopped_on_budget {
             let exhausted = self.budget.exhausted() || packet_budget_exhausted;
             self.metadata_report.budget_exhausted |= exhausted;
-            self.metadata_report.status = scryer_media_types::ProbeStatus::Incomplete;
-            self.metadata_report.warnings.push(scryer_media_types::ProbeWarning {
+            self.metadata_report.status = scryer_media_model::ProbeStatus::Incomplete;
+            self.metadata_report.warnings.push(scryer_media_model::ProbeWarning {
                 code: if exhausted { "ts_stream_probe_budget" } else { "ts_stream_probe_incomplete" }.into(),
                 message: if exhausted {
                     "Transport stream enrichment reached its read budget before all requested metadata was established"
@@ -1259,7 +1259,7 @@ fn probe_dts_track(data: &[u8], track: &mut RawTrack) {
         track.metadata.channel_layout = header.channel_layout.map(str::to_owned);
         if header.bit_rate_bps > 3 && track.bit_rate_bps.is_none() {
             track.bit_rate_bps = Some(i64::from(header.bit_rate_bps));
-            track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
+            track.metadata.bitrate_provenance = scryer_media_model::Provenance::Bitstream;
         }
     }
 }
@@ -1412,10 +1412,10 @@ impl Ac3Header {
         if self.bitrate_is_estimate {
             track.metadata.estimated_bitrate_bps = self.bit_rate_bps.map(u64::from);
         } else if track.bit_rate_bps.is_none()
-            || track.metadata.bitrate_provenance == scryer_media_types::Provenance::Observed
+            || track.metadata.bitrate_provenance == scryer_media_model::Provenance::Observed
         {
             track.bit_rate_bps = self.bit_rate_bps.map(i64::from);
-            track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
+            track.metadata.bitrate_provenance = scryer_media_model::Provenance::Bitstream;
         }
     }
 }
@@ -2429,7 +2429,7 @@ mod tests {
         assert!(analysis.details.report.budget_exhausted);
         assert_eq!(
             analysis.details.report.status,
-            scryer_media_types::ProbeStatus::Incomplete
+            scryer_media_model::ProbeStatus::Incomplete
         );
     }
 
@@ -2554,7 +2554,7 @@ mod tests {
                 dovi_config: None,
             }];
             let mut tracks = [build_track(&entries[0])];
-            let mut report = scryer_media_types::ProbeReport::default();
+            let mut report = scryer_media_model::ProbeReport::default();
             enrich_tracks_from_probe(
                 &mut source,
                 &entries,
@@ -2567,7 +2567,7 @@ mod tests {
                 &mut Vec::new(),
             )
             .unwrap();
-            assert_eq!(report.status, scryer_media_types::ProbeStatus::Incomplete);
+            assert_eq!(report.status, scryer_media_model::ProbeStatus::Incomplete);
             assert_eq!(report.budget_exhausted, exhausted);
             assert!(
                 report
@@ -2632,7 +2632,7 @@ mod tests {
             if exhausted {
                 assert_eq!(
                     state.metadata_report.status,
-                    scryer_media_types::ProbeStatus::Incomplete
+                    scryer_media_model::ProbeStatus::Incomplete
                 );
             }
         }
@@ -2777,12 +2777,12 @@ mod tests {
         assert_eq!(track.bit_rate_bps, None);
         assert_eq!(track.metadata.estimated_bitrate_bps, Some(64_000));
         track.bit_rate_bps = Some(96_000);
-        track.metadata.bitrate_provenance = scryer_media_types::Provenance::Container;
+        track.metadata.bitrate_provenance = scryer_media_model::Provenance::Container;
         header.apply(&mut track);
         assert_eq!(track.bit_rate_bps, Some(96_000));
         assert_eq!(
             track.metadata.bitrate_provenance,
-            scryer_media_types::Provenance::Container
+            scryer_media_model::Provenance::Container
         );
         let mut low_rate_mp2 = vec![0; 772];
         low_rate_mp2[..4].copy_from_slice(&[0xff, 0xf5, 0xc4, 0xc0]);
@@ -2856,7 +2856,7 @@ mod tests {
         assert_eq!(core.bit_rate_bps, Some(1_536_000));
         assert_eq!(
             core.metadata.bitrate_provenance,
-            scryer_media_types::Provenance::Bitstream
+            scryer_media_model::Provenance::Bitstream
         );
 
         let mut extension = RawTrack {

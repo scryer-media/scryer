@@ -200,7 +200,7 @@ fn clpi_rejects_truncation_overlaps_and_unknown_clock_sequences() {
         );
     }
     let parsed = clip_info::parse(&info).unwrap();
-    let segment = scryer_media_types::DiscSegment {
+    let segment = scryer_media_model::DiscSegment {
         in_seconds: 0.0,
         out_seconds: 2.0,
         sequence_id: Some(1),
@@ -219,7 +219,7 @@ fn clpi_rejects_truncation_overlaps_and_unknown_clock_sequences() {
 fn clpi_access_points_bound_trims_and_reject_invalid_tables() {
     let info = authored_image::clpi(300, 196_608, &[(0, 0), (100, 65_536), (200, 131_072)]);
     let parsed = clip_info::parse(&info).unwrap();
-    let segment = scryer_media_types::DiscSegment {
+    let segment = scryer_media_model::DiscSegment {
         in_seconds: 90_000.0 / 45_000.0,
         out_seconds: 120_000.0 / 45_000.0,
         sequence_id: Some(0),
@@ -281,7 +281,7 @@ fn clpi_clock_selection_prevents_pts_reset_from_reusing_the_first_sequence() {
     be32(&mut info, 12, (program + 14) as u32);
     be32(&mut info, 16, (cpi + 14) as u32);
     let parsed = clip_info::parse(&info).unwrap();
-    let mut segment = scryer_media_types::DiscSegment {
+    let mut segment = scryer_media_model::DiscSegment {
         in_seconds: 0.25,
         out_seconds: 1.0,
         sequence_id: Some(1),
@@ -375,7 +375,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
     let mapped = inspect(
         &mut mapped_source,
         DiscSelection {
-            episode_mappings: vec![scryer_media_types::DiscEpisodeMapping {
+            episode_mappings: vec![scryer_media_model::DiscEpisodeMapping {
                 disc_title_id: "00002".into(),
                 episode_ids: vec!["episode-2".into()],
             }],

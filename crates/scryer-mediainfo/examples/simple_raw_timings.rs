@@ -391,9 +391,9 @@ fn group_explicit_files(paths: Vec<PathBuf>) -> BTreeMap<&'static str, Vec<PathB
 }
 
 fn empty_media_groups() -> BTreeMap<&'static str, Vec<PathBuf>> {
-    scryer_media_types::formats::MEDIA_FORMATS
+    scryer_media_model::formats::MEDIA_FORMATS
         .iter()
-        .filter(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+        .filter(|entry| entry.handling == scryer_media_model::formats::MediaHandling::Native)
         .map(|entry| (entry.extension, Vec::new()))
         .collect()
 }
@@ -454,8 +454,8 @@ fn collect_by_type(
 }
 
 fn media_type(path: &Path) -> Option<&'static str> {
-    scryer_media_types::formats::media_format_for_path(path)
-        .filter(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+    scryer_media_model::formats::media_format_for_path(path)
+        .filter(|entry| entry.handling == scryer_media_model::formats::MediaHandling::Native)
         .map(|entry| entry.extension)
 }
 

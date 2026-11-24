@@ -1,5 +1,5 @@
 use crate::types::RawTrack;
-use scryer_media_types::Provenance;
+use scryer_media_model::Provenance;
 
 pub(crate) fn enrich(track: &mut RawTrack, data: &[u8]) {
     match track.codec_name.as_deref() {
@@ -68,7 +68,7 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8]) {
 }
 /// Inspect marker headers only; entropy-coded image data is never read here.
 fn jpeg(track: &mut RawTrack, data: &[u8]) -> Option<()> {
-    use scryer_media_types::Rational;
+    use scryer_media_model::Rational;
     let data = &data[..data.len().min(64 * 1024)];
     if !data.starts_with(&[0xff, 0xd8]) {
         return None;
@@ -255,7 +255,7 @@ pub(crate) fn mpeg_sequence_header_end(data: &[u8], start: usize) -> Option<usiz
 }
 
 fn mpeg12(track: &mut RawTrack, data: &[u8]) -> Option<()> {
-    use scryer_media_types::Rational;
+    use scryer_media_model::Rational;
     let start = data.windows(4).position(|bytes| bytes == [0, 0, 1, 0xb3])? + 4;
     let header_end = mpeg_sequence_header_end(data, start)?;
     let mut bits = crate::ts::BitReader::new(data.get(start..start + 8)?);
@@ -403,8 +403,8 @@ fn marker(bits: &mut crate::ts::BitReader<'_>) -> Option<()> {
 
 fn mpeg4_aspect(
     bits: &mut crate::ts::BitReader<'_>,
-) -> Option<Option<scryer_media_types::Rational>> {
-    use scryer_media_types::Rational;
+) -> Option<Option<scryer_media_model::Rational>> {
+    use scryer_media_model::Rational;
     let pair = match bits.read_bits(4)? {
         1 => Some((1, 1)),
         2 => Some((12, 11)),
@@ -421,7 +421,7 @@ fn mpeg4_aspect(
 }
 
 fn mpeg4_vol(track: &mut RawTrack, data: &[u8]) -> Option<()> {
-    use scryer_media_types::Rational;
+    use scryer_media_model::Rational;
     let mut bits = crate::ts::BitReader::new(data);
     bits.read_bits(1)?; // random access
     let object_type = bits.read_bits(8)?;
@@ -556,7 +556,7 @@ fn apply_mpeg4_picture(
     track: &mut RawTrack,
     width: u32,
     height: u32,
-    aspect: Option<scryer_media_types::Rational>,
+    aspect: Option<scryer_media_model::Rational>,
     interlaced: bool,
     depth: u32,
     format: &str,
@@ -582,7 +582,7 @@ fn apply_mpeg4_picture(
         track.metadata.display_aspect_ratio = i64::from(width)
             .checked_mul(aspect.numerator)
             .zip(u64::from(height).checked_mul(aspect.denominator))
-            .and_then(|(n, d)| scryer_media_types::Rational::new(n, d));
+            .and_then(|(n, d)| scryer_media_model::Rational::new(n, d));
     }
 }
 
@@ -717,11 +717,11 @@ mod tests {
             assert_eq!(track.height, Some(240));
             assert_eq!(
                 track.metadata.sample_aspect_ratio,
-                scryer_media_types::Rational::new(3, 4)
+                scryer_media_model::Rational::new(3, 4)
             );
             assert_eq!(
                 track.metadata.display_aspect_ratio,
-                scryer_media_types::Rational::new(1, 1)
+                scryer_media_model::Rational::new(1, 1)
             );
             assert!(track.metadata.field_order.is_none());
         }
@@ -799,7 +799,7 @@ mod tests {
             );
             assert_eq!(
                 video.metadata.sample_aspect_ratio,
-                scryer_media_types::Rational::new(1, 1),
+                scryer_media_model::Rational::new(1, 1),
                 "{fixture}"
             );
             assert_eq!(video.metadata.color.matrix, Some(5), "{fixture}");
@@ -862,15 +862,15 @@ mod tests {
         assert_eq!(track.metadata.pixel_format.as_deref(), Some("yuv422p"));
         assert_eq!(
             track.metadata.sample_aspect_ratio,
-            scryer_media_types::Rational::new(32, 27)
+            scryer_media_model::Rational::new(32, 27)
         );
         assert_eq!(
             track.metadata.display_aspect_ratio,
-            scryer_media_types::Rational::new(16, 9)
+            scryer_media_model::Rational::new(16, 9)
         );
         assert_eq!(
             track.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(20_000, 1001)
+            scryer_media_model::Rational::new(20_000, 1001)
         );
         let mut short = RawTrack {
             codec_name: Some("mpeg2video".into()),
@@ -918,11 +918,11 @@ mod tests {
         assert!(mpeg12(&mut track, &bytes).is_some());
         assert_eq!(
             track.metadata.sample_aspect_ratio,
-            scryer_media_types::Rational::new(10_000, 6735)
+            scryer_media_model::Rational::new(10_000, 6735)
         );
         assert_eq!(
             track.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(24_000, 1001)
+            scryer_media_model::Rational::new(24_000, 1001)
         );
         assert_eq!(track.metadata.profile, None);
         let mut missing = RawTrack {
@@ -953,7 +953,7 @@ mod tests {
         assert_eq!(track.metadata.bit_depth, Some(8));
         assert_eq!(
             track.metadata.sample_aspect_ratio,
-            scryer_media_types::Rational::new(1, 1)
+            scryer_media_model::Rational::new(1, 1)
         );
         assert_eq!(track.metadata.field_order.as_deref(), Some("progressive"));
         for length in 0..8 {
@@ -1002,12 +1002,12 @@ mod tests {
             assert_eq!(track.metadata.field_order.as_deref(), Some("interlaced"));
             assert_eq!(
                 track.metadata.display_aspect_ratio,
-                scryer_media_types::Rational::new(18, 11)
+                scryer_media_model::Rational::new(18, 11)
             );
             assert_eq!(
                 track.metadata.declared_frame_rate,
                 if fixed {
-                    scryer_media_types::Rational::new(30_000, 1001)
+                    scryer_media_model::Rational::new(30_000, 1001)
                 } else {
                     None
                 }
@@ -1050,7 +1050,7 @@ mod tests {
             assert_eq!(track.metadata.bit_depth, Some(10));
             assert_eq!(
                 track.metadata.display_aspect_ratio,
-                scryer_media_types::Rational::new(16, 9)
+                scryer_media_model::Rational::new(16, 9)
             );
             assert_eq!(track.metadata.declared_frame_rate, None);
         }

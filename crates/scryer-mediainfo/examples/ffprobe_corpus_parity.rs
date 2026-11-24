@@ -1077,8 +1077,8 @@ fn walk_media_files(
 }
 
 fn is_media_file(path: &Path) -> bool {
-    scryer_media_types::formats::media_format_for_path(path)
-        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+    scryer_media_model::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_model::formats::MediaHandling::Native)
 }
 
 fn is_ignored_dir_name(name: &str) -> bool {

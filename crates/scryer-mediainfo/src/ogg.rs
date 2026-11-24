@@ -165,11 +165,11 @@ pub(crate) fn parse_ogg_source(
     {
         duration_seconds = None;
     }
-    let mut details = scryer_media_types::AnalysisDetails::default();
+    let mut details = scryer_media_model::AnalysisDetails::default();
     if earlier_end_outside_tail && duration_seconds.is_some() {
-        details.duration_provenance = scryer_media_types::Provenance::Estimated;
-        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
-        details.report.warnings.push(scryer_media_types::ProbeWarning {
+        details.duration_provenance = scryer_media_model::Provenance::Estimated;
+        details.report.status = scryer_media_model::ProbeStatus::Incomplete;
+        details.report.warnings.push(scryer_media_model::ProbeWarning {
             code: "ogg_earlier_stream_end_outside_tail".into(),
             message: "Duration uses terminal stream timing; earlier stream ends are outside the bounded tail probe".into(),
             ..Default::default()
@@ -491,7 +491,7 @@ fn set_ogm_frame_rate(
 ) -> Result<(), MediaInfoError> {
     let numerator =
         i64::try_from(numerator).map_err(|_| parse_error("OGM frame rate is too large"))?;
-    let rate = scryer_media_types::Rational::new(numerator, denominator)
+    let rate = scryer_media_model::Rational::new(numerator, denominator)
         .ok_or_else(|| parse_error("invalid OGM frame rate"))?;
     track.frame_rate_fps = Some(numerator as f64 / denominator as f64);
     track.metadata.declared_frame_rate = Some(rate);
@@ -585,13 +585,13 @@ fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), 
     track.height = Some(height);
     track.frame_rate_fps = Some(fps);
     track.metadata.declared_frame_rate =
-        scryer_media_types::Rational::new(i64::from(fps_numerator), u64::from(fps_denominator));
+        scryer_media_model::Rational::new(i64::from(fps_numerator), u64::from(fps_denominator));
     if aspect_numerator > 0 && aspect_denominator > 0 {
-        track.metadata.sample_aspect_ratio = scryer_media_types::Rational::new(
+        track.metadata.sample_aspect_ratio = scryer_media_model::Rational::new(
             i64::from(aspect_numerator),
             u64::from(aspect_denominator),
         );
-        track.metadata.display_aspect_ratio = scryer_media_types::Rational::new(
+        track.metadata.display_aspect_ratio = scryer_media_model::Rational::new(
             i64::from(width) * i64::from(aspect_numerator),
             height as u64 * u64::from(aspect_denominator),
         );
@@ -605,7 +605,7 @@ fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), 
         track.metadata.color.primaries = Some(if space == 1 { 4 } else { 5 });
         track.metadata.color.transfer = Some(if space == 1 { 4 } else { 5 });
         track.metadata.color.matrix = Some(if space == 1 { 6 } else { 5 });
-        track.metadata.color.provenance = scryer_media_types::Provenance::Bitstream;
+        track.metadata.color.provenance = scryer_media_model::Provenance::Bitstream;
     }
     track.metadata.estimated_bitrate_bps = nominal_bitrate;
     track.codec_private = Some(data.to_vec());
@@ -997,7 +997,7 @@ mod tests {
         assert_eq!(video.frame_rate_fps, Some(25.0));
         assert_eq!(
             video.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(25, 1)
+            scryer_media_model::Rational::new(25, 1)
         );
         assert_eq!(video.name.as_deref(), Some("Main video"));
         assert_eq!(raw.tracks[1].codec_name.as_deref(), Some("vorbis"));
@@ -1043,7 +1043,7 @@ mod tests {
         assert_eq!(raw.tracks[0].codec_name, None);
         assert_eq!(
             raw.tracks[0].metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(24_000, 1001)
+            scryer_media_model::Rational::new(24_000, 1001)
         );
         assert_eq!(raw.duration_seconds, Some(1.001));
         assert_eq!(crate::build_analysis(raw).video_codec, None);
@@ -1081,7 +1081,7 @@ mod tests {
         );
         assert_eq!(
             raw.tracks[0].metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(25, 1)
+            scryer_media_model::Rational::new(25, 1)
         );
         let raw = parse(fixture::single_stream(
             &fixture::legacy_audio(),
@@ -1325,7 +1325,7 @@ mod tests {
             crate::build_analysis(raw.clone())
                 .details
                 .duration_provenance,
-            scryer_media_types::Provenance::Estimated
+            scryer_media_model::Provenance::Estimated
         );
         assert_eq!(
             raw.details.report.warnings[0].code,
@@ -1489,15 +1489,15 @@ mod tests {
         let (track, _, _, _) = parse_theora_identification(&header).unwrap();
         assert_eq!(
             track.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(15, 1)
+            scryer_media_model::Rational::new(15, 1)
         );
         assert_eq!(
             track.metadata.sample_aspect_ratio,
-            scryer_media_types::Rational::new(1, 1)
+            scryer_media_model::Rational::new(1, 1)
         );
         assert_eq!(
             track.metadata.display_aspect_ratio,
-            scryer_media_types::Rational::new(20, 11)
+            scryer_media_model::Rational::new(20, 11)
         );
         assert_eq!(track.metadata.bit_depth, Some(8));
         assert_eq!(track.metadata.pixel_format.as_deref(), Some("yuv420p"));

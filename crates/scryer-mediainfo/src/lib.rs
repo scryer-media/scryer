@@ -122,7 +122,7 @@ pub struct SubtitleStreamDetail {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MediaAnalysis {
-    pub details: scryer_media_types::AnalysisDetails,
+    pub details: scryer_media_model::AnalysisDetails,
     pub video_codec: Option<String>,
     pub video_width: Option<i32>,
     pub video_height: Option<i32>,
@@ -192,7 +192,7 @@ pub fn analyze_catalog_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfo
 /// A missing saved title remains unresolved and never falls back to automatic selection.
 pub fn analyze_disc_file(
     file_path: &Path,
-    selection: scryer_media_types::DiscSelection,
+    selection: scryer_media_model::DiscSelection,
 ) -> Result<MediaAnalysis, MediaInfoError> {
     disc::analyze(file_path, selection, AnalysisProfile::DefaultRich)
 }
@@ -202,7 +202,7 @@ pub fn analyze_file_with_options(
     file_path: &Path,
     options: AnalyzeOptions,
 ) -> Result<MediaAnalysis, MediaInfoError> {
-    let ext = scryer_media_types::formats::canonical_video_extension(file_path)
+    let ext = scryer_media_model::formats::canonical_video_extension(file_path)
         .map(str::to_owned)
         .or_else(|| {
             file_path
@@ -212,8 +212,8 @@ pub fn analyze_file_with_options(
         })
         .unwrap_or_default();
 
-    if scryer_media_types::formats::media_format_for_extension(&ext).is_some_and(|entry| {
-        entry.handling == scryer_media_types::formats::MediaHandling::DiscImage
+    if scryer_media_model::formats::media_format_for_extension(&ext).is_some_and(|entry| {
+        entry.handling == scryer_media_model::formats::MediaHandling::DiscImage
     }) {
         return disc::analyze(file_path, Default::default(), options.profile);
     }
@@ -223,7 +223,7 @@ pub fn analyze_file_with_options(
         // readable; a registered suffix, or none at all, reports the I/O failure.
         Err(_)
             if !ext.is_empty()
-                && scryer_media_types::formats::media_format_for_extension(&ext).is_none() =>
+                && scryer_media_model::formats::media_format_for_extension(&ext).is_none() =>
         {
             return Err(MediaInfoError::UnsupportedFormat(ext));
         }
@@ -307,17 +307,17 @@ pub(crate) fn analyze_source_with_limits(
         Err(_) if source.exhausted => MediaAnalysis::default(),
         Err(error) => return Err(error),
     };
-    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    analysis.details.revision = scryer_media_model::ANALYSIS_REVISION;
     let report = &mut analysis.details.report;
     report.bytes_read = source.bytes_read;
     report.seeks = source.seeks;
     report.elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     report.budget_exhausted |= source.exhausted;
-    if report.status == scryer_media_types::ProbeStatus::Unknown || source.exhausted {
-        report.status = scryer_media_types::ProbeStatus::Incomplete;
+    if report.status == scryer_media_model::ProbeStatus::Unknown || source.exhausted {
+        report.status = scryer_media_model::ProbeStatus::Incomplete;
     }
     if source.exhausted {
-        report.warnings.push(scryer_media_types::ProbeWarning {
+        report.warnings.push(scryer_media_model::ProbeWarning {
             code: "read_budget_exhausted".into(),
             message: "The aggregate media byte or I/O-operation budget was exhausted".into(),
             ..Default::default()
@@ -416,8 +416,8 @@ fn parse_audio_only(
         }
         "wav"
     };
-    let mut details = scryer_media_types::AnalysisDetails::default();
-    details.report.status = scryer_media_types::ProbeStatus::Complete;
+    let mut details = scryer_media_model::AnalysisDetails::default();
+    details.report.status = scryer_media_model::ProbeStatus::Complete;
     Ok(RawContainer {
         format_name: name.into(),
         duration_seconds: None,
@@ -435,7 +435,7 @@ fn resolve_container_format(
 }
 
 fn container_format_from_extension(ext: &str) -> Option<ContainerFormat> {
-    use scryer_media_types::formats::{
+    use scryer_media_model::formats::{
         MediaFormat, MediaProbeCapability, media_format_for_extension,
     };
     let registration = media_format_for_extension(ext)?;
@@ -484,7 +484,7 @@ enum ContainerFormat {
 
 #[test]
 fn every_registered_native_format_has_a_parser_dispatch() {
-    use scryer_media_types::formats::{MEDIA_FORMATS, MediaProbeCapability};
+    use scryer_media_model::formats::{MEDIA_FORMATS, MediaProbeCapability};
     for entry in MEDIA_FORMATS {
         assert_eq!(
             container_format_from_extension(entry.extension).is_some(),
@@ -774,7 +774,7 @@ fn select_primary_audio_track<'a>(audio_tracks: &[&'a RawTrack]) -> Option<&'a R
 }
 
 fn populate_analysis_details(raw: &mut RawContainer) {
-    use scryer_media_types::{ANALYSIS_REVISION, Provenance, StreamDetail, StreamKind};
+    use scryer_media_model::{ANALYSIS_REVISION, Provenance, StreamDetail, StreamKind};
     raw.details.revision = ANALYSIS_REVISION;
     raw.details.duration_seconds = raw.duration_seconds;
     if raw.duration_seconds.is_some() && raw.details.duration_provenance == Provenance::Unknown {
@@ -790,16 +790,16 @@ fn populate_analysis_details(raw: &mut RawContainer) {
         {
             if matches!(
                 raw.details.report.status,
-                scryer_media_types::ProbeStatus::Unknown
-                    | scryer_media_types::ProbeStatus::Complete
+                scryer_media_model::ProbeStatus::Unknown
+                    | scryer_media_model::ProbeStatus::Complete
             ) {
-                raw.details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                raw.details.report.status = scryer_media_model::ProbeStatus::Incomplete;
             }
             raw.details.report.budget_exhausted |= exhausted;
             raw.details
                 .report
                 .warnings
-                .push(scryer_media_types::ProbeWarning {
+                .push(scryer_media_model::ProbeWarning {
                     code: code.into(),
                     message: "Audio configuration metadata could not be completely interpreted"
                         .into(),
@@ -841,7 +841,7 @@ fn populate_analysis_details(raw: &mut RawContainer) {
                     raw.details
                         .report
                         .warnings
-                        .push(scryer_media_types::ProbeWarning {
+                        .push(scryer_media_model::ProbeWarning {
                         code: "color_signaling_conflict".into(),
                         message:
                             "Bitstream transfer signaling overrides conflicting container metadata"
@@ -889,7 +889,7 @@ fn populate_analysis_details(raw: &mut RawContainer) {
                 .and_then(codec::parse_dovi_config)
             {
                 track.metadata.hdr.dolby_vision = Some(true);
-                track.metadata.hdr.dovi = Some(scryer_media_types::DolbyVision {
+                track.metadata.hdr.dovi = Some(scryer_media_model::DolbyVision {
                     profile: Some(dovi.profile),
                     level: Some(dovi.level),
                     base_layer_compatibility_id: Some(dovi.bl_signal_compatibility_id),
@@ -1131,7 +1131,7 @@ mod tests {
                 assert_eq!(analysis.details.selected_video_id, None);
                 assert_eq!(
                     analysis.details.report.status,
-                    scryer_media_types::ProbeStatus::Complete
+                    scryer_media_model::ProbeStatus::Complete
                 );
             }
         }

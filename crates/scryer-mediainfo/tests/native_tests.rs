@@ -94,7 +94,7 @@ fn program_stream_codec_headers_reach_the_catalog_contract() {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
             .unwrap();
         assert_eq!(video.metadata.id.as_deref(), Some("00e0"));
         assert_eq!(video.metadata.bitrate_bps, None);
@@ -103,7 +103,7 @@ fn program_stream_codec_headers_reach_the_catalog_contract() {
         assert_eq!(video.metadata.pixel_format.as_deref(), Some("yuv420p"));
         assert_eq!(
             video.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(25, 1)
+            scryer_media_model::Rational::new(25, 1)
         );
         assert_eq!(
             video.metadata.profile.as_deref(),
@@ -111,20 +111,20 @@ fn program_stream_codec_headers_reach_the_catalog_contract() {
         );
         assert_eq!(
             video.metadata.sample_aspect_ratio,
-            scryer_media_types::Rational::new(1, 1)
+            scryer_media_model::Rational::new(1, 1)
         );
         let audio = analysis
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
             .unwrap();
         assert_eq!(audio.codec.as_deref(), Some("mp2"));
         assert_eq!(audio.metadata.sample_rate, Some(48_000));
         assert_eq!(audio.metadata.channel_layout.as_deref(), Some("mono"));
         assert_eq!(
             analysis.details.report.status,
-            scryer_media_types::ProbeStatus::Incomplete
+            scryer_media_model::ProbeStatus::Incomplete
         );
         assert!(analysis.details.report.bytes_read < 256 * 1024);
     }
@@ -138,13 +138,13 @@ fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
         .details
         .streams
         .iter()
-        .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+        .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
         .unwrap();
     let audio = analysis
         .details
         .streams
         .iter()
-        .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+        .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
         .unwrap();
     assert_eq!(video.metadata.id.as_deref(), Some("1"));
     assert_eq!(audio.metadata.id.as_deref(), Some("2"));
@@ -155,7 +155,7 @@ fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
     assert!(audio.metadata.original_language.is_some());
     assert_eq!(
         audio.metadata.language_provenance,
-        scryer_media_types::Provenance::Container
+        scryer_media_model::Provenance::Container
     );
 }
 
@@ -182,7 +182,7 @@ fn short_transport_stream_audio_retains_separate_bitrate_estimates() {
         assert!(audio.metadata.bitrate_bps.is_none());
         assert_eq!(
             audio.metadata.bitrate_provenance,
-            scryer_media_types::Provenance::Unknown
+            scryer_media_model::Provenance::Unknown
         );
         assert!(analysis.audio_bitrate_kbps.is_none());
     }
@@ -200,11 +200,11 @@ fn flv_declared_frame_rates_do_not_claim_observed_timing() {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
             .unwrap();
         assert_eq!(
             video.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(fps, 1),
+            scryer_media_model::Rational::new(fps, 1),
             "{name}"
         );
         assert!(video.metadata.observed_frame_rate.is_none());
@@ -303,7 +303,7 @@ fn opus_vorbis_and_flac_headers_reach_the_canonical_contract() {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
             .unwrap();
         assert_eq!(stream.codec.as_deref(), Some(codec), "{name}");
         assert_eq!(stream.channels, Some(channels), "{name}");
@@ -338,7 +338,7 @@ fn dolby_audio_properties_survive_mkv_mp4_and_transport_streams() {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
             .unwrap();
         assert_eq!(track.codec.as_deref(), Some(codec), "{name}");
         assert_eq!(track.channels, Some(channels), "{name}");
@@ -367,7 +367,7 @@ fn encoded_audio_properties_do_not_invent_decoder_formats_or_surround_layouts() 
         .details
         .streams
         .iter()
-        .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+        .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
         .unwrap();
     assert_eq!(track.channels, Some(6));
     assert_eq!(track.metadata.sample_format.as_deref(), Some("s16le"));
@@ -392,7 +392,7 @@ fn encoded_audio_properties_do_not_invent_decoder_formats_or_surround_layouts() 
         .details
         .streams
         .iter()
-        .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+        .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
         .unwrap();
     assert_eq!(track.channels, Some(6));
     assert!(
@@ -404,7 +404,7 @@ fn encoded_audio_properties_do_not_invent_decoder_formats_or_surround_layouts() 
         .details
         .streams
         .iter()
-        .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+        .find(|stream| stream.kind == scryer_media_model::StreamKind::Audio)
         .unwrap();
     assert_eq!(track.metadata.channel_layout.as_deref(), Some("stereo"));
     assert!(
@@ -453,7 +453,7 @@ fn av1_sequence_color_matches_native_expectations_in_mp4_and_mkv() {
         );
         assert_eq!(
             metadata.color.provenance,
-            scryer_media_types::Provenance::Bitstream
+            scryer_media_model::Provenance::Bitstream
         );
         assert_eq!(metadata.hdr.hdr10plus, None);
         assert!(
@@ -482,7 +482,7 @@ fn hevc_sequence_and_sei_metadata_survive_mp4_and_mkv_projection() {
         assert_eq!(metadata.field_order.as_deref(), Some("progressive"));
         assert_eq!(
             metadata.sample_aspect_ratio,
-            scryer_media_types::Rational::new(1, 1)
+            scryer_media_model::Rational::new(1, 1)
         );
         let mastering = metadata.color.mastering_display.as_ref().expect(name);
         assert_eq!(mastering.red_x, Some(0.68));
@@ -873,11 +873,11 @@ fn mpegts_content_probe_profile_identifies_video_without_deep_track_enrichment()
     assert!(is_valid_video(&a));
     assert_eq!(
         a.details.duration_provenance,
-        scryer_media_types::Provenance::Estimated
+        scryer_media_model::Provenance::Estimated
     );
     assert_eq!(
         a.details.report.status,
-        scryer_media_types::ProbeStatus::Incomplete
+        scryer_media_model::ProbeStatus::Incomplete
     );
     assert!(!a.details.report.budget_exhausted);
     assert!(

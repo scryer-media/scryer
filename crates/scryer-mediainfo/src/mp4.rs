@@ -45,7 +45,7 @@ struct ParsedMp4Track {
 
 #[derive(Debug, Clone, Default)]
 struct Mp4TrackMetadata {
-    details: scryer_media_types::StreamMetadata,
+    details: scryer_media_model::StreamMetadata,
     track_id: Option<u32>,
     handler_type: Option<[u8; 4]>,
     language: Option<String>,
@@ -60,7 +60,7 @@ struct Mp4TrackMetadata {
 #[derive(Debug, Clone, Default)]
 struct Mp4ChapterMetadata {
     chpl_count: Option<i32>,
-    entries: Vec<scryer_media_types::Chapter>,
+    entries: Vec<scryer_media_model::Chapter>,
     incomplete: bool,
     chapter_track_ids: Vec<u32>,
 }
@@ -92,7 +92,7 @@ pub(crate) fn parse_mp4_source(
     let ctx = match mp4parse::read_mp4(&mut cursor) {
         Ok(ctx) => ctx,
         Err(_) if prepared.budget_exhausted => {
-            let mut details = scryer_media_types::AnalysisDetails::default();
+            let mut details = scryer_media_model::AnalysisDetails::default();
             report_container_budget(&mut details.report);
             return Ok(RawContainer {
                 format_name: extension.to_owned(),
@@ -156,7 +156,7 @@ pub(crate) fn parse_mp4_source(
                     .zip(media_duration)
                     .filter(|(_, duration)| *duration > 0.0)
                     .map(|(bytes, duration)| (bytes as f64 * 8.0 / duration) as i64);
-                track.raw.metadata.bitrate_provenance = scryer_media_types::Provenance::Observed;
+                track.raw.metadata.bitrate_provenance = scryer_media_model::Provenance::Observed;
                 if track.raw.kind == TrackKind::Video && duration_seconds.is_none() {
                     duration_seconds = Some(duration);
                 }
@@ -167,7 +167,7 @@ pub(crate) fn parse_mp4_source(
     let overall_bitrate_bps = duration_seconds
         .filter(|duration| *duration > 0.0)
         .map(|duration| (prepared.file_len_hint as f64 * 8.0 / duration) as u64);
-    let mut report = scryer_media_types::ProbeReport::default();
+    let mut report = scryer_media_model::ProbeReport::default();
     report_fragment_budget(&mut report, fragment_result.budget_exhausted);
     if prepared.budget_exhausted {
         report_container_budget(&mut report);
@@ -231,9 +231,9 @@ pub(crate) fn parse_mp4_source(
             match result {
                 Ok(entries) => chapters.extend(entries),
                 Err((message, budget)) => {
-                    report.status = scryer_media_types::ProbeStatus::Incomplete;
+                    report.status = scryer_media_model::ProbeStatus::Incomplete;
                     report.budget_exhausted |= budget;
-                    report.warnings.push(scryer_media_types::ProbeWarning {
+                    report.warnings.push(scryer_media_model::ProbeWarning {
                         code: "mp4_chapter_track_incomplete".into(),
                         message: message.into(),
                         stream_id: Some(id.to_string()),
@@ -247,8 +247,8 @@ pub(crate) fn parse_mp4_source(
     if parsed_metadata.chapters.incomplete
         || (chapters.is_empty() && !parsed_metadata.chapters.chapter_track_ids.is_empty())
     {
-        report.status = scryer_media_types::ProbeStatus::Incomplete;
-        report.warnings.push(scryer_media_types::ProbeWarning {
+        report.status = scryer_media_model::ProbeStatus::Incomplete;
+        report.warnings.push(scryer_media_model::ProbeWarning {
             code: "mp4_chapters_incomplete".into(),
             message: "Chapter metadata could not be fully inventoried".into(),
             ..Default::default()
@@ -275,7 +275,7 @@ pub(crate) fn parse_mp4_source(
     .to_owned();
 
     Ok(RawContainer {
-        details: scryer_media_types::AnalysisDetails {
+        details: scryer_media_model::AnalysisDetails {
             overall_bitrate_bps,
             report,
             caption_services,
@@ -289,13 +289,13 @@ pub(crate) fn parse_mp4_source(
     })
 }
 
-fn report_fragment_budget(report: &mut scryer_media_types::ProbeReport, exhausted: bool) {
+fn report_fragment_budget(report: &mut scryer_media_model::ProbeReport, exhausted: bool) {
     if !exhausted {
         return;
     }
-    report.status = scryer_media_types::ProbeStatus::Incomplete;
+    report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted = true;
-    report.warnings.push(scryer_media_types::ProbeWarning {
+    report.warnings.push(scryer_media_model::ProbeWarning {
         code: "mp4_fragment_inventory_budget".into(),
         message: "Fragment timing metadata exceeds the bounded header, track, or sample inventory"
             .into(),
@@ -405,10 +405,10 @@ fn best_sonarr_runtime(audio: Option<f64>, video: Option<f64>, format: Option<f6
     }
 }
 
-fn report_container_budget(report: &mut scryer_media_types::ProbeReport) {
-    report.status = scryer_media_types::ProbeStatus::Incomplete;
+fn report_container_budget(report: &mut scryer_media_model::ProbeReport) {
+    report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted = true;
-    report.warnings.push(scryer_media_types::ProbeWarning {
+    report.warnings.push(scryer_media_model::ProbeWarning {
         code: "mp4_container_scan_budget".into(),
         message: "MP4 catalog inspection stops after 128 top-level boxes or 16 MiB of metadata; incomplete fragment timing and bitrate remain unknown".into(),
         ..Default::default()
@@ -774,14 +774,14 @@ fn build_mp4_tracks(
                     .checked_mul(sar.numerator)
                     .zip((height as u64).checked_mul(sar.denominator))
                     .and_then(|(numerator, denominator)| {
-                        scryer_media_types::Rational::new(numerator, denominator)
+                        scryer_media_model::Rational::new(numerator, denominator)
                     });
             }
         }
 
         if let Some(bit_rate_bps) = accounted_track_bitrate(track) {
             raw.bit_rate_bps = Some(bit_rate_bps);
-            raw.metadata.bitrate_provenance = scryer_media_types::Provenance::Observed;
+            raw.metadata.bitrate_provenance = scryer_media_model::Provenance::Observed;
         }
 
         if raw.codec_name.is_none() {
@@ -1226,7 +1226,7 @@ fn parse_trak(data: &[u8]) -> Mp4TrackMetadata {
     track.details.id = track.track_id.map(|id| id.to_string());
     track.details.original_language = track.language.clone();
     if track.language.is_some() {
-        track.details.language_provenance = scryer_media_types::Provenance::Container;
+        track.details.language_provenance = scryer_media_model::Provenance::Container;
     }
     track.details.disposition.default = Some(track.default_track);
     track.details.disposition.forced = Some(track.forced);
@@ -1362,7 +1362,7 @@ fn parse_stsd(data: &[u8], track: &mut Mp4TrackMetadata) {
                                 if child_payload.len() >= 10
                                     && matches!(&child_payload[..4], b"nclx" | b"nclc")
                                 {
-                                    track.details.color = scryer_media_types::ColorMetadata {
+                                    track.details.color = scryer_media_model::ColorMetadata {
                                         primaries: read_be_u16(&child_payload[4..6])
                                             .map(u32::from)
                                             .filter(|value| *value != 2),
@@ -1377,7 +1377,7 @@ fn parse_stsd(data: &[u8], track: &mut Mp4TrackMetadata) {
                                                 child_payload.get(10).map(|byte| byte & 128 != 0)
                                             })
                                             .flatten(),
-                                        provenance: scryer_media_types::Provenance::Container,
+                                        provenance: scryer_media_model::Provenance::Container,
                                         ..Default::default()
                                     };
                                 }
@@ -1387,7 +1387,7 @@ fn parse_stsd(data: &[u8], track: &mut Mp4TrackMetadata) {
                                     read_be_u32(&child_payload[..4])
                                         .zip(read_be_u32(&child_payload[4..8]))
                                         .and_then(|(width, height)| {
-                                            scryer_media_types::Rational::new(
+                                            scryer_media_model::Rational::new(
                                                 i64::from(width),
                                                 u64::from(height),
                                             )
@@ -1850,7 +1850,7 @@ fn matrix_rotation(matrix: &mp4parse::Matrix) -> Option<f64> {
     Some(-b.atan2(a).to_degrees())
 }
 
-fn uniform_sample_frame_rate(track: &mp4parse::Track) -> Option<scryer_media_types::Rational> {
+fn uniform_sample_frame_rate(track: &mp4parse::Track) -> Option<scryer_media_model::Rational> {
     let scale = track.timescale?.0;
     let samples = &track.stts.as_ref()?.samples;
     let delta = samples.first()?.sample_delta;
@@ -1862,13 +1862,13 @@ fn uniform_sample_frame_rate(track: &mp4parse::Track) -> Option<scryer_media_typ
     {
         return None;
     }
-    scryer_media_types::Rational::new(i64::try_from(scale).ok()?, u64::from(delta))
+    scryer_media_model::Rational::new(i64::try_from(scale).ok()?, u64::from(delta))
 }
 
 fn sample_timing_facts(
     track: &mp4parse::Track,
-) -> (Option<scryer_media_types::Rational>, Option<bool>) {
-    use scryer_media_types::Rational;
+) -> (Option<scryer_media_model::Rational>, Option<bool>) {
+    use scryer_media_model::Rational;
     let facts = (|| {
         let scale = track.timescale?.0;
         if scale == 0 {
@@ -2012,8 +2012,8 @@ fn scan_mp4_sample_probes(
     ctx: &MediaContext,
     tracks: &mut [ParsedMp4Track],
     profile: AnalysisProfile,
-    report: &mut scryer_media_types::ProbeReport,
-) -> Vec<scryer_media_types::CaptionService> {
+    report: &mut scryer_media_model::ProbeReport,
+) -> Vec<scryer_media_model::CaptionService> {
     if profile.skips_deep_probes() {
         return Vec::new();
     }
@@ -2073,8 +2073,8 @@ fn scan_mp4_video_metadata_with_cache(
     sample_cache: &mut HashMap<Mp4SampleReadKey, Vec<u8>>,
     ctx: &MediaContext,
     tracks: &mut [ParsedMp4Track],
-    report: &mut scryer_media_types::ProbeReport,
-    captions: &mut Vec<scryer_media_types::CaptionService>,
+    report: &mut scryer_media_model::ProbeReport,
+    captions: &mut Vec<scryer_media_model::CaptionService>,
 ) {
     let mut remaining = 8 * 1024 * 1024_usize;
     for parsed in tracks
@@ -2154,19 +2154,19 @@ fn scan_mp4_video_metadata_with_cache(
 }
 
 fn sample_probe_warning(
-    report: &mut scryer_media_types::ProbeReport,
+    report: &mut scryer_media_model::ProbeReport,
     track: &RawTrack,
     code: &str,
     budget: bool,
 ) {
-    report.status = scryer_media_types::ProbeStatus::Incomplete;
+    report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted |= budget;
     if !report
         .warnings
         .iter()
         .any(|warning| warning.code == code && warning.stream_id == track.metadata.id)
     {
-        report.warnings.push(scryer_media_types::ProbeWarning {
+        report.warnings.push(scryer_media_model::ProbeWarning {
             code: code.into(),
             message: "MP4 sample enrichment is incomplete; undetected metadata remains unknown"
                 .into(),
@@ -2253,7 +2253,7 @@ fn scan_mp4_audio_profiles_with_cache(
     sample_cache: &mut HashMap<Mp4SampleReadKey, Vec<u8>>,
     ctx: &MediaContext,
     tracks: &mut [ParsedMp4Track],
-    report: &mut scryer_media_types::ProbeReport,
+    report: &mut scryer_media_model::ProbeReport,
 ) {
     let mut remaining = 4 * 1024 * 1024_usize;
     for parsed_track in tracks
@@ -2449,7 +2449,7 @@ mod tests {
 
     #[test]
     fn uniform_sample_timing_retains_declarations_without_claiming_observations() {
-        use scryer_media_types::Rational;
+        use scryer_media_model::Rational;
         assert_eq!(
             uniform_sample_frame_rate(&timing_track(&[(1, 1000)])),
             Rational::new(1, 1)
@@ -2477,7 +2477,7 @@ mod tests {
             .details
             .streams
             .iter()
-            .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+            .find(|stream| stream.kind == scryer_media_model::StreamKind::Video)
             .unwrap();
         assert_eq!(video.metadata.declared_frame_rate, Rational::new(1, 1));
         assert!(video.metadata.observed_frame_rate.is_none());
@@ -2486,7 +2486,7 @@ mod tests {
 
     #[test]
     fn sample_timing_handles_reordering_vfr_and_bounded_unknowns() {
-        use scryer_media_types::Rational;
+        use scryer_media_model::Rational;
         let constant = timing_track(&[(4, 40)]);
         assert_eq!(
             sample_timing_facts(&constant),
@@ -2585,7 +2585,7 @@ mod tests {
         let container =
             parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
         let report = container.details.report;
-        assert_eq!(report.status, scryer_media_types::ProbeStatus::Incomplete);
+        assert_eq!(report.status, scryer_media_model::ProbeStatus::Incomplete);
         assert!(report.budget_exhausted);
         assert_eq!(report.warnings.len(), 1);
         assert_eq!(report.warnings[0].code, "mp4_fragment_inventory_budget");
@@ -2666,7 +2666,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let mut report = scryer_media_types::ProbeReport::default();
+        let mut report = scryer_media_model::ProbeReport::default();
         scan_mp4_sample_probes(
             &mut Cursor::new(bytes),
             &context,
@@ -3025,7 +3025,7 @@ mod tests {
             );
             assert_eq!(
                 track.details.language_provenance,
-                scryer_media_types::Provenance::Container
+                scryer_media_model::Provenance::Container
             );
         }
         let invalid = make_box(b"elng", b"\0\0\0\0fr\0hidden");

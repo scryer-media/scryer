@@ -4,7 +4,7 @@ use crate::{
     source::MediaSource,
     types::{RawContainer, RawTrack},
 };
-use scryer_media_types::{AnalysisDetails, ProbeStatus};
+use scryer_media_model::{AnalysisDetails, ProbeStatus};
 use std::io::SeekFrom;
 
 const LIMIT: u64 = 1024 * 1024;

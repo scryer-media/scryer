@@ -4,7 +4,7 @@ use crate::{
     source::MediaSource,
     types::{RawContainer, RawTrack},
 };
-use scryer_media_types::{AnalysisDetails, ProbeStatus};
+use scryer_media_model::{AnalysisDetails, ProbeStatus};
 use std::io::SeekFrom;
 
 pub(crate) fn sniff(data: &[u8]) -> bool {

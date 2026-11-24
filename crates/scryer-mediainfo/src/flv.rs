@@ -112,17 +112,17 @@ pub(crate) fn parse_flv_source(
 
         Ok(())
     })();
-    let mut details = scryer_media_types::AnalysisDetails::default();
+    let mut details = scryer_media_model::AnalysisDetails::default();
     if let Err(error) = scanned {
         if !file.exhausted() {
             return Err(error);
         }
-        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.status = scryer_media_model::ProbeStatus::Incomplete;
         details.report.budget_exhausted = true;
         details
             .report
             .warnings
-            .push(scryer_media_types::ProbeWarning {
+            .push(scryer_media_model::ProbeWarning {
             code: "flv_tag_scan_budget".into(),
             message:
                 "FLV tag scanning stopped when the media byte or I/O-operation budget was exhausted"
@@ -138,7 +138,7 @@ pub(crate) fn parse_flv_source(
         video.frame_rate_fps = video.frame_rate_fps.or(metadata.frame_rate_fps);
         video.metadata.declared_frame_rate = metadata
             .frame_rate_fps
-            .and_then(scryer_media_types::Rational::from_f64);
+            .and_then(scryer_media_model::Rational::from_f64);
         video.bit_rate_bps = video.bit_rate_bps.or(metadata.video_bitrate_bps);
         tracks.push(video);
     }
@@ -747,7 +747,7 @@ mod tests {
         assert!(analysis.details.report.budget_exhausted);
         assert_eq!(
             analysis.details.report.status,
-            scryer_media_types::ProbeStatus::Incomplete
+            scryer_media_model::ProbeStatus::Incomplete
         );
     }
 

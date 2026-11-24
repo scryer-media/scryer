@@ -44,6 +44,7 @@ members = [
     "crates/scryer-mock-apis",
     "crates/scryer-mediainfo",
     "crates/scryer-media-types",
+    "crates/scryer-media-model",
 ]
 exclude = ["test-plugins/test-indexer", "benchmarks/criterion"]
 resolver = "2"

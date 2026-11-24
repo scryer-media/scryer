@@ -105,7 +105,7 @@ pub(crate) fn parse_avi_source(
         }
     }
 
-    let mut details = scryer_media_types::AnalysisDetails::default();
+    let mut details = scryer_media_model::AnalysisDetails::default();
     if let Some(offset) = idx1_offset {
         let idx1 = riff::Chunk::read(&mut file, offset)
             .map_err(|e| MediaInfoError::Parse(format!("error reading idx1 chunk: {e}")))?;
@@ -118,18 +118,18 @@ pub(crate) fn parse_avi_source(
                 if !file.exhausted() {
                     return Err(error);
                 }
-                details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                details.report.status = scryer_media_model::ProbeStatus::Incomplete;
                 details.report.budget_exhausted = true;
-                details.report.warnings.push(scryer_media_types::ProbeWarning {
+                details.report.warnings.push(scryer_media_model::ProbeWarning {
                     code: "avi_index_read_budget".into(),
                     message: "AVI index accounting stopped when the media byte or I/O-operation budget was exhausted; index-derived bitrate remains partial".into(),
                     ..Default::default()
                 });
             }
         } else {
-            details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+            details.report.status = scryer_media_model::ProbeStatus::Incomplete;
             details.report.budget_exhausted = true;
-            details.report.warnings.push(scryer_media_types::ProbeWarning {
+            details.report.warnings.push(scryer_media_model::ProbeWarning {
                 code: "avi_index_budget".into(),
                 message: "AVI index exceeds the 4 MiB catalog budget; index-derived bitrate remains unknown".into(),
                 ..Default::default()
@@ -165,8 +165,8 @@ pub(crate) fn parse_avi_source(
     })
 }
 
-fn avi_sampling_warning(report: &mut scryer_media_types::ProbeReport, budget: bool) {
-    report.status = scryer_media_types::ProbeStatus::Incomplete;
+fn avi_sampling_warning(report: &mut scryer_media_model::ProbeReport, budget: bool) {
+    report.status = scryer_media_model::ProbeStatus::Incomplete;
     report.budget_exhausted |= budget;
     let code = if budget {
         "avi_sample_budget"
@@ -174,7 +174,7 @@ fn avi_sampling_warning(report: &mut scryer_media_types::ProbeReport, budget: bo
         "avi_sample_reference_invalid"
     };
     if !report.warnings.iter().any(|warning| warning.code == code) {
-        report.warnings.push(scryer_media_types::ProbeWarning {
+        report.warnings.push(scryer_media_model::ProbeWarning {
             code: code.into(),
             message: "AVI sample inspection did not cover all referenced payloads".into(),
             ..Default::default()
@@ -189,7 +189,7 @@ fn enrich_movi<T: Read + Seek>(
     mut at: u64,
     mut end: u64,
     tracks: &mut [AviTrack],
-    details: &mut scryer_media_types::AnalysisDetails,
+    details: &mut scryer_media_model::AnalysisDetails,
 ) -> Result<(), MediaInfoError> {
     let mut stack = Vec::new();
     let mut counts = vec![0_u8; tracks.len()];
@@ -494,7 +494,7 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
         let dw_scale = read_u32_le(strh, 20);
         let dw_rate = read_u32_le(strh, 24);
         if dw_scale > 0 && dw_rate > 0 {
-            scryer_media_types::Rational::new(i64::from(dw_rate), u64::from(dw_scale))
+            scryer_media_model::Rational::new(i64::from(dw_rate), u64::from(dw_scale))
         } else {
             None
         }
@@ -538,7 +538,7 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
     }
 
     RawTrack {
-        metadata: scryer_media_types::StreamMetadata {
+        metadata: scryer_media_model::StreamMetadata {
             declared_frame_rate,
             ..Default::default()
         },
@@ -729,7 +729,7 @@ fn backfill_track_bitrates(tracks: &mut [AviTrack]) {
             && duration_seconds > 0.0
         {
             track.raw.bit_rate_bps = Some((total_bytes as f64 * 8.0 / duration_seconds) as i64);
-            track.raw.metadata.bitrate_provenance = scryer_media_types::Provenance::Observed;
+            track.raw.metadata.bitrate_provenance = scryer_media_model::Provenance::Observed;
         }
     }
 }
@@ -1030,14 +1030,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             video.metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(24, 1)
+            scryer_media_model::Rational::new(24, 1)
         );
         assert_eq!(video.metadata.profile.as_deref(), Some("Simple Profile"));
         assert_eq!(video.metadata.bit_depth, Some(8));
         assert_eq!(video.metadata.pixel_format.as_deref(), Some("yuv420p"));
         assert_eq!(
             video.metadata.display_aspect_ratio,
-            scryer_media_types::Rational::new(16, 9)
+            scryer_media_model::Rational::new(16, 9)
         );
     }
 
@@ -1109,7 +1109,7 @@ mod tests {
         assert!(analysis.details.report.budget_exhausted);
         assert_eq!(
             analysis.details.report.status,
-            scryer_media_types::ProbeStatus::Incomplete
+            scryer_media_model::ProbeStatus::Incomplete
         );
     }
 
@@ -1144,7 +1144,7 @@ mod tests {
         record.extend(sample_chunk(b"01wb", &[0xff, 0xfb, 0x50, 0xc0]));
         let bytes = sample_chunk(b"LIST", &record);
         let mut tracks = vec![sample_track(0), sample_track(1)];
-        let mut details = scryer_media_types::AnalysisDetails::default();
+        let mut details = scryer_media_model::AnalysisDetails::default();
         super::enrich_movi(
             &mut std::io::Cursor::new(&bytes),
             0,
@@ -1190,19 +1190,19 @@ mod tests {
             cursor: std::io::Cursor::new(bytes),
             read: 0,
         };
-        let mut details = scryer_media_types::AnalysisDetails::default();
+        let mut details = scryer_media_model::AnalysisDetails::default();
         super::enrich_movi(&mut source, 0, end, &mut [sample_track(0)], &mut details).unwrap();
         assert_eq!(source.read, 8 + 64 * 1024);
         assert!(details.report.budget_exhausted);
         assert_eq!(
             details.report.status,
-            scryer_media_types::ProbeStatus::Incomplete
+            scryer_media_model::ProbeStatus::Incomplete
         );
 
         source.cursor =
             std::io::Cursor::new([b"00wb".as_slice(), &u32::MAX.to_le_bytes()].concat());
         source.read = 0;
-        let mut details = scryer_media_types::AnalysisDetails::default();
+        let mut details = scryer_media_model::AnalysisDetails::default();
         super::enrich_movi(&mut source, 0, 8, &mut [sample_track(0)], &mut details).unwrap();
         assert_eq!(source.read, 8);
         assert!(!details.report.budget_exhausted);

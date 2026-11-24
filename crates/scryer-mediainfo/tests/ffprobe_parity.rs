@@ -18,8 +18,8 @@ fn media_dir() -> PathBuf {
 }
 
 fn is_media_fixture(path: &Path) -> bool {
-    scryer_media_types::formats::media_format_for_path(path)
-        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+    scryer_media_model::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_model::formats::MediaHandling::Native)
 }
 
 fn ffprobe_bin() -> Option<PathBuf> {
@@ -770,7 +770,7 @@ fn compare_fixture_corpus_against_ffprobe() {
         }
     }
     if let Some(path) = report_path {
-        let report = serde_json::json!({"analysis_revision": scryer_media_types::ANALYSIS_REVISION,
+        let report = serde_json::json!({"analysis_revision": scryer_media_model::ANALYSIS_REVISION,
             "ffprobe_version": String::from_utf8_lossy(&version.stdout), "fixtures": records, "mismatches": mismatches});
         std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap())
             .expect("write differential report");
@@ -811,13 +811,13 @@ fn sparse_mkv_authored_bytes_require_unknowns_and_explicit_variants_require_fact
             assert_eq!(stream.metadata.original_language.as_deref(), Some("eng"));
             assert_eq!(
                 stream.metadata.language_provenance,
-                scryer_media_types::Provenance::Container
+                scryer_media_model::Provenance::Container
             );
         }
         assert_eq!(explicit.video_frame_rate.as_deref(), Some("25"));
         assert_eq!(
             explicit.details.streams[0].metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(25, 1)
+            scryer_media_model::Rational::new(25, 1)
         );
         assert_eq!(
             explicit.details.streams[1]

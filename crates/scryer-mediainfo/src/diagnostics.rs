@@ -5,7 +5,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::Instant;
 
-use scryer_media_types::{
+use scryer_media_model::{
     DiagnosticCoverage, DiscSelection, ProbeReport, ProbeStatus, ProbeWarning,
     StructuralDiagnostics,
 };

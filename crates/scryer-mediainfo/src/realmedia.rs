@@ -4,7 +4,7 @@ use crate::{
     source::MediaSource,
     types::{RawContainer, RawTrack, TrackKind},
 };
-use scryer_media_types::{AnalysisDetails, ProbeStatus, Provenance};
+use scryer_media_model::{AnalysisDetails, ProbeStatus, Provenance};
 use std::io::SeekFrom;
 const LIMIT: u64 = 1024 * 1024;
 enum Descriptor {

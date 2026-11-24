@@ -2,7 +2,7 @@ use crate::{
     MediaAnalysis,
     types::{RawContainer, RawTrack, TrackKind},
 };
-use scryer_media_types::{StreamDetail, StreamKind};
+use scryer_media_model::{StreamDetail, StreamKind};
 
 pub(super) fn apply_navigation(analysis: &mut MediaAnalysis, declared: &[StreamDetail]) {
     if declared.is_empty() {
@@ -64,8 +64,8 @@ pub(super) fn apply_navigation(analysis: &mut MediaAnalysis, declared: &[StreamD
                 && declaration.metadata.color.primaries.is_some()
             {
                 actual.metadata.color.primaries = declaration.metadata.color.primaries;
-                if actual.metadata.color.provenance == scryer_media_types::Provenance::Unknown {
-                    actual.metadata.color.provenance = scryer_media_types::Provenance::Container;
+                if actual.metadata.color.provenance == scryer_media_model::Provenance::Unknown {
+                    actual.metadata.color.provenance = scryer_media_model::Provenance::Container;
                 }
             }
             if declaration.metadata.hdr.dolby_vision == Some(true) {
@@ -81,7 +81,7 @@ pub(super) fn apply_navigation(analysis: &mut MediaAnalysis, declared: &[StreamD
                 || declaration.metadata.hdr.hdr10plus == Some(true))
                 && contradicts_pq
             {
-                analysis.details.report.warnings.push(scryer_media_types::ProbeWarning {
+                analysis.details.report.warnings.push(scryer_media_model::ProbeWarning {
                     code: "disc_hdr_signaling_conflict".into(), message: "Disc HDR signaling conflicts with the elementary video; bitstream signaling takes precedence".into(),
                     stream_id: actual.metadata.id.clone(), ..Default::default()
                 });

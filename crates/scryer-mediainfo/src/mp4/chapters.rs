@@ -1,4 +1,4 @@
-use scryer_media_types::Chapter;
+use scryer_media_model::Chapter;
 
 /// Nero chapter timestamps use 100 ns units, independently of movie timescale.
 /// The one-byte count and title lengths bound this inventory to 255 entries.

@@ -350,6 +350,6 @@ fn collect_media_files(root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> i
 }
 
 fn is_media_file(path: &Path) -> bool {
-    scryer_media_types::formats::media_format_for_path(path)
-        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+    scryer_media_model::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_model::formats::MediaHandling::Native)
 }
