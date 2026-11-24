@@ -31,7 +31,7 @@ macro_rules! codecs {
         /// assert_eq!(codec.kind(), Some(StreamKind::Audio));
         /// assert_eq!(Codec::from("future_codec"), Codec::Other("future_codec".into()));
         /// ```
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[non_exhaustive]
         pub enum Codec {
             $($(#[doc = $doc])* $variant,)*
@@ -250,6 +250,19 @@ codecs! {
 
     /// A stream the container declares but whose codec it does not identify.
     Unknown => "unknown", None;
+}
+
+/// Codecs order by name, as the names themselves do.
+impl Ord for Codec {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for Codec {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl fmt::Display for Codec {

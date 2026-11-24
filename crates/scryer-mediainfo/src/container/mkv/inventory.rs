@@ -110,6 +110,15 @@ fn inventory<R: Read + Seek>(
     if !complete {
         incomplete_inventory(details);
     }
+    let mut uid_index = std::collections::BTreeMap::new();
+    for &(uid, index) in track_uids {
+        uid_index
+            .entry(uid)
+            .and_modify(|index| *index = None)
+            .or_insert(Some(index));
+    }
+    let mut file_allowance = crate::tags::Allowance::new();
+    let mut track_allowance = crate::tags::Allowance::new();
     let mut bitrates = std::collections::BTreeMap::new();
     let mut track_tags =
         std::collections::BTreeMap::<u64, std::collections::BTreeMap<String, String>>::new();
@@ -176,19 +185,15 @@ fn inventory<R: Read + Seek>(
                     &mut TagScopes {
                         file: &mut details.tags,
                         tracks: &mut track_tags,
+                        known_tracks: &uid_index,
+                        file_allowance: &mut file_allowance,
+                        track_allowance: &mut track_allowance,
                         report: &mut details.report,
                     },
                 )?;
             }
             _ => {}
         }
-    }
-    let mut uid_index = std::collections::BTreeMap::new();
-    for &(uid, index) in track_uids {
-        uid_index
-            .entry(uid)
-            .and_modify(|index| *index = None)
-            .or_insert(Some(index));
     }
     for (uid, scope) in track_tags {
         // A UID two tracks share cannot say whose tags these are.
@@ -354,6 +359,12 @@ fn spend(remaining: &mut usize) -> Result<(), ProbeError> {
 struct TagScopes<'a> {
     file: &'a mut std::collections::BTreeMap<String, String>,
     tracks: &'a mut std::collections::BTreeMap<u64, std::collections::BTreeMap<String, String>>,
+    /// Track UIDs the file declares; `None` marks one that two tracks share.
+    known_tracks: &'a std::collections::BTreeMap<u64, Option<usize>>,
+    /// Bytes the file's own tags may still take while collecting.
+    file_allowance: &'a mut crate::tags::Allowance,
+    /// Bytes all track tags together may still take while collecting.
+    track_allowance: &'a mut crate::tags::Allowance,
     report: &'a mut scryer_media_model::ProbeReport,
 }
 
@@ -437,13 +448,26 @@ fn statistics(
                 fields = &fields[length..];
             }
             if !targets_other {
+                // Only tracks the file declares, each once: a Tag may name
+                // any number of UIDs, and every text is kept per named track.
+                let mut tagged: Vec<u64> = targets
+                    .iter()
+                    .copied()
+                    .filter(|uid| matches!(scopes.known_tracks.get(uid), Some(Some(_))))
+                    .collect();
+                tagged.sort_unstable();
+                tagged.dedup();
                 for (name, value) in texts {
                     if targets.is_empty() {
-                        crate::tags::insert(scopes.file, name, value, scopes.report);
+                        scopes
+                            .file_allowance
+                            .insert(scopes.file, name, value, scopes.report);
                     }
-                    for uid in &targets {
+                    for uid in &tagged {
                         let scope = scopes.tracks.entry(*uid).or_default();
-                        crate::tags::insert(scope, name, value, scopes.report);
+                        scopes
+                            .track_allowance
+                            .insert(scope, name, value, scopes.report);
                     }
                 }
             }
@@ -652,11 +676,13 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     fn element(id: &[u8], data: &[u8]) -> Vec<u8> {
-        assert!(data.len() < 16383);
         if data.len() < 127 {
             [id, &[0x80 | data.len() as u8], data].concat()
-        } else {
+        } else if data.len() < 16383 {
             [id, &(0x4000 | data.len() as u16).to_be_bytes(), data].concat()
+        } else {
+            assert!(data.len() < 0x0fff_ffff);
+            [id, &(0x1000_0000 | data.len() as u32).to_be_bytes(), data].concat()
         }
     }
     fn video(with_rate: bool) -> RawTrack {
@@ -878,6 +904,9 @@ mod tests {
                 &mut TagScopes {
                     file: &mut Default::default(),
                     tracks: &mut Default::default(),
+                    known_tracks: &Default::default(),
+                    file_allowance: &mut crate::tags::Allowance::new(),
+                    track_allowance: &mut crate::tags::Allowance::new(),
                     report: &mut Default::default(),
                 },
             )
@@ -892,6 +921,9 @@ mod tests {
                 &mut TagScopes {
                     file: &mut Default::default(),
                     tracks: &mut Default::default(),
+                    known_tracks: &Default::default(),
+                    file_allowance: &mut crate::tags::Allowance::new(),
+                    track_allowance: &mut crate::tags::Allowance::new(),
                     report: &mut Default::default(),
                 },
             )
@@ -1036,6 +1068,9 @@ mod tests {
             &mut TagScopes {
                 file: &mut file,
                 tracks: &mut tracks,
+                known_tracks: &[(7, Some(0))].into(),
+                file_allowance: &mut crate::tags::Allowance::new(),
+                track_allowance: &mut crate::tags::Allowance::new(),
                 report: &mut report,
             },
         )
@@ -1048,6 +1083,64 @@ mod tests {
         assert_eq!(
             tracks[&7].get("ENCODER").map(String::as_str),
             Some("synthetic-enc")
+        );
+    }
+
+    #[test]
+    fn a_tag_naming_many_tracks_keeps_only_declared_ones_within_the_file_limit() {
+        let simple = |name: &[u8], value: &[u8]| {
+            element(
+                &[0x67, 0xc8],
+                &[element(&[0x45, 0xa3], name), element(&[0x44, 0x87], value)].concat(),
+            )
+        };
+        // One Tag names 2,000 UIDs no track has, and two declared tracks
+        // 500 times each, and carries 200 texts of the largest kept size.
+        let mut targets = Vec::new();
+        for uid in 0..3_000_u16 {
+            let uid = match uid % 3 {
+                0 => 7,
+                1 => 8,
+                _ => 1_000 + uid,
+            };
+            targets.extend(element(&[0x63, 0xc5], &uid.to_be_bytes()));
+        }
+        let value = vec![b'v'; crate::tags::MAX_VALUE_BYTES];
+        let mut fields = element(&[0x63, 0xc0], &targets);
+        for index in 0..200 {
+            fields.extend(simple(format!("KEY{index:03}").as_bytes(), &value));
+        }
+        let bytes = element(&[0x73, 0x73], &fields);
+        let mut tracks = std::collections::BTreeMap::new();
+        let mut report = scryer_media_model::ProbeReport::default();
+        statistics(
+            &bytes,
+            &mut MAX_HEADERS.clone(),
+            &mut Default::default(),
+            &mut TagScopes {
+                file: &mut Default::default(),
+                tracks: &mut tracks,
+                known_tracks: &[(7, Some(0)), (8, Some(1)), (9, None)].into(),
+                file_allowance: &mut crate::tags::Allowance::new(),
+                track_allowance: &mut crate::tags::Allowance::new(),
+                report: &mut report,
+            },
+        )
+        .unwrap();
+        assert_eq!(tracks.keys().copied().collect::<Vec<_>>(), [7, 8]);
+        let held: usize = tracks
+            .values()
+            .flatten()
+            .map(|(key, value)| key.len() + value.len())
+            .sum();
+        assert!(held <= crate::tags::MAX_FILE_BYTES, "{held}");
+        assert_eq!(
+            report
+                .warnings
+                .iter()
+                .filter(|item| item.code == scryer_media_model::warning::TAGS_TRUNCATED)
+                .count(),
+            1
         );
     }
 }

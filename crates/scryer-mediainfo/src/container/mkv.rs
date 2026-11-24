@@ -960,14 +960,18 @@ fn parse_mkv_video_payload(payload: &[u8]) -> (Option<i32>, Option<i32>, Option<
 }
 
 /// The sampling a Matroska Colour element's ChromaSubsamplingHorz and
-/// ChromaSubsamplingVert state, as the log2 of the chroma decimation. Absent
-/// elements state nothing; a monochrome picture cannot be stated this way.
+/// ChromaSubsamplingVert state. The specification counts the chroma samples
+/// removed for each one kept, which makes 4:1:1 a horizontal 3; common
+/// muxers write the log2 of the decimation instead, a horizontal 2. Both
+/// are read as 4:1:1, since a horizontal 2 means nothing else in practice
+/// and the two conventions agree on every other sampling. Absent elements
+/// state nothing; a monochrome picture cannot be stated this way.
 fn colour_subsampling([horizontal, vertical]: [Option<u32>; 2]) -> Option<ChromaSubsampling> {
     Some(match (horizontal?, vertical?) {
         (1, 1) => ChromaSubsampling::Yuv420,
         (1, 0) => ChromaSubsampling::Yuv422,
         (0, 0) => ChromaSubsampling::Yuv444,
-        (2, 0) => ChromaSubsampling::Yuv411,
+        (2 | 3, 0) => ChromaSubsampling::Yuv411,
         (0, 1) => ChromaSubsampling::Yuv440,
         _ => return None,
     })

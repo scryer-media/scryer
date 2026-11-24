@@ -163,13 +163,16 @@ fn enrich_video(track: &mut RawTrack, report: &mut scryer_media_model::ProbeRepo
     }
     // The pixel format names its sampling exactly; a container's own
     // statement stands only when the bitstream gave no pixel format.
-    if let Some(subsampling) = track
-        .metadata
-        .pixel_format
-        .as_deref()
-        .and_then(chroma_subsampling)
-    {
-        track.metadata.chroma_subsampling = Some(subsampling);
+    if let Some(pixel_format) = track.metadata.pixel_format.as_deref() {
+        if let Some(subsampling) = chroma_subsampling(pixel_format) {
+            track.metadata.chroma_subsampling = Some(subsampling);
+        } else if ["gbr", "rgb", "bgr", "argb", "abgr"]
+            .iter()
+            .any(|prefix| pixel_format.starts_with(prefix))
+        {
+            // An RGB picture has no chroma planes, whatever the container says.
+            track.metadata.chroma_subsampling = None;
+        }
     }
     track.metadata.configured_width = info.width;
     track.metadata.configured_height = info.height;
@@ -238,6 +241,7 @@ fn chroma_subsampling(pixel_format: &str) -> Option<ChromaSubsampling> {
     }
     let sampling = pixel_format
         .strip_prefix("yuvj")
+        .or_else(|| pixel_format.strip_prefix("yuva"))
         .or_else(|| pixel_format.strip_prefix("yuv"))?;
     Some(match sampling.get(..4)? {
         "420p" => ChromaSubsampling::Yuv420,

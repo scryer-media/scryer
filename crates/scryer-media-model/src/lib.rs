@@ -803,9 +803,35 @@ impl AnalysisDetails {
     #[must_use]
     pub fn selected_video(&self) -> Option<&StreamDetail> {
         let id = self.selected_video_id.as_ref()?;
-        self.streams.iter().find(|stream| {
+        let mut matches = self.streams.iter().filter(|stream| {
             stream.kind == StreamKind::Video && stream.metadata.id.as_ref() == Some(id)
-        })
+        });
+        let first = matches.next()?;
+        if matches.next().is_none() {
+            return Some(first);
+        }
+        // A damaged file can give two video streams one id. The selection
+        // was the first stream that is a real picture, so the same test
+        // finds it again among the streams sharing the id.
+        let videos = self.video_streams().count();
+        self.streams
+            .iter()
+            .filter(|stream| {
+                stream.kind == StreamKind::Video && stream.metadata.id.as_ref() == Some(id)
+            })
+            .find(|stream| {
+                let disposition = &stream.metadata.disposition;
+                if disposition.attached_picture == Some(true)
+                    || disposition.still_image == Some(true)
+                {
+                    return false;
+                }
+                videos == 1
+                    || disposition.attached_picture == Some(false)
+                    || disposition.still_image == Some(false)
+                    || !matches!(stream.codec, Some(Codec::Mjpeg | Codec::Png))
+            })
+            .or(Some(first))
     }
 
     /// Streams of one kind that belong to the selected program, in file order.
@@ -1036,5 +1062,36 @@ mod tests {
         assert_eq!(with(Some(-1.0)).duration(), None);
         assert_eq!(with(Some(f64::NAN)).duration(), None);
         assert_eq!(with(None).duration(), None);
+    }
+    #[test]
+    fn streams_sharing_an_id_resolve_to_the_selected_picture() {
+        let video = |codec: Codec| StreamDetail {
+            kind: StreamKind::Video,
+            codec: Some(codec),
+            metadata: StreamMetadata {
+                id: Some("1".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut details = AnalysisDetails {
+            selected_video_id: Some("1".to_owned()),
+            streams: vec![video(Codec::Mjpeg), video(Codec::H264)],
+            ..Default::default()
+        };
+        assert_eq!(
+            details.selected_video().and_then(|v| v.codec.clone()),
+            Some(Codec::H264)
+        );
+        details.streams = vec![video(Codec::Hevc), video(Codec::H264)];
+        assert_eq!(
+            details.selected_video().and_then(|v| v.codec.clone()),
+            Some(Codec::Hevc)
+        );
+        details.streams = vec![video(Codec::Mjpeg), video(Codec::Png)];
+        assert_eq!(
+            details.selected_video().and_then(|v| v.codec.clone()),
+            Some(Codec::Mjpeg)
+        );
     }
 }
