@@ -1419,6 +1419,14 @@ const ru: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Персонализированные рекомендации",
   "settings.personalizedDiscoveryHelp":
     "Отправляет сводку вашей библиотеки в шлюз метаданных, чтобы рекомендации могли предлагать тайтлы на основе того, что у вас есть. Отключите, чтобы ограничить рекомендации только публичными лентами.",
+  "settings.unmonitorDeletedMoviesLabel":
+    "Снимать с мониторинга фильмы после удаления файлов",
+  "settings.unmonitorDeletedMoviesHelp":
+    "После подтверждённого сканирования удаления файла ранее загруженного фильма снять с мониторинга фильм, если не осталось других действительных локальных файлов.",
+  "settings.unmonitorDeletedEpisodesLabel":
+    "Снимать с мониторинга эпизоды после удаления файлов",
+  "settings.unmonitorDeletedEpisodesHelp":
+    "После подтверждённого сканирования удаления файлов эпизодов снять с мониторинга только затронутые эпизоды и сохранить настройки остальных и будущих эпизодов.",
   "settings.srrdbFilenameRecoveryLabel":
     "Восстанавливать запутанные имена файлов через srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
