@@ -302,7 +302,9 @@ export function SettingsOverviewSection({
                 disabled={generalSaving}
                 onChange={(nextValue) => {
                   updateGeneralSettings({ unmonitorDeletedMovies: nextValue });
-                  onGeneralSettingsCommit({ unmonitorDeletedMovies: nextValue });
+                  onGeneralSettingsCommit({
+                    unmonitorDeletedMovies: nextValue,
+                  });
                 }}
               />
             </div>
@@ -320,8 +322,12 @@ export function SettingsOverviewSection({
                 ariaLabel={t("settings.unmonitorDeletedEpisodesLabel")}
                 disabled={generalSaving}
                 onChange={(nextValue) => {
-                  updateGeneralSettings({ unmonitorDeletedEpisodes: nextValue });
-                  onGeneralSettingsCommit({ unmonitorDeletedEpisodes: nextValue });
+                  updateGeneralSettings({
+                    unmonitorDeletedEpisodes: nextValue,
+                  });
+                  onGeneralSettingsCommit({
+                    unmonitorDeletedEpisodes: nextValue,
+                  });
                 }}
               />
             </div>
