@@ -1693,6 +1693,7 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         burned_by_import_gate: true,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -1835,6 +1836,7 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
         burned_by_import_gate,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
     crate::failed_download_handler::process_failed(&app, &mut tracked).await;
     assert_eq!(tracked.state, scryer_domain::TrackedDownloadState::Failed);
@@ -2046,6 +2048,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -2946,6 +2949,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -3198,6 +3202,7 @@ async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() 
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -3475,6 +3480,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;

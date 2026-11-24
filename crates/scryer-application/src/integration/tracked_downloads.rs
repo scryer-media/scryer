@@ -191,6 +191,13 @@ pub struct TrackedDownload {
     /// re-running it per poll would re-pause a stopped torrent and log the
     /// same release once a tick forever.
     pub retained_in_client_after_cleanup: bool,
+    /// Runtime-only memory that failure handling found no grab on record for
+    /// this client-failed job although the job carries Scryer's origin
+    /// marker. Until `next_retry_at`, `check` treats the job as not grabbed
+    /// instead of re-entering failure handling each poll; the answer is
+    /// re-asked on a backoff because a fresh grab's row can land after the
+    /// client already lists the job.
+    pub failed_without_grab_recheck: Option<ImportExecutionRetryState>,
 }
 
 /// Content-only reason a completed download is temporarily held from import.
@@ -335,6 +342,9 @@ impl TrackedDownload {
         self.burned_by_import_gate = finished.burned_by_import_gate;
         self.manual_failure_cleanup = finished.manual_failure_cleanup;
         self.blocklist_confirmation_failed = finished.blocklist_confirmation_failed;
+        // Failure handling's "no grab on record" answer lives on the worker's
+        // copy; without it the next poll would send the job straight back.
+        self.failed_without_grab_recheck = finished.failed_without_grab_recheck;
     }
 
     pub(crate) fn reset_for_import_retry(&mut self) {
@@ -352,6 +362,7 @@ impl TrackedDownload {
         self.skip_reacquire_on_failure = false;
         self.manual_failure_cleanup = false;
         self.burned_by_import_gate = false;
+        self.failed_without_grab_recheck = None;
     }
 
     /// Whether an automatic import re-attempt is still inside its backoff
@@ -1066,6 +1077,7 @@ impl TrackedDownloadService {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
 
         Self::resolve_title(app, &mut td).await;
@@ -3523,6 +3535,7 @@ mod tests {
         password_retry: Mutex<Option<crate::DownloadPasswordRetryObservation>>,
         password_retry_read_failure: std::sync::atomic::AtomicBool,
         submission_read_failure: std::sync::atomic::AtomicBool,
+        grab_lookups: std::sync::atomic::AtomicUsize,
     }
 
     struct TestDownloadRegistry {
@@ -3714,6 +3727,8 @@ mod tests {
             canonical_download_id: Option<&DownloadId>,
             identity: &ClientJobLocator,
         ) -> AppResult<Option<crate::DownloadSubmission>> {
+            self.grab_lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self
                 .submission_read_failure
                 .load(std::sync::atomic::Ordering::SeqCst)
@@ -4895,6 +4910,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 
@@ -6611,6 +6627,7 @@ mod tests {
             password_retry: Default::default(),
             password_retry_read_failure: Default::default(),
             submission_read_failure: Default::default(),
+            grab_lookups: Default::default(),
         });
         let imports = Arc::new(TestImportRepo {
             import_record: Some(ImportRecord {
@@ -6934,6 +6951,7 @@ mod tests {
             password_retry: Default::default(),
             password_retry_read_failure: Default::default(),
             submission_read_failure: Default::default(),
+            grab_lookups: Default::default(),
         });
         let imports = Arc::new(TestImportRepo::default());
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -7337,6 +7355,123 @@ mod tests {
         assert!(tracked.manual_failure_cleanup);
     }
 
+    fn grab_lookup_count(repo: &TestDownloadSubmissionRepo) -> usize {
+        repo.grab_lookups.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Runs failure handling the way the poller does: on a clone, merged back
+    /// into the tracker's copy.
+    async fn run_failure_work(app: &AppUseCase, tracked: &mut TrackedDownload) {
+        let mut worker_copy = tracked.clone();
+        crate::failed_download_handler::process_failed(app, &mut worker_copy).await;
+        tracked.merge_background_work_state_from(worker_copy);
+    }
+
+    /// A client-failed job that carries Scryer's origin marker but has no grab
+    /// row settles with the not-grabbed warning instead of bouncing between
+    /// Downloading and FailedPending every poll, and asks again only on a
+    /// backoff or after the client retries the job.
+    #[tokio::test]
+    async fn origin_marked_failure_without_a_grab_row_stops_requeueing() {
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        let app = build_app(
+            download_submissions.clone(),
+            Arc::new(TestImportRepo::default()),
+        );
+        let mut tracked = build_tracked_download("harbor-lights-job");
+        tracked.client_item.is_scryer_origin = true;
+        tracked.client_item.state = DownloadQueueState::Failed;
+        tracked.state = TrackedDownloadState::Downloading;
+
+        crate::failed_download_handler::check(&mut tracked);
+        assert_eq!(tracked.state, TrackedDownloadState::FailedPending);
+
+        run_failure_work(&app, &mut tracked).await;
+        assert_eq!(tracked.state, TrackedDownloadState::Downloading);
+        assert_eq!(tracked.status, TrackedDownloadStatus::Warning);
+        assert_eq!(grab_lookup_count(&download_submissions), 1);
+        let recheck = tracked
+            .failed_without_grab_recheck
+            .clone()
+            .expect("the not-grabbed answer reaches the tracker's copy");
+        assert_eq!(recheck.attempts, 1);
+
+        // Later polls inside the backoff keep the warning and never re-enter
+        // failure handling, so nothing is dispatched and nothing is read.
+        for _ in 0..3 {
+            tracked.status_messages.clear();
+            crate::failed_download_handler::check_at(
+                &mut tracked,
+                recheck.next_retry_at - Duration::seconds(1),
+            );
+            assert_eq!(tracked.state, TrackedDownloadState::Downloading);
+            assert_eq!(tracked.status, TrackedDownloadStatus::Warning);
+            assert_eq!(
+                crate::tracked_downloads::status_texts(&tracked.status_messages),
+                vec![
+                    "Download has failed but wasn't grabbed by Scryer. Skipping automatic failure handling."
+                ]
+            );
+        }
+        assert_eq!(grab_lookup_count(&download_submissions), 1);
+
+        // Once the backoff elapses the question is asked once more, and a
+        // second "no" pushes the next one further out.
+        crate::failed_download_handler::check_at(&mut tracked, recheck.next_retry_at);
+        assert_eq!(tracked.state, TrackedDownloadState::FailedPending);
+        run_failure_work(&app, &mut tracked).await;
+        assert_eq!(tracked.state, TrackedDownloadState::Downloading);
+        assert_eq!(grab_lookup_count(&download_submissions), 2);
+        let second = tracked
+            .failed_without_grab_recheck
+            .clone()
+            .expect("still remembered");
+        assert_eq!(second.attempts, 2);
+
+        // A client retry clears the memory, so a fresh failure is asked anew.
+        tracked.client_item.state = DownloadQueueState::Downloading;
+        crate::failed_download_handler::check(&mut tracked);
+        assert!(tracked.failed_without_grab_recheck.is_none());
+        tracked.client_item.state = DownloadQueueState::Failed;
+        crate::failed_download_handler::check(&mut tracked);
+        assert_eq!(tracked.state, TrackedDownloadState::FailedPending);
+    }
+
+    /// An operator's failure request is not held back by the remembered
+    /// not-grabbed answer: it still reaches failure handling, which reads the
+    /// grab record again and resets the request flags as before.
+    #[tokio::test]
+    async fn operator_failure_request_still_reaches_failure_handling_after_not_grabbed() {
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        let app = build_app(
+            download_submissions.clone(),
+            Arc::new(TestImportRepo::default()),
+        );
+        let mut tracked = build_tracked_download("harbor-lights-job");
+        tracked.client_item.is_scryer_origin = true;
+        tracked.client_item.state = DownloadQueueState::Failed;
+        tracked.state = TrackedDownloadState::FailedPending;
+        run_failure_work(&app, &mut tracked).await;
+        assert!(tracked.failed_without_grab_recheck.is_some());
+        assert_eq!(grab_lookup_count(&download_submissions), 1);
+
+        tracked.state = TrackedDownloadState::FailedPending;
+        tracked.status = TrackedDownloadStatus::Error;
+        tracked.status_messages.clear();
+        tracked.skip_reacquire_on_failure = true;
+        tracked.manual_failure_cleanup = true;
+        let mut worker_copy = tracked.clone();
+        crate::failed_download_handler::process_failed(&app, &mut worker_copy).await;
+
+        assert_eq!(grab_lookup_count(&download_submissions), 2);
+        assert_eq!(worker_copy.state, TrackedDownloadState::Downloading);
+        assert!(!worker_copy.manual_failure_cleanup);
+        assert!(!worker_copy.skip_reacquire_on_failure);
+        tracked.merge_background_work_state_from(worker_copy);
+        assert_eq!(tracked.state, TrackedDownloadState::Downloading);
+        assert!(!tracked.manual_failure_cleanup);
+    }
+
     #[tokio::test]
     async fn track_reresolves_when_scryer_metadata_arrives_on_later_snapshot() {
         let title = build_title("House of Ravens", MediaFacet::Anime, &[]);
@@ -7469,6 +7604,7 @@ mod tests {
                 burned_by_import_gate: false,
                 snapshot_missing_since: None,
                 retained_in_client_after_cleanup: false,
+                failed_without_grab_recheck: None,
             };
             tracker.cache.insert(tracked.download_id, tracked);
         }
@@ -8225,6 +8361,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
 
         crate::failed_download_handler::check(&mut tracked);
@@ -8279,6 +8416,7 @@ mod tests {
                 burned_by_import_gate: false,
                 snapshot_missing_since: None,
                 retained_in_client_after_cleanup: false,
+                failed_without_grab_recheck: None,
             };
 
             crate::failed_download_handler::check(&mut tracked);
@@ -8487,6 +8625,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
 
         crate::failed_download_handler::check(&mut tracked);
@@ -8578,6 +8717,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
 
         crate::fail_active_manual_import_for_source(&app, &tracked, "health below critical").await;
@@ -8799,6 +8939,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
 
         crate::fail_active_manual_import_for_source(&app, &tracked, "health below critical").await;

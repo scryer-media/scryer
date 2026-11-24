@@ -2762,6 +2762,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     });
     let submission = DownloadSubmission {
         download_id: scryer_domain::download_identity::DownloadId::new(),
@@ -5375,6 +5376,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     let cache = match tick {
@@ -16045,6 +16047,7 @@ impl DispositionFixture {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 

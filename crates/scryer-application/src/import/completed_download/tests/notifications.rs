@@ -105,6 +105,7 @@ async fn check_emits_manual_interaction_notification_once() {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     check(&app, &mut td).await;
