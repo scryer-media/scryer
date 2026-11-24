@@ -1184,7 +1184,7 @@ pub struct PendingReleasesPageQuery {
 }
 
 /// Parsed media properties from media analysis — application-layer DTO.
-/// A single audio stream, mirroring `scryer_mediainfo::AudioStreamDetail`.
+/// One audio stream of the stored summary, built by `media::analysis_summary`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioStreamDetail {
     pub codec: Option<String>,
@@ -1195,7 +1195,7 @@ pub struct AudioStreamDetail {
     pub bitrate_kbps: Option<i32>,
 }
 
-/// A single subtitle stream, mirroring `scryer_mediainfo::SubtitleStreamDetail`.
+/// One subtitle stream of the stored summary, built by `media::analysis_summary`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubtitleStreamDetail {
     pub codec: Option<String>,
@@ -1205,7 +1205,8 @@ pub struct SubtitleStreamDetail {
     pub default: bool,
 }
 
-/// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
+/// Scryer's stored media summary: the parser's details plus the flat fields
+/// `media::analysis_summary` derives from them.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MediaFileAnalysis {

@@ -3,11 +3,8 @@
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-pub trait MediaSource: Read + Seek {
+pub(crate) trait MediaSource: Read + Seek {
     fn len(&self) -> u64;
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
     /// Whether a read or seek already failed because a wrapping budget ran out.
     /// Parsers check this so that exhaustion stops enrichment instead of
     /// discarding the tracks they have already parsed.
@@ -25,14 +22,14 @@ impl<T: MediaSource + ?Sized> MediaSource for &mut T {
     }
 }
 
-pub struct FileSource {
+pub(crate) struct FileSource {
     file: std::fs::File,
     length: u64,
     metadata: std::fs::Metadata,
 }
 
 impl FileSource {
-    pub fn open(path: &Path) -> io::Result<Self> {
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
         let file = std::fs::File::open(path)?;
         let metadata = file.metadata()?;
         let length = metadata.len();
@@ -43,7 +40,7 @@ impl FileSource {
         })
     }
 
-    pub fn unchanged(&self, path: &Path) -> io::Result<bool> {
+    pub(crate) fn unchanged(&self, path: &Path) -> io::Result<bool> {
         fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
             #[cfg(unix)]
             {
@@ -80,13 +77,46 @@ impl<T: AsRef<[u8]>> MediaSource for io::Cursor<T> {
     }
 }
 
+/// Any reader the public entry point accepts, behind one non-generic type so
+/// that the parsers are compiled once rather than per caller's reader.
+pub(crate) trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek + ?Sized> ReadSeek for T {}
+
+/// A caller's reader with the length learned before probing began.
+pub(crate) struct SizedReader<'a> {
+    inner: &'a mut dyn ReadSeek,
+    length: u64,
+}
+
+impl<'a> SizedReader<'a> {
+    pub(crate) fn new(inner: &'a mut dyn ReadSeek, length: u64) -> Self {
+        Self { inner, length }
+    }
+}
+
+impl Read for SizedReader<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(bytes)
+    }
+}
+impl Seek for SizedReader<'_> {
+    fn seek(&mut self, offset: SeekFrom) -> io::Result<u64> {
+        self.inner.seek(offset)
+    }
+}
+impl MediaSource for SizedReader<'_> {
+    fn len(&self) -> u64 {
+        self.length
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Extent {
+pub(crate) struct Extent {
     pub offset: u64,
     pub length: u64,
 }
 
-pub struct ExtentSource<'a> {
+pub(crate) struct ExtentSource<'a> {
     source: &'a mut dyn MediaSource,
     extents: Vec<Extent>,
     starts: Vec<u64>,
@@ -95,7 +125,7 @@ pub struct ExtentSource<'a> {
 }
 
 impl<'a> ExtentSource<'a> {
-    pub fn new(source: &'a mut dyn MediaSource, extents: Vec<Extent>) -> io::Result<Self> {
+    pub(crate) fn new(source: &'a mut dyn MediaSource, extents: Vec<Extent>) -> io::Result<Self> {
         if extents.len() > 65_536 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -168,19 +198,19 @@ impl MediaSource for ExtentSource<'_> {
     }
 }
 
-pub struct BoundedSource<R> {
+pub(crate) struct BoundedSource<R> {
     inner: R,
     remaining: u64,
     remaining_operations: Option<u64>,
-    pub bytes_read: u64,
-    pub seeks: u64,
-    pub exhausted: bool,
+    pub(crate) bytes_read: u64,
+    pub(crate) seeks: u64,
+    pub(crate) exhausted: bool,
 }
 impl<R> BoundedSource<R> {
-    pub fn get_ref(&self) -> &R {
+    pub(crate) fn get_ref(&self) -> &R {
         &self.inner
     }
-    pub fn new(inner: R, budget: u64) -> Self {
+    pub(crate) fn new(inner: R, budget: u64) -> Self {
         Self {
             inner,
             remaining: budget,
@@ -192,7 +222,7 @@ impl<R> BoundedSource<R> {
     }
 
     /// Limit underlying read/seek calls as well as bytes, for latency-sensitive probes.
-    pub fn with_io_limit(mut self, operations: u64) -> Self {
+    pub(crate) fn with_io_limit(mut self, operations: u64) -> Self {
         self.remaining_operations = Some(operations);
         self
     }
@@ -238,6 +268,28 @@ impl<R: MediaSource> MediaSource for BoundedSource<R> {
     }
     fn exhausted(&self) -> bool {
         self.exhausted
+    }
+}
+
+/// Byte budget for bounded payload probing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeBudget {
+    remaining: u64,
+}
+
+impl ProbeBudget {
+    pub(crate) fn new(limit: u64) -> Self {
+        Self { remaining: limit }
+    }
+
+    pub(crate) fn exhausted(&self) -> bool {
+        self.remaining == 0
+    }
+
+    pub(crate) fn consume(&mut self, amount: usize) -> usize {
+        let taken = amount.min(self.remaining as usize);
+        self.remaining -= taken as u64;
+        taken
     }
 }
 
@@ -326,5 +378,13 @@ mod tests {
         std::fs::write(&replacement, b"replaced").unwrap();
         std::fs::rename(&replacement, &path).unwrap();
         assert!(!source.unchanged(&path).unwrap());
+    }
+
+    #[test]
+    fn probe_budget_clamps_consumption() {
+        let mut budget = ProbeBudget::new(5);
+        assert_eq!(budget.consume(3), 3);
+        assert_eq!(budget.consume(8), 2);
+        assert!(budget.exhausted());
     }
 }

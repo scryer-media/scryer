@@ -8,6 +8,8 @@ use serde_json::Value;
 
 #[path = "support/analysis_parity.rs"]
 mod analysis_parity;
+#[path = "support/details_facts.rs"]
+mod facts;
 #[path = "support/sparse_mkv.rs"]
 mod sparse_mkv;
 
@@ -18,8 +20,8 @@ fn media_dir() -> PathBuf {
 }
 
 fn is_media_fixture(path: &Path) -> bool {
-    scryer_media_types::formats::media_format_for_path(path)
-        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
+    scryer_media_model::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_model::formats::MediaHandling::Native)
 }
 
 fn ffprobe_bin() -> Option<PathBuf> {
@@ -177,10 +179,11 @@ fn ffprobe_primary_stream<'a>(json: &'a Value, codec_type: &str) -> Option<&'a V
     if codec_type != "audio" {
         return candidates.into_iter().next();
     }
-    // The product's own rule: the default stream that is not commentary, or
-    // the first that is not. Codec and channel count never pick the stream.
-    scryer_media_types::primary_audio_stream_index(candidates.iter().map(|stream| {
-        (
+    // The same rule applied to the native streams: the default stream that is
+    // not commentary, or the first that is not, read from FFprobe's own
+    // disposition and title. Codec and channel count never pick the stream.
+    scryer_mediainfo::primary_audio_position(candidates.iter().map(|stream| {
+        scryer_mediainfo::AudioCandidate::new(
             stream["disposition"]["default"] == 1,
             stream["disposition"]["comment"] == 1,
             stream["tags"]["title"].as_str(),
@@ -367,8 +370,8 @@ fn compare_fixture_corpus_against_ffprobe() {
             continue;
         }
         seen.push(file_name.clone());
-        let analysis = scryer_mediainfo::analyze_catalog_file(&path)
-            .expect("canonical native analysis should succeed");
+        let analysis =
+            scryer_mediainfo::probe(&path).expect("canonical native analysis should succeed");
         let raw_reference = sonarr_ffprobe_json(&ffprobe, &path);
         let native_json = serde_json::to_value(&analysis).unwrap();
         let (ffprobe, reference_assumptions, expectation_errors) =
@@ -409,10 +412,17 @@ fn compare_fixture_corpus_against_ffprobe() {
         let audio = ffprobe_primary_stream(&ffprobe, "audio");
         let container_format = analysis.container_format.as_deref();
 
-        let native_duration = analysis.duration_seconds;
+        let native_duration = facts::duration_seconds(&analysis);
+        let native_video_size = facts::video_size(&analysis);
+        let native_primary_audio = facts::primary_audio(&analysis);
+        let native_audio_streams = facts::audio(&analysis);
+        let native_subtitle_streams = facts::subtitles(&analysis);
+        // The rate as a reader sees it, to three decimals.
+        let native_frame_rate =
+            facts::video_fps(&analysis).map(|fps| (fps * 1000.0).round() / 1000.0);
         let ffprobe_duration =
             ffprobe_duration_seconds(&ffprobe).map(|duration| duration.round() as i32);
-        let native_num_chapters = analysis.num_chapters.unwrap_or_default();
+        let native_num_chapters = facts::chapter_count(&analysis).unwrap_or_default();
         let ffprobe_num_chapters = ffprobe
             .get("chapters")
             .and_then(Value::as_array)
@@ -422,7 +432,7 @@ fn compare_fixture_corpus_against_ffprobe() {
         let checks = [
             (
                 "video_codec",
-                analysis.video_codec.clone(),
+                facts::video_codec(&analysis).map(str::to_owned),
                 video
                     .and_then(|stream| stream.get("codec_name"))
                     .and_then(Value::as_str)
@@ -430,7 +440,8 @@ fn compare_fixture_corpus_against_ffprobe() {
             ),
             (
                 "audio_codec",
-                analysis.audio_codec.clone(),
+                native_primary_audio
+                    .and_then(|stream| stream.codec.as_ref().map(ToString::to_string)),
                 audio
                     .and_then(|stream| stream.get("codec_name"))
                     .and_then(Value::as_str)
@@ -453,7 +464,7 @@ fn compare_fixture_corpus_against_ffprobe() {
         let numeric_checks = [
             (
                 "video_width",
-                analysis.video_width,
+                native_video_size.0,
                 video
                     .and_then(|stream| stream.get("width"))
                     .and_then(Value::as_i64)
@@ -461,7 +472,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             ),
             (
                 "video_height",
-                analysis.video_height,
+                native_video_size.1,
                 video
                     .and_then(|stream| stream.get("height"))
                     .and_then(Value::as_i64)
@@ -469,7 +480,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             ),
             (
                 "audio_channels",
-                analysis.audio_channels,
+                native_primary_audio.and_then(|stream| stream.channels),
                 audio
                     .and_then(|stream| stream.get("channels"))
                     .and_then(Value::as_i64)
@@ -494,10 +505,11 @@ fn compare_fixture_corpus_against_ffprobe() {
             &mut mismatches,
             &path,
             "video_bitrate_kbps",
-            analysis.video_bitrate_kbps,
+            facts::video_bitrate_kbps(&analysis),
             video_bitrate_probe,
         );
-        if let (Some(native), Some(probe)) = (analysis.video_bitrate_kbps, video_bitrate_probe)
+        if let (Some(native), Some(probe)) =
+            (facts::video_bitrate_kbps(&analysis), video_bitrate_probe)
             && (native - probe).abs() > 16
         {
             mismatches.push(format!(
@@ -516,12 +528,14 @@ fn compare_fixture_corpus_against_ffprobe() {
                 &mut mismatches,
                 &path,
                 "audio_bitrate_kbps",
-                analysis.audio_bitrate_kbps,
+                native_primary_audio.and_then(|stream| facts::kbps(stream.metadata.bitrate_bps)),
                 audio_bitrate_probe,
             );
         }
-        if let (Some(native), Some(probe)) = (analysis.audio_bitrate_kbps, audio_bitrate_probe)
-            && (native - probe).abs() > 16
+        if let (Some(native), Some(probe)) = (
+            native_primary_audio.and_then(|stream| facts::kbps(stream.metadata.bitrate_bps)),
+            audio_bitrate_probe,
+        ) && (native - probe).abs() > 16
         {
             mismatches.push(format!(
                 "{} audio_bitrate_kbps mismatch: native={} ffprobe={}",
@@ -535,26 +549,18 @@ fn compare_fixture_corpus_against_ffprobe() {
             &mut mismatches,
             &path,
             "video_frame_rate",
-            analysis
-                .video_frame_rate
-                .as_deref()
-                .and_then(|value| value.parse::<f64>().ok()),
+            native_frame_rate,
             ffprobe_frame_rate(video),
         );
         missing_native(
             &mut mismatches,
             &path,
             "duration_seconds",
-            analysis.details.duration_seconds,
+            analysis.duration_seconds,
             ffprobe_duration_seconds(&ffprobe),
         );
-        if let (Some(native), Some(probe)) = (
-            analysis
-                .video_frame_rate
-                .as_deref()
-                .and_then(|fps| fps.parse::<f64>().ok()),
-            ffprobe_frame_rate(video),
-        ) && (native - probe).abs() > 0.05
+        if let (Some(native), Some(probe)) = (native_frame_rate, ffprobe_frame_rate(video))
+            && (native - probe).abs() > 0.05
         {
             mismatches.push(format!(
                 "{} video_frame_rate mismatch: native={:.3} ffprobe={:.3}",
@@ -575,7 +581,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             ));
         }
 
-        let native_audio_languages = analysis.audio_languages.clone();
+        let native_audio_languages = facts::audio_languages(&analysis);
         let probe_audio_languages = ffprobe_languages_for_compare(
             container_format,
             &native_audio_languages,
@@ -590,7 +596,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             ));
         }
 
-        let native_subtitle_languages = analysis.subtitle_languages.clone();
+        let native_subtitle_languages = facts::subtitle_languages(&analysis);
         let probe_subtitle_languages = ffprobe_languages_for_compare(
             container_format,
             &native_subtitle_languages,
@@ -605,7 +611,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             ));
         }
 
-        let native_subtitle_codecs = analysis.subtitle_codecs.clone();
+        let native_subtitle_codecs = facts::subtitle_codecs(&analysis);
         let probe_subtitle_codecs = ffprobe_subtitle_codecs(&ffprobe);
         if native_subtitle_codecs != probe_subtitle_codecs {
             mismatches.push(format!(
@@ -617,39 +623,42 @@ fn compare_fixture_corpus_against_ffprobe() {
         }
 
         let probe_audio_streams = ffprobe_streams(&ffprobe, "audio");
-        if analysis.audio_streams.len() != probe_audio_streams.len() {
+        if native_audio_streams.len() != probe_audio_streams.len() {
             mismatches.push(format!(
                 "{} audio_stream count mismatch: native={} ffprobe={}",
                 path.file_name().unwrap().to_string_lossy(),
-                analysis.audio_streams.len(),
+                native_audio_streams.len(),
                 probe_audio_streams.len()
             ));
         }
 
-        for (index, (native, probe)) in analysis
-            .audio_streams
+        for (index, (native, probe)) in native_audio_streams
             .iter()
             .zip(probe_audio_streams.iter())
             .enumerate()
         {
+            let native_language = facts::known_language(native).map(str::to_owned);
             let probe_language = ffprobe_language_for_compare(
                 container_format,
-                native.language.as_deref(),
+                native_language.as_deref(),
                 analysis_parity::reference_language(probe),
             );
             let probe_channels = ffprobe_optional_i32(Some(probe), "channels");
             let probe_bitrate = ffprobe_bitrate_kbps(Some(probe));
+            let native_bitrate = facts::kbps(native.metadata.bitrate_bps);
             if !analysis_parity::reference_bitrate_is_estimate(&ffprobe, probe) {
                 missing_native(
                     &mut mismatches,
                     &path,
                     &format!("audio_stream[{index}].bitrate_kbps"),
-                    native.bitrate_kbps,
+                    native_bitrate,
                     probe_bitrate,
                 );
             }
 
-            if native.codec.as_deref() != probe.get("codec_name").and_then(Value::as_str) {
+            if native.codec.as_ref().map(scryer_media_model::Codec::as_str)
+                != probe.get("codec_name").and_then(Value::as_str)
+            {
                 mismatches.push(format!(
                     "{} audio_stream[{}] codec mismatch: native={:?} ffprobe={:?}",
                     path.file_name().unwrap().to_string_lossy(),
@@ -667,17 +676,16 @@ fn compare_fixture_corpus_against_ffprobe() {
                     probe_channels
                 ));
             }
-            if native.language != probe_language {
+            if native_language != probe_language {
                 mismatches.push(format!(
                     "{} audio_stream[{}] language mismatch: native={:?} ffprobe={:?}",
                     path.file_name().unwrap().to_string_lossy(),
                     index,
-                    native.language,
+                    native_language,
                     probe_language
                 ));
             }
-            if let (Some(native_bitrate), Some(probe_bitrate)) =
-                (native.bitrate_kbps, probe_bitrate)
+            if let (Some(native_bitrate), Some(probe_bitrate)) = (native_bitrate, probe_bitrate)
                 && (native_bitrate - probe_bitrate).abs() > 16
             {
                 mismatches.push(format!(
@@ -691,24 +699,24 @@ fn compare_fixture_corpus_against_ffprobe() {
         }
 
         let probe_subtitle_streams = ffprobe_streams(&ffprobe, "subtitle");
-        if analysis.subtitle_streams.len() != probe_subtitle_streams.len() {
+        if native_subtitle_streams.len() != probe_subtitle_streams.len() {
             mismatches.push(format!(
                 "{} subtitle_stream count mismatch: native={} ffprobe={}",
                 path.file_name().unwrap().to_string_lossy(),
-                analysis.subtitle_streams.len(),
+                native_subtitle_streams.len(),
                 probe_subtitle_streams.len()
             ));
         }
 
-        for (index, (native, probe)) in analysis
-            .subtitle_streams
+        for (index, (native, probe)) in native_subtitle_streams
             .iter()
             .zip(probe_subtitle_streams.iter())
             .enumerate()
         {
+            let native_language = facts::known_language(native).map(str::to_owned);
             let probe_language = ffprobe_language_for_compare(
                 container_format,
-                native.language.as_deref(),
+                native_language.as_deref(),
                 analysis_parity::reference_language(probe),
             );
             let disposition = probe.get("disposition");
@@ -722,8 +730,12 @@ fn compare_fixture_corpus_against_ffprobe() {
                 .and_then(Value::as_i64)
                 .unwrap_or_default()
                 != 0;
+            let native_forced = native.metadata.disposition.forced == Some(true);
+            let native_default = native.metadata.disposition.default == Some(true);
 
-            if native.codec.as_deref() != probe.get("codec_name").and_then(Value::as_str) {
+            if native.codec.as_ref().map(scryer_media_model::Codec::as_str)
+                != probe.get("codec_name").and_then(Value::as_str)
+            {
                 mismatches.push(format!(
                     "{} subtitle_stream[{}] codec mismatch: native={:?} ffprobe={:?}",
                     path.file_name().unwrap().to_string_lossy(),
@@ -732,30 +744,30 @@ fn compare_fixture_corpus_against_ffprobe() {
                     probe.get("codec_name").and_then(Value::as_str)
                 ));
             }
-            if native.language != probe_language {
+            if native_language != probe_language {
                 mismatches.push(format!(
                     "{} subtitle_stream[{}] language mismatch: native={:?} ffprobe={:?}",
                     path.file_name().unwrap().to_string_lossy(),
                     index,
-                    native.language,
+                    native_language,
                     probe_language
                 ));
             }
-            if native.forced != probe_forced {
+            if native_forced != probe_forced {
                 mismatches.push(format!(
                     "{} subtitle_stream[{}] forced mismatch: native={} ffprobe={}",
                     path.file_name().unwrap().to_string_lossy(),
                     index,
-                    native.forced,
+                    native_forced,
                     probe_forced
                 ));
             }
-            if native.default != probe_default {
+            if native_default != probe_default {
                 mismatches.push(format!(
                     "{} subtitle_stream[{}] default mismatch: native={} ffprobe={}",
                     path.file_name().unwrap().to_string_lossy(),
                     index,
-                    native.default,
+                    native_default,
                     probe_default
                 ));
             }
@@ -770,7 +782,7 @@ fn compare_fixture_corpus_against_ffprobe() {
         }
     }
     if let Some(path) = report_path {
-        let report = serde_json::json!({"analysis_revision": scryer_media_types::ANALYSIS_REVISION,
+        let report = serde_json::json!({"analysis_revision": scryer_media_model::ANALYSIS_REVISION,
             "ffprobe_version": String::from_utf8_lossy(&version.stdout), "fixtures": records, "mismatches": mismatches});
         std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap())
             .expect("write differential report");
@@ -795,41 +807,35 @@ fn sparse_mkv_authored_bytes_require_unknowns_and_explicit_variants_require_fact
             sparse,
             "{name}: authored fixture audit"
         );
-        let negative = scryer_mediainfo::analyze_catalog_file(&media_dir().join(name)).unwrap();
+        let negative = scryer_mediainfo::probe(&media_dir().join(name)).unwrap();
         let negative = serde_json::to_value(negative).unwrap();
         assert!(
             sparse_mkv::unknown_fact_errors(&negative).is_empty(),
             "{name}"
         );
-        let explicit = scryer_mediainfo::analyze_source(
+        let explicit = scryer_mediainfo::probe_source(
             &mut std::io::Cursor::new(sparse_mkv::authored_bytes(name, true).unwrap()),
             "mkv",
-            scryer_mediainfo::AnalyzeOptions::default(),
+            &scryer_mediainfo::ProbeOptions::new().with_depth(scryer_mediainfo::ProbeDepth::Quick),
         )
         .unwrap();
-        for stream in &explicit.details.streams {
+        for stream in &explicit.streams {
             assert_eq!(stream.metadata.original_language.as_deref(), Some("eng"));
             assert_eq!(
                 stream.metadata.language_provenance,
-                scryer_media_types::Provenance::Container
+                scryer_media_model::Provenance::Container
             );
         }
-        assert_eq!(explicit.video_frame_rate.as_deref(), Some("25"));
+        assert_eq!(facts::video_fps(&explicit), Some(25.0));
         assert_eq!(
-            explicit.details.streams[0].metadata.declared_frame_rate,
-            scryer_media_types::Rational::new(25, 1)
+            explicit.streams[0].metadata.declared_frame_rate,
+            scryer_media_model::Rational::new(25, 1)
         );
         assert_eq!(
-            explicit.details.streams[1]
-                .metadata
-                .channel_layout
-                .as_deref(),
+            explicit.streams[1].metadata.channel_layout.as_deref(),
             Some("stereo")
         );
-        assert_eq!(
-            explicit.details.streams[1].metadata.sample_rate,
-            Some(48_000)
-        );
+        assert_eq!(explicit.streams[1].metadata.sample_rate, Some(48_000));
     }
 }
 
@@ -837,10 +843,8 @@ fn sparse_mkv_authored_bytes_require_unknowns_and_explicit_variants_require_fact
 fn sparse_mkv_reference_defaults_require_exact_authored_evidence() {
     let name = sparse_mkv::NAMES[0];
     let bytes = std::fs::read(media_dir().join(name)).unwrap();
-    let native = serde_json::to_value(
-        scryer_mediainfo::analyze_catalog_file(&media_dir().join(name)).unwrap(),
-    )
-    .unwrap();
+    let native =
+        serde_json::to_value(scryer_mediainfo::probe(&media_dir().join(name)).unwrap()).unwrap();
     let reference = serde_json::json!({"streams":[
         {"codec_type":"video","tags":{"language":"eng"},"r_frame_rate":"1000/1"},
         {"codec_type":"audio","tags":{"language":"eng"},"channel_layout":"stereo"},
@@ -866,13 +870,16 @@ fn sparse_mkv_reference_defaults_require_exact_authored_evidence() {
             .is_empty()
     );
     for (path, fabricated) in [
-        ("/video_frame_rate", serde_json::json!("1000.000")),
         (
-            "/details/streams/0/metadata/original_language",
+            "/streams/0/metadata/nominal_frame_rate_fps",
+            serde_json::json!(1000.0),
+        ),
+        (
+            "/streams/0/metadata/original_language",
             serde_json::json!("eng"),
         ),
         (
-            "/details/streams/1/metadata/channel_layout",
+            "/streams/1/metadata/channel_layout",
             serde_json::json!("stereo"),
         ),
     ] {
@@ -897,38 +904,27 @@ fn mkv_dolby_vision_mapping_never_adds_reads() {
     assert!(dolby_vision.len() > 256 * 1024);
 
     let analyze = |bytes: &[u8], profile| {
-        scryer_mediainfo::analyze_source(
+        scryer_mediainfo::probe_source(
             &mut std::io::Cursor::new(bytes.to_vec()),
             "mkv",
-            scryer_mediainfo::AnalyzeOptions { profile },
+            &scryer_mediainfo::ProbeOptions::new().with_depth(profile),
         )
         .unwrap()
     };
     for profile in [
-        scryer_mediainfo::AnalysisProfile::ContentProbe,
-        scryer_mediainfo::AnalysisProfile::Fast,
-        scryer_mediainfo::AnalysisProfile::DefaultRich,
-        scryer_mediainfo::AnalysisProfile::FfprobeParity,
+        scryer_mediainfo::ProbeDepth::Identify,
+        scryer_mediainfo::ProbeDepth::Quick,
+        scryer_mediainfo::ProbeDepth::Full,
+        scryer_mediainfo::ProbeDepth::FfprobeParity,
     ] {
         let with_dv = analyze(&dolby_vision, profile);
         let without_dv = analyze(&plain, profile);
-        assert_eq!(
-            with_dv.video_hdr_format.as_deref(),
-            Some("Dolby Vision"),
-            "{profile:?}"
-        );
-        assert_eq!(with_dv.dovi_profile, Some(8), "{profile:?}");
-        assert_eq!(
-            without_dv.video_hdr_format.as_deref(),
-            Some("HDR10"),
-            "{profile:?}"
-        );
-        let (dv_read, plain_read) = (
-            with_dv.details.report.bytes_read,
-            without_dv.details.report.bytes_read,
-        );
+        assert!(facts::hdr_signals(&with_dv)[0], "{profile:?}");
+        assert_eq!(facts::dovi(&with_dv).0, Some(8), "{profile:?}");
+        assert_eq!(facts::hdr_signals(&without_dv), facts::HDR10, "{profile:?}");
+        let (dv_read, plain_read) = (with_dv.report.bytes_read, without_dv.report.bytes_read);
         assert!(plain_read > 0, "{profile:?}");
-        if profile == scryer_mediainfo::AnalysisProfile::FfprobeParity {
+        if profile == scryer_mediainfo::ProbeDepth::FfprobeParity {
             // The PQ frame-payload HDR10+ probe runs only without a Dolby Vision record.
             assert!(
                 dv_read + 256 * 1024 <= plain_read,
@@ -942,23 +938,21 @@ fn mkv_dolby_vision_mapping_never_adds_reads() {
 
 #[test]
 fn mkv_dolby_vision_record_follows_its_track_past_cover_art() {
-    let analysis = scryer_mediainfo::analyze_source(
+    let analysis = scryer_mediainfo::probe_source(
         &mut std::io::Cursor::new(sparse_mkv::cover_art_then_dolby_vision_bytes()),
         "mkv",
-        scryer_mediainfo::AnalyzeOptions::default(),
+        &scryer_mediainfo::ProbeOptions::new().with_depth(scryer_mediainfo::ProbeDepth::Quick),
     )
     .unwrap();
-    assert_eq!(analysis.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(analysis.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(analysis.dovi_profile, Some(7));
-    assert_eq!(analysis.dovi_bl_compat_id, Some(6));
+    assert_eq!(facts::video_codec(&analysis), Some("hevc"));
+    assert!(facts::hdr_signals(&analysis)[0], "Dolby Vision signal");
+    assert_eq!(facts::dovi(&analysis), (Some(7), Some(6)));
     let dolby_vision: Vec<_> = analysis
-        .details
         .streams
         .iter()
         .map(|stream| {
             (
-                stream.codec.as_deref(),
+                stream.codec.as_ref().map(scryer_media_model::Codec::as_str),
                 stream.metadata.hdr.dolby_vision,
                 stream
                     .metadata
@@ -996,16 +990,15 @@ fn compare_explicit_sparse_mkv_variants_against_ffprobe() {
     for name in sparse_mkv::NAMES {
         let path = directory.0.join(name);
         std::fs::write(&path, sparse_mkv::authored_bytes(name, true).unwrap()).unwrap();
-        let native =
-            serde_json::to_value(scryer_mediainfo::analyze_catalog_file(&path).unwrap()).unwrap();
+        let native = serde_json::to_value(scryer_mediainfo::probe(&path).unwrap()).unwrap();
         let reference = sonarr_ffprobe_json(&ffprobe, &path);
         let differences = analysis_parity::compare(&native, &reference);
         assert!(differences.is_empty(), "{name}: {differences:?}");
         for path in [
-            "/details/streams/0/metadata/original_language",
-            "/details/streams/1/metadata/original_language",
-            "/details/streams/1/metadata/channel_layout",
-            "/details/streams/0/metadata/declared_frame_rate",
+            "/streams/0/metadata/original_language",
+            "/streams/1/metadata/original_language",
+            "/streams/1/metadata/channel_layout",
+            "/streams/0/metadata/declared_frame_rate",
         ] {
             let mut missing = native.clone();
             *missing.pointer_mut(path).unwrap() = Value::Null;
@@ -1146,17 +1139,17 @@ fn parity_distinguishes_frame_estimates_from_accountable_bitrate() {
     let mut reference = serde_json::json!({"format":{"format_name":"matroska,webm"},"streams":[
         {"codec_type":"audio","codec_name":"eac3","bit_rate":"96000"}
     ]});
-    let mut native = serde_json::json!({"details":{"streams":[
+    let mut native = serde_json::json!({"streams":[
         {"kind":"audio","codec":"eac3","metadata":{"estimated_bitrate_bps":96000}}
-    ]}});
+    ]});
     assert!(analysis_parity::compare(&native, &reference).is_empty());
-    native["details"]["streams"][0]["metadata"]["estimated_bitrate_bps"] = Value::Null;
+    native["streams"][0]["metadata"]["estimated_bitrate_bps"] = Value::Null;
     assert!(
         analysis_parity::compare(&native, &reference)
             .iter()
             .any(|gap| gap.contains("bitrate_bps"))
     );
-    native["details"]["streams"][0]["metadata"]["estimated_bitrate_bps"] = 96000.into();
+    native["streams"][0]["metadata"]["estimated_bitrate_bps"] = 96000.into();
     reference["streams"][0]["tags"] = serde_json::json!({"BPS":"96000"});
     assert!(
         analysis_parity::compare(&native, &reference)

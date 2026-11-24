@@ -314,15 +314,15 @@ pub fn authored_bytes(name: &str, explicit: bool) -> Option<Vec<u8>> {
 
 pub fn unknown_fact_errors(native: &Value) -> Vec<String> {
     [
-        "/video_frame_rate",
-        "/details/streams/0/language",
-        "/details/streams/0/metadata/original_language",
-        "/details/streams/0/metadata/declared_frame_rate",
-        "/details/streams/0/metadata/observed_frame_rate",
-        "/details/streams/0/metadata/variable_frame_rate",
-        "/details/streams/1/language",
-        "/details/streams/1/metadata/original_language",
-        "/details/streams/1/metadata/channel_layout",
+        "/streams/0/metadata/nominal_frame_rate_fps",
+        "/streams/0/language",
+        "/streams/0/metadata/original_language",
+        "/streams/0/metadata/declared_frame_rate",
+        "/streams/0/metadata/observed_frame_rate",
+        "/streams/0/metadata/variable_frame_rate",
+        "/streams/1/language",
+        "/streams/1/metadata/original_language",
+        "/streams/1/metadata/channel_layout",
     ]
     .into_iter()
     .filter(|path| native.pointer(path) != Some(&Value::Null))

@@ -638,7 +638,7 @@ mod tests {
     #[cfg(feature = "runtime-media-analysis")]
     #[test]
     fn build_rule_input_populates_post_download_file_doc() {
-        let analysis = scryer_mediainfo::analyze_file(
+        let details = scryer_mediainfo::probe(
             &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
                 .join("scryer-mediainfo")
@@ -679,7 +679,7 @@ mod tests {
                 is_filler: false,
             },
             Some(file_doc_from_analysis(
-                &crate::post_download_gate::build_media_file_analysis(&analysis),
+                &crate::media::analysis_summary::summarize(details),
             )),
         );
 

@@ -714,75 +714,6 @@ fn finalize_post_download_rule_scores(
     blocking_codes
 }
 
-#[cfg(feature = "runtime-media-analysis")]
-pub(crate) fn build_media_file_analysis(
-    analysis: &scryer_mediainfo::MediaAnalysis,
-) -> crate::MediaFileAnalysis {
-    let audio_languages = crate::normalize_detected_audio_languages(
-        analysis.audio_languages.iter().map(String::as_str),
-    );
-    let subtitle_languages = crate::normalize_detected_subtitle_languages(
-        analysis.subtitle_languages.iter().map(String::as_str),
-    );
-
-    crate::MediaFileAnalysis {
-        details: analysis.details.clone(),
-        video_codec: analysis
-            .video_codec
-            .as_deref()
-            .and_then(crate::release_parser::VideoCodec::parse),
-        video_width: analysis.video_width,
-        video_height: analysis.video_height,
-        video_bitrate_kbps: analysis.video_bitrate_kbps,
-        video_bit_depth: analysis.video_bit_depth,
-        video_hdr_format: analysis.video_hdr_format.clone(),
-        dovi_profile: analysis.dovi_profile,
-        dovi_bl_compat_id: analysis.dovi_bl_compat_id,
-        video_frame_rate: analysis.video_frame_rate.clone(),
-        video_profile: analysis.video_profile.clone(),
-        audio_codec: analysis.audio_codec.clone(),
-        audio_profile: analysis.audio_profile.clone(),
-        audio_channels: analysis.audio_channels,
-        audio_bitrate_kbps: analysis.audio_bitrate_kbps,
-        audio_languages,
-        audio_streams: analysis
-            .audio_streams
-            .iter()
-            .map(|stream| crate::AudioStreamDetail {
-                codec: stream.codec.clone(),
-                profile: stream.profile.clone(),
-                channels: stream.channels,
-                language: stream
-                    .language
-                    .as_deref()
-                    .and_then(crate::normalize_detected_audio_language_code),
-                name: stream.name.clone(),
-                bitrate_kbps: stream.bitrate_kbps,
-            })
-            .collect(),
-        subtitle_languages,
-        subtitle_codecs: analysis.subtitle_codecs.clone(),
-        subtitle_streams: analysis
-            .subtitle_streams
-            .iter()
-            .map(|stream| crate::SubtitleStreamDetail {
-                codec: stream.codec.clone(),
-                language: stream
-                    .language
-                    .as_deref()
-                    .and_then(crate::normalize_detected_subtitle_language_code),
-                name: stream.name.clone(),
-                forced: stream.forced,
-                default: stream.default,
-            })
-            .collect(),
-        has_multiaudio: analysis.has_multiaudio,
-        duration_seconds: analysis.duration_seconds,
-        num_chapters: analysis.num_chapters,
-        container_format: analysis.container_format.clone(),
-    }
-}
-
 pub(crate) fn build_stream_pointer_media_file_analysis() -> crate::MediaFileAnalysis {
     crate::MediaFileAnalysis {
         details: Default::default(),
@@ -965,10 +896,13 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
         // An uncoded failure (a metadata read through a mount symlink, a probe
         // worker that died) is an I/O failure of the probe, handled below.
-        Err(error) => Err(scryer_mediainfo::MediaInfoError::Io(error.to_string())),
+        Err(error) => Err(scryer_mediainfo::ProbeError::Io {
+            kind: std::io::ErrorKind::Other,
+            message: error.to_string(),
+        }),
     };
-    let mut analysis = match probe {
-        Ok(analysis) => analysis,
+    let mut details = match probe {
+        Ok(details) => details,
         Err(error) => {
             warn!(error = %error, path = %path.display(), "media analysis failed");
             if scryer_domain::is_disc_image(path) {
@@ -977,20 +911,17 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 )));
             }
             if handling == Some(MediaHandling::Playlist)
-                && matches!(
-                    error,
-                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)
-                )
+                && matches!(error, scryer_mediainfo::ProbeError::Unsupported(_))
             {
                 return media_review_hold(reasons::REFERENCES_REQUIRE_REVIEW, error.to_string());
             }
             if runtime_sample_validation.mode == RuntimeSampleValidationMode::EnforceAutomatic {
                 let code = match &error {
-                    scryer_mediainfo::MediaInfoError::Io(_) => reasons::PROBE_IO_FAILED,
-                    scryer_mediainfo::MediaInfoError::Parse(_) => reasons::PROBE_MALFORMED,
-                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_) => {
-                        MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
-                    }
+                    scryer_mediainfo::ProbeError::Io { .. }
+                    | scryer_mediainfo::ProbeError::SourceChanged => reasons::PROBE_IO_FAILED,
+                    scryer_mediainfo::ProbeError::Malformed(_) => reasons::PROBE_MALFORMED,
+                    // Unsupported, and any kind this version does not know.
+                    _ => MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
                 };
                 return media_review_hold(code, error.to_string());
             }
@@ -1012,8 +943,9 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
             }));
         }
     };
+    use crate::media::analysis_summary as summary;
     use scryer_media_types::ProbeStatus;
-    match analysis.details.report.status {
+    match details.report.status {
         ProbeStatus::Encrypted => {
             return media_review_hold(reasons::PROBE_ENCRYPTED, "encrypted media requires review");
         }
@@ -1022,7 +954,11 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
         _ => {}
     }
-    let unavailable = analysis.details.report.status == ProbeStatus::Unsupported;
+    let unavailable = details.report.status == ProbeStatus::Unsupported;
+    let has_video_codec = details
+        .selected_video()
+        .is_some_and(|video| video.codec.is_some());
+    let duration_seconds = summary::duration_seconds(&details);
     // A replacement needs the facts the probe actually resolved, not a complete
     // inventory: an MKV prefix inventory stops at its coverage limit
     // (`budget_exhausted`) on every real file while still resolving duration and
@@ -1031,9 +967,8 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
     // check, so it needs only the codec, as release-0.22.0 allowed.
     let operator_override =
         runtime_sample_validation.mode == RuntimeSampleValidationMode::BypassRuntimeSampleCheck;
-    let unverified = unavailable
-        || analysis.video_codec.is_none()
-        || (analysis.duration_seconds.is_none() && !operator_override);
+    let unverified =
+        unavailable || !has_video_codec || (duration_seconds.is_none() && !operator_override);
     if unverified && has_existing_file {
         return media_review_hold(
             reasons::UNVERIFIED_REPLACEMENT,
@@ -1041,18 +976,17 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         );
     }
 
-    if analysis.container_format.as_deref() == Some("iso") {
-        if analysis.details.report.status != scryer_media_types::ProbeStatus::Complete
-            || !scryer_mediainfo::is_valid_video(&analysis)
+    if details.container_format.as_deref() == Some("iso") {
+        if details.report.status != scryer_media_types::ProbeStatus::Complete
+            || !details.is_playable_video()
         {
             return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
                 "disc inspection requires review ({:?}); the source image has been preserved",
-                analysis.details.report.status
+                details.report.status
             )));
         }
         if title.facet != MediaFacet::Movie
-            && analysis
-                .details
+            && details
                 .disc
                 .as_ref()
                 .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
@@ -1061,20 +995,20 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 "episodic disc imports require explicit disc-title-to-episode mappings",
             ));
         }
-        if let Some(disc) = &mut analysis.details.disc
+        if let Some(disc) = &mut details.disc
             && let Err(error) = app.validate_disc_episode_mappings(title, disc).await
         {
             return ImportedFileGateDecision::Rejected(disc_review_rejection(error.to_string()));
         }
     }
 
-    if analysis.video_codec.is_none() && !unavailable {
+    if !has_video_codec && !unavailable {
         // A video stream whose codec the probe could not resolve is held, not
         // imported as if it were verified.
-        if analysis.details.selected_video_id.is_some()
-            || analysis.details.report.budget_exhausted
+        if details.selected_video_id.is_some()
+            || details.report.budget_exhausted
             || matches!(
-                analysis.details.report.status,
+                details.report.status,
                 scryer_media_types::ProbeStatus::Unsupported
                     | scryer_media_types::ProbeStatus::Encrypted
             )
@@ -1094,19 +1028,19 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         });
     }
 
-    let accepted_analysis = build_media_file_analysis(&analysis);
-    let (parsed_from_probe, _) = rescore_parsed_from_analysis(parsed, Some(&accepted_analysis));
-    if analysis
-        .details
+    let without_episode_mappings = details
         .disc
         .as_ref()
-        .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
+        .is_none_or(|disc| disc.selection.episode_mappings.is_empty());
+    let accepted_analysis = summary::summarize(details);
+    let (parsed_from_probe, _) = rescore_parsed_from_analysis(parsed, Some(&accepted_analysis));
+    if without_episode_mappings
         && let Some(rejection) = sample_rejection(
             runtime_sample_validation,
             &title.facet,
             &parsed_from_probe,
             size_bytes,
-            analysis.duration_seconds,
+            duration_seconds,
         )
     {
         warn!(
@@ -1264,7 +1198,7 @@ async fn evaluate_import_analysis(
     // same `MediaFileAnalysis` this import persists on the row — so the document
     // a rule sees at import is byte-for-byte the one it sees when the bar is
     // re-derived from that row. The import path used to build its doc straight
-    // from `scryer_mediainfo::MediaAnalysis`, whose `video_codec` is the raw
+    // from the parser's output, whose video codec is the raw
     // probe string (`"h264"`), while re-derivation goes through
     // `VideoCodec::as_str()` (`"H.264"`): any rule reading
     // `input.file.video_codec` scored differently on the two sides, permanently.
@@ -2766,14 +2700,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let candidate = directory.path().join("Coverage.Limit.2024.mkv");
         coverage_limited_mkv(&candidate);
-        let probed = scryer_mediainfo::analyze_catalog_file(&candidate).unwrap();
+        let probed = scryer_mediainfo::probe(&candidate).unwrap();
+        assert!(probed.report.budget_exhausted, "{:?}", probed.report);
         assert!(
-            probed.details.report.budget_exhausted,
-            "{:?}",
-            probed.details.report
+            probed
+                .selected_video()
+                .is_some_and(|video| video.codec.is_some())
         );
-        assert!(probed.video_codec.is_some());
-        let duration = probed.duration_seconds.expect("fixture duration resolves");
+        let duration = crate::media::analysis_summary::duration_seconds(&probed)
+            .expect("fixture duration resolves");
 
         let decision = gate_decision(
             &app,

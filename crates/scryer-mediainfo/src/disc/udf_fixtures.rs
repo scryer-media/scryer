@@ -463,7 +463,7 @@ fn udf_unimplemented_domains_and_layout_flags_remain_unsupported() {
             "sector={sector} field={field}"
         );
         let report = super::diagnose_source(&mut Cursor::new(bytes), Default::default());
-        assert_eq!(report.status, scryer_media_types::ProbeStatus::Unsupported);
+        assert_eq!(report.status, scryer_media_model::ProbeStatus::Unsupported);
         assert!(!report.warnings.is_empty());
     }
 }

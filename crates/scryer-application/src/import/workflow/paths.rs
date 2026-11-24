@@ -858,40 +858,52 @@ fn probe_video_content(
     {
         let started = std::time::Instant::now();
         let result = if disc_image {
-            scryer_mediainfo::analyze_disc_file(path, Default::default())
-        } else {
-            scryer_mediainfo::analyze_file_with_options(
+            scryer_mediainfo::probe_disc(
                 path,
-                scryer_mediainfo::AnalyzeOptions {
-                    profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
-                },
+                Default::default(),
+                &scryer_mediainfo::ProbeOptions::new(),
+            )
+        } else {
+            scryer_mediainfo::probe_path(
+                path,
+                &scryer_mediainfo::ProbeOptions::new()
+                    .with_depth(scryer_mediainfo::ProbeDepth::Identify),
             )
         };
         crate::media::metrics::record_probe(
             crate::media::metrics::ProbeOperation::Discovery,
             started.elapsed(),
-            result
-                .as_ref()
-                .ok()
-                .map(|analysis| &analysis.details.report),
+            result.as_ref().ok().map(|details| &details.report),
         );
         match result {
-            Ok(analysis) if disc_image || scryer_mediainfo::is_valid_video(&analysis) => {
+            Ok(details)
+                if disc_image || details.is_playable_video() =>
+            {
+                use crate::media::analysis_summary as summary;
+                let video = details.selected_video();
+                let (video_width, video_height) = video
+                    .map(scryer_media_types::StreamDetail::picture_size)
+                    .unwrap_or_default();
                 Ok(Some(ManualImportVideoFacts {
-                    container_format: analysis.container_format,
-                    video_codec: analysis.video_codec,
-                    audio_codec: analysis.audio_codec,
-                    video_width: analysis.video_width,
-                    video_height: analysis.video_height,
-                    duration_seconds: analysis.duration_seconds,
-                    disc: analysis.details.disc,
-                    report: analysis.details.report,
+                    video_codec: video
+                        .and_then(|video| video.codec.as_ref())
+                        .map(|codec| codec.as_str().to_owned()),
+                    audio_codec: details
+                        .primary_audio()
+                        .and_then(|audio| audio.codec.as_ref())
+                        .map(|codec| codec.as_str().to_owned()),
+                    video_width,
+                    video_height,
+                    duration_seconds: summary::duration_seconds(&details),
+                    container_format: details.container_format,
+                    disc: details.disc,
+                    report: details.report,
                 }))
             }
             Ok(_)
-            | Err(scryer_mediainfo::MediaInfoError::Parse(_))
-            | Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)) => Ok(None),
-            Err(scryer_mediainfo::MediaInfoError::Io(error)) => Err(error),
+            | Err(scryer_mediainfo::ProbeError::Malformed(_))
+            | Err(scryer_mediainfo::ProbeError::Unsupported(_)) => Ok(None),
+            Err(error) => Err(error.message().to_owned()),
         }
     }
     #[cfg(not(feature = "runtime-media-analysis"))]
@@ -987,11 +999,11 @@ mod media_registry_discovery_tests {
             // Probe-only suffixes and disc companions are never import candidates.
             assert_eq!(
                 files.iter().any(|file| file.path() == path),
-                entry.is_standalone_video(),
+                scryer_media_types::formats::is_standalone_video_format(entry),
                 "{}",
                 entry.extension
             );
-            if entry.is_standalone_video() {
+            if scryer_media_types::formats::is_standalone_video_format(entry) {
                 assert_eq!(
                     import_video_destination_extension(&path, None),
                     entry.extension

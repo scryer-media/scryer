@@ -1,6 +1,6 @@
 //! Bounded CLPI stream declarations and authored clock-sequence ranges.
 use super::image::ImageError;
-use scryer_media_types::{DiscSegment, Provenance, Rational, StreamDetail, StreamKind};
+use scryer_media_model::{DiscSegment, Provenance, Rational, StreamDetail, StreamKind};
 
 type Result<T> = std::result::Result<T, ImageError>;
 #[derive(Clone)]
