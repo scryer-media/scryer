@@ -1095,9 +1095,9 @@ fn series_movie_match_keys(link: &SeriesMovieLink) -> Vec<String> {
 }
 
 fn normalized_key_contains_phrase(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
+    let Some(first) = needle.chars().next() else {
         return false;
-    }
+    };
     // Both arguments are normalized keys: words joined by single spaces with
     // no leading/trailing whitespace. The former padded-string check
     // (`format!(" {haystack} ").contains(&format!(" {needle} "))`) therefore
@@ -1105,11 +1105,7 @@ fn normalized_key_contains_phrase(haystack: &str, needle: &str) -> bool {
     // directly so each comparison no longer allocates two temporary Strings.
     let bytes = haystack.as_bytes();
     let needle_len = needle.len();
-    let advance = needle
-        .chars()
-        .next()
-        .map(char::len_utf8)
-        .expect("non-empty needle");
+    let advance = first.len_utf8();
     let mut from = 0;
     while let Some(relative) = haystack[from..].find(needle) {
         let start = from + relative;
@@ -1699,6 +1695,11 @@ mod tests {
             ("foo bar ", "bar"),
             (" foo bar", "foo"),
             ("one two three one two", "one two"),
+            // Overlapping occurrences: the first one sits inside a word, and
+            // only the one that overlaps it is on a word boundary.
+            ("ax x x", "x x"),
+            ("ax x xa", "x x"),
+            ("éx x x", "x x"),
             ("foo bar baz", "qux"),
             ("foo", "foobar"),
             ("foobar", "foo"),
@@ -1714,6 +1715,9 @@ mod tests {
                 "haystack={haystack:?}, needle={needle:?}"
             );
         }
+        // The overlapping case must match, not merely agree with the reference.
+        assert!(normalized_key_contains_phrase("ax x x", "x x"));
+        assert!(!normalized_key_contains_phrase("ax x xa", "x x"));
     }
 
     #[test]
