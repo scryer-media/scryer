@@ -1,3 +1,15 @@
+/// An automatic import left pending on a blocked download is not waiting on
+/// anything: a retry moves the download out of the block first, and nothing
+/// else picks it up again on its own. The row shows the block and its reason,
+/// not a pending import, the same as the tracked projection does, whatever
+/// status the block carries: a block restored after a restart reads as a
+/// warning.
+fn automatic_import_stopped_by_block(item: &DownloadQueueItem, record: &ImportRecord) -> bool {
+    record.import_type != ImportType::ManualImport
+        && record.status == ImportStatus::Pending
+        && item.tracked_state == Some(TrackedDownloadState::ImportBlocked)
+}
+
 async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [DownloadQueueItem]) {
     let import_sources = items
         .iter()
@@ -103,7 +115,9 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
         if queue_item_import_state_eligible(item) {
             if let Some(record) = manual_records.get(&import_key) {
                 apply_import_record_to_queue_item(item, record);
-            } else if let Some(record) = fallback_records.get(&import_key) {
+            } else if let Some(record) = fallback_records.get(&import_key)
+                && !automatic_import_stopped_by_block(item, record)
+            {
                 apply_import_record_to_queue_item(item, record);
             }
         }
@@ -194,10 +208,11 @@ impl AppUseCase {
             return Err(AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD, "manual import title does not match the Scryer submission that grabbed this download"
                     .to_string()));
         }
+        let disk = crate::disk::Disk::process();
         let trusted_root = if selection.trusted_source_root.trim().is_empty() {
-            tokio::fs::canonicalize(&completed.dest_dir).await
+            disk.canonicalize(&completed.dest_dir).await
         } else {
-            tokio::fs::canonicalize(crate::stored_paths::stored_path_to_path_buf(
+            disk.canonicalize(crate::stored_paths::stored_path_to_path_buf(
                 &selection.trusted_source_root,
             ))
             .await
@@ -205,7 +220,7 @@ impl AppUseCase {
         .map_err(|_| {
             AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_FILES_UNAVAILABLE, "manual import files are no longer available".to_string())
         })?;
-        let download_root = tokio::fs::canonicalize(&completed.dest_dir).await.ok();
+        let download_root = disk.canonicalize(&completed.dest_dir).await.ok();
         let mapped_candidate_ids = mappings
             .iter()
             .map(|mapping| mapping.candidate_id.as_str())

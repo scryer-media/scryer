@@ -2,8 +2,11 @@
 //!
 //! Wasmtime's engine cache persists native code across restarts. This registry
 //! keeps the corresponding `Module` handles alive for the current process so
-//! a plugin invocation never reparses or rehydrates the same artifact.
+//! a plugin invocation never reparses or rehydrates the same artifact. Each
+//! ready module also keeps the host's pre-instantiated world binding for it,
+//! so an invocation builds only its own `Store`.
 
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::Instant;
@@ -44,9 +47,18 @@ struct ModuleKey {
 }
 
 enum ModuleEntry {
-    Ready(Arc<Component>),
+    Ready(ReadyModule),
     Loading(Arc<ModuleWaiter>),
     Failed(String),
+}
+
+/// A compiled module and, once a host has built it, that host's linked,
+/// pre-instantiated binding for it. The binding is keyed by the same digest as
+/// the module and lives exactly as long as the module's slot: an evicted
+/// module drops it, and different bytes have a different slot.
+struct ReadyModule {
+    component: Arc<Component>,
+    binding: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 struct ModuleWaiter {
@@ -101,8 +113,13 @@ impl ModuleRegistry {
     }
 
     fn insert_ready(&mut self, key: ModuleKey, artifact: Arc<Component>) {
-        self.entries
-            .insert(key.clone(), ModuleEntry::Ready(artifact));
+        self.entries.insert(
+            key.clone(),
+            ModuleEntry::Ready(ReadyModule {
+                component: artifact,
+                binding: None,
+            }),
+        );
         self.touch(&key);
 
         while self
@@ -133,26 +150,6 @@ static MODULE_REGISTRY: LazyLock<Mutex<ModuleRegistry>> =
 
 pub(crate) fn indexer_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
     component_for(ModuleFlavor::Indexer, wasm)
-}
-
-pub(crate) fn archive_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::Archive, wasm)
-}
-
-pub(crate) fn subtitle_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::Subtitle, wasm)
-}
-
-pub(crate) fn download_client_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::DownloadClient, wasm)
-}
-
-pub(crate) fn notification_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::Notification, wasm)
-}
-
-pub(crate) fn list_provider_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::ListProvider, wasm)
 }
 
 /// A deliberate plugin load retries a prior compilation failure. This is used
@@ -269,6 +266,51 @@ fn component_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<Arc<Component>, St
         flavor,
         wasm_digest: *blake3::hash(wasm).as_bytes(),
     };
+    component_for_key(key, wasm)
+}
+
+/// The compiled module for `wasm` and the binding `build` makes from it,
+/// reused across invocations for as long as the module stays cached. `build`
+/// runs only when the module's slot holds no binding of type `T` yet; it must
+/// depend on nothing but the component, since every later invocation of the
+/// same bytes receives what it returned. A failed build is not retained.
+pub(crate) fn binding_for<T: Any + Send + Sync>(
+    flavor: ModuleFlavor,
+    wasm: &[u8],
+    build: impl FnOnce(&Arc<Component>) -> Result<T, String>,
+) -> Result<(Arc<Component>, Arc<T>), String> {
+    let key = ModuleKey {
+        flavor,
+        wasm_digest: *blake3::hash(wasm).as_bytes(),
+    };
+    let component = component_for_key(key.clone(), wasm)?;
+    {
+        let registry = MODULE_REGISTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(ModuleEntry::Ready(ready)) = registry.entries.get(&key)
+            && Arc::ptr_eq(&ready.component, &component)
+            && let Some(binding) = ready.binding.clone()
+            && let Ok(binding) = binding.downcast::<T>()
+        {
+            return Ok((component, binding));
+        }
+    }
+
+    let binding = Arc::new(build(&component)?);
+    let mut registry = MODULE_REGISTRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(ModuleEntry::Ready(ready)) = registry.entries.get_mut(&key)
+        && Arc::ptr_eq(&ready.component, &component)
+    {
+        ready.binding = Some(Arc::clone(&binding) as Arc<dyn Any + Send + Sync>);
+    }
+    Ok((component, binding))
+}
+
+fn component_for_key(key: ModuleKey, wasm: &[u8]) -> Result<Arc<Component>, String> {
+    let flavor = key.flavor;
     enum Resolution {
         Wait(Arc<ModuleWaiter>),
         Compile(Arc<ModuleWaiter>),
@@ -279,8 +321,8 @@ fn component_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<Arc<Component>, St
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match registry.entries.get(&key) {
-            Some(ModuleEntry::Ready(artifact)) => {
-                let artifact = artifact.clone();
+            Some(ModuleEntry::Ready(ready)) => {
+                let artifact = ready.component.clone();
                 registry.touch(&key);
                 tracing::debug!(
                     module_flavor = flavor.label(),
@@ -407,13 +449,52 @@ mod tests {
     }
 
     #[test]
+    fn bindings_are_built_once_per_module_and_never_for_other_bytes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Binding(usize);
+        let builds = AtomicUsize::new(0);
+        let build = |_: &Arc<Component>| -> Result<Binding, String> {
+            Ok(Binding(builds.fetch_add(1, Ordering::SeqCst)))
+        };
+        let wasm = wat::parse_str("(component)").expect("component WAT must parse");
+        let changed =
+            wat::parse_str("(component (core module))").expect("component WAT must parse");
+
+        let (first_component, first) =
+            binding_for(ModuleFlavor::Notification, &wasm, build).expect("first binding");
+        let (second_component, second) =
+            binding_for(ModuleFlavor::Notification, &wasm, build).expect("reused binding");
+        let (changed_component, changed) =
+            binding_for(ModuleFlavor::Notification, &changed, build).expect("changed binding");
+        let (_, other_flavor) =
+            binding_for(ModuleFlavor::ListProvider, &wasm, build).expect("other flavor binding");
+
+        assert!(Arc::ptr_eq(&first_component, &second_component));
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first_component, &changed_component));
+        assert_eq!((first.0, changed.0, other_flavor.0), (0, 1, 2));
+        assert_eq!(builds.load(Ordering::SeqCst), 3);
+
+        let failed = binding_for(
+            ModuleFlavor::Subtitle,
+            &wasm,
+            |_| -> Result<Binding, String> { Err("refused".into()) },
+        );
+        assert!(failed.is_err());
+        let (_, after_failure) =
+            binding_for(ModuleFlavor::Subtitle, &wasm, build).expect("a failure is not retained");
+        assert_eq!(after_failure.0, 3);
+    }
+
+    #[test]
     fn concurrent_requests_share_one_module_slot() {
         let wasm = Arc::new(wat::parse_str("(component)").expect("component WAT must parse"));
         let first_wasm = Arc::clone(&wasm);
         let second_wasm = Arc::clone(&wasm);
 
-        let first = std::thread::spawn(move || archive_component(&first_wasm));
-        let second = std::thread::spawn(move || archive_component(&second_wasm));
+        let first = std::thread::spawn(move || component_for(ModuleFlavor::Archive, &first_wasm));
+        let second = std::thread::spawn(move || component_for(ModuleFlavor::Archive, &second_wasm));
         let first = first
             .join()
             .expect("first request must not panic")

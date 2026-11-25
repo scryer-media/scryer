@@ -14,6 +14,9 @@
 //!    carries the policy tags, the lease is a real claim, and the trace explains
 //!    all of it.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use async_graphql::Variables;
@@ -95,7 +98,7 @@ const APPROVE_EVERYTHING: &str = "approve if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n\
      \n\
-     tags contains \"auto-approved\" if {\n\
+     add_tags := [\"auto-approved\"] if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n";
 
@@ -127,7 +130,7 @@ const MANUAL_WITH_TAG: &str = "manual if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n\
      \n\
-     tags contains \"family\" if {\n\
+     add_tags := [\"family\"] if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n";
 
@@ -151,7 +154,7 @@ fn detail_fields() -> String {
              ruleSetId
              revisionNumber
              regoSource
-             matcherContentHash
+             sourceContentHash
              createdBy
              createdAt
          }}"
@@ -179,7 +182,6 @@ const DECISION_FIELDS: &str = r#"
     id
     requestId
     evaluatedAt
-    mode
     effectiveOutcome
     policyOutcome
     fallbackReason
@@ -194,7 +196,7 @@ fn preview_mutation() -> String {
         "mutation($input: PreviewRequestRuleInput!) {{
             previewRequestRule(input: $input) {{
                 ruleSetId
-                matcherContentHash
+                sourceContentHash
                 metadataPartial
                 inputDocument
                 decision {{{DECISION_FIELDS}}}
@@ -540,7 +542,7 @@ async fn request_rule_create_list_get_and_revisions_round_trip() {
     assert_eq!(revision["revisionNumber"], 1);
     assert_eq!(revision["ruleSetId"], json!(id));
     assert!(
-        revision["matcherContentHash"]
+        revision["sourceContentHash"]
             .as_str()
             .is_some_and(|hash| !hash.is_empty())
     );
@@ -558,8 +560,8 @@ async fn request_rule_create_list_get_and_revisions_round_trip() {
     let updated = gql(
         &ctx,
         &format!(
-            "mutation($input: UpdateRequestRuleMatcherInput!) {{
-                updateRequestRuleMatcher(input: $input) {{{}}}
+            "mutation($input: UpdateRequestRuleSourceInput!) {{
+                updateRequestRuleSource(input: $input) {{{}}}
             }}",
             detail_fields()
         ),
@@ -568,7 +570,7 @@ async fn request_rule_create_list_get_and_revisions_round_trip() {
     .await;
     assert_no_errors(&updated);
     assert_eq!(
-        updated["data"]["updateRequestRuleMatcher"]["revision"]["revisionNumber"],
+        updated["data"]["updateRequestRuleSource"]["revision"]["revisionNumber"],
         2
     );
 
@@ -725,7 +727,7 @@ async fn validating_an_unknown_fact_path_names_the_rules_context_reference() {
 // ===========================================================================
 
 #[tokio::test]
-async fn a_person_targeting_matcher_needs_permission_management_authority() {
+async fn a_person_targeting_source_needs_permission_management_authority() {
     let ctx = TestContext::new().await;
 
     let catalog_only = user_with(
@@ -831,7 +833,6 @@ async fn the_author_preview_returns_the_vote_the_reasons_the_tags_and_the_input_
     assert_no_errors(&inline);
     let inline_decision = &inline["data"]["previewRequestRule"]["decision"];
     assert_eq!(inline_decision["policyOutcome"], "DENY");
-    assert_eq!(inline_decision["mode"], "DISABLED");
     assert_eq!(
         inline_decision["reasons"][0]["code"],
         json!("policy_denied")
@@ -887,7 +888,6 @@ async fn the_requester_preflight_returns_an_outcome_without_any_rule_internals()
                 reasons { code ruleName }
                 tags
                 metadataPartial
-                evaluationMode
             }
         }",
         json!({ "input": submit_input(Some(30)) }),
@@ -898,7 +898,6 @@ async fn the_requester_preflight_returns_an_outcome_without_any_rule_internals()
 
     let payload = &body["data"]["previewMyRequestDecision"];
     assert_eq!(payload["outcome"], "DENY");
-    assert_eq!(payload["evaluationMode"], "ENFORCE");
     assert_eq!(payload["reasons"][0]["code"], json!("policy_denied"));
     assert_eq!(payload["reasons"][0]["ruleName"], json!("Deny everything"));
 
@@ -939,6 +938,61 @@ async fn the_requester_preflight_returns_an_outcome_without_any_rule_internals()
     assert!(
         refused.get("errors").is_some(),
         "a requester who may not ask may not use the rules as an oracle: {refused}"
+    );
+}
+
+#[tokio::test]
+async fn staging_a_subject_lets_the_preflight_read_its_metadata_and_needs_request_permission() {
+    let ctx = TestContext::new().await;
+    let requester = requester(&ctx, "staging-requester").await;
+    mount_title_id_metadata(&ctx).await;
+    let preview = "query($input: SubmitMediaRequestInput!) {
+        previewMyRequestDecision(input: $input) { outcome metadataPartial }
+    }";
+    let stage = "mutation($input: StageMediaRequestMetadataInput!) {
+        stageMyRequestMetadata(input: $input) { metadataPartial }
+    }";
+    let submit = submit_input(None);
+    let stage_input = json!({ "input": {
+        "libraryId": submit["libraryId"],
+        "facet": submit["facet"],
+        "externalIds": submit["externalIds"],
+    }});
+
+    // Nothing staged: the preview answers, and says the metadata is not there.
+    let unstaged = gql_as(&ctx, preview, json!({ "input": submit }), &requester).await;
+    assert_no_errors(&unstaged);
+    assert_eq!(
+        unstaged["data"]["previewMyRequestDecision"]["metadataPartial"],
+        json!(true)
+    );
+
+    let staged = gql_as(&ctx, stage, stage_input.clone(), &requester).await;
+    assert_no_errors(&staged);
+    assert_eq!(
+        staged["data"]["stageMyRequestMetadata"]["metadataPartial"],
+        json!(false)
+    );
+
+    let previewed = gql_as(&ctx, preview, json!({ "input": submit }), &requester).await;
+    assert_no_errors(&previewed);
+    assert_eq!(
+        previewed["data"]["previewMyRequestDecision"]["metadataPartial"],
+        json!(false),
+        "the preview reads the record the staging step stored"
+    );
+
+    let stranger = user_with(
+        &ctx,
+        "no-request-permission-staging",
+        AppPermissionMask::NONE,
+        LibraryPermissionMask::from_permissions([LibraryPermission::View]),
+    )
+    .await;
+    let refused = gql_as(&ctx, stage, stage_input, &stranger).await;
+    assert!(
+        refused.get("errors").is_some(),
+        "a user who may not request may not stage: {refused}"
     );
 }
 
@@ -1025,7 +1079,6 @@ async fn an_enforced_approval_leases_the_title_and_explains_itself() {
     let decision = &request["decision"];
     assert_eq!(decision["effectiveOutcome"], "AUTO_APPROVE");
     assert_eq!(decision["policyOutcome"], "AUTO_APPROVE");
-    assert_eq!(decision["mode"], "ENFORCE");
     assert_eq!(decision["tags"], json!(["auto-approved"]));
     // The requester sees the verdict, never the vote table.
     assert!(
@@ -1062,6 +1115,30 @@ async fn an_enforced_approval_leases_the_title_and_explains_itself() {
     assert_eq!(managed["effectiveOutcome"], "AUTO_APPROVE");
     assert_eq!(managed["votes"][0]["vote"], "APPROVE");
     assert_eq!(managed["votes"][0]["ruleSetName"], "Policy under test");
+
+    // The count is read when the selection asks for it, in the list and in
+    // the detail alike.
+    let listed = gql(
+        &ctx,
+        "query { requestRuleSets { id decisionCount } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let rule_sets = listed["data"]["requestRuleSets"].as_array().expect("rules");
+    assert_eq!(rule_sets.len(), 1, "{listed}");
+    assert_eq!(rule_sets[0]["decisionCount"], 1, "{listed}");
+    let detail = gql(
+        &ctx,
+        "query($id: ID!) { requestRuleSet(id: $id) { ruleSet { decisionCount } } }",
+        json!({ "id": rule_sets[0]["id"] }),
+    )
+    .await;
+    assert_no_errors(&detail);
+    assert_eq!(
+        detail["data"]["requestRuleSet"]["ruleSet"]["decisionCount"],
+        1
+    );
 }
 
 #[tokio::test]
@@ -1332,7 +1409,7 @@ async fn renaming_a_title_tag_follows_pending_requests_and_names_the_request_rul
         "mutation($input: UpdateTitleTagDefinitionInput!) {
             updateTitleTagDefinition(input: $input) {
                 definition { label }
-                counts { titles delayProfiles maintenanceRuleSets requestRuleSets }
+                counts { titles delayProfiles lifecycleRuleSets requestRuleSets }
             }
         }",
         json!({ "input": { "id": definition_id, "label": "family friendly" } }),

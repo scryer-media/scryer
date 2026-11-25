@@ -14,6 +14,9 @@ export type RuleSetRecord = {
   managedTagFilter: string[] | null;
   createdAt: string;
   updatedAt: string;
+  /// The stored builder document, read only by the single-rule query. Opaque
+  /// until `parseRuleBuilderModel` reads it.
+  builderModel?: unknown;
 };
 
 export type RuleSetDraft = {
@@ -23,6 +26,8 @@ export type RuleSetDraft = {
   enabled: boolean;
   priority: number;
   appliedFacets: string[];
+  /// Set while the draft is still exactly what the builder writes.
+  builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
 
 export type RuleValidationResult = {

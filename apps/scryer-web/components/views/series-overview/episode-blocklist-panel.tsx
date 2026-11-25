@@ -2,6 +2,7 @@ import type { TitleReleaseBlocklistEntry } from "@/components/containers/series-
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { blocklistReasonText } from "@/lib/utils/blocklist-reason";
 import { formatDate } from "./helpers";
 import { LoadingMark } from "@/components/common/loading-mark";
 
@@ -44,7 +45,7 @@ export function EpisodeBlocklistPanel({
                 </span>
                 {entry.errorMessage ? (
                   <span className="rounded bg-[var(--scry-danger-bg)] px-2 py-0.5 text-[var(--scry-danger-text)]">
-                    {entry.errorMessage}
+                    {blocklistReasonText(entry.errorMessage, t)}
                   </span>
                 ) : null}
               </div>

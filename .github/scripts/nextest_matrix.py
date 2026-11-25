@@ -45,6 +45,43 @@ def matrix(document):
     return {"include": lanes}
 
 
+def test_only_features(packages):
+    """Features each workspace package has that only dev-dependencies enable.
+
+    Such a feature is a test seam of the crate that turns it on: Cargo never
+    applies another crate's dev-dependency features to a downstream build, so
+    a lane that cannot address it still builds what its own tests use.
+    """
+    enabled_by = {}
+    for package in packages.values():
+        for dep in package.get("dependencies", []):
+            if dep["name"] not in packages or not dep.get("path"):
+                continue
+            kind = dep.get("kind") or "normal"
+            for feature in dep.get("features", []):
+                enabled_by.setdefault((dep["name"], feature), set()).add(kind)
+        # A feature table forwarding `crate/feature` enables it outside tests.
+        for values in package["features"].values():
+            for value in values:
+                if "/" not in value:
+                    continue
+                dep_name, feature = value.split("/", 1)
+                dep_name = dep_name.removeprefix("dep:").rstrip("?")
+                target = next(
+                    (dep["name"] for dep in package.get("dependencies", [])
+                     if (dep.get("rename") or dep["name"]) == dep_name),
+                    dep_name,
+                )
+                enabled_by.setdefault((target, feature), set()).add("normal")
+    return {
+        name: {
+            feature for feature in package["features"]
+            if enabled_by.get((name, feature)) == {"dev"}
+        }
+        for name, package in packages.items()
+    }
+
+
 def feature_args(document, lane):
     # Cargo accepts feature selectors for the selected package and its direct
     # dependencies, not arbitrary unrelated workspace packages.
@@ -59,6 +96,7 @@ def feature_args(document, lane):
     # Fail closed if a future graph change hides a feature-bearing workspace
     # dependency behind another crate without a directly addressable selector.
     direct = {package["name"] for package in dependencies.values()}
+    test_only = test_only_features(packages)
     pending = list(direct)
     visited = set()
     while pending:
@@ -68,7 +106,7 @@ def feature_args(document, lane):
         visited.add(name)
         package = packages[name]
         if name not in direct and any(
-            feature != "default" or values
+            (feature != "default" or values) and feature not in test_only[name]
             for feature, values in package["features"].items()
         ):
             raise ValueError(f"Cannot preserve transitive features of {name} in {lane['package']}")

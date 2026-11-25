@@ -29,10 +29,14 @@ const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   passwordMinLength: MIN_PASSWORD_LENGTH,
   skipLoginForLocalIps: false,
   apiKeysRestrictToSystemSettingsUsers: false,
+  mcpEnabled: true,
+  mcpEnabledEnvOverride: null,
   mfaRequireConfigStepUp: false,
   mfaRequirePasswordLogin: false,
   mfaRequireJellyfinLogin: false,
   mfaRequireEmbyLogin: false,
+  localTrustAllowedHosts: [],
+  restrictLocalTrustToTrustedProxies: false,
   effectiveFormLoginEnabled: false,
   envOverrideActive: false,
   envOverrideDescription: null,
@@ -44,6 +48,18 @@ function errorMessage(
   translate?: Parameters<typeof userFacingGraphQlErrorMessage>[2],
 ) {
   return userFacingGraphQlErrorMessage(error, fallback, translate);
+}
+
+type LocalTrustChange = {
+  allowedHosts?: string[];
+  restrictToTrustedProxies?: boolean;
+};
+
+function parseAllowedHostsDraft(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function parsePasswordMinLengthDraft(value: string): number | null {
@@ -87,6 +103,7 @@ export function SettingsSecurityContainer() {
     String(DEFAULT_SECURITY_SETTINGS.passwordMinLength),
   );
   const settingsRef = React.useRef(settings);
+  const [allowedHostsDraft, setAllowedHostsDraft] = React.useState("");
   const [sessionDurationDraft, setSessionDurationDraft] = React.useState(
     String(DEFAULT_SECURITY_SETTINGS.sessionDurationDays),
   );
@@ -113,6 +130,9 @@ export function SettingsSecurityContainer() {
   React.useEffect(() => {
     setSessionDurationDraft(String(settings.sessionDurationDays));
   }, [settings.sessionDurationDays]);
+  React.useEffect(() => {
+    setAllowedHostsDraft(settings.localTrustAllowedHosts.join("\n"));
+  }, [settings.localTrustAllowedHosts]);
 
   const draftPasswordMinLength = React.useMemo(
     () => parsePasswordMinLengthDraft(passwordMinLengthDraft),
@@ -173,6 +193,8 @@ export function SettingsSecurityContainer() {
       mfaRequireEmbyLogin: boolean = settingsRef.current.mfaRequireEmbyLogin,
       apiKeysRestrictToSystemSettingsUsers?: boolean,
       sessionDurationDays?: number,
+      mcpEnabled?: boolean,
+      localTrust?: LocalTrustChange,
     ) => {
       const { data, error } = await client
         .mutation(updateSecuritySettingsMutation, {
@@ -190,6 +212,16 @@ export function SettingsSecurityContainer() {
             ...(apiKeysRestrictToSystemSettingsUsers === undefined
               ? {}
               : { apiKeysRestrictToSystemSettingsUsers }),
+            ...(mcpEnabled === undefined ? {} : { mcpEnabled }),
+            ...(localTrust?.allowedHosts === undefined
+              ? {}
+              : { localTrustAllowedHosts: localTrust.allowedHosts }),
+            ...(localTrust?.restrictToTrustedProxies === undefined
+              ? {}
+              : {
+                  restrictLocalTrustToTrustedProxies:
+                    localTrust.restrictToTrustedProxies,
+                }),
           },
         })
         .toPromise();
@@ -714,6 +746,52 @@ export function SettingsSecurityContainer() {
     ],
   );
 
+  const handleMcpEnabledChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (confirmBusy || saveBusy || enabled === settings.mcpEnabled) {
+        return;
+      }
+
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+          settings.mfaRequireEmbyLogin,
+          undefined,
+          undefined,
+          enabled,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.formLoginEnabled,
+      settings.mcpEnabled,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequireEmbyLogin,
+      settings.mfaRequireJellyfinLogin,
+      settings.mfaRequirePasswordLogin,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      t,
+    ],
+  );
+
   const handleMfaPasswordLoginChange = React.useCallback(
     async (enabled: boolean) => {
       if (
@@ -844,6 +922,70 @@ export function SettingsSecurityContainer() {
     ],
   );
 
+  const saveLocalTrust = React.useCallback(
+    async (change: LocalTrustChange) => {
+      if (loading || confirmBusy || saveBusy) {
+        return;
+      }
+
+      await submitPasswordMinLength(false);
+      const current = settingsRef.current;
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          current.formLoginEnabled,
+          current.passwordMinLength,
+          current.skipLoginForLocalIps,
+          current.mfaRequireConfigStepUp,
+          current.mfaRequirePasswordLogin,
+          current.mfaRequireJellyfinLogin,
+          current.mfaRequireEmbyLogin,
+          undefined,
+          undefined,
+          undefined,
+          change,
+        );
+        setSettings(nextSettings);
+        setAllowedHostsDraft(nextSettings.localTrustAllowedHosts.join("\n"));
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      loading,
+      saveBusy,
+      submitPasswordMinLength,
+      t,
+    ],
+  );
+
+  const handleRestrictLocalTrustChange = React.useCallback(
+    (enabled: boolean) => {
+      if (enabled === settings.restrictLocalTrustToTrustedProxies) {
+        return;
+      }
+      void saveLocalTrust({ restrictToTrustedProxies: enabled });
+    },
+    [saveLocalTrust, settings.restrictLocalTrustToTrustedProxies],
+  );
+
+  const handleAllowedHostsSubmit = React.useCallback(async () => {
+    const allowedHosts = parseAllowedHostsDraft(allowedHostsDraft);
+    const saved = settingsRef.current.localTrustAllowedHosts;
+    if (
+      allowedHosts.length === saved.length &&
+      allowedHosts.every((host, index) => host === saved[index])
+    ) {
+      return;
+    }
+    await saveLocalTrust({ allowedHosts });
+  }, [allowedHostsDraft, saveLocalTrust]);
+
   const handlePasswordMinLengthSubmit = React.useCallback(
     async (value?: string) => {
       await submitPasswordMinLength(true, value);
@@ -941,10 +1083,16 @@ export function SettingsSecurityContainer() {
       onSkipLocalIpsChange={handleSkipLocalIpsChange}
       onApiKeysRestrictionChange={handleApiKeysRestrictionChange}
       canManageApiKeysRestriction={canManageOAuthApplications}
+      onMcpEnabledChange={handleMcpEnabledChange}
       onMfaConfigStepUpChange={handleMfaConfigStepUpChange}
       onMfaPasswordLoginChange={handleMfaPasswordLoginChange}
       onTotpJellyfinLoginChange={handleTotpJellyfinLoginChange}
       onTotpEmbyLoginChange={handleTotpEmbyLoginChange}
+      onRestrictLocalTrustChange={handleRestrictLocalTrustChange}
+      allowedHostsDraft={allowedHostsDraft}
+      onAllowedHostsDraftChange={setAllowedHostsDraft}
+      onAllowedHostsSubmit={handleAllowedHostsSubmit}
+      canManageLocalTrust={canManageOAuthApplications}
       networkPanel={<NetworkSettingsGroup />}
       oauthApplicationsPanel={
         canManageOAuthApplications ? <OAuthClientRegistrationsPanel /> : null

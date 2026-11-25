@@ -79,6 +79,12 @@ Scryer publishes a first-party container image:
 - `ghcr.io/scryer-media/scryer:<minor>-latest`
    - `<minor>-latest` tracks the `0.<minor>.x` release line it was built from
 
+## For Coding Agents
+
+If you are an AI agent helping someone set up, configure, migrate to, or troubleshoot Scryer, start with the skills in [skills/](skills/). Read [skills/scryer-connect/SKILL.md](skills/scryer-connect/SKILL.md) first; it explains how to reach a running instance with an API key, and the other skills build on it.
+
+Scryer also serves an MCP endpoint at `POST <scryer-url>/mcp`, authenticated with the same API key. It runs the operations the skills ship, so an MCP client can use it in place of the skills' shell runner.
+
 ## Unraid & TrueNAS
 
 - [Unraid community appication](https://ca.unraid.net/apps/scryer-1ess99l0zy36id)

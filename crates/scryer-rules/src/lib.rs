@@ -4,7 +4,7 @@
 //!
 //! - [`release`] (re-exported at the crate root for compatibility) scores
 //!   indexer release candidates for acquisition.
-//! - [`maintenance`] evaluates existing library media against maintenance
+//! - [`lifecycle`] evaluates existing library media against lifecycle
 //!   rules and returns a match / no-match / unknown decision. It never
 //!   selects or performs an action.
 //! - [`request`] decides a media request at submit time — approve, deny, or
@@ -19,12 +19,19 @@
 //!   input/output and Regorus — never media deletion, requests, jobs,
 //!   GraphQL, or stores.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 pub(crate) mod builtins;
 pub mod diagnostic_codes;
-pub mod maintenance;
+pub mod lifecycle;
+pub mod lifecycle_actions;
 pub mod policy;
 mod release;
 pub mod request;
+pub mod request_actions;
+pub mod rule_builder_schema;
+pub mod rule_scan;
 pub mod runtime;
 pub mod validation;
 
@@ -38,4 +45,12 @@ pub(crate) use release::{
 mod trash_pack_validation;
 
 #[cfg(test)]
+mod builder_fixture_tests;
+#[cfg(test)]
 mod rego_editor_tests;
+
+#[cfg(test)]
+mod lifecycle_action_tests;
+
+#[cfg(test)]
+mod request_action_tests;

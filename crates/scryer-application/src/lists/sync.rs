@@ -26,7 +26,7 @@ use scryer_domain::{
 };
 use serde::Serialize;
 
-use super::act::{ListActions, act_on_candidate};
+use super::act::{ListActions, act_on_candidate, stage_candidate_requests};
 use super::evaluate::{ItemDecision, count_states, edited_since_last_sync, evaluate};
 use super::fetch::{ListChartSource, ListFailure, ListFailureClass, fetch_list};
 use super::leave::{LeaveReport, handle_departures, has_runnable_leave_action};
@@ -498,6 +498,15 @@ pub async fn sync_subscription(
     // A member whose list policy needs approval gets requests that wait for
     // review, whatever their grants and the request rules would allow.
     let hold_requests = owner_policy == Some(ListPolicy::Approval);
+    // The candidates that become requests get their metadata staged together
+    // here, so the submits below read the staged records.
+    let candidates: Vec<&super::resolve::ResolvedItem> = evaluated
+        .iter()
+        .filter(|evaluated| matches!(evaluated.decision, ItemDecision::Candidate))
+        .map(|evaluated| &evaluated.item)
+        .collect();
+    stage_candidate_requests(context.actions, subscription, &candidates).await;
+    drop(candidates);
     let mut rows = Vec::with_capacity(evaluated.len());
     let mut acted_states = Vec::new();
     // Set once the list is found disabled mid-sync: no further add, request

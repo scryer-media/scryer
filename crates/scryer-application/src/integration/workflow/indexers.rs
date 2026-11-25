@@ -133,6 +133,16 @@ fn validate_max_queries_per_minute(
     }
 }
 
+fn validate_monthly_indexer_limit(value: Option<i64>, name: &str) -> AppResult<Option<i64>> {
+    match value {
+        Some(limit) if limit < 1 => Err(AppError::validation_refused(
+            crate::error_reasons::indexer_monthly_quota::CONFIGURATION_INVALID,
+            format!("{name} must be at least 1, or empty for no limit"),
+        )),
+        other => Ok(other),
+    }
+}
+
 fn next_indexer_routing_priority(entries: &[IndexerRoutingSettingsEntry]) -> i32 {
     entries
         .iter()
@@ -681,7 +691,12 @@ impl AppUseCase {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    self.record_caps_refresh_failure(&config, &error).await;
+                    // A local monthly limit refused the request before it was
+                    // sent. The indexer did not fail, so its health is left
+                    // alone and nothing is written.
+                    if !error.is_indexer_monthly_limit_refusal() {
+                        self.record_caps_refresh_failure(&config, &error).await;
+                    }
                     tracing::warn!(
                         config_id = %config.id,
                         provider_type = %config.provider_type,
@@ -828,6 +843,10 @@ impl AppUseCase {
             input.max_queries_per_minute,
             management_capabilities.supports_managed_children_sync,
         )?;
+        let max_requests_per_month =
+            validate_monthly_indexer_limit(input.max_requests_per_month, "monthly request limit")?;
+        let max_grabs_per_month =
+            validate_monthly_indexer_limit(input.max_grabs_per_month, "monthly grab limit")?;
         let normalized_config_json =
             normalize_indexer_config_json(&fields, input.config_json.as_deref(), None)?;
         let base_url =
@@ -872,6 +891,8 @@ impl AppUseCase {
             rate_limit_seconds: input.rate_limit_seconds,
             rate_limit_burst: input.rate_limit_burst,
             max_queries_per_minute,
+            max_requests_per_month,
+            max_grabs_per_month,
             disabled_until: None,
             is_enabled: input.is_enabled,
             enable_interactive_search: if management_capabilities.supports_managed_children_sync {
@@ -1003,6 +1024,8 @@ impl AppUseCase {
         changes_beyond_local.rate_limit_seconds = None;
         changes_beyond_local.rate_limit_burst = None;
         changes_beyond_local.max_queries_per_minute = None;
+        changes_beyond_local.max_requests_per_month = None;
+        changes_beyond_local.max_grabs_per_month = None;
         let managed_local_only = !changes_beyond_local.has_changes();
         let managed_local_update = IndexerConfigUpdate {
             id: update.id.clone(),
@@ -1013,6 +1036,14 @@ impl AppUseCase {
             max_queries_per_minute: update
                 .max_queries_per_minute
                 .map(|budget| validate_max_queries_per_minute(budget, false))
+                .transpose()?,
+            max_requests_per_month: update
+                .max_requests_per_month
+                .map(|limit| validate_monthly_indexer_limit(limit, "monthly request limit"))
+                .transpose()?,
+            max_grabs_per_month: update
+                .max_grabs_per_month
+                .map(|limit| validate_monthly_indexer_limit(limit, "monthly grab limit"))
                 .transpose()?,
             ..Default::default()
         };
@@ -1121,6 +1152,18 @@ impl AppUseCase {
                 .unwrap_or(existing.max_queries_per_minute),
             management_capabilities.supports_managed_children_sync,
         )?;
+        let max_requests_per_month = validate_monthly_indexer_limit(
+            update
+                .max_requests_per_month
+                .unwrap_or(existing.max_requests_per_month),
+            "monthly request limit",
+        )?;
+        let max_grabs_per_month = validate_monthly_indexer_limit(
+            update
+                .max_grabs_per_month
+                .unwrap_or(existing.max_grabs_per_month),
+            "monthly grab limit",
+        )?;
         // A provider switch to Prowlarr sheds a lingering challenge-solver
         // assignment; transport and tunnel proxies only carry bytes and stay.
         let existing_prowlarr_solver_assignment =
@@ -1177,6 +1220,8 @@ impl AppUseCase {
             rate_limit_seconds: update.rate_limit_seconds.or(existing.rate_limit_seconds),
             rate_limit_burst: update.rate_limit_burst.or(existing.rate_limit_burst),
             max_queries_per_minute,
+            max_requests_per_month,
+            max_grabs_per_month,
             disabled_until: existing.disabled_until,
             is_enabled: update.is_enabled.unwrap_or(existing.is_enabled),
             enable_interactive_search: if management_capabilities.supports_managed_children_sync {
@@ -1326,6 +1371,8 @@ impl AppUseCase {
                     rate_limit_seconds: update.rate_limit_seconds,
                     rate_limit_burst: update.rate_limit_burst,
                     max_queries_per_minute: update.max_queries_per_minute,
+                    max_requests_per_month: update.max_requests_per_month,
+                    max_grabs_per_month: update.max_grabs_per_month,
                     is_enabled: update.is_enabled,
                     enable_interactive_search: if management_capabilities
                         .supports_managed_children_sync
@@ -1716,6 +1763,8 @@ impl AppUseCase {
                             },
                             rate_limit_burst: None,
                             max_queries_per_minute: None,
+                            max_requests_per_month: None,
+                            max_grabs_per_month: None,
                             is_enabled: Some(desired.is_enabled && !locally_disabled),
                             // The parent's sync profile seeds a child's search
                             // flags at creation; afterwards the operator owns
@@ -1795,6 +1844,8 @@ impl AppUseCase {
                             rate_limit_seconds: managed_rate_limit_seconds,
                             rate_limit_burst: None,
                             max_queries_per_minute: None,
+                            max_requests_per_month: None,
+                            max_grabs_per_month: None,
                             disabled_until: None,
                             is_enabled: desired.is_enabled
                                 && !managed_child_is_locally_disabled(

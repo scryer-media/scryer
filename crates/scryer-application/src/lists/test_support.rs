@@ -651,6 +651,8 @@ pub(crate) struct RecordingActions {
     pub owner_manages_titles: bool,
     /// Makes the owner's permission lookup fail instead of answering.
     pub owner_permission_unreadable: bool,
+    /// The item keys of every request staging batch, in order.
+    pub staged_requests: Mutex<Vec<Vec<String>>>,
 }
 
 impl RecordingActions {
@@ -722,6 +724,19 @@ impl ListActions for RecordingActions {
             hold,
         });
         Ok(format!("request-{}", item.item.item_key))
+    }
+
+    async fn stage_requests(
+        &self,
+        _subscription: &ListSubscription,
+        items: &[(&ListRoute, &ResolvedItem)],
+    ) {
+        self.staged_requests.lock().unwrap().push(
+            items
+                .iter()
+                .map(|(_, item)| item.item.item_key.clone())
+                .collect(),
+        );
     }
 
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()> {

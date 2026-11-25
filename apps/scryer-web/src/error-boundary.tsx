@@ -9,10 +9,13 @@ import {
 } from "react-router";
 import { AlertTriangle, Home, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { claimViteImportRecovery } from "@/lib/utils/vite-import-recovery";
+import {
+  browserRecoveryEnvironment,
+  recoverFromViteImportError,
+} from "@/lib/utils/vite-import-recovery";
+import { buildAppUrl } from "@/lib/runtime-config";
 
 const logoUrl = `${import.meta.env.BASE_URL}scryer-logo.svg`;
-const VITE_IMPORT_RECOVERY_DELAY_MS = 500;
 
 function errorInfo(
   error: unknown,
@@ -69,15 +72,11 @@ export function RouteErrorBoundary() {
       return;
     }
 
-    if (!claimViteImportRecovery(error, window.sessionStorage)) {
-      return;
-    }
-
-    const reloadTimer = window.setTimeout(
-      () => window.location.reload(),
-      VITE_IMPORT_RECOVERY_DELAY_MS,
+    const cancel = recoverFromViteImportError(
+      error,
+      browserRecoveryEnvironment(buildAppUrl("/health")),
     );
-    return () => window.clearTimeout(reloadTimer);
+    return cancel ?? undefined;
   }, [error]);
 
   return (

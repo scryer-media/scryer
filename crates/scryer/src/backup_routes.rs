@@ -6,6 +6,9 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use scryer_application::disk::{
+    Access, Disk, IfPresent, Open, OwnerOnly, Parents, PathReading, Remove, Replace,
+};
 use scryer_application::{AppError, AppUseCase, BackupInfo, BackupStatus};
 use scryer_infrastructure_runtime::{
     DatastoreConfig, DatastoreEngine, datastore_file_path,
@@ -126,20 +129,36 @@ fn parse_backup_download_authorization(
     Ok(token.trim().to_string())
 }
 
-#[cfg(unix)]
 fn ensure_owner_only_permissions(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    if !path.exists() {
-        return Ok(());
-    }
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    Disk::process()
+        .restrict_to_owner_blocking(path, OwnerOnly::File)
+        .if_present()?;
+    Ok(())
 }
 
-#[cfg(not(unix))]
-fn ensure_owner_only_permissions(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+/// Whether `reading` shows something at its path. A path that could not be
+/// read is an error, so nothing is renamed or removed on a guess.
+fn present(reading: PathReading, path: &Path) -> std::io::Result<bool> {
+    reading.exists().ok_or_else(|| {
+        std::io::Error::other(format!(
+            "restore path could not be read: {}",
+            path.display()
+        ))
+    })
+}
+
+/// Run blocking restore file work off the async runtime, under the caller's
+/// restore deadline.
+async fn off_runtime<T: Send + 'static>(
+    job: impl FnOnce() -> std::io::Result<T> + Send + 'static,
+) -> std::io::Result<T> {
+    let deadline = scryer_application::current_restore_deadline();
+    tokio::task::spawn_blocking(move || match deadline {
+        Some(deadline) => deadline.scope_blocking(job),
+        None => job(),
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 fn sqlite_related_paths(db_file: &Path) -> Vec<PathBuf> {
@@ -164,23 +183,26 @@ fn promotion_backup_path(path: &Path) -> PathBuf {
 }
 
 fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
+    Disk::process().remove_blocking(path, Remove::File)?;
+    Ok(())
+}
+
+/// Rename `source` over `target`, a path this restore owns.
+fn rename_over(source: &Path, target: &Path) -> std::io::Result<()> {
+    Disk::process().move_replacing_blocking(source, target)?;
+    Ok(())
 }
 
 fn restore_backup_file_if_present(target: &Path) -> std::io::Result<()> {
     remove_file_if_exists(&promotion_temp_path(target))?;
 
     let backup = promotion_backup_path(target);
-    if !backup.exists() {
+    if !present(Disk::process().follow_blocking(&backup), &backup)? {
         return Ok(());
     }
 
     remove_file_if_exists(target)?;
-    std::fs::rename(&backup, target)?;
+    rename_over(&backup, target)?;
     ensure_owner_only_permissions(target)
 }
 
@@ -190,51 +212,47 @@ fn cleanup_promotion_files(target: &Path) -> std::io::Result<()> {
 }
 
 fn stage_file_for_promotion(source: &Path, target: &Path) -> std::io::Result<()> {
+    let disk = Disk::process();
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
+        disk.create_dir_blocking(parent, Parents::Create)?;
     }
     let temp = promotion_temp_path(target);
     remove_file_if_exists(&temp)?;
-    let mut input = scryer_application::RestoreReader::new(std::fs::File::open(source)?);
-    let mut output = std::fs::File::create(&temp)?;
+    let mut input =
+        scryer_application::RestoreReader::new(disk.open_blocking(source, Open::read())?);
+    let mut output = disk.open_blocking(&temp, Open::create().with_access(Access::OwnerOnly))?;
     ensure_owner_only_permissions(&temp)?;
     std::io::copy(&mut input, &mut output)?;
     output.sync_all()
 }
 
 fn promote_staged_file(target: &Path) -> std::io::Result<()> {
+    let disk = Disk::process();
     let temp = promotion_temp_path(target);
-    if !temp.exists() {
+    if !present(disk.follow_blocking(&temp), &temp)? {
         return Ok(());
     }
-
-    let backup = promotion_backup_path(target);
-    remove_file_if_exists(&backup)?;
-    if target.exists() {
-        std::fs::rename(target, &backup)?;
-    }
-    std::fs::rename(&temp, target)?;
+    retire_live_file_without_replacement(target)?;
+    rename_over(&temp, target)?;
     ensure_owner_only_permissions(target)
 }
 
 fn retire_live_file_without_replacement(target: &Path) -> std::io::Result<()> {
     let backup = promotion_backup_path(target);
     remove_file_if_exists(&backup)?;
-    if target.exists() {
-        std::fs::rename(target, &backup)?;
+    if present(Disk::process().follow_blocking(target), target)? {
+        rename_over(target, &backup)?;
     }
     Ok(())
 }
 
-/// Make renames inside `directory` durable. Windows offers no directory
-/// handle to flush; NTFS journals the rename itself.
-#[cfg(unix)]
+/// Make renames inside `directory` durable, or fail. Windows offers no
+/// directory handle to flush; NTFS journals the rename itself.
 fn sync_directory(directory: &Path) -> std::io::Result<()> {
-    std::fs::File::open(directory)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_directory: &Path) -> std::io::Result<()> {
+    let outcome = Disk::process().sync_dir_blocking(directory)?;
+    if cfg!(unix) {
+        outcome.required()?;
+    }
     Ok(())
 }
 
@@ -268,12 +286,12 @@ fn cleanup_restore_promotion_artifacts(targets: &[PathBuf]) -> std::io::Result<(
     Ok(())
 }
 
-fn load_backup_metadata(backup_dir: &Path, filename: &str) -> Result<BackupInfo, AppError> {
+async fn load_backup_metadata(backup_dir: &Path, filename: &str) -> Result<BackupInfo, AppError> {
     let path = metadata_path_for_backup(backup_dir, filename);
-    let bytes = std::fs::read(&path).map_err(|error| {
+    let bytes = Disk::process().read(&path).await.map_err(|error| {
         AppError::not_found_reason(
             crate::error_reasons::HTTP_BACKUP_METADATA_NOT_FOUND,
-            format!("backup metadata not found: {error}"),
+            format!("backup metadata not found: {}", error.words()),
         )
     })?;
     serde_json::from_slice::<BackupInfo>(&bytes)
@@ -309,7 +327,7 @@ pub(crate) async fn download_backup_handler(
             "invalid backup filename",
         ));
     }
-    let info = match load_backup_metadata(&backup_dir, &filename) {
+    let info = match load_backup_metadata(&backup_dir, &filename).await {
         Ok(info) => info,
         Err(error) => return map_app_error(error),
     };
@@ -334,12 +352,12 @@ pub(crate) async fn download_backup_handler(
     }
 
     let bundle = backup_dir.join(&filename);
-    let file = match tokio::fs::File::open(&bundle).await {
+    let file = match Disk::process().open(&bundle, Open::read()).await {
         Ok(file) => file,
         Err(error) => {
             return map_app_error(AppError::not_found_reason(
                 crate::error_reasons::HTTP_BACKUP_BUNDLE_NOT_FOUND,
-                format!("backup bundle not found: {error}"),
+                format!("backup bundle not found: {}", error.words()),
             ));
         }
     };
@@ -393,9 +411,10 @@ where
     F: FnOnce(PathBuf, DatastoreConfig) -> Fut,
     Fut: Future<Output = Result<(), AppError>>,
 {
+    let disk = Disk::process();
     let pending_dir = pending_restore_dir(data_dir);
     let pending_ready = pending_restore_ready_path(data_dir);
-    if !pending_dir.exists() {
+    if disk.follow(&pending_dir).await.exists() != Some(true) {
         return Ok(false);
     }
     let target_secrets = managed_instance_secrets_path(data_dir);
@@ -406,49 +425,72 @@ where
         )));
     }
     let promoted_marker = pending_dir.join("restore-promoted");
-    if std::fs::read(&promoted_marker).is_ok_and(|bytes| bytes == b"complete") {
+    if disk
+        .read(&promoted_marker)
+        .await
+        .is_ok_and(|bytes| bytes == b"complete")
+    {
         // All replacements committed before cleanup began. A restart during
         // cleanup must never roll back only the backups that remain.
-        cleanup_restore_promotion_artifacts(&promotion_targets).map_err(restore_recovery_error)?;
-        let _ = std::fs::remove_dir_all(&pending_dir);
+        let targets = promotion_targets.clone();
+        off_runtime(move || cleanup_restore_promotion_artifacts(&targets))
+            .await
+            .map_err(restore_recovery_error)?;
+        let _ = disk.remove(&pending_dir, Remove::Tree).await;
         return Ok(true);
     }
-    if !pending_ready.exists() {
-        let _ = std::fs::remove_dir_all(&pending_dir);
-        return Ok(false);
+    match disk.follow(&pending_ready).await.exists() {
+        Some(true) => {}
+        Some(false) => {
+            let _ = disk.remove(&pending_dir, Remove::Tree).await;
+            return Ok(false);
+        }
+        // An unreadable marker leaves the pending restore in place.
+        None => {
+            return Err(std::io::Error::other(
+                "pending restore marker could not be read",
+            ));
+        }
     }
 
     let pending_secrets = pending_restore_instance_secrets_path(data_dir);
-    if !pending_secrets.exists() {
+    if disk.follow(&pending_secrets).await.exists() != Some(true) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "pending restore secrets are missing",
         ));
     }
-    recover_interrupted_restore_promotion(&promotion_targets).map_err(restore_recovery_error)?;
+    let targets = promotion_targets.clone();
+    off_runtime(move || recover_interrupted_restore_promotion(&targets))
+        .await
+        .map_err(restore_recovery_error)?;
     scryer_application::check_restore_deadline().map_err(std::io::Error::other)?;
 
     let mut postgres_committed = false;
     let promotion_result = async {
+        let (source, target) = (pending_secrets.clone(), target_secrets.clone());
+        let stage_secrets = move || stage_file_for_promotion(&source, &target);
+        let target = target_secrets.clone();
+        let promote_secrets = move || promote_staged_file(&target);
         match datastore_config.engine {
             DatastoreEngine::Postgres => {
                 let prepared_bundle_dir = pending_restore_prepared_bundle_dir(data_dir);
-                if !prepared_bundle_dir.exists() {
+                if disk.follow(&prepared_bundle_dir).await.exists() != Some(true) {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "pending restore bundle is missing",
                     ));
                 }
-                stage_file_for_promotion(&pending_secrets, &target_secrets)?;
+                off_runtime(stage_secrets).await?;
                 restore_postgres_bundle(prepared_bundle_dir, datastore_config.clone())
                     .await
                     .map_err(std::io::Error::other)?;
                 postgres_committed = true;
-                promote_staged_file(&target_secrets)
+                off_runtime(promote_secrets).await
             }
             DatastoreEngine::Sqlite => {
                 let pending_db = pending_restore_db_path(data_dir);
-                if !pending_db.exists() {
+                if disk.follow(&pending_db).await.exists() != Some(true) {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "pending restore database is missing",
@@ -456,33 +498,43 @@ where
                 }
 
                 let target_db = datastore_file_path(&datastore_config.database_url);
-                let target_db_paths = sqlite_related_paths(&target_db);
-
-                for (pending_path, target_path) in sqlite_related_paths(&pending_db)
+                let pairs: Vec<(PathBuf, PathBuf)> = sqlite_related_paths(&pending_db)
                     .into_iter()
-                    .zip(target_db_paths.iter())
-                {
-                    if pending_path.exists() {
-                        stage_file_for_promotion(&pending_path, target_path)?;
+                    .zip(sqlite_related_paths(&target_db))
+                    .collect();
+
+                // Which pending files exist is read once, while staging, and
+                // decides the promotion below.
+                let (pairs, staged) = off_runtime(move || {
+                    let disk = Disk::process();
+                    let mut staged = Vec::with_capacity(pairs.len());
+                    for (pending_path, target_path) in &pairs {
+                        let exists = present(disk.follow_blocking(pending_path), pending_path)?;
+                        if exists {
+                            stage_file_for_promotion(pending_path, target_path)?;
+                        }
+                        staged.push(exists);
                     }
-                }
-                stage_file_for_promotion(&pending_secrets, &target_secrets)?;
+                    stage_secrets()?;
+                    Ok((pairs, staged))
+                })
+                .await?;
 
                 // Promotion is recovery-protected once it starts. Expiry before
                 // that boundary leaves the live files intact; expiry afterward
                 // must not interrupt the multi-file promotion.
                 scryer_application::check_restore_deadline().map_err(std::io::Error::other)?;
-                for (pending_path, target_path) in sqlite_related_paths(&pending_db)
-                    .into_iter()
-                    .zip(target_db_paths.iter())
-                {
-                    if pending_path.exists() {
-                        promote_staged_file(target_path)?;
-                    } else {
-                        retire_live_file_without_replacement(target_path)?;
+                off_runtime(move || {
+                    for ((_, target_path), staged) in pairs.iter().zip(staged) {
+                        if staged {
+                            promote_staged_file(target_path)?;
+                        } else {
+                            retire_live_file_without_replacement(target_path)?;
+                        }
                     }
-                }
-                promote_staged_file(&target_secrets)
+                    promote_secrets()
+                })
+                .await
             }
         }
     }
@@ -494,7 +546,9 @@ where
             // pair them with the new database; retain all recovery artifacts.
             return Err(restore_recovery_error(error));
         }
-        recover_interrupted_restore_promotion(&promotion_targets)
+        let targets = promotion_targets.clone();
+        off_runtime(move || recover_interrupted_restore_promotion(&targets))
+            .await
             .map_err(restore_recovery_error)?;
         return Err(error);
     }
@@ -502,16 +556,23 @@ where
     // The marker lives in another directory from the files it vouches for,
     // so their renames must be durable before it is. Then the marker's own
     // entry must be durable before cleanup removes any rollback copy.
-    sync_parent_directories(&promotion_targets).map_err(restore_recovery_error)?;
-    std::fs::write(&promoted_marker, b"complete").map_err(restore_recovery_error)?;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&promoted_marker)
-        .and_then(|file| file.sync_all())
-        .map_err(restore_recovery_error)?;
-    sync_directory(&pending_dir).map_err(restore_recovery_error)?;
-    cleanup_restore_promotion_artifacts(&promotion_targets).map_err(restore_recovery_error)?;
-    let _ = std::fs::remove_dir_all(&pending_dir);
+    let marker_dir = pending_dir.clone();
+    off_runtime(move || {
+        let disk = Disk::process();
+        sync_parent_directories(&promotion_targets)?;
+        disk.write_blocking(
+            &promoted_marker,
+            b"complete",
+            Replace::Allowed,
+            Access::Default,
+        )?;
+        disk.sync_blocking(&promoted_marker)?.required()?;
+        sync_directory(&marker_dir)?;
+        cleanup_restore_promotion_artifacts(&promotion_targets)
+    })
+    .await
+    .map_err(restore_recovery_error)?;
+    let _ = disk.remove(&pending_dir, Remove::Tree).await;
     Ok(true)
 }
 

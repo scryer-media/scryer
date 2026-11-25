@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use crate::disk::{Disk, PathReading};
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
 
@@ -100,12 +101,6 @@ fn disk_space_verdict_for_measurement(available: Option<u64>, source_size: u64) 
         .unwrap_or(ImportVerdict::Accept)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> &Path {
-    path.ancestors()
-        .find(|candidate| candidate.exists())
-        .unwrap_or(path)
-}
-
 fn destination_directory(dest_path: &Path) -> &Path {
     match dest_path.parent() {
         Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
@@ -115,7 +110,9 @@ fn destination_directory(dest_path: &Path) -> &Path {
 }
 
 fn available_disk_space(path: &Path) -> std::io::Result<u64> {
-    Ok(crate::filesystem_space_raw(path)?.available_bytes)
+    Ok(crate::disk::capacity::StorageCapacity::process()
+        .refresh_blocking(path)?
+        .available_bytes)
 }
 
 /// Prove a same-sized destination holds the source's bytes with the shared
@@ -211,7 +208,7 @@ pub fn check_not_unpacking(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
             let mut marker_name = file_name.to_os_string();
             marker_name.push(marker);
             let marker_path = parent.join(marker_name);
-            if marker_path.exists() {
+            if Disk::process().follow_blocking(&marker_path).exists() == Some(true) {
                 return ImportVerdict::Reject {
                     reason: format!("sibling marker file exists: {}", marker_path.display()),
                     code: ImportCheckCode::StillUnpacking,
@@ -228,19 +225,18 @@ pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict
     // A failed catalog write can leave verified bytes at the destination. Let
     // the coordinated importer prove their content and claim catalog ownership
     // before it can remove the source on retry.
-    if !ctx.dest_path.exists()
-        || (ctx.import_mode == scryer_domain::ImportMode::Move
-            && !ctx
-                .existing_files
-                .iter()
-                .any(|file| Path::new(&file.file_path) == ctx.dest_path))
+    if ctx.import_mode == scryer_domain::ImportMode::Move
+        && !ctx
+            .existing_files
+            .iter()
+            .any(|file| Path::new(&file.file_path) == ctx.dest_path)
     {
         return ImportVerdict::Accept;
     }
-
-    let existing_size = std::fs::metadata(ctx.dest_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let PathReading::Known { len, .. } = Disk::process().follow_blocking(ctx.dest_path) else {
+        return ImportVerdict::Accept;
+    };
+    let existing_size = len.unwrap_or(0);
 
     if existing_size == ctx.source_size
         && files_have_identical_contents(ctx.source_path, ctx.dest_path)
@@ -261,9 +257,15 @@ pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict
 /// Reject if available disk space is insufficient.
 ///
 /// Requires at least `source_size + 500 MB` free on the destination volume.
+// disk-guard: the volume key is the raw device number, which owner readings
+// keep opaque and drop entirely on filesystems that report a zero inode.
+#[allow(clippy::disallowed_methods)]
 fn measured_disk_space(ctx: &ImportCheckContext<'_>) -> (ImportVerdict, Option<(u64, String)>) {
     let target_dir = destination_directory(ctx.dest_path);
-    let stat_path = nearest_existing_ancestor(target_dir);
+    let disk = Disk::process();
+    let stat_path = disk
+        .nearest_existing_blocking(target_dir)
+        .unwrap_or(target_dir);
     let available = match available_disk_space(stat_path) {
         Ok(available) => Some(available),
         Err(error) => {
@@ -390,7 +392,8 @@ fn space_path_key(path: &std::path::Path) -> String {
 
 fn normalized_space_root(root: &std::path::Path) -> String {
     use std::path::Component;
-    let absolute = std::fs::canonicalize(root)
+    let absolute = Disk::process()
+        .canonicalize_blocking(root)
         .or_else(|_| std::path::absolute(root))
         .unwrap_or_else(|_| root.to_path_buf());
     let mut normalized = std::path::PathBuf::new();
@@ -834,7 +837,10 @@ mod tests {
     fn disk_space_uses_nearest_existing_ancestor() {
         let temp = tempfile::tempdir().expect("create temp directory");
         let missing = temp.path().join("missing").join("destination");
-        assert_eq!(nearest_existing_ancestor(&missing), temp.path());
+        assert_eq!(
+            Disk::process().nearest_existing_blocking(&missing),
+            Some(temp.path())
+        );
     }
 
     #[test]

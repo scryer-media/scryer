@@ -327,16 +327,58 @@ pub struct PersistedContentHashes {
     /// vintage can be attested from one that cannot (see
     /// [`crate::location::collisions::FullHash`]).
     pub hash_computed_at: Option<DateTime<Utc>>,
+    /// The stored mark of the file the hash was read of, written and cleared
+    /// with the hash. Absent for a hash stored without one, which the disk
+    /// owner reads again before it answers with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
 }
 
 impl PersistedContentHashes {
-    /// The write side: what one streaming pass produced, stamped with when.
-    pub fn from_streamed(hashes: &StreamedContentHashes, computed_at: DateTime<Utc>) -> Self {
+    /// The write side: what one streaming pass produced, the mark of the file
+    /// it streamed where the writer read one, stamped with when.
+    pub fn from_streamed(
+        hashes: &StreamedContentHashes,
+        mark: Option<&crate::disk::Mark>,
+        computed_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             full_blake3: hashes.full_blake3.clone(),
             move_crc: Some(hashes.move_crc),
             crc_algorithm: Some(hashes.crc_algorithm),
             hash_computed_at: Some(computed_at),
+            mark: mark.map(crate::disk::Mark::to_stored),
+        }
+    }
+
+    /// The hashes a verified copy streamed, stored for its destination. The
+    /// destination's `mark` is kept only when the destination itself was read
+    /// back whole; below that, its middle was never read, so the hash goes
+    /// without a mark and the disk owner reads the file whole before it
+    /// answers with one. The hash is still stored for the readers of the
+    /// column that do not judge content by it.
+    pub fn from_verified(
+        hashes: &StreamedContentHashes,
+        depth: &scryer_domain::AppliedVerificationDepth,
+        mark: Option<&crate::disk::Mark>,
+        computed_at: DateTime<Utc>,
+    ) -> Self {
+        Self::from_streamed(
+            hashes,
+            mark.filter(|_| depth.read_back_whole()),
+            computed_at,
+        )
+    }
+
+    /// What the disk service read, stamped with when, and the mark it was
+    /// read against.
+    pub fn from_known(known: &crate::disk::KnownHash, computed_at: DateTime<Utc>) -> Self {
+        Self {
+            full_blake3: known.blake3.clone(),
+            move_crc: known.crc,
+            crc_algorithm: known.crc.map(|_| MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(computed_at),
+            mark: Some(known.mark.to_stored()),
         }
     }
 }
@@ -346,54 +388,61 @@ impl PersistedContentHashes {
 /// source a second time.
 ///
 /// The stored BLAKE3 was streamed the last time the file was written or hashed
-/// end to end (FR-041/046). It is trusted only while the file's signature —
-/// its size and the platform's mtime scheme, the same facts a scan uses to
-/// invalidate stored hashes — still matches on disk at comparison time. A file
-/// touched since is compared the slow way, both sides in full.
+/// end to end, and stored with the mark of the file it was read of. Whether it
+/// still describes the file on disk is the disk service's call
+/// ([`crate::disk::Disk::full_hash`]); nothing here judges it. A hash stored
+/// without a mark is read again before it is used.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KnownSourceContent {
     /// Full-file BLAKE3 (hex) of the source as last recorded.
     pub full_blake3: String,
     pub size_bytes: u64,
-    /// The source signature the hash was recorded against (see
-    /// [`crate::file_source_signature`]).
-    pub signature_scheme: String,
-    pub signature_value: String,
+    /// The whole-file CRC stored with it, where one was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crc: Option<u64>,
+    /// The stored mark of the file the hash was read of; absent from plans
+    /// written by earlier builds and for a hash stored without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
+    /// The media file row the hash is stored on, where a read records again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_file_id: Option<String>,
 }
 
 impl KnownSourceContent {
     /// Read the stored facts off a media file row. `None` unless the row holds
-    /// an attested full hash and a signature in this platform's scheme.
+    /// an attested full hash.
     pub fn from_media_file(media_file: &crate::TitleMediaFile) -> Option<Self> {
-        let full_blake3 = crate::location::collisions::FullHash::from_persisted(
-            media_file.content_hashes.as_ref(),
-        )
-        .as_known()?
-        .to_string();
-        let scheme = media_file.source_signature_scheme.as_deref()?;
-        let value = media_file.source_signature_value.as_deref()?;
-        if scheme != crate::file_source_signature::MEDIA_FILE_SOURCE_SIGNATURE_SCHEME
-            || value.trim().is_empty()
-        {
-            return None;
-        }
+        let hashes = media_file.content_hashes.as_ref();
+        let full_blake3 = crate::location::collisions::FullHash::from_persisted(hashes)
+            .as_known()?
+            .to_string();
         Some(Self {
             full_blake3,
             size_bytes: u64::try_from(media_file.size_bytes).ok()?,
-            signature_scheme: scheme.to_string(),
-            signature_value: value.to_string(),
+            crc: hashes.and_then(|hashes| hashes.move_crc).filter(|_| {
+                hashes.and_then(|hashes| hashes.crc_algorithm) == Some(MoveCrcAlgorithm::Crc64Nvme)
+            }),
+            mark: hashes.and_then(|hashes| hashes.mark.clone()),
+            media_file_id: Some(media_file.id.clone()),
         })
     }
 
-    /// Whether the file on disk is still the one the stored hash describes.
-    pub fn matches(&self, metadata: &std::fs::Metadata) -> bool {
-        metadata.len() == self.size_bytes
-            && crate::file_source_signature::file_source_signature_from_metadata(metadata)
-                .ok()
-                .is_some_and(|signature| {
-                    signature.scheme == self.signature_scheme
-                        && signature.value == self.signature_value
-                })
+    /// The ask of the disk service for `path`'s full hash, with this record
+    /// as what is recorded of it.
+    pub fn ask(&self, path: &std::path::Path) -> crate::disk::HashAsk {
+        let ask = crate::disk::HashAsk::new(path).recorded(crate::disk::StoredHash {
+            blake3: self.full_blake3.clone(),
+            crc: self.crc,
+            mark: self
+                .mark
+                .as_deref()
+                .and_then(crate::disk::Mark::from_stored),
+        });
+        match &self.media_file_id {
+            Some(id) => ask.of_row(crate::disk::HashRow::Id(id.clone())),
+            None => ask,
+        }
     }
 }
 
@@ -421,7 +470,21 @@ pub struct FileVerificationRecord {
     pub outcome: FileVerificationOutcome,
     /// Human-readable explanation for a non-verified outcome or a fallback.
     pub detail: Option<String>,
+    /// The destination was already there and the quick check, which keeps no
+    /// hashes, proved it the source's copy. A record written before this was
+    /// kept reads as unset. See [`Self::is_link`].
+    #[serde(default)]
+    pub content_matched: bool,
     pub verified_at: DateTime<Utc>,
+}
+
+impl FileVerificationRecord {
+    /// Whether no bytes were copied because the destination is the source's
+    /// own file, a rename or a second link: no hashes, and no content check
+    /// stood in for them.
+    pub fn is_link(&self) -> bool {
+        self.hashes.is_none() && !self.content_matched
+    }
 }
 
 /// Progress of one title inside an operation. Titles are the safe-cancel and

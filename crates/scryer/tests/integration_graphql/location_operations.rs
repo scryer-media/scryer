@@ -931,6 +931,7 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
                     verifying: 0,
                     recording: 0,
                     detail: (sequence == 50).then(|| "destination conflict".into()),
+                    refusal: None,
                 },
             )
             .await
@@ -944,6 +945,7 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
         locationTransferSummary(id: $id) { generation revision progressBasisPoints etaSeconds totalCount titles { titleId } }
         locationTransferPage(id: $id, offset: 0) { generation revision totalCount hasMore titles { titleId state hasException } }
         locationTransferTitleDetail(id: $id, titleId: "title-50")
+        locationTransferTitleOutcome(id: $id, titleId: "title-50") { detail refusalReason refusalFacts }
     }"#;
     let body = gql(&ctx, query, json!({"id": operation_id})).await;
     assert_no_errors(&body);
@@ -981,6 +983,20 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
         body["data"]["locationTransferTitleDetail"],
         "destination conflict"
     );
+    // A row without a coded failure has its detail and no refusal.
+    let outcome = &body["data"]["locationTransferTitleOutcome"];
+    assert_eq!(outcome["detail"], "destination conflict");
+    assert!(outcome["refusalReason"].is_null());
+    assert!(outcome["refusalFacts"].is_null());
+    let denied = schema_exec(
+        &ctx,
+        &format!(
+            r#"query {{ locationTransferTitleOutcome(id: "{operation_id}", titleId: "title-50") {{ detail }} }}"#
+        ),
+        Some(location_outsider()),
+    )
+    .await;
+    assert_graphql_field_denied(&denied, "locationTransferTitleOutcome");
     let denied = schema_exec(
         &ctx,
         &format!(r#"query {{ locationTransferSummary(id: "{operation_id}") {{ revision }} }}"#),
@@ -1006,6 +1022,89 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
             .unwrap()
             > summary["revision"].as_i64().unwrap()
     );
+}
+
+#[tokio::test]
+async fn graphql_transfer_title_outcome_carries_the_failure_code_and_facts() {
+    use scryer_application::location::live::{TitleRefusal, TitleRefusalFact, TransferTitle};
+    let ctx = TestContext::new().await;
+    let root = tempfile::tempdir().unwrap();
+    let root_id = configure_default_library_root(&ctx, MediaFacet::Movie, root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let operation_id = seed_queued_operation(&ctx, &library_id, &root_id).await;
+    let store = LocationOperationStore::new(ctx.db.datastore());
+    let left_behind = "/synthetic/library/Synthetic Title/Synthetic.mkv";
+    store
+        .upsert_transfer_title(
+            &operation_id,
+            &TransferTitle {
+                title_id: "title-failed".into(),
+                name: "Synthetic Title".into(),
+                sequence: 0,
+                state: TitleCheckpointState::Failed,
+                files_total: 1,
+                files_done: 0,
+                bytes_total: 100,
+                copy_bytes: 0,
+                verification_bytes: 0,
+                current_file: None,
+                copying: 0,
+                verifying: 0,
+                recording: 0,
+                detail: Some("synthetic link could not be proven".into()),
+                refusal: Some(TitleRefusal {
+                    reason: "LOCATION_UNPROVEN_LINK_NOT_REMOVED".into(),
+                    facts: [
+                        (
+                            "leftBehindPath".to_owned(),
+                            TitleRefusalFact::Text(left_behind.into()),
+                        ),
+                        (
+                            "syntheticList".to_owned(),
+                            TitleRefusalFact::List(vec!["a".into(), "b".into()]),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .mark_transfer_titles_initialized(&operation_id)
+        .await
+        .unwrap();
+    let query = r#"query($id: ID!, $titleId: ID!) {
+        locationTransferTitleOutcome(id: $id, titleId: $titleId) { detail refusalReason refusalFacts }
+    }"#;
+    let body = gql(
+        &ctx,
+        query,
+        json!({ "id": operation_id, "titleId": "title-failed" }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let outcome = &body["data"]["locationTransferTitleOutcome"];
+    assert_eq!(outcome["detail"], "synthetic link could not be proven");
+    assert_eq!(
+        outcome["refusalReason"],
+        "LOCATION_UNPROVEN_LINK_NOT_REMOVED"
+    );
+    assert_eq!(
+        outcome["refusalFacts"],
+        json!({ "leftBehindPath": left_behind, "syntheticList": ["a", "b"] }),
+        "facts are served verbatim, in the error-extension shape"
+    );
+    // A title the operation has no row for is absent, not an error.
+    let missing = gql(
+        &ctx,
+        query,
+        json!({ "id": operation_id, "titleId": "no-such-title" }),
+    )
+    .await;
+    assert_no_errors(&missing);
+    assert!(missing["data"]["locationTransferTitleOutcome"].is_null());
 }
 
 #[tokio::test]

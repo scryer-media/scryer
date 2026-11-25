@@ -37,8 +37,9 @@ pub mod title_provenance;
 
 pub use plugin::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
 pub use ports::{
-    ListExclusionRepository, ListMembershipRepository, ListSubscriptionQuery,
-    ListSubscriptionRepository, UserListAccountRepository, UserListPolicyRepository,
+    ListExclusionRepository, ListMembershipIdentity, ListMembershipRepository,
+    ListSubscriptionQuery, ListSubscriptionRepository, UserListAccountRepository,
+    UserListPolicyRepository,
 };
 pub use provider_settings::{
     GATEWAY_LIST_CLIENT_ID_PROVIDERS, ListProviderConfigs, ListProviderSettingField,

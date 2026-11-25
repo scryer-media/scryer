@@ -1,5 +1,6 @@
 pub(crate) use crate::*;
 
+pub mod archive_extraction;
 #[cfg(feature = "runtime-archives")]
 pub(crate) mod archive_extractor;
 #[cfg(not(feature = "runtime-archives"))]

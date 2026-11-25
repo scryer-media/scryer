@@ -66,6 +66,70 @@ async fn legacy_rule_set_row_defaults_to_additional_evaluation_phase() {
     let _ = std::fs::remove_file(db);
 }
 
+/// The builder document is stored beside the rule and only by the builder
+/// writes: a plain update, the path every pack and migration takes, never
+/// touches it.
+#[tokio::test]
+async fn rule_set_builder_model_is_written_only_by_the_builder_paths() {
+    let (services, db) = temp_services("scryer_rule_set_builder_model").await;
+    let store = crate::RuleSetStore::new(services.datastore());
+    let mut rule = managed_rule("builder-rule");
+    let model = r#"{"family":"scoring","version":2}"#;
+    store
+        .create_rule_set_with_builder_model(&rule, Some(model))
+        .await
+        .expect("create with builder model");
+    assert_eq!(
+        store
+            .get_rule_set_builder_model("builder-rule")
+            .await
+            .expect("read model")
+            .as_deref(),
+        Some(model)
+    );
+
+    rule.name = "Renamed rule".to_string();
+    store.update_rule_set(&rule).await.expect("plain update");
+    assert_eq!(
+        store
+            .get_rule_set_builder_model("builder-rule")
+            .await
+            .expect("read model after plain update")
+            .as_deref(),
+        Some(model)
+    );
+
+    store
+        .update_rule_set_with_builder_model(&rule, None)
+        .await
+        .expect("clear model");
+    assert_eq!(
+        store
+            .get_rule_set_builder_model("builder-rule")
+            .await
+            .expect("read cleared model"),
+        None
+    );
+    assert_eq!(
+        store
+            .get_rule_set("builder-rule")
+            .await
+            .expect("read rule")
+            .expect("rule exists")
+            .name,
+        "Renamed rule"
+    );
+    assert_eq!(
+        store
+            .get_rule_set_builder_model("missing-rule")
+            .await
+            .expect("read missing rule"),
+        None
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn rule_pack_customizable_persists_across_updates_and_legacy_deserialization_defaults_true() {
     let (services, db) = temp_services("scryer_rule_pack_customizable").await;

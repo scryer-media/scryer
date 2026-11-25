@@ -894,6 +894,8 @@ pub enum DomainEventTypeValue {
     ListSyncFinished,
     /// A list was followed, changed, turned on or off, or unfollowed.
     ListSubscriptionChanged,
+    /// A lifecycle rule applied its actions and sent its own message.
+    LifecycleRuleNotified,
 }
 
 impl DomainEventTypeValue {
@@ -959,6 +961,7 @@ impl DomainEventTypeValue {
             DomainEventType::ListUnfollowed => Self::ListUnfollowed,
             DomainEventType::ListSyncFinished => Self::ListSyncFinished,
             DomainEventType::ListSubscriptionChanged => Self::ListSubscriptionChanged,
+            DomainEventType::LifecycleRuleNotified => Self::LifecycleRuleNotified,
         }
     }
 
@@ -1024,6 +1027,7 @@ impl DomainEventTypeValue {
             Self::ListUnfollowed => DomainEventType::ListUnfollowed,
             Self::ListSyncFinished => DomainEventType::ListSyncFinished,
             Self::ListSubscriptionChanged => DomainEventType::ListSubscriptionChanged,
+            Self::LifecycleRuleNotified => DomainEventType::LifecycleRuleNotified,
         }
     }
 }
@@ -1357,6 +1361,8 @@ pub enum ImportSkipReasonValue {
     ArchiveExtractionPluginRequired,
     /// Archive extraction exceeded its configured time limit.
     ArchiveExtractionTimedOut,
+    /// Archive extraction failed on every allowed attempt; retry the import to try again.
+    ArchiveExtractionBlocked,
     /// The title's folder must be resolved before the import can run.
     TitleFolderConflict,
 }
@@ -1383,6 +1389,7 @@ impl ImportSkipReasonValue {
                 Self::ArchiveExtractionPluginRequired
             }
             ImportSkipReason::ArchiveExtractionTimedOut => Self::ArchiveExtractionTimedOut,
+            ImportSkipReason::ArchiveExtractionBlocked => Self::ArchiveExtractionBlocked,
             ImportSkipReason::TitleFolderConflict => Self::TitleFolderConflict,
         }
     }

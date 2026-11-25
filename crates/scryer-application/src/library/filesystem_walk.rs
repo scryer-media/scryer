@@ -1,7 +1,8 @@
 use std::collections::HashSet;
-use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+use crate::disk::{Disk, EntryKind};
 use crate::{AppError, AppResult};
 use scryer_domain::is_standalone_video_file as is_video_file;
 
@@ -138,23 +139,12 @@ impl FilesystemWalker {
         let listing = self.read_directory(root)?;
         let symlinked_subdirs = listing.symlinked_subdirs.clone();
         let subdirs = listing.subdirs;
-        let root_visit_key = fs::canonicalize(root).map_err(|err| {
-            AppError::Repository(format!(
-                "failed to resolve directory {}: {err}",
-                root.display()
-            ))
-        })?;
+        let root_visit_key = canonical(root)?;
         let mut seen = HashSet::new();
 
         for path in subdirs {
             let visit_key =
-                visit_key_for_child(&root_visit_key, &path, symlinked_subdirs.contains(&path))
-                    .map_err(|err| {
-                        AppError::Repository(format!(
-                            "failed to resolve directory {}: {err}",
-                            path.display()
-                        ))
-                    })?;
+                visit_key_for_child(&root_visit_key, &path, symlinked_subdirs.contains(&path))?;
             if seen.insert(visit_key) {
                 visitor(path)?;
             }
@@ -167,12 +157,7 @@ impl FilesystemWalker {
     where
         F: FnMut(WalkedDirectory) -> AppResult<bool>,
     {
-        let root_visit_key = fs::canonicalize(root).map_err(|err| {
-            AppError::Repository(format!(
-                "failed to resolve directory {}: {err}",
-                root.display()
-            ))
-        })?;
+        let root_visit_key = canonical(root)?;
         let mut stack = vec![(root.to_path_buf(), root_visit_key.clone(), 0usize)];
         let mut visited = HashSet::new();
         let mut has_visited_root = false;
@@ -274,30 +259,55 @@ impl FilesystemWalker {
     /// One `read_dir` pass, returning the listing and the number of raw
     /// directory entries it saw before any policy filtering.
     fn read_directory_once(&self, dir: &Path) -> AppResult<(WalkedDirectory, usize)> {
-        let entries = fs::read_dir(dir).map_err(|err| {
-            AppError::Repository(format!("failed to read directory {}: {err}", dir.display()))
+        let disk = Disk::process();
+        let mut entries = Vec::new();
+        let mut failure = None;
+        disk.visit_blocking(dir, |entry| {
+            let kind = match entry {
+                Ok(entry) => match entry.kind() {
+                    Ok(kind) => Ok((entry.into_path(), kind)),
+                    Err(error) => Err((
+                        "failed to inspect filesystem entry",
+                        entry.into_path(),
+                        error,
+                    )),
+                },
+                Err(error) => Err(("failed to read entry in", dir.to_path_buf(), error)),
+            };
+            match kind {
+                Ok(entry) => {
+                    entries.push(entry);
+                    ControlFlow::Continue(())
+                }
+                Err(failed) => {
+                    failure = Some(failed);
+                    ControlFlow::Break(())
+                }
+            }
+        })
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read directory {}: {}",
+                dir.display(),
+                error.words()
+            ))
         })?;
+        if let Some((what, path, error)) = failure {
+            return Err(AppError::Repository(format!(
+                "{what} {}: {}",
+                path.display(),
+                error.words()
+            )));
+        }
 
         let mut subdirs = Vec::new();
         let mut files = Vec::new();
         let mut filenames_lower = HashSet::new();
         let mut symlinked_subdirs = HashSet::new();
-        let mut entry_count = 0usize;
+        let entry_count = entries.len();
 
-        for entry in entries {
-            entry_count = entry_count.saturating_add(1);
-            let entry = entry.map_err(|err| {
-                AppError::Repository(format!("failed to read entry in {}: {err}", dir.display()))
-            })?;
-            let path = entry.path();
-            let file_type = entry.file_type().map_err(|err| {
-                AppError::Repository(format!(
-                    "failed to inspect filesystem entry {}: {err}",
-                    path.display()
-                ))
-            })?;
-
-            let Some(kind) = classify_entry_kind(&path, &file_type) else {
+        for (path, kind) in entries {
+            let Some(kind) = classify_entry_kind(&disk, &path, kind) else {
                 continue;
             };
 
@@ -336,6 +346,17 @@ impl FilesystemWalker {
     }
 
     fn apply_walk_filter(&self, root: &Path, listing: &mut WalkedDirectory) {
+        // A scan notes folders holding a per-pass archive workspace for
+        // housekeeping, from the names already listed, before hidden ones
+        // are dropped.
+        if self.filter_policy != WalkFilterPolicy::None {
+            for subdir in &listing.subdirs {
+                crate::import::archive_extraction::note_pass_workspace_parent(
+                    &listing.path,
+                    subdir,
+                );
+            }
+        }
         match self.filter_policy {
             WalkFilterPolicy::None => {}
             WalkFilterPolicy::LibraryScanJunkOnly => {
@@ -394,36 +415,39 @@ fn path_has_extension(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
-fn classify_entry_kind(path: &Path, file_type: &fs::FileType) -> Option<WalkEntryKind> {
-    if file_type.is_dir() {
-        return Some(WalkEntryKind::Directory { via_symlink: false });
+/// A link is classified by what it points at, with one probe.
+fn classify_entry_kind(disk: &Disk, path: &Path, kind: EntryKind) -> Option<WalkEntryKind> {
+    match kind {
+        EntryKind::Directory => Some(WalkEntryKind::Directory { via_symlink: false }),
+        EntryKind::File => Some(WalkEntryKind::File),
+        EntryKind::Other => None,
+        EntryKind::Symlink => match disk.follow_blocking(path).kind()? {
+            EntryKind::Directory => Some(WalkEntryKind::Directory { via_symlink: true }),
+            EntryKind::File => Some(WalkEntryKind::File),
+            _ => None,
+        },
     }
+}
 
-    if file_type.is_file() {
-        return Some(WalkEntryKind::File);
-    }
-
-    if !file_type.is_symlink() {
-        return None;
-    }
-
-    let metadata = fs::metadata(path).ok()?;
-    if metadata.is_dir() {
-        Some(WalkEntryKind::Directory { via_symlink: true })
-    } else if metadata.is_file() {
-        Some(WalkEntryKind::File)
-    } else {
-        None
-    }
+fn canonical(path: &Path) -> AppResult<PathBuf> {
+    Disk::process()
+        .canonicalize_blocking(path)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to resolve directory {}: {}",
+                path.display(),
+                error.words()
+            ))
+        })
 }
 
 fn visit_key_for_child(
     parent_visit_key: &Path,
     path: &Path,
     via_symlink: bool,
-) -> std::io::Result<PathBuf> {
+) -> AppResult<PathBuf> {
     if via_symlink {
-        fs::canonicalize(path)
+        canonical(path)
     } else {
         Ok(match path.file_name() {
             Some(name) => parent_visit_key.join(name),
@@ -435,6 +459,7 @@ fn visit_key_for_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[cfg(unix)]
     #[test]
@@ -655,5 +680,86 @@ mod tests {
 
         assert_eq!(empty_count, 0);
         assert!(empty_listing.files.is_empty());
+    }
+
+    /// A title folder with a season, an episode, and one hidden directory.
+    fn title_folder_with_hidden(root: &Path, hidden: &str) -> PathBuf {
+        let title = root.join("Synthetic Walk Show");
+        fs::create_dir_all(title.join("Season 01")).expect("season");
+        fs::write(
+            title
+                .join("Season 01")
+                .join("Synthetic.Walk.Show.S01E01.mkv"),
+            b"video",
+        )
+        .expect("episode");
+        fs::create_dir_all(title.join(hidden).join("out")).expect("hidden");
+        fs::write(title.join(hidden).join("out").join("Inner.mkv"), b"video").expect("inner");
+        title
+    }
+
+    /// The walk relative to its root: each directory with its subdirectories
+    /// and files.
+    fn relative_walk(
+        walker: &FilesystemWalker,
+        root: &Path,
+    ) -> Vec<(PathBuf, Vec<PathBuf>, Vec<PathBuf>)> {
+        let relative = |path: &PathBuf| path.strip_prefix(root).unwrap().to_path_buf();
+        walker
+            .walk(root)
+            .expect("walk")
+            .iter()
+            .map(|dir| {
+                (
+                    relative(&dir.path),
+                    dir.subdirs.iter().map(relative).collect(),
+                    dir.files.iter().map(relative).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_scan_walk_notes_a_folder_holding_a_pass_workspace_and_returns_the_same_listing() {
+        let scan = FilesystemWalker::new()
+            .skip_episodic_scan_junk_and_trailers()
+            .supported_video_files_only();
+        let noted = crate::import::archive_extraction::noted_pass_workspace_folders_for_test;
+        let other = tempfile::tempdir().expect("tempdir");
+        title_folder_with_hidden(other.path(), ".synthetic-hidden");
+        let with_workspace = tempfile::tempdir().expect("tempdir");
+        let title = title_folder_with_hidden(with_workspace.path(), ".scryer-ax-0123456789abcdef");
+
+        let other_walk = relative_walk(&scan, other.path());
+        assert!(
+            noted(other.path()).is_empty(),
+            "other hidden names note nothing"
+        );
+        let unfiltered = relative_walk(&FilesystemWalker::new(), with_workspace.path());
+        assert!(
+            noted(with_workspace.path()).is_empty(),
+            "a walk that is not a scan notes nothing"
+        );
+
+        let workspace_walk = relative_walk(&scan, with_workspace.path());
+
+        assert_eq!(
+            workspace_walk, other_walk,
+            "the walk returns the same listing"
+        );
+        assert!(
+            unfiltered.len() > workspace_walk.len(),
+            "the workspace is still skipped"
+        );
+        #[cfg(feature = "runtime-archives")]
+        assert_eq!(noted(with_workspace.path()), vec![title]);
+        #[cfg(not(feature = "runtime-archives"))]
+        {
+            let _ = title;
+            assert!(
+                noted(with_workspace.path()).is_empty(),
+                "without archive support nothing is noted"
+            );
+        }
     }
 }

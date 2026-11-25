@@ -1,3 +1,6 @@
+// disk-guard: this crate is the media parser, one of the three crates clippy.toml exempts from the disk guard by name.
+#![allow(clippy::disallowed_methods)]
+
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek};
 use std::path::Path;

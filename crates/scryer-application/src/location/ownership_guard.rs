@@ -674,24 +674,24 @@ pub const FOLDER_MATCH_ENTRY: GuardedEntry = GuardedEntry {
     constant: "FOLDER_MATCH_ENTRY",
 };
 
-/// The maintenance executor's policy delete, which does not route through
+/// The lifecycle executor's policy delete, which does not route through
 /// [`TITLE_DELETE_ENTRY`]: a scheduled destructive action is a delete like any
 /// other, and a title an operation is mid-move stays out of its reach.
-pub const MAINTENANCE_DELETE_ENTRY: GuardedEntry = GuardedEntry {
+pub const LIFECYCLE_DELETE_ENTRY: GuardedEntry = GuardedEntry {
     action: GuardedAction::MaintenanceJob,
     module: "catalog/workflow/delete.rs",
     function: "delete_title_by_policy",
-    constant: "MAINTENANCE_DELETE_ENTRY",
+    constant: "LIFECYCLE_DELETE_ENTRY",
 };
 
-/// The maintenance executor's pre-action recheck. A destructive candidate whose
+/// The lifecycle executor's pre-action recheck. A destructive candidate whose
 /// title an operation owns *holds* rather than fails — the operation releases
 /// its claim on every terminal path, so the action simply retries later.
-pub const MAINTENANCE_ACTION_ENTRY: GuardedEntry = GuardedEntry {
+pub const LIFECYCLE_ACTION_ENTRY: GuardedEntry = GuardedEntry {
     action: GuardedAction::MaintenanceJob,
-    module: "maintenance_rules/action_execution.rs",
-    function: "maintenance_execution_safety_checks",
-    constant: "MAINTENANCE_ACTION_ENTRY",
+    module: "lifecycle_rules/action_execution.rs",
+    function: "lifecycle_execution_safety_checks",
+    constant: "LIFECYCLE_ACTION_ENTRY",
 };
 
 pub const TITLE_METADATA_EDIT_ENTRY: GuardedEntry = GuardedEntry {
@@ -837,8 +837,8 @@ pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
     &LIBRARY_DELETE_ENTRY,
     &RECYCLE_RESTORE_ENTRY,
     &FOLDER_MATCH_ENTRY,
-    &MAINTENANCE_DELETE_ENTRY,
-    &MAINTENANCE_ACTION_ENTRY,
+    &LIFECYCLE_DELETE_ENTRY,
+    &LIFECYCLE_ACTION_ENTRY,
 ];
 
 /// Actions that need no registered entry point because exclusivity is enforced
@@ -1539,8 +1539,8 @@ mod tests {
             include_str!("../catalog/workflow/episode_file_reassign.rs"),
         ),
         (
-            "maintenance_rules/action_execution.rs",
-            include_str!("../maintenance_rules/action_execution.rs"),
+            "lifecycle_rules/action_execution.rs",
+            include_str!("../lifecycle_rules/action_execution.rs"),
         ),
         (
             "catalog/workflow/metadata.rs",

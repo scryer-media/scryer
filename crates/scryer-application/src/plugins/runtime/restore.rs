@@ -215,6 +215,27 @@ impl AppUseCase {
         self.persist_plugin_catalog_status_payload(payload, Utc::now())
             .await
     }
+
+    /// Clears the warnings the last backup restore left behind and returns the
+    /// resulting catalog status. Nothing else in the stored status changes, and
+    /// the stored check time is kept: dismissing is not a catalog check.
+    pub async fn dismiss_plugin_restore_warnings(
+        &self,
+        actor: &User,
+    ) -> AppResult<PluginCatalogStatus> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+
+        if let Some((mut payload, checked_at)) = self.load_stored_plugin_catalog_status().await?
+            && !payload.restore_warnings.is_empty()
+        {
+            payload.restore_warnings.clear();
+            self.persist_plugin_catalog_status_payload(payload, checked_at)
+                .await?;
+        }
+
+        self.plugin_catalog_status(actor).await
+    }
 }
 impl AppUseCase {
     fn catalog_resolution_matches_restored_installation(

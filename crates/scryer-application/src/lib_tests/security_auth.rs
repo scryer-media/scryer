@@ -179,10 +179,14 @@ async fn existing_short_password_remains_valid_after_minimum_is_raised() {
             password_min_length: 12,
             skip_login_for_local_ips: false,
             api_keys_restrict_to_system_settings_users: Some(false),
+            mcp_enabled: None,
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(false),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -285,10 +289,14 @@ async fn emby_totp_requirement_round_trips_through_settings_values() {
             password_min_length: 8,
             skip_login_for_local_ips: false,
             api_keys_restrict_to_system_settings_users: Some(false),
+            mcp_enabled: None,
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(true),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -579,7 +587,7 @@ async fn token_signed_without_auth_session_version_authenticates() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode token");
 
@@ -588,6 +596,101 @@ async fn token_signed_without_auth_session_version_authenticates() {
         .await
         .expect("token without auth session version should authenticate");
     assert_eq!(decoded.id, user.id);
+}
+
+#[tokio::test]
+async fn token_forged_with_the_credential_salt_is_rejected() {
+    let (app, _) = bootstrap();
+    assert_ne!(app.auth.jwt_signing_salt, app.auth.session_signing_salt);
+    let user = User {
+        id: "user-jwt-credential-salt".to_string(),
+        username: "jwt_credential_salt".to_string(),
+        password_hash: Some(TEST_PASSWORD_HASH.to_string()),
+        password_change_required: false,
+        account_kind: Default::default(),
+        authorization: Default::default(),
+    };
+    app.services
+        .identity
+        .users
+        .create(user.clone())
+        .await
+        .unwrap();
+    let claims = JwtClaims {
+        sub: user.id.clone(),
+        exp: Utc::now().timestamp() + 3600,
+        iat: Utc::now().timestamp(),
+        iss: app.auth.issuer.clone(),
+        username: user.username.clone(),
+        app_permissions: vec![],
+        library_permissions: vec![],
+        mfa_verified_until: None,
+        mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
+        actor_capabilities: vec![],
+        oauth_client_id: None,
+        oauth_grant_id: None,
+        oauth_authorization_source: crate::types::OAuthAuthorizationSource::Authenticated,
+        auth_scope: JwtSessionScope::Full,
+        persist_session: false,
+        auth_session_version: None,
+        password_change_required_after_enrollment: false,
+    };
+    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    let encode_with = |salt: &str| {
+        let signing_key = test_derive_jwt_key(salt, TEST_PASSWORD_HASH, &[]);
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(&signing_key),
+        )
+        .expect("encode token")
+    };
+
+    // The derivation every session used before sessions got their own salt:
+    // the credential salt, which can be the registration secret in the binary.
+    let forged = encode_with(&app.auth.jwt_signing_salt);
+    assert!(app.authenticate_token(&forged).await.is_err());
+
+    let genuine = encode_with(&app.auth.session_signing_salt);
+    let decoded = app
+        .authenticate_token(&genuine)
+        .await
+        .expect("token signed with the session salt authenticates");
+    assert_eq!(decoded.id, user.id);
+}
+
+#[test]
+fn session_signing_salt_follows_explicit_secret_or_master_key() {
+    use base64::Engine as _;
+    let master_key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+    let other_master_key = base64::engine::general_purpose::STANDARD.encode([8u8; 32]);
+
+    assert_eq!(
+        JwtAuthConfig::select_session_signing_salt(Some("explicit-secret"), &master_key).unwrap(),
+        "explicit-secret"
+    );
+    assert_eq!(
+        JwtAuthConfig::select_session_signing_salt(Some("explicit-secret"), &other_master_key)
+            .unwrap(),
+        "explicit-secret"
+    );
+
+    let derived = JwtAuthConfig::select_session_signing_salt(None, &master_key).unwrap();
+    // A fixed vector: any change to the derivation signs every session out.
+    assert_eq!(derived, "lsTTNZ4b9f73kFiYVw_htSr8fs3Wtou40UbN2DfYSaM");
+    assert_ne!(
+        derived,
+        JwtAuthConfig::derive_session_signing_salt(&other_master_key).unwrap()
+    );
+    assert_ne!(derived, master_key);
+    assert!(JwtAuthConfig::derive_session_signing_salt("not base64!").is_err());
+    assert!(
+        JwtAuthConfig::derive_session_signing_salt(
+            &base64::engine::general_purpose::STANDARD.encode([7u8; 16])
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -725,7 +828,7 @@ async fn legacy_token_without_scope_claim_defaults_to_full_scope() {
         mfa_verified_until: None,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode legacy token");
 
@@ -963,7 +1066,7 @@ async fn oauth_token_with_app_permissions_is_rejected_during_authentication() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode token");
 
@@ -1024,7 +1127,7 @@ async fn oauth_token_with_actor_capabilities_is_rejected_during_authentication()
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode token");
 
@@ -1808,7 +1911,7 @@ async fn expired_token_returns_unauthorized() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let expired_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
     let result = app.authenticate_token(&expired_token).await;
@@ -1853,7 +1956,7 @@ async fn wrong_issuer_token_returns_unauthorized() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
     let result = app.authenticate_token(&bad_token).await;
@@ -2444,7 +2547,7 @@ async fn deleting_user_invalidates_existing_token_immediately() {
 fn jwt_key_derivation_is_stable_across_permission_order() {
     let (app, _) = bootstrap();
     let key_a = test_derive_jwt_key(
-        &app.auth.jwt_signing_salt,
+        &app.auth.session_signing_salt,
         TEST_PASSWORD_HASH,
         &[
             TestPermissionPreset::TitleManagement,
@@ -2452,7 +2555,7 @@ fn jwt_key_derivation_is_stable_across_permission_order() {
         ],
     );
     let key_b = test_derive_jwt_key(
-        &app.auth.jwt_signing_salt,
+        &app.auth.session_signing_salt,
         TEST_PASSWORD_HASH,
         &[
             TestPermissionPreset::CatalogView,
@@ -2505,7 +2608,7 @@ async fn token_permission_claims_do_not_override_database_authorization() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
 
@@ -2730,4 +2833,264 @@ async fn a_listening_address_pinned_by_the_environment_is_read_only() {
         .expect("the setup choice is ignored, not refused");
     assert!(outcome.ignored_because_pinned);
     assert!(!outcome.restart_required);
+}
+
+fn local_trust_change(
+    hosts: Option<&[&str]>,
+    restrict: Option<bool>,
+    request_host: Option<&str>,
+) -> UpdateSecuritySettings {
+    UpdateSecuritySettings {
+        session_duration_days: None,
+        form_login_enabled: false,
+        password_min_length: 8,
+        skip_login_for_local_ips: false,
+        api_keys_restrict_to_system_settings_users: None,
+        mcp_enabled: None,
+        mfa_require_config_step_up: false,
+        mfa_require_password_login: false,
+        totp_require_jellyfin_login: false,
+        totp_require_emby_login: None,
+        local_trust_allowed_hosts: hosts
+            .map(|hosts| hosts.iter().map(|host| host.to_string()).collect()),
+        restrict_local_trust_to_trusted_proxies: restrict,
+        request_host: request_host.map(str::to_string),
+    }
+}
+
+fn trusted_proxy_change(addresses: Option<&[&str]>) -> UpdateServiceSettings {
+    UpdateServiceSettings {
+        tls_cert_path: None,
+        tls_key_path: None,
+        trusted_proxy_ips: addresses
+            .map(|addresses| addresses.iter().map(|value| value.to_string()).collect()),
+        reset_trusted_proxy_ips: addresses.is_none(),
+        public_url: None,
+        reset_public_url: false,
+        acknowledge_passkey_impact: false,
+        bind_host: None,
+        reset_bind_host: false,
+    }
+}
+
+fn refusal_reason(error: &AppError) -> Option<&str> {
+    error.validation_reason()
+}
+
+#[tokio::test]
+async fn local_trust_settings_default_off_and_a_save_without_them_keeps_them() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        settings.clone(),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    app.initialize_local_trust_policy().await.unwrap();
+    let loaded = app.security_settings().await.unwrap();
+    assert!(loaded.local_trust_allowed_hosts.is_empty());
+    assert!(!loaded.restrict_local_trust_to_trusted_proxies);
+    assert_eq!(
+        *app.local_trust_runtime().snapshot(),
+        crate::local_trust::LocalTrustPolicy::default()
+    );
+
+    let saved = app
+        .update_security_settings(&admin, local_trust_change(None, None, None))
+        .await
+        .unwrap();
+    assert!(saved.local_trust_allowed_hosts.is_empty());
+    assert!(!saved.restrict_local_trust_to_trusted_proxies);
+    assert_eq!(
+        settings
+            .get_value(SETTINGS_SCOPE_SYSTEM, crate::local_trust::ALLOWED_HOSTS_KEY)
+            .await,
+        None
+    );
+    assert_eq!(
+        settings
+            .get_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::local_trust::RESTRICT_TO_TRUSTED_PROXIES_KEY
+            )
+            .await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn allowed_hosts_save_normalizes_installs_and_survives_a_restart() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        settings.clone(),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+
+    let saved = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(
+                Some(&[" Scryer.LAN ", "scryer.lan", "media-box"]),
+                None,
+                Some("scryer.lan:8080"),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.local_trust_allowed_hosts, ["scryer.lan", "media-box"]);
+    assert_eq!(
+        app.local_trust_runtime().snapshot().allowed_hosts,
+        ["scryer.lan", "media-box"]
+    );
+
+    let (restarted, _) = bootstrap_with_settings_repo_and_profiles(
+        settings,
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    restarted.initialize_local_trust_policy().await.unwrap();
+    assert_eq!(
+        restarted.local_trust_runtime().snapshot().allowed_hosts,
+        ["scryer.lan", "media-box"]
+    );
+
+    // Clearing the list turns the check off from any host.
+    let cleared = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(Some(&[]), None, Some("attacker.example")),
+        )
+        .await
+        .unwrap();
+    assert!(cleared.local_trust_allowed_hosts.is_empty());
+    assert!(
+        app.local_trust_runtime()
+            .snapshot()
+            .allowed_hosts
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn allowed_hosts_save_refuses_invalid_names_and_a_list_that_locks_out_the_saver() {
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let invalid = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(Some(&["http://scryer.lan"]), None, Some("scryer.lan")),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&invalid),
+        Some(crate::error_reasons::settings::LOCAL_TRUST_HOST_INVALID)
+    );
+
+    let too_many: Vec<String> = (0..=crate::local_trust::MAX_ALLOWED_HOSTS)
+        .map(|index| format!("host{index}.lan"))
+        .collect();
+    let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
+    let refused = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(Some(&too_many), None, Some("127.0.0.1")),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&refused),
+        Some(crate::error_reasons::settings::LOCAL_TRUST_HOST_INVALID)
+    );
+
+    for request_host in [Some("other.lan:8080"), None] {
+        let locked_out = app
+            .update_security_settings(
+                &admin,
+                local_trust_change(Some(&["scryer.lan"]), None, request_host),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal_reason(&locked_out),
+            Some(crate::error_reasons::settings::LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT),
+            "{request_host:?}"
+        );
+    }
+    assert!(
+        app.local_trust_runtime()
+            .snapshot()
+            .allowed_hosts
+            .is_empty()
+    );
+
+    // An IP literal or localhost always passes, whatever the list holds.
+    for request_host in ["192.168.1.20:8080", "localhost:3000", "[::1]:8080"] {
+        app.update_security_settings(
+            &admin,
+            local_trust_change(Some(&["scryer.lan"]), None, Some(request_host)),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{request_host}: {error}"));
+    }
+}
+
+#[tokio::test]
+async fn restricting_local_trust_to_listed_proxies_needs_a_proxy_list() {
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    app.initialize_trusted_proxy_policy("").await.unwrap();
+    let refused = app
+        .update_security_settings(&admin, local_trust_change(None, Some(true), None))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&refused),
+        Some(crate::error_reasons::settings::LOCAL_TRUST_PROXY_LIST_EMPTY)
+    );
+    assert!(
+        !app.local_trust_runtime()
+            .snapshot()
+            .restrict_to_trusted_proxies
+    );
+
+    app.update_service_settings(&admin, trusted_proxy_change(Some(&["10.0.0.2"])))
+        .await
+        .unwrap();
+    let saved = app
+        .update_security_settings(&admin, local_trust_change(None, Some(true), None))
+        .await
+        .unwrap();
+    assert!(saved.restrict_local_trust_to_trusted_proxies);
+    assert!(
+        app.local_trust_runtime()
+            .snapshot()
+            .restrict_to_trusted_proxies
+    );
+
+    // The list cannot be emptied, by a save or a reset to an empty
+    // environment, while the restriction is on.
+    for change in [trusted_proxy_change(Some(&[])), trusted_proxy_change(None)] {
+        let refused = app
+            .update_service_settings(&admin, change)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal_reason(&refused),
+            Some(crate::error_reasons::settings::LOCAL_TRUST_PROXY_LIST_EMPTY)
+        );
+    }
+
+    app.update_security_settings(&admin, local_trust_change(None, Some(false), None))
+        .await
+        .unwrap();
+    app.update_service_settings(&admin, trusted_proxy_change(Some(&[])))
+        .await
+        .unwrap();
 }

@@ -104,6 +104,41 @@ class MatrixTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "transitive features"):
             feature_args(data, {"package": "app"})
 
+    def test_transitive_test_seam_features_are_allowed(self):
+        data = document(package("app"), package("middle"),
+                        package("storage", features={"test-support": []}))
+        data["packages"][0]["dependencies"] = [
+            {"name": "middle", "rename": None, "path": "crates/middle"},
+        ]
+        data["packages"][1]["dependencies"] = [
+            {"name": "storage", "rename": None, "path": "crates/storage"},
+            {"name": "storage", "rename": None, "path": "crates/storage",
+             "kind": "dev", "features": ["test-support"]},
+        ]
+        self.assertEqual(feature_args(data, {"package": "app"}), ["--all-features"])
+        self.assertEqual(feature_args(data, {"package": "middle"}),
+                         ["--all-features", "--features", "storage/test-support"])
+
+    def test_transitive_features_enabled_outside_tests_fail(self):
+        for edge in ({"kind": None, "features": ["backups"]}, None):
+            data = document(package("app"), package("middle", features={}),
+                            package("storage", features={"backups": []}))
+            data["packages"][0]["dependencies"] = [
+                {"name": "middle", "rename": None, "path": "crates/middle"},
+            ]
+            data["packages"][1]["dependencies"] = [
+                {"name": "storage", "rename": None, "path": "crates/storage"},
+                {"name": "storage", "rename": None, "path": "crates/storage",
+                 "kind": "dev", "features": ["backups"]},
+            ]
+            if edge:
+                data["packages"][1]["dependencies"].append(
+                    {"name": "storage", "rename": None, "path": "crates/storage", **edge})
+            else:
+                data["packages"][1]["features"] = {"backups": ["storage/backups"]}
+            with self.assertRaisesRegex(ValueError, "transitive features"):
+                feature_args(data, {"package": "app"})
+
     def test_duplicates_fail(self):
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             matrix(document(package("app"), package("app")))

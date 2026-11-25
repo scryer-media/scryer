@@ -649,6 +649,248 @@ mod title_history_filter_tests {
         }
     }
 
+    /// An append describes each event from the values it prepared instead of
+    /// decoding the row it just wrote, so what it returns has to be what a
+    /// read of that row returns.
+    #[tokio::test]
+    async fn appended_events_equal_their_stored_rows_across_types_and_replay() {
+        let store = store().await;
+        let read_back = |event_id: String| {
+            let store = store.clone();
+            async move {
+                super::super::core::fetch_domain_event_by_event_id(
+                    store.datastore.read_exec(),
+                    &event_id,
+                )
+                .await
+                .expect("stored event should load")
+                .expect("event should be stored")
+            }
+        };
+
+        let mut grabbed = event_with_payload(
+            "event-grabbed",
+            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                title: title_snapshot(),
+                source_title: Some("Synthetic.Release.1080p.WEB-DL".to_string()),
+                source_hint: Some("https://indexer.example/api".to_string()),
+                source_provider: Some("Configured Indexer".to_string()),
+                download_id: Some("download-1".to_string()),
+                episode_ids: vec!["episode-1".to_string(), "episode-2".to_string()],
+                release_facts: None,
+            }),
+        );
+        grabbed.title_id = None;
+        grabbed.facet = None;
+        grabbed.stream = DomainEventStream::Global;
+        grabbed.actor_kind = DomainEventActorKind::User;
+        grabbed.actor_user_id = Some("member-owner".to_string());
+        grabbed.actor_display_name = "Synthetic Member".to_string();
+        grabbed.correlation_id = Some("correlation-1".to_string());
+        grabbed.causation_id = Some("causation-1".to_string());
+
+        let mut ignored = download_ignored_event();
+        ignored.event_id = "event-ignored".to_string();
+        ignored.actor_kind = DomainEventActorKind::Anonymous;
+        ignored.stream = DomainEventStream::User {
+            user_id: "member-owner".to_string(),
+        };
+
+        let upgraded = event_with_payload(
+            "event-upgraded",
+            DomainEventPayload::MediaFileUpgraded(scryer_domain::MediaFileUpgradedEventData {
+                title: title_snapshot(),
+                media_updates: vec![],
+                episode_ids: vec!["episode-1".to_string()],
+                previous_file_id: Some("file-old".to_string()),
+                current_file_id: Some("file-new".to_string()),
+                old_score: Some(-120),
+                new_score: Some(340),
+                size_bytes: Some(5_000_000_000),
+                import_id: Some("import-1".to_string()),
+                source_ref: None,
+            }),
+        );
+
+        let mut completed = event_with_payload(
+            "event-completed",
+            DomainEventPayload::ImportCompleted(scryer_domain::ImportCompletedEventData {
+                title: title_snapshot(),
+                media_updates: vec![],
+                imported_count: 3,
+                import_id: Some("import-1".to_string()),
+                source_system: None,
+                source_ref: None,
+                source_title: Some("Synthetic.Release.1080p.WEB-DL".to_string()),
+                source_path: Some("/downloads/synthetic".to_string()),
+                dest_path: Some("/library/Synthetic Title".to_string()),
+                quality: None,
+                episode_ids: vec![],
+                size_bytes: None,
+                upgrade: true,
+            }),
+        );
+        completed.stream = DomainEventStream::JobRun {
+            run_id: "run-1".to_string(),
+        };
+
+        let events = vec![grabbed, ignored, upgraded, completed];
+        let appended = store
+            .append_many(events.clone())
+            .await
+            .expect("events should append");
+        assert_eq!(appended.len(), events.len());
+        for (event, stored) in events.iter().zip(&appended) {
+            assert_eq!(stored.event_id, event.event_id);
+            assert_eq!(*stored, read_back(event.event_id.clone()).await);
+        }
+        assert!(
+            appended
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence),
+            "a batch is stored in the order it was given"
+        );
+
+        // A replay returns the event as first stored, whatever it carries now.
+        for (event, stored) in events.iter().zip(&appended) {
+            let mut changed = event.clone();
+            changed.occurred_at += chrono::Duration::hours(1);
+            changed.actor_display_name = "Replayed".to_string();
+            assert_eq!(
+                store
+                    .append_once(changed)
+                    .await
+                    .expect("replay should succeed"),
+                *stored
+            );
+        }
+
+        let mut first_once = download_ignored_event();
+        first_once.event_id = "event-once".to_string();
+        let once = store
+            .append_once(first_once)
+            .await
+            .expect("a first append-once should store the event");
+        assert_eq!(once, read_back("event-once".to_string()).await);
+        assert!(once.sequence > appended[appended.len() - 1].sequence);
+    }
+
+    /// A batch large enough to be prepared in several blocking chunks through
+    /// shared zstd contexts stores, for every event, exactly the bytes and
+    /// projections a per-event encode with a fresh context produces, in order.
+    #[tokio::test]
+    async fn a_multi_chunk_batch_stores_what_per_event_encoding_stores() {
+        let store = store().await;
+        let events = (0..600)
+            .map(|index| {
+                let event_id = format!("event-batch-{index:04}");
+                let payload = match index % 5 {
+                    0 => DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                        title: title_snapshot(),
+                        source_title: Some(format!("Synthetic.Release.{index}.1080p.WEB-DL")),
+                        source_hint: None,
+                        source_provider: Some("Configured Indexer".to_string()),
+                        download_id: Some(format!("download-{index}")),
+                        episode_ids: (0..index % 7).map(|e| format!("episode-{e}")).collect(),
+                        release_facts: None,
+                    }),
+                    1 => DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                        title: Some(title_snapshot()),
+                        status: ImportStatus::Failed,
+                        import_id: None,
+                        source_system: None,
+                        source_ref: None,
+                        source_title: Some("x".repeat(index * 40)),
+                        source_path: None,
+                        dest_path: None,
+                        quality: None,
+                        reason: Some(format!("synthetic reason {index}")),
+                        skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
+                        episode_ids: Vec::new(),
+                    }),
+                    2 => DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                        title: title_snapshot(),
+                        media_updates: Vec::new(),
+                        file_id: Some(format!("file-{index}")),
+                        reason: MediaFileDeletedReason::UpgradeCleanup,
+                        episode_ids: Vec::new(),
+                    }),
+                    3 => DomainEventPayload::MediaFileUpgraded(
+                        scryer_domain::MediaFileUpgradedEventData {
+                            title: title_snapshot(),
+                            media_updates: vec![],
+                            episode_ids: vec![format!("episode-{index}")],
+                            previous_file_id: None,
+                            current_file_id: Some(format!("file-{index}")),
+                            old_score: Some(-(index as i32)),
+                            new_score: Some(index as i32),
+                            size_bytes: Some(index as i64 * 1_000_003),
+                            import_id: None,
+                            source_ref: None,
+                        },
+                    ),
+                    _ => download_ignored_event().payload,
+                };
+                event_with_payload(&event_id, payload)
+            })
+            .collect::<Vec<_>>();
+        let appended = store
+            .append_many(events.clone())
+            .await
+            .expect("events should append");
+        assert_eq!(appended.len(), events.len());
+        assert!(
+            appended
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            unreachable!("the test store is SQLite");
+        };
+        for (event, stored) in events.iter().zip(&appended) {
+            assert_eq!(stored.event_id, event.event_id);
+            let payload = serde_json::to_value(&event.payload).unwrap();
+            let expected_bytes =
+                scryer_infrastructure_sql::domain_event_payload::encode_domain_event_payload(
+                    &payload,
+                )
+                .unwrap();
+            let expected_projections =
+                scryer_infrastructure_sql::domain_event_payload::derive_domain_event_projections(
+                    event.payload.event_type().as_str(),
+                    &payload,
+                );
+            let row = sqlx::query(
+                "SELECT payload_json, import_status, media_file_delete_reason, download_id,
+                        import_skip_reason, media_request_id
+                   FROM domain_events WHERE event_id = ?1",
+            )
+            .bind(&event.event_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(row.get::<Vec<u8>, _>("payload_json"), expected_bytes);
+            assert_eq!(
+                scryer_infrastructure_sql::domain_event_payload::DomainEventProjections {
+                    import_status: row.get("import_status"),
+                    import_skip_reason: row.get("import_skip_reason"),
+                    media_file_delete_reason: row.get("media_file_delete_reason"),
+                    download_id: row.get("download_id"),
+                    media_request_id: row.get("media_request_id"),
+                },
+                expected_projections
+            );
+            assert_eq!(
+                stored.payload,
+                scryer_infrastructure_sql::domain_event_payload::decode_domain_event_payload(
+                    &expected_bytes
+                )
+                .map(|value| serde_json::from_value::<DomainEventPayload>(value).unwrap())
+                .unwrap()
+            );
+        }
+    }
+
     /// Filtering the history page by "download ignored" used to push a literal
     /// never-match clause, so the filtered page came back empty while the
     /// unfiltered page showed the very same rows.

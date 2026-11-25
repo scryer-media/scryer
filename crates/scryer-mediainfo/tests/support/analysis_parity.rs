@@ -421,6 +421,16 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
                 .flatten()
                 .filter(|frame| frame["stream_index"] == stream["index"])
                 .flat_map(|frame| frame["side_data_list"].as_array().into_iter().flatten());
+            let reference_has_dovi = stream["side_data_list"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|side| side["side_data_type"] == "DOVI configuration record");
+            if !reference_has_dovi && metadata["hdr"]["dolby_vision"] == Value::Bool(true) {
+                differences.push(format!(
+                    "{label}.hdr.dolby_vision: native true, reference has no DOVI configuration record"
+                ));
+            }
             for side in stream["side_data_list"]
                 .as_array()
                 .into_iter()

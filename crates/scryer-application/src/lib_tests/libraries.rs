@@ -4096,3 +4096,66 @@ async fn update_library_cancels_the_library_scan_only_when_a_root_is_removed() {
     assert!(tracker.get_session(session_id).await.is_none());
     assert!(token.is_cancelled());
 }
+
+/// The disk owner caches and bounds only configured roots, so creating a
+/// library and adding a root install them, and a path outside every root
+/// stays application data.
+#[tokio::test]
+async fn library_root_writes_install_the_roots_on_the_disk_owner() {
+    use crate::disk::{Disk, VolumeClass};
+    let (app, admin) = bootstrap();
+    let first = std::path::Path::new("/synthetic/invented-films");
+    let second = std::path::Path::new("/synthetic/invented-features");
+    let disk = Disk::process();
+    assert_eq!(disk.class_of(&first.join("a.mkv")), VolumeClass::AppData);
+
+    let library = app
+        .create_library(
+            &admin,
+            MediaFacet::Movie,
+            "Invented films".into(),
+            vec![LibraryRootDraft {
+                id: None,
+                path: first.to_string_lossy().into(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create library");
+    assert_eq!(
+        disk.class_of(&first.join("a.mkv")),
+        VolumeClass::LibraryRoot
+    );
+    assert_eq!(disk.class_of(&second.join("a.mkv")), VolumeClass::AppData);
+
+    let roots = library
+        .roots
+        .iter()
+        .map(|root| LibraryRootDraft {
+            id: Some(root.id.clone()),
+            path: root.path.clone(),
+            is_default: root.is_default,
+        })
+        .chain([LibraryRootDraft {
+            id: None,
+            path: second.to_string_lossy().into(),
+            is_default: false,
+        }])
+        .collect();
+    app.update_library(&admin, &library.id, None, Some(roots), None)
+        .await
+        .expect("add a root");
+    assert_eq!(
+        disk.class_of(&first.join("a.mkv")),
+        VolumeClass::LibraryRoot
+    );
+    assert_eq!(
+        disk.class_of(&second.join("a.mkv")),
+        VolumeClass::LibraryRoot
+    );
+    assert_eq!(
+        disk.class_of(std::path::Path::new("/synthetic/elsewhere/a.mkv")),
+        VolumeClass::AppData
+    );
+}

@@ -4,7 +4,8 @@ mod tests {
         DownloadImportActions, DownloadQueueBucket, TrackedDownloadBackgroundWorkKind,
         TrackedDownloadWorkDrain, apply_import_record_to_queue_item,
         apply_submission_to_queue_item, apply_tracked_download_activity_projection,
-        apply_tracked_download_queue_metadata, build_download_queue_status_detail,
+        apply_tracked_download_queue_metadata, automatic_import_stopped_by_block,
+        build_download_queue_status_detail,
         canonicalize_download_queue_item_clients, classify_download_queue_item,
         collect_download_client_filter_options, dedupe_download_queue_items,
         derive_download_queue_display_state, derive_download_queue_import_actions,
@@ -225,6 +226,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -848,6 +850,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -929,6 +932,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -981,6 +985,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -1041,6 +1046,7 @@ mod tests {
                 path_missing_since: None,
                 no_video_import_retry: None,
                 import_execution_retry: None,
+                stalled_import_passes: 0,
                 import_hold: None,
                 skip_reacquire_on_failure: false,
                 manual_failure_cleanup: false,
@@ -1097,6 +1103,75 @@ mod tests {
                 derive_download_queue_display_state(&queue_item),
                 DownloadDisplayState::ImportBlocked
             );
+        }
+
+        // An automatic import a block stopped is not pending: the row shows
+        // the block and its reason. A manual import queued on the same row is
+        // still live. The block holds as the import left it, in error, and as
+        // a restart restores it, as a warning.
+        for (import_type, stays, status) in [
+            (ImportType::MovieDownload, false, TrackedDownloadStatus::Error),
+            (ImportType::ManualImport, true, TrackedDownloadStatus::Error),
+            (ImportType::MovieDownload, false, TrackedDownloadStatus::Warning),
+            (ImportType::ManualImport, true, TrackedDownloadStatus::Warning),
+        ] {
+            let mut queue_item = item("job-1", DownloadQueueState::Completed);
+            queue_item.import_status = Some(ImportStatus::Pending);
+            queue_item.import_type = Some(import_type);
+            let mut tracked = blocked_tracked(&queue_item);
+            tracked.status = status;
+            tracked.status_messages =
+                vec!["the library file is the import source's own entry".to_string().into()];
+            let metadata = tracked_download_queue_snapshot(&tracked);
+
+            // The queue read lays the import record over the tracked row and
+            // leaves a stopped automatic import off it the same way.
+            let mut read_item = item("job-1", DownloadQueueState::Completed);
+            apply_tracked_download_queue_metadata(&mut read_item, &metadata);
+            let record = ImportRecord {
+                id: "import-1".to_string(),
+                source_client_id: Some("client-1".to_string()),
+                source_system: "weaver".to_string(),
+                source_ref: "job-1".to_string(),
+                import_type,
+                status: ImportStatus::Pending,
+                payload_json: "{}".to_string(),
+                result_json: None,
+                download_id: None,
+                import_transfer_phase: None,
+                import_transfer_bytes: None,
+                import_transfer_total_bytes: None,
+                import_transfer_started_at: None,
+                import_transfer_updated_at: None,
+                started_at: None,
+                finished_at: None,
+                created_at: "2026-06-17T12:00:00Z".to_string(),
+                updated_at: "2026-06-17T12:00:01Z".to_string(),
+            };
+            assert_eq!(
+                automatic_import_stopped_by_block(&read_item, &record),
+                !stays
+            );
+
+            apply_tracked_download_activity_projection(&mut queue_item, &metadata);
+            if stays {
+                assert_eq!(queue_item.import_status, Some(ImportStatus::Pending));
+                assert_eq!(
+                    derive_download_queue_display_state(&queue_item),
+                    DownloadDisplayState::ImportPending
+                );
+            } else {
+                assert_eq!(queue_item.import_status, None);
+                assert_eq!(
+                    derive_download_queue_display_state(&queue_item),
+                    DownloadDisplayState::ImportBlocked
+                );
+                assert!(
+                    build_download_queue_status_detail(&queue_item)
+                        .contains("the library file is the import source's own entry"),
+                    "the block's reason shows"
+                );
+            }
         }
     }
 
@@ -1185,6 +1260,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -1395,6 +1471,63 @@ mod tests {
         );
     }
 
+    fn automatic_import_record(id: &str, reason_code: Option<&str>) -> ImportRecord {
+        let reason = reason_code
+            .map(|code| format!(r#","reason_code":"{code}""#))
+            .unwrap_or_default();
+        let mut record = manual_import_record(
+            id,
+            ImportStatus::Failed,
+            &format!(
+                r#"{{"import_id":"import-auto","decision":"failed","source_path":"/downloads/Synthetic.Title.S01E01.mkv","episode_ids":[],"error_message":"the existing destination is the source file itself"{reason},"needs_reconciliation":true,"started_at":"2026-09-17T00:00:00Z","completed_at":"2026-09-17T00:00:00Z"}}"#
+            ),
+        );
+        record.import_type = ImportType::SeriesDownload;
+        record
+    }
+
+    /// A queue rebuilt from a stored automatic import keeps the refusal's code
+    /// as its attention code, not only its sentence.
+    #[test]
+    fn a_rebuilt_queue_row_keeps_the_stored_import_refusal_code() {
+        let record = automatic_import_record(
+            "job-auto-refused",
+            Some(crate::error_reasons::import::DESTINATION_IS_SOURCE),
+        );
+        let overlay = import_record_result_overlay(&record);
+        assert_eq!(
+            overlay.reason_code.as_deref(),
+            Some(crate::error_reasons::import::DESTINATION_IS_SOURCE)
+        );
+        let mut queue_item = item("job-auto-refused", DownloadQueueState::Completed);
+        apply_import_record_to_queue_item(&mut queue_item, &record);
+        assert_eq!(
+            queue_item.attention_reason_code.as_deref(),
+            Some("IMPORT_DESTINATION_IS_SOURCE")
+        );
+        assert_eq!(
+            queue_item.attention_reason.as_deref(),
+            Some("the existing destination is the source file itself")
+        );
+    }
+
+    /// A stored code this release does not know, or none, leaves the row as
+    /// it was before codes were carried.
+    #[test]
+    fn a_rebuilt_queue_row_without_a_known_code_behaves_as_before() {
+        for reason_code in [Some("IMPORT_SYNTHETIC_UNKNOWN_REASON"), None] {
+            let record = automatic_import_record("job-auto-uncoded", reason_code);
+            assert_eq!(import_record_result_overlay(&record).reason_code, None);
+            let mut queue_item = item("job-auto-uncoded", DownloadQueueState::Completed);
+            apply_import_record_to_queue_item(&mut queue_item, &record);
+            assert_eq!(queue_item.attention_reason_code, None, "{reason_code:?}");
+            assert_eq!(
+                queue_item.attention_reason.as_deref(),
+                Some("the existing destination is the source file itself")
+            );
+        }
+    }
+
     /// A manual import result carries its reason on the failed mapping when the
     /// run itself recorded no summary; history and the queue row both read it
     /// through the same overlay.
@@ -1437,6 +1570,16 @@ mod tests {
         assert!(actions.assign_title);
         assert!(actions.ignore);
         assert!(actions.mark_failed);
+
+        // A download Scryer did not grab keeps its other actions, but failure
+        // cleanup is not offered: the mutation would refuse it.
+        let mut not_grabbed = blocked.clone();
+        not_grabbed.is_scryer_origin = false;
+        let actions = derive_download_queue_import_actions(&not_grabbed);
+        assert!(!actions.mark_failed);
+        assert!(actions.manual_import_interactive);
+        assert!(actions.assign_title);
+        assert!(actions.ignore);
 
         // A movie imports without the dialog.
         let mut movie = blocked.clone();
@@ -1650,6 +1793,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -2546,14 +2690,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_blocklist_refuses_downloads_without_grab_history() {
+        use crate::tracked_downloads::TrackedDownloadCommand;
+        let (app, actor) = crate::lib_tests::bootstrap();
+        for is_scryer_origin in [false, true] {
+            for skip_reacquire in [false, true] {
+                let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+                let mut row = reconcile_row(None, TrackedDownloadState::ImportBlocked);
+                row.client_item.is_scryer_origin = is_scryer_origin;
+                let download_id = tracker.insert_for_tests(row);
+                let before = row_debug(&tracker, download_id);
+                let (work_tx, mut work_rx) = tokio::sync::mpsc::unbounded_channel();
+                let mut in_flight = Default::default();
+                let (reply, response) = tokio::sync::oneshot::channel();
+                super::handle_tracked_download_command(
+                    &app,
+                    &actor,
+                    &mut tracker,
+                    &mut in_flight,
+                    &work_tx,
+                    TrackedDownloadCommand::MarkFailed {
+                        id: SHARED_TORRENT_ID.to_string(),
+                        skip_reacquire,
+                        reply,
+                    },
+                )
+                .await;
+                let error = response
+                    .await
+                    .unwrap()
+                    .expect_err("unowned download must not report success");
+                assert_eq!(
+                    error.validation_reason(),
+                    Some("INTEGRATION_DOWNLOAD_NOT_GRABBED")
+                );
+                assert_eq!(row_debug(&tracker, download_id), before);
+                assert!(in_flight.is_empty());
+                assert!(work_rx.try_recv().is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn operator_commands_act_on_the_live_row_when_a_settled_sibling_shares_its_id_string() {
         use crate::tracked_downloads::TrackedDownloadCommand;
         let (app, actor) = crate::lib_tests::bootstrap();
         for _ in 0..8 {
-            // Mark failed. Nothing grabbed this synthetic torrent, so the arm
-            // warns the row it resolved instead of failing it.
+            // No grab history: refuse without changing either sibling.
             let (mut tracker, settled, live) = settled_and_live_siblings();
             let settled_before = row_debug(&tracker, settled);
+            let live_before = row_debug(&tracker, live);
             let (reply, response) = tokio::sync::oneshot::channel();
             run_tracked_command(
                 &app,
@@ -2566,15 +2752,15 @@ mod tests {
                 },
             )
             .await;
-            response.await.expect("reply").expect("mark failed");
-            let warned = tracker.get_by_download_id(live).expect("live row");
-            assert_eq!(warned.status, TrackedDownloadStatus::Warning);
-            assert!(
-                warned
-                    .status_messages
-                    .iter()
-                    .any(|message| message.text.contains("wasn't grabbed"))
+            let error = response
+                .await
+                .expect("reply")
+                .expect_err("unowned download");
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::integration::DOWNLOAD_NOT_GRABBED),
             );
+            assert_eq!(row_debug(&tracker, live), live_before);
             assert_eq!(row_debug(&tracker, settled), settled_before);
 
             // Ignore.

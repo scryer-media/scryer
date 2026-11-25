@@ -1,7 +1,7 @@
 //! Bounded stable enrichment shared across polls; mutable state belongs to one pass.
 use crate::{AppUseCase, ClientJobLocator, DownloadSubmission, PersistedSeedGoals};
 use scryer_domain::download_identity::DownloadId;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -308,6 +308,13 @@ pub(crate) struct DownloadEnrichmentPass {
     pub(crate) submissions: HashMap<ClientJobLocator, Option<Arc<SubmissionProjection>>>,
     pub(crate) goals: HashMap<ClientJobLocator, Option<PersistedSeedGoals>>,
     pub(crate) states: HashMap<ClientJobLocator, Option<String>>,
+    /// Locators whose submission read failed in the latest [`Self::load`]:
+    /// whether Scryer submitted them is unknown, not "no".
+    pub(crate) submission_lookup_failed: HashSet<ClientJobLocator>,
+    /// Rows of the latest enrichment whose origin could not be read, keyed as
+    /// [`Self::origin_is_unknown`] looks them up. The tracker keeps the origin
+    /// it last knew for these instead of taking the client's word for it.
+    origin_unknown: HashSet<(ClientJobLocator, Option<String>)>,
 }
 impl DownloadEnrichmentPass {
     pub(crate) fn restore_invalidated(
@@ -328,6 +335,16 @@ impl DownloadEnrichmentPass {
             }
         }
     }
+    /// Whether the latest enrichment could not read `item`'s origin.
+    pub(crate) fn origin_is_unknown(&self, item: &crate::DownloadQueueItem) -> bool {
+        !self.origin_unknown.is_empty() && self.origin_unknown.contains(&applied_key(item))
+    }
+    pub(crate) fn clear_origin_unknown(&mut self) {
+        self.origin_unknown.clear();
+    }
+    pub(crate) fn mark_origin_unknown(&mut self, item: &crate::DownloadQueueItem) {
+        self.origin_unknown.insert(applied_key(item));
+    }
     pub(crate) fn remember(&mut self, item: &crate::DownloadQueueItem, before: QueueAttribution) {
         let generation = self.generation.unwrap_or(0);
         let after = QueueAttribution::capture(item);
@@ -344,6 +361,7 @@ impl DownloadEnrichmentPass {
     pub(crate) async fn load(&mut self, app: &AppUseCase, locators: &[ClientJobLocator]) {
         let cache = &app.runtime.acquisition.download_enrichment;
         let _fill = cache.fill.lock().await;
+        self.submission_lookup_failed.clear();
         for attempt in 0..3 {
             let generation = app.runtime.acquisition.download_registry_generation();
             if self.generation != Some(generation) || attempt == 2 {
@@ -405,7 +423,13 @@ impl DownloadEnrichmentPass {
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "failed to batch-load download submissions for queue enrichment")
+                        tracing::warn!(
+                            %error,
+                            reason_code = crate::error_reasons::download_origin::LOOKUP_FAILED,
+                            rows = missing.len(),
+                            "failed to batch-load download submissions for queue enrichment; keeping each download's last known origin"
+                        );
+                        self.submission_lookup_failed.extend(missing);
                     }
                 }
             }

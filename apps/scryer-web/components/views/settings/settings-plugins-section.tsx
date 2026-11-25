@@ -117,6 +117,7 @@ type SettingsPluginsSectionProps = {
   pluginProgress: Partial<Record<string, PluginInstallProgressRecord>>;
   pluginErrors: Partial<Record<string, string>>;
   refreshing: boolean;
+  dismissingRestoreWarnings: boolean;
   upgradingAll: boolean;
   manualRepoUrl: string;
   manualFileName: string | null;
@@ -143,6 +144,7 @@ type SettingsPluginsSectionProps = {
   onRequestInstallUploadedPlugin: () => void;
   onInstallManualPlugin: () => void;
   onRefreshRegistry: () => void;
+  onDismissRestoreWarnings: () => void;
   onUpgradeAllPlugins: () => void;
   onTogglePlugin: (plugin: RegistryPluginRecord) => void;
   onInstallPlugin: (plugin: RegistryPluginRecord) => void;
@@ -783,6 +785,7 @@ export function SettingsPluginsSection({
   pluginProgress,
   pluginErrors,
   refreshing,
+  dismissingRestoreWarnings,
   upgradingAll,
   manualRepoUrl,
   manualFileName,
@@ -802,6 +805,7 @@ export function SettingsPluginsSection({
   onRequestInstallUploadedPlugin,
   onInstallManualPlugin,
   onRefreshRegistry,
+  onDismissRestoreWarnings,
   onUpgradeAllPlugins,
   onTogglePlugin,
   onInstallPlugin,
@@ -929,7 +933,21 @@ export function SettingsPluginsSection({
 
       {catalogStatus && catalogStatus.restoreWarnings.length > 0 && (
         <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-sm text-[var(--scry-warning-text)]">
-          <div className="font-medium">{t("uiText.restoreWarnings")}</div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="font-medium">{t("uiText.restoreWarnings")}</div>
+            <Button
+              id="settings-plugins-dismiss-restore-warnings"
+              variant="outline"
+              size="sm"
+              disabled={dismissingRestoreWarnings}
+              onClick={onDismissRestoreWarnings}
+            >
+              {dismissingRestoreWarnings ? (
+                <LoadingMark className="mr-2 h-4 w-4" />
+              ) : null}
+              {t("label.dismiss")}
+            </Button>
+          </div>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {catalogStatus.restoreWarnings.map((warning) => (
               <li key={warning}>{warning}</li>

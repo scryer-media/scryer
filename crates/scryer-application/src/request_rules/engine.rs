@@ -1,4 +1,4 @@
-//! The cached request-rules engine and its rebuild (spec 0003 FR-013).
+//! The cached request-rules engine and its rebuild.
 //!
 //! Compiling Rego is expensive and a request is decided while its requester
 //! waits, so the engine is built once and swapped, exactly as the release
@@ -28,7 +28,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use scryer_domain::RequestRuleEvaluationMode;
 use scryer_rules::request::{RequestPolicy, RequestRulesEngine};
 
 use crate::{AppError, AppResult, AppUseCase};
@@ -37,7 +36,6 @@ use crate::{AppError, AppResult, AppUseCase};
 #[derive(Clone, Debug)]
 pub struct RequestRuleScope {
     pub name: String,
-    pub mode: RequestRuleEvaluationMode,
     /// Empty means every library.
     pub library_ids: Vec<String>,
     pub revision_number: i64,
@@ -64,6 +62,9 @@ pub struct RequestRulesEngineCache {
     /// True after a persisted rule mutation could not be reflected in this
     /// generation. Evaluation must hold rather than consult stale policy.
     pub unavailable: bool,
+    /// The fact families some loaded rule may read. Evaluation leaves the
+    /// others unread.
+    pub fact_reads: crate::request_rules::facts::RequestFactReads,
 }
 
 impl Default for RequestRulesEngineCache {
@@ -74,6 +75,7 @@ impl Default for RequestRulesEngineCache {
             load_errors: HashMap::new(),
             generation: 0,
             unavailable: false,
+            fact_reads: crate::request_rules::facts::RequestFactReads::ALL,
         }
     }
 }
@@ -92,8 +94,10 @@ impl RequestRulesEngineCache {
     }
 }
 
-/// Shared handle the service bundle hangs on to.
-pub type RequestRulesEngineHandle = Arc<RwLock<RequestRulesEngineCache>>;
+/// Shared handle the service bundle hangs on to. A generation is installed
+/// whole and never changed in place, so a reader takes the `Arc` and drops the
+/// lock without copying the engine or its maps.
+pub type RequestRulesEngineHandle = Arc<RwLock<Arc<RequestRulesEngineCache>>>;
 
 impl AppUseCase {
     /// Read the current engine generation.
@@ -101,21 +105,21 @@ impl AppUseCase {
     /// A poisoned lock produces an unavailable generation. Request evaluation
     /// holds rather than deciding against an empty engine that might omit
     /// persisted enabled rules.
-    pub(crate) fn request_rules_engine_snapshot(&self) -> RequestRulesEngineCache {
+    pub(crate) fn request_rules_engine_snapshot(&self) -> Arc<RequestRulesEngineCache> {
         self.services
             .customization
             .request_rules_engine
             .read()
-            .map(|guard| guard.clone())
+            .map(|guard| Arc::clone(&guard))
             .unwrap_or_else(|error| {
                 tracing::warn!(
                     error = %error,
                     "request rules engine lock poisoned; request rules are unavailable"
                 );
-                RequestRulesEngineCache {
+                Arc::new(RequestRulesEngineCache {
                     unavailable: true,
                     ..RequestRulesEngineCache::default()
-                }
+                })
             })
     }
 
@@ -131,11 +135,17 @@ impl AppUseCase {
             .map_err(|error| {
                 AppError::Repository(format!("request rules engine lock poisoned: {error}"))
             })?;
-        guard.unavailable = true;
-        guard.generation = guard.generation.checked_add(1).ok_or_else(|| {
+        let generation = guard.generation.checked_add(1).ok_or_else(|| {
             AppError::Repository("request rules engine generation exhausted".to_string())
         })?;
-        Ok(guard.generation)
+        // Readers keep the generation they already hold; the unavailable one
+        // replaces it, copied once per rebuild rather than once per read.
+        *guard = Arc::new(RequestRulesEngineCache {
+            unavailable: true,
+            generation,
+            ..RequestRulesEngineCache::clone(&guard)
+        });
+        Ok(generation)
     }
 
     /// Rebuild the engine from every enabled rule set.
@@ -156,20 +166,26 @@ impl AppUseCase {
             .list_rule_sets()
             .await?;
 
+        let rule_sets: Vec<_> = rule_sets
+            .into_iter()
+            .filter(|rule_set| rule_set.enabled)
+            .collect();
+        let revision_keys: Vec<(String, i64)> = rule_sets
+            .iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set.current_revision_number))
+            .collect();
+        let revisions = self
+            .services
+            .customization
+            .request_rule_sets
+            .get_revisions(&revision_keys)
+            .await?;
+
         let mut policies: Vec<RequestPolicy> = Vec::new();
         let mut scopes: HashMap<String, RequestRuleScope> = HashMap::new();
         let mut load_errors = HashMap::new();
-        for rule_set in rule_sets
-            .into_iter()
-            .filter(|rule_set| rule_set.evaluation_mode != RequestRuleEvaluationMode::Disabled)
-        {
-            let Some(revision) = self
-                .services
-                .customization
-                .request_rule_sets
-                .get_revision(&rule_set.id, rule_set.current_revision_number)
-                .await?
-            else {
+        for (rule_set, revision) in rule_sets.into_iter().zip(revisions) {
+            let Some(revision) = revision else {
                 tracing::warn!(
                     rule_set_id = rule_set.id.as_str(),
                     revision_number = rule_set.current_revision_number,
@@ -179,7 +195,6 @@ impl AppUseCase {
                     rule_set.id.clone(),
                     RequestRuleScope {
                         name: rule_set.name,
-                        mode: rule_set.evaluation_mode,
                         library_ids: rule_set.library_ids,
                         revision_number: rule_set.current_revision_number,
                         content_hash: String::new(),
@@ -201,10 +216,9 @@ impl AppUseCase {
                 rule_set.id.clone(),
                 RequestRuleScope {
                     name: rule_set.name,
-                    mode: rule_set.evaluation_mode,
                     library_ids: rule_set.library_ids,
                     revision_number: revision.revision_number,
-                    content_hash: revision.matcher_content_hash,
+                    content_hash: revision.source_content_hash,
                 },
             );
             policies.push(policy);
@@ -235,13 +249,19 @@ impl AppUseCase {
                 });
                 RequestRulesEngine::build(&policies).map_err(|error| {
                     AppError::validation_refused(
-                        crate::error_reasons::request_rules::FAILED_BUILD_REQUEST_RULES_ENGINE,
+                        crate::error_reasons::request_rules::ENGINE_BUILD_FAILED,
                         format!("failed to build the request rules engine: {error}"),
                     )
                 })?
             }
         };
         let rule_count = policies.len();
+        // Every loaded rule is evaluated, whichever libraries it covers.
+        let fact_reads = crate::request_rules::facts::RequestFactReads::for_policies(
+            policies
+                .iter()
+                .map(|policy| (policy.rego_source.as_str(), policy.id.as_str())),
+        );
 
         let mut guard = self
             .services
@@ -259,13 +279,14 @@ impl AppUseCase {
             );
             return Ok(());
         }
-        *guard = RequestRulesEngineCache {
+        *guard = Arc::new(RequestRulesEngineCache {
             engine,
             scopes,
             load_errors,
             generation,
             unavailable: false,
-        };
+            fact_reads,
+        });
         drop(guard);
 
         tracing::debug!(rule_count, "request rules engine rebuilt");

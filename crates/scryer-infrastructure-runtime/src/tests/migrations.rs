@@ -6381,7 +6381,7 @@ async fn migration_0278_postgres_rekeys_search_terms_by_language() -> AppResult<
         })?;
 
     let result = async {
-        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(277)).await?;
+        postgres_history::replay_historical_postgres(&pool, 277).await?;
         sqlx::query(
             "INSERT INTO titles (
                 id, library_id, name, name_normalized, facet, root_folder_id,
@@ -6679,7 +6679,7 @@ async fn migration_0279_postgres_carries_text_learning_into_v3_and_applies_the_c
         })?;
 
     let result = async {
-        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(278)).await?;
+        postgres_history::replay_historical_postgres(&pool, 278).await?;
         for statement in migration_0279_seed_statements(true) {
             sqlx::query(sqlx::AssertSqlSafe(statement))
                 .execute(&pool)
@@ -6763,8 +6763,9 @@ async fn migration_0295_preserves_inherited_movie_availability() {
     );
 }
 
-/// Runs 0304 against a fully migrated schema holding one enabled destructive
-/// maintenance rule, one shadow maintenance rule and one enforcing request
+/// Runs 0304 against the schema of the last release before lifecycle rules
+/// stored one state (0347), holding one enabled destructive
+/// lifecycle rule, one shadow lifecycle rule and one enforcing request
 /// rule, with the experimental-features setting stored as `value_json`, or
 /// absent when `experimental` is `None`. Returns the rule rows afterwards as
 /// `(id, enabled, evaluation_mode, effect_arming, destructive_rearm_required)`
@@ -6776,10 +6777,16 @@ async fn rules_after_0304(
     Vec<(String, i64, String)>,
 ) {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
-    let services = SqliteServices::new(directory.path().join("rules-0304.db").to_string_lossy())
+    let db = directory.path().join("rules-0304.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
         .await
-        .expect("migrations should apply");
-    let pool = services.pool().clone();
+        .expect("pre-0348 database should open");
+    // The four rule-state columns 0304 writes are replaced at 0348.
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(347), true)
+        .await
+        .expect("migrations through 0347 should apply");
     let mut conn = pool.acquire().await.expect("rule reset connection");
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *conn)
@@ -6794,7 +6801,7 @@ async fn rules_after_0304(
     )
     .execute(&mut *conn)
     .await
-    .expect("seed maintenance rules");
+    .expect("seed lifecycle rules");
     sqlx::query(
         "INSERT INTO request_rule_sets (id, name, enabled, evaluation_mode)
          VALUES ('request-enforcing', 'Synthetic request rule', 1, 'enforce')",
@@ -6831,33 +6838,33 @@ async fn rules_after_0304(
     .map(str::trim)
     .filter(|statement| !statement.is_empty())
     {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.to_string()))
             .execute(&mut *conn)
             .await
             .expect("0304 should apply");
     }
 
-    let maintenance = sqlx::query_as(
+    let lifecycle = sqlx::query_as(
         "SELECT id, enabled, evaluation_mode, effect_arming, destructive_rearm_required
          FROM maintenance_rule_sets ORDER BY id",
     )
     .fetch_all(&mut *conn)
     .await
-    .expect("read maintenance rules");
+    .expect("read lifecycle rules");
     let requests =
         sqlx::query_as("SELECT id, enabled, evaluation_mode FROM request_rule_sets ORDER BY id")
             .fetch_all(&mut *conn)
             .await
             .expect("read request rules");
-    (maintenance, requests)
+    (lifecycle, requests)
 }
 
 #[tokio::test]
 async fn migration_0304_disables_every_rule_unless_experimental_features_are_on() {
     for experimental in [None, Some("false"), Some("\"off\"")] {
-        let (maintenance, requests) = rules_after_0304(experimental).await;
+        let (lifecycle, requests) = rules_after_0304(experimental).await;
         assert_eq!(
-            maintenance,
+            lifecycle,
             vec![
                 (
                     "rule-armed".to_string(),
@@ -6887,9 +6894,9 @@ async fn migration_0304_disables_every_rule_unless_experimental_features_are_on(
 #[tokio::test]
 async fn migration_0304_keeps_rule_states_when_experimental_features_are_on() {
     for experimental in [Some("true"), Some("\"true\"")] {
-        let (maintenance, requests) = rules_after_0304(experimental).await;
+        let (lifecycle, requests) = rules_after_0304(experimental).await;
         assert_eq!(
-            maintenance,
+            lifecycle,
             vec![
                 (
                     "rule-armed".to_string(),
@@ -7012,6 +7019,11 @@ async fn migration_0318_adds_favourites_without_marking_existing_signals() {
         .execute(&mut *conn)
         .await
         .expect("relax foreign keys for the seeded row");
+    // A later migration indexes the column, so the index goes with it.
+    sqlx::query("DROP INDEX IF EXISTS idx_media_server_signals_title_favorite")
+        .execute(&mut *conn)
+        .await
+        .expect("drop the later favourites index");
     sqlx::query("ALTER TABLE media_server_user_media_signals DROP COLUMN is_favorite")
         .execute(&mut *conn)
         .await
@@ -7917,5 +7929,174 @@ async fn migration_0342_adds_requested_audio_language_columns() {
                 .unwrap_or_else(|| panic!("{table}.{column} should exist after 0342"));
             assert_eq!(*not_null, 0, "{table}.{column} is nullable: NULL inherits");
         }
+    }
+}
+
+#[tokio::test]
+async fn migration_0345_adds_nullable_solver_reach_through_column() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("proxy-reach-through-0345.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+
+    let found: Vec<(String, i64)> =
+        sqlx::query_as("SELECT name, \"notnull\" FROM pragma_table_info('proxy_configs')")
+            .fetch_all(&pool)
+            .await
+            .expect("read columns");
+    let (_, not_null) = found
+        .iter()
+        .find(|(name, _)| name == "reach_through_proxy_config_id")
+        .expect("proxy_configs.reach_through_proxy_config_id should exist after 0345");
+    assert_eq!(*not_null, 0, "NULL keeps the solver reached directly");
+
+    let indexes: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_index_list('proxy_configs')")
+            .fetch_all(&pool)
+            .await
+            .expect("read indexes");
+    assert!(
+        indexes
+            .iter()
+            .any(|(name,)| name == "idx_proxy_configs_reach_through"),
+        "the solver reference count is index-served"
+    );
+}
+
+#[test]
+fn migration_0345_is_registered_for_sqlite_and_postgres() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("crate should live under repo/crates");
+    let manifest =
+        std::fs::read_to_string(repo_root.join("crates/scryer/src/db/migration_manifest.toml"))
+            .expect("migration manifest should load");
+    for file in [
+        "migrations/0345_proxy_reach_through.sql",
+        "postgres/migrations/0345_proxy_reach_through.sql",
+    ] {
+        assert!(
+            manifest.contains(&format!("file = \"{file}\"")),
+            "{file} should be registered"
+        );
+        let sql = std::fs::read_to_string(repo_root.join("crates/scryer/src/db").join(file))
+            .unwrap_or_else(|error| panic!("{file} should load: {error}"));
+        assert!(sql.contains("reach_through_proxy_config_id"), "{file}");
+        assert!(sql.contains("idx_proxy_configs_reach_through"), "{file}");
+    }
+}
+
+#[tokio::test]
+async fn migration_0346_gives_a_fresh_install_onboarding() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(directory.path().join("ui-tours-0346.db").to_string_lossy())
+        .await
+        .expect("migrations should apply");
+    let (users, tours): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM users), (SELECT COUNT(*) FROM user_ui_tours)")
+            .fetch_one(services.pool())
+            .await
+            .expect("count users and tours");
+    assert!(users >= 1, "the bootstrap administrator exists");
+    assert_eq!(tours, 0, "no title yet, so nobody counts as onboarded");
+}
+
+#[tokio::test]
+async fn migration_0346_marks_existing_accounts_onboarded_when_the_instance_holds_titles() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_0346_ui_tours_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("pre-0346 database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(345), true)
+        .await
+        .expect("migrations through 0345 should apply");
+
+    let library_id = scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Movie);
+    let (root_folder_id,): (String,) = sqlx::query_as(
+        "SELECT id FROM library_roots WHERE library_id = ? ORDER BY is_default DESC, path LIMIT 1",
+    )
+    .bind(&library_id)
+    .fetch_one(&pool)
+    .await
+    .expect("default movie root should exist");
+    sqlx::query(
+        "INSERT INTO users (id, username, status, created_at, updated_at)
+         VALUES ('tour-existing-user', 'tour_existing_user', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed an existing account");
+    sqlx::query(
+        "INSERT INTO titles (
+            id, name, name_normalized, library_id, facet, monitored, status,
+            tags, external_ids, root_folder_id, genres, created_at
+         ) VALUES ('tour-existing-title', 'Lanternwick Drift', 'lanternwick drift', ?, 'movie', 1,
+                   'active', '[]', '[]', ?, '[]', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&library_id)
+    .bind(&root_folder_id)
+    .execute(&pool)
+    .await
+    .expect("seed an existing title");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0346_user_ui_tours.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("0346 should apply");
+
+    let onboarded: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT user_id, tour_id, outcome FROM user_ui_tours WHERE user_id = 'tour-existing-user'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read tours");
+    assert_eq!(
+        onboarded,
+        [(
+            "tour-existing-user".to_string(),
+            "onboarding".to_string(),
+            "completed".to_string()
+        )]
+    );
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
+fn migration_0346_is_registered_for_sqlite_and_postgres() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("crate should live under repo/crates");
+    let manifest =
+        std::fs::read_to_string(repo_root.join("crates/scryer/src/db/migration_manifest.toml"))
+            .expect("migration manifest should load");
+    for file in [
+        "migrations/0346_user_ui_tours.sql",
+        "postgres/migrations/0346_user_ui_tours.sql",
+    ] {
+        assert!(
+            manifest.contains(&format!("file = \"{file}\"")),
+            "{file} should be registered"
+        );
+        let sql = std::fs::read_to_string(repo_root.join("crates/scryer/src/db").join(file))
+            .unwrap_or_else(|error| panic!("{file} should load: {error}"));
+        assert!(sql.contains("CREATE TABLE user_ui_tours"), "{file}");
+        assert!(sql.contains("EXISTS (SELECT 1 FROM titles)"), "{file}");
     }
 }

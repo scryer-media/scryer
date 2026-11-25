@@ -611,10 +611,31 @@ impl AppUseCase {
             false
         };
 
+        // Episode writes are queued here and applied together after the pass,
+        // in the order the pass produced them, instead of one transaction
+        // per episode.
+        let mut pending_episode_writes: Vec<(EpisodeWrite, HydrationEpisodeWrite)> = Vec::new();
+        let mut pending_created_episode_keys: HashSet<(String, String)> = HashSet::new();
+
         for ep in episodes {
             let season_number_key = ep.season_number.to_string();
             let episode_number_key = ep.episode_number.to_string();
             let collection_id = season_number_to_collection.get(&ep.season_number).cloned();
+
+            // Upstream naming one episode twice makes the second row depend
+            // on whether the first was created, so the queue is applied
+            // before that row is judged.
+            if pending_created_episode_keys
+                .contains(&(season_number_key.clone(), episode_number_key.clone()))
+            {
+                self.apply_hydration_episode_writes(
+                    title,
+                    &mut pending_episode_writes,
+                    &mut existing_episode_lookup,
+                )
+                .await;
+                pending_created_episode_keys.clear();
+            }
 
             let air_date = if ep.aired.is_empty() {
                 None
@@ -622,7 +643,7 @@ impl AppUseCase {
                 Some(ep.aired.clone())
             };
             // A retained, unmonitored season also governs episodes discovered
-            // after a scoped maintenance deletion or a manual unmonitor.
+            // after a scoped lifecycle deletion or a manual unmonitor.
             let collection_unmonitored = collection_id
                 .as_ref()
                 .and_then(|id| existing_collections_by_id.get(id))
@@ -718,30 +739,26 @@ impl AppUseCase {
                         .then_some(new_contiguous_absolute_number),
                     ..Default::default()
                 };
-                if update.has_changes()
-                    && let Err(err) = self
-                        .services
-                        .catalog
-                        .shows
-                        .update_episode(&existing.id, update)
-                        .await
-                {
-                    warn!(
-                        title_id = %title.id,
-                        episode_id = %existing.id,
-                        error = %err,
-                        "failed to refresh episode metadata"
-                    );
+                if update.has_changes() {
+                    pending_episode_writes.push((
+                        EpisodeWrite::Update {
+                            episode_id: existing.id.clone(),
+                            update,
+                        },
+                        HydrationEpisodeWrite::Refreshed,
+                    ));
                 }
-                if unmonitor_for_skip_policy
-                    && let Err(err) = self.persist_episode_monitoring(&existing.id, false).await
-                {
-                    warn!(
-                        title_id = %title.id,
-                        episode_id = %existing.id,
-                        error = %err,
-                        "failed to unmonitor episode under the skip policy"
-                    );
+                if unmonitor_for_skip_policy {
+                    pending_episode_writes.push((
+                        EpisodeWrite::Update {
+                            episode_id: existing.id.clone(),
+                            update: EpisodeUpdate {
+                                monitored: Some(false),
+                                ..Default::default()
+                            },
+                        },
+                        HydrationEpisodeWrite::SkipPolicyUnmonitored,
+                    ));
                 }
                 continue;
             }
@@ -787,20 +804,15 @@ impl AppUseCase {
                 created_at: Utc::now(),
             };
 
-            match self.services.catalog.shows.create_episode(episode).await {
-                Ok(created) => {
-                    existing_episode_lookup
-                        .insert((season_number_key, episode_number_key), created);
-                }
-                Err(err) => {
-                    warn!(
-                        title_id = %title.id,
-                        episode_number = ep.episode_number,
-                        error = %err,
-                        "failed to create episode"
-                    );
-                }
-            }
+            let key = (season_number_key, episode_number_key);
+            pending_created_episode_keys.insert(key.clone());
+            pending_episode_writes.push((
+                EpisodeWrite::Create(episode),
+                HydrationEpisodeWrite::Created {
+                    key,
+                    episode_number: ep.episode_number,
+                },
+            ));
         }
 
         // A row the incoming metadata no longer names (TVDB renumbered its
@@ -813,28 +825,24 @@ impl AppUseCase {
                 .iter()
                 .filter(|episode_id| !refreshed_episode_ids.contains(*episode_id))
             {
-                if let Err(err) = self
-                    .services
-                    .catalog
-                    .shows
-                    .update_episode(
-                        episode_id,
-                        EpisodeUpdate {
+                pending_episode_writes.push((
+                    EpisodeWrite::Update {
+                        episode_id: episode_id.clone(),
+                        update: EpisodeUpdate {
                             contiguous_absolute_number: Some(None),
                             ..Default::default()
                         },
-                    )
-                    .await
-                {
-                    warn!(
-                        title_id = %title.id,
-                        episode_id = %episode_id,
-                        error = %err,
-                        "failed to clear the contiguous absolute number of an episode the metadata no longer names"
-                    );
-                }
+                    },
+                    HydrationEpisodeWrite::ContiguousCleared,
+                ));
             }
         }
+        self.apply_hydration_episode_writes(
+            title,
+            &mut pending_episode_writes,
+            &mut existing_episode_lookup,
+        )
+        .await;
 
         if title.facet == MediaFacet::Anime {
             let episode_lookup_by_number: HashMap<(i32, i32), Episode> = existing_episode_lookup
@@ -882,6 +890,99 @@ impl AppUseCase {
                     error = %err,
                     "failed to persist scoped anibridge external IDs"
                 );
+            }
+        }
+    }
+}
+
+/// What a queued episode write of a metadata refresh is for, which decides
+/// what its outcome leads to.
+enum HydrationEpisodeWrite {
+    Created {
+        key: (String, String),
+        episode_number: i32,
+    },
+    Refreshed,
+    SkipPolicyUnmonitored,
+    ContiguousCleared,
+}
+
+impl AppUseCase {
+    /// Applies the queued episode writes of a metadata refresh and gives each
+    /// outcome the handling it had when every write was its own call: a
+    /// created episode joins `episode_lookup`, a skip-policy unmonitor runs
+    /// the monitoring follow-ups, and a failure is logged for its own row
+    /// without stopping the rest.
+    async fn apply_hydration_episode_writes(
+        &self,
+        title: &Title,
+        pending: &mut Vec<(EpisodeWrite, HydrationEpisodeWrite)>,
+        episode_lookup: &mut std::collections::HashMap<(String, String), Episode>,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        let mut writes = Vec::with_capacity(pending.len());
+        let mut purposes = Vec::with_capacity(pending.len());
+        for (write, purpose) in pending.drain(..) {
+            let episode_id = match &write {
+                EpisodeWrite::Create(episode) => episode.id.clone(),
+                EpisodeWrite::Update { episode_id, .. } => episode_id.clone(),
+            };
+            writes.push(write);
+            purposes.push((episode_id, purpose));
+        }
+        let results = self
+            .services
+            .catalog
+            .shows
+            .apply_episode_writes(writes)
+            .await;
+        for ((episode_id, purpose), result) in purposes.into_iter().zip(results) {
+            match (purpose, result) {
+                (HydrationEpisodeWrite::Created { key, .. }, Ok(created)) => {
+                    episode_lookup.insert(key, created);
+                }
+                (HydrationEpisodeWrite::Created { episode_number, .. }, Err(err)) => {
+                    warn!(
+                        title_id = %title.id,
+                        episode_number,
+                        error = %err,
+                        "failed to create episode"
+                    );
+                }
+                (HydrationEpisodeWrite::Refreshed, Err(err)) => {
+                    warn!(
+                        title_id = %title.id,
+                        episode_id = %episode_id,
+                        error = %err,
+                        "failed to refresh episode metadata"
+                    );
+                }
+                (HydrationEpisodeWrite::SkipPolicyUnmonitored, Ok(episode)) => {
+                    self.after_episode_monitoring_persisted(&episode, false)
+                        .await;
+                }
+                (HydrationEpisodeWrite::SkipPolicyUnmonitored, Err(err)) => {
+                    warn!(
+                        title_id = %title.id,
+                        episode_id = %episode_id,
+                        error = %err,
+                        "failed to unmonitor episode under the skip policy"
+                    );
+                }
+                (HydrationEpisodeWrite::ContiguousCleared, Err(err)) => {
+                    warn!(
+                        title_id = %title.id,
+                        episode_id = %episode_id,
+                        error = %err,
+                        "failed to clear the contiguous absolute number of an episode the metadata no longer names"
+                    );
+                }
+                (
+                    HydrationEpisodeWrite::Refreshed | HydrationEpisodeWrite::ContiguousCleared,
+                    Ok(_),
+                ) => {}
             }
         }
     }

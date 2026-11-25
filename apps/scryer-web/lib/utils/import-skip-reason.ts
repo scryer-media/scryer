@@ -22,6 +22,8 @@ export const IMPORT_SKIP_REASON_KEYS = {
     "importHistory.skipReason.ARCHIVE_EXTRACTION_PLUGIN_REQUIRED",
   ARCHIVE_EXTRACTION_TIMED_OUT:
     "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT",
+  ARCHIVE_EXTRACTION_BLOCKED:
+    "importHistory.skipReason.ARCHIVE_EXTRACTION_BLOCKED",
   TITLE_FOLDER_CONFLICT: "importHistory.skipReason.TITLE_FOLDER_CONFLICT",
 } satisfies Record<ImportSkipReason, string>;
 

@@ -19,6 +19,7 @@
 
 use std::ffi::CString;
 use std::os::raw::c_char;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DUMP_SECS_ENV: &str = "SCRYER_JEMALLOC_PROF_DUMP_SECS";
@@ -69,8 +70,11 @@ pub fn spawn_dump_thread() {
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .unwrap_or_else(|| DEFAULT_DIR.to_string());
-    if let Err(error) = std::fs::create_dir_all(&dir) {
-        eprintln!("jemalloc-prof: cannot create {dir}: {error}");
+    let disk = scryer_application::disk::Disk::process();
+    if let Err(error) =
+        disk.create_dir_blocking(Path::new(&dir), scryer_application::disk::Parents::Create)
+    {
+        eprintln!("jemalloc-prof: cannot create {dir}: {}", error.words());
         return;
     }
     let interval = std::time::Duration::from_secs(secs);
@@ -88,7 +92,12 @@ pub fn spawn_dump_thread() {
                 let (allocated, active, resident, retained) = stats();
                 match dump(&path) {
                     Ok(()) => {
-                        let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                        let bytes = match disk.follow_blocking(Path::new(&path)) {
+                            scryer_application::disk::PathReading::Known {
+                                len: Some(len), ..
+                            } => len,
+                            _ => 0,
+                        };
                         tracing::info!(
                             target: "scryer::jemalloc_prof",
                             path = %path,

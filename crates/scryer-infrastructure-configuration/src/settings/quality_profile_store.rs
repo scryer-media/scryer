@@ -341,6 +341,8 @@ fn decode_quality_profile(
         min_score_to_grab: scoring_config.min_score_to_grab,
         cutoff_score: scoring_config.cutoff_score,
         min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
+        min_missing_episodes_for_pack: scoring_config.min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack: scoring_config.min_missing_percent_for_series_pack,
         decision_pipeline: scoring_config.decision_pipeline.unwrap_or_default(),
         facet_persona_overrides: scoring_config.facet_persona_overrides,
     };
@@ -419,6 +421,8 @@ async fn upsert_quality_profile_tx(
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
         min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+        min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack: criteria.min_missing_percent_for_series_pack,
         decision_pipeline,
         facet_persona_overrides: criteria.facet_persona_overrides,
     })
@@ -921,6 +925,65 @@ mod tests {
         );
         let gamma = &profiles[2].criteria;
         assert!(gamma.quality_tiers.is_empty() && gamma.source_allowlist.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pack_thresholds_round_trip_and_read_absent_as_unset() {
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "pack-profile", "Pack Profile", None).await;
+        let mut profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(profiles[0].criteria.min_missing_episodes_for_pack, None);
+        assert_eq!(
+            profiles[0].criteria.min_missing_percent_for_series_pack,
+            None
+        );
+        assert_eq!(
+            profiles[0]
+                .criteria
+                .min_missing_episodes_for_pack_or_default(),
+            2
+        );
+        assert_eq!(
+            profiles[0]
+                .criteria
+                .min_missing_percent_for_series_pack_or_default(),
+            30
+        );
+
+        for (minimum, percent) in [(Some(1), Some(55)), (None, None)] {
+            profiles[0].criteria.min_missing_episodes_for_pack = minimum;
+            profiles[0].criteria.min_missing_percent_for_series_pack = percent;
+            store
+                .replace_quality_profiles(SCOPE, None, profiles.clone())
+                .await
+                .unwrap();
+            store.invalidate_cache();
+            let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+            assert_eq!(loaded[0].criteria.min_missing_episodes_for_pack, minimum);
+            assert_eq!(
+                loaded[0].criteria.min_missing_percent_for_series_pack,
+                percent
+            );
+            let raw: String = sqlx::query_scalar(
+                "SELECT scoring_config FROM quality_profiles WHERE id = 'pack-profile'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let value: JsonValue = serde_json::from_str(&raw).unwrap();
+            assert_eq!(
+                value
+                    .get("min_missing_episodes_for_pack")
+                    .and_then(JsonValue::as_u64),
+                minimum.map(u64::from)
+            );
+            assert_eq!(
+                value
+                    .get("min_missing_percent_for_series_pack")
+                    .and_then(JsonValue::as_u64),
+                percent.map(u64::from)
+            );
+        }
     }
 
     #[tokio::test]

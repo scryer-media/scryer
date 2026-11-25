@@ -3,10 +3,6 @@
 /// requester's library permission does. A rule is created disabled, so
 /// enabling one is always a deliberate second step.
 
-/// Whether an evaluation consulted an enabled rule (`ENFORCE`) or fell back
-/// to the requester's permission (`DISABLED`).
-export type RequestEvaluationMode = "DISABLED" | "ENFORCE";
-
 /// What a decision came to. `MANUAL_REVIEW` is the domain default, so an
 /// unreadable verdict never reads back as an approval or a denial.
 export type RequestDecisionOutcome = "AUTO_APPROVE" | "MANUAL_REVIEW" | "DENY";
@@ -28,16 +24,56 @@ export type LifecycleClaimKind = "RETAIN_UNTIL";
 export type LifecycleClaimState =
   "DORMANT" | "ACTIVE" | "EXPIRED" | "RELEASED" | "CONVERTED";
 
+/// A head a request rule's source can define, as the API names it
+/// (`SET_LEASE_DAYS`). The heads a build knows come from the served output
+/// descriptors, so this is any string the server sends.
+export type RequestActionHead = string;
+
+/// What a request rule's source can do, read from the source by the server:
+/// the heads it defines and every literal each valued head can produce.
+export type RequestDeclaredActions = {
+  heads: RequestActionHead[];
+  qualityProfiles: string[];
+  /// `0` is forever.
+  leaseDays: number[];
+  monitors: string[];
+  requiredAudioLanguages: string[];
+  preferredAudioLanguages: string[];
+  addTags: string[];
+  notifications: string[];
+};
+
+/// One shaped value and the name of the rule set that set it. The requester's
+/// own pre-flight selects only the value.
+export type RequestShapedValue<T> = {
+  value: T;
+  ruleSetName?: string;
+};
+
+/// What an approval of this request would be changed to. Applied on
+/// auto-approve, offered to the approver as suggestions on manual review, and
+/// trace only on deny. A head two rules disagreed on is in `conflicts` and
+/// carries no value.
+export type RequestShaping = {
+  qualityProfile: RequestShapedValue<string> | null;
+  /// `0` is forever.
+  leaseDays: RequestShapedValue<number> | null;
+  monitor: RequestShapedValue<string> | null;
+  requiredAudioLanguages: RequestShapedValue<string[]> | null;
+  preferredAudioLanguages: RequestShapedValue<string[]> | null;
+  /// Not selected on the requester's pre-flight.
+  notifications?: RequestShapedValue<string>[];
+  conflicts: RequestActionHead[];
+};
+
 export type RequestRuleSetRecord = {
   id: string;
   name: string;
   description: string;
   enabled: boolean;
   libraryIds: string[];
-  currentRevisionNumber: number;
-  /// How many stored decisions name this rule set. Read per rule set rather
-  /// than batched, so the number on a row is the number the API holds.
-  decisionCount: number;
+  /// Absent on payloads that do not select it.
+  declaredActions?: RequestDeclaredActions;
   createdAt: string;
   updatedAt: string;
 };
@@ -49,7 +85,7 @@ export type RequestRuleRevision = {
   /// Editor-stripped source: the API removes the package and import lines it
   /// generates, so what round-trips through the editor is what the author wrote.
   regoSource: string;
-  matcherContentHash: string;
+  sourceContentHash: string;
   createdBy: string | null;
   createdAt: string;
 };
@@ -57,12 +93,20 @@ export type RequestRuleRevision = {
 export type RequestRuleSetDetail = {
   ruleSet: RequestRuleSetRecord;
   revision: RequestRuleRevision;
+  /// The stored builder document, read only by the single-rule query. Opaque
+  /// until `parseRuleBuilderModel` reads it.
+  builderModel?: unknown;
 };
 
 export type RequestRuleValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
+  /// Findings that never block saving.
+  warnings?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
+  /// Null when the source could not be read.
+  declaredActions?: RequestDeclaredActions | null;
+  unavailable?: boolean;
 };
 
 /// The whole vocabulary a requester is permitted to see about why a rule
@@ -93,21 +137,24 @@ export type RequestRuleDecisionRecord = {
   id: string | null;
   requestId: string | null;
   evaluatedAt: string;
-  mode: RequestEvaluationMode;
   /// What actually happened. `policyOutcome` is what the rules alone came to;
-  /// the two differ only when the decision fell back.
+  /// the two differ only when the rules approved, the tag registry could not
+  /// be read, and the request was held. Traces from 0.22 and earlier may also differ when the
+  /// facts could not be assembled and the Auto-Approve permission decided.
   effectiveOutcome: RequestDecisionOutcome;
   policyOutcome: RequestDecisionOutcome;
   fallbackReason: string | null;
   votes: RequestRuleVoteRecord[];
   reasons: RequestPreflightReason[];
   tags: string[];
+  /// Absent where a view does not select it.
+  shaping?: RequestShaping | null;
   inputSchemaVersion: number;
 };
 
 export type RequestRulePreviewResult = {
   ruleSetId: string;
-  matcherContentHash: string;
+  sourceContentHash: string;
   decision: RequestRuleDecisionRecord;
   metadataPartial: boolean;
   /// Of the tags the rule emitted, the ones the tag registry does not define.
@@ -127,11 +174,12 @@ export type RequestPreflightResult = {
   reasons: RequestPreflightReason[];
   tags: string[];
   metadataPartial: boolean;
-  evaluationMode: RequestEvaluationMode;
   /// Why the verdict fell back to needing approval, when it did. It names the
-  /// shape of the fallback (`rule_manual`, `held`, `error`, `no_rule_matched`)
-  /// and never a rule, so it is safe on the requester's surface.
+  /// shape of the fallback (`rule_manual`, `held`, `error`, `no_rule_matched`,
+  /// `library_permission`, `shaping_conflict`, `shaping_invalid`) and never a
+  /// rule, so it is safe on the requester's surface.
   fallbackReason: string | null;
+  shaping: RequestShaping | null;
 };
 
 export type TitleClaimRecord = {
@@ -183,10 +231,11 @@ export type RequestRuleSetDraft = {
   description: string;
   regoSource: string;
   libraryIds: string[];
+  /// Set while the draft is still exactly what the builder writes.
+  builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
 
-/// One account the user picker can write into a matcher. Only the id and the
-/// username matter: a rule names people by username.
+/// One account a preview can run as.
 export type RequestRuleUserOption = {
   id: string;
   username: string;
@@ -204,7 +253,3 @@ export type RequestRulePreviewSample = {
   leaseForever: boolean;
   leaseDays: number;
 };
-
-/// Where a preview run gets its matcher from: the stored revision of a saved
-/// rule set, or the unsaved editor draft.
-export type RequestRulePreviewSource = "stored" | "draft";

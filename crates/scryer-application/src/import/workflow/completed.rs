@@ -73,7 +73,7 @@ pub(crate) async fn write_imported_media_nfo(
     let nfo_path = dest_path.with_extension("nfo");
     // Nothing below is worth doing for a sidecar that will not be written, and
     // the check is a single stat against several repository reads.
-    if tokio::fs::try_exists(&nfo_path).await.unwrap_or(false) {
+    if Disk::process().follow(&nfo_path).await.exists() == Some(true) {
         tracing::debug!(
             path = %nfo_path.display(),
             "NFO sidecar already exists; leaving it as it is"
@@ -177,7 +177,7 @@ fn additional_import_dest_path(
     let hash = &hash.as_str()[..8];
     let base_name = sanitize_filesystem_component(&format!("{stem} - {label} {hash}.{extension}"));
     let mut candidate = parent.join(&base_name);
-    if !candidate.exists() {
+    if Disk::process().follow_blocking(&candidate).exists() != Some(true) {
         return candidate;
     }
 
@@ -186,7 +186,7 @@ fn additional_import_dest_path(
             "{stem} - {label} {hash} ({suffix}).{extension}"
         ));
         candidate = parent.join(name);
-        if !candidate.exists() {
+        if Disk::process().follow_blocking(&candidate).exists() != Some(true) {
             return candidate;
         }
     }
@@ -687,6 +687,21 @@ impl TerminalCleanupTickCache {
     }
 }
 
+/// Whether an import still holds `download_id`'s sources, and whether one
+/// found its file is the library file, read on its own, or why the store
+/// could not tell.
+pub(crate) async fn sources_held_by_import(
+    app: &AppUseCase,
+    download_id: &scryer_domain::download_identity::DownloadId,
+) -> Result<crate::DownloadImportSources, String> {
+    app.services
+        .workflow
+        .imports
+        .download_import_sources(download_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// `cleanup_routing_scope_for_title_id`, answering from the tick cache when the
 /// same title has already been resolved in this tick.
 async fn cleanup_routing_scope_for_title_id_cached(
@@ -903,13 +918,15 @@ async fn reconcile_unclaimed_terminal_cleanup(
         ),
         cache,
         record,
+        record.is_some_and(|record| record.library_holds_payload),
+        record.map_or(&[], |record| record.library_file_unsettled.as_slice()),
     )
     .await
 }
 
 pub(crate) async fn run_claimed_download_cleanup(
     app: &AppUseCase,
-    record: crate::DownloadCleanupRecord,
+    mut record: crate::DownloadCleanupRecord,
     cache: Option<&TerminalCleanupTickCache>,
 ) -> Option<(
     scryer_domain::download_identity::DownloadId,
@@ -922,7 +939,10 @@ pub(crate) async fn run_claimed_download_cleanup(
         &record.item_id,
     );
     let result = async {
-        if app.services.workflow.imports.archive_processing_pending_for_download(&record.download_id).await? {
+        let sources = app.services.workflow.imports.download_import_sources(&record.download_id).await?;
+        record.library_holds_payload = sources.library_holds_payload;
+        record.library_file_unsettled = sources.library_file_unsettled;
+        if sources.held {
             finish_cleanup_attempt(app, &record, CleanupSettlement::CleanupDeferred, false, record.history_offset,
                 Some("archive or subtitle delivery is pending; sources preserved")).await;
             return Ok(None);
@@ -987,7 +1007,11 @@ pub(crate) async fn run_claimed_download_cleanup(
             Some(crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
                 | crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON)
         );
-        let remove = if state == TrackedDownloadState::Ignored || manual_cleanup {
+        // An ignored download keeps its client entry and its data: ignoring
+        // only stops Scryer tracking it, so its cleanup settles as retained.
+        let remove = if state == TrackedDownloadState::Ignored {
+            false
+        } else if manual_cleanup {
             true
         } else {
             let facet = facet.as_ref().ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::CLEANUP_ATTRIBUTION_MISSING, CLEANUP_UNATTRIBUTED))?;
@@ -1471,6 +1495,8 @@ mod settlement_tests {
             history_offset: 0,
             payload_checkpoint: None,
             previous_failure_retry_seconds,
+            library_holds_payload: false,
+            library_file_unsettled: Vec::new(),
         }
     }
 

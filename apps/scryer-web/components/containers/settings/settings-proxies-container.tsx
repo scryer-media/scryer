@@ -120,6 +120,7 @@ export function SettingsProxiesContainer() {
             ? ""
             : String(proxy.tunnelKeepaliveSeconds),
         hasStoredTunnelKeepaliveSeconds: proxy.tunnelKeepaliveSeconds !== null,
+        reachThroughProxyConfigId: proxy.reachThroughProxyConfigId ?? "",
         remoteDns: proxy.remoteDns,
         isEnabled: proxy.isEnabled,
       });
@@ -164,6 +165,7 @@ export function SettingsProxiesContainer() {
           tunnelDnsServers: "",
           tunnelMtu: "",
           tunnelKeepaliveSeconds: "",
+          reachThroughProxyConfigId: "",
           remoteDns: supportsProxyRemoteDns(providerType)
             ? prev.remoteDns
             : false,

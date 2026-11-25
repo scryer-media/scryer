@@ -35,6 +35,24 @@ pub(super) struct PipelineOutcome {
     pub stop: Option<(StopReason, String)>,
 }
 
+/// Why a title failed in the pipeline: the guidance code, the sentence, and the
+/// refusal the error named, all taken from the same error.
+struct PipelineFailure {
+    reason_code: LocationReasonCode,
+    detail: String,
+    refusal: Option<TitleRefusal>,
+}
+
+impl PipelineFailure {
+    fn new(reason_code: LocationReasonCode, error: &AppError) -> Self {
+        Self {
+            reason_code,
+            refusal: TitleRefusal::from_error(error),
+            detail: error.to_string(),
+        }
+    }
+}
+
 type FileResult<'a> = (
     &'a PlannedTitle,
     &'a PlannedFile,
@@ -107,7 +125,7 @@ impl LocationOperationRunner<'_> {
         let mut admitted = BTreeSet::new();
         let mut verified_paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut remaining: BTreeMap<String, usize> = BTreeMap::new();
-        let mut failed = BTreeMap::<String, (LocationReasonCode, String)>::new();
+        let mut failed = BTreeMap::<String, PipelineFailure>::new();
         let mut rows = BTreeMap::<String, TransferTitle>::new();
         let mut stop = None;
         let mut fatal = None;
@@ -151,8 +169,7 @@ impl LocationOperationRunner<'_> {
                     && fatal.is_none()
                     && !hub.has_storage_waiters(&operation.id)
                     && title_index < plan.titles.len()
-                    && copying.len()
-                        < crate::location::transfer::CopyCoordinator::shared().capacity()
+                    && copying.len() < crate::location::transfer::shared().capacity()
                     && pending.saturating_sub(copying.len()) < PIPELINE_POST_COPY_LIMIT
                 {
                     let title = &plan.titles[title_index];
@@ -232,6 +249,7 @@ impl LocationOperationRunner<'_> {
                                         progress,
                                         plan,
                                         None,
+                                        None,
                                     )
                                     .await
                                 {
@@ -257,6 +275,7 @@ impl LocationOperationRunner<'_> {
                                         Some(reason),
                                         progress,
                                         plan,
+                                        None,
                                         None,
                                     )
                                     .await
@@ -449,6 +468,7 @@ impl LocationOperationRunner<'_> {
                                         progress.warnings.push(detail.clone());
                                         if let Some(row) = rows.get_mut(&title.title_id) {
                                             row.detail = Some(detail);
+                                            row.refusal = None;
                                             let mut persisted = row.clone();
                                             persisted.copy_bytes = 0; persisted.verification_bytes = 0;
                                             if let Err(error) = self.store.upsert_transfer_title(&operation.id, &persisted).await { fatal = Some(error); }
@@ -497,7 +517,7 @@ impl LocationOperationRunner<'_> {
                         match result {
                             Some(Err((reason_code, error))) => {
                                 hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
-                                failed.insert(title.title_id.clone(), (reason_code, error.to_string()));
+                                failed.insert(title.title_id.clone(), PipelineFailure::new(reason_code, &error));
                             }
                             Some(Ok(())) if fatal.is_none() => progress.note_file_done(&title.title_id, file),
                             _ => {}
@@ -539,9 +559,10 @@ impl LocationOperationRunner<'_> {
                     row.state = TitleCheckpointState::Verifying;
                 } else if row.copying > 0 {
                     row.state = TitleCheckpointState::Moving;
-                } else if let Some((_, detail)) = failed.get(id) {
+                } else if let Some(failure) = failed.get(id) {
                     row.state = TitleCheckpointState::Failed;
-                    row.detail = Some(detail.clone());
+                    row.detail = Some(failure.detail.clone());
+                    row.refusal = failure.refusal.clone();
                 } else if stop.is_some()
                     && matches!(
                         row.state,
@@ -602,7 +623,12 @@ impl LocationOperationRunner<'_> {
         }
         let mut failures = Vec::new();
         for title in &plan.titles {
-            if let Some((reason_code, detail)) = failed.remove(&title.title_id) {
+            if let Some(PipelineFailure {
+                reason_code,
+                detail,
+                refusal,
+            }) = failed.remove(&title.title_id)
+            {
                 self.settle_title(
                     operation,
                     title,
@@ -611,6 +637,7 @@ impl LocationOperationRunner<'_> {
                     progress,
                     plan,
                     Some(reason_code),
+                    refusal,
                 )
                 .await?;
                 failures.push(TitleFailure {
@@ -717,7 +744,10 @@ impl LocationOperationRunner<'_> {
                 result => result,
             };
             match result {
-                Err(error) if move_error_is_transient(&error) => {
+                // Storage that went away answers like a missing source or a
+                // full or denied destination too, so storage is asked first;
+                // only when it is there does the error itself decide.
+                Err(error) if move_error_may_be_storage_loss(&error) => {
                     if let Some(storage) = &storage
                         && !storage.available().await
                     {
@@ -762,7 +792,7 @@ impl LocationOperationRunner<'_> {
                             0,
                         );
                         attempt = 1;
-                    } else if attempt < self.retry.attempts {
+                    } else if move_error_is_transient(&error) && attempt < self.retry.attempts {
                         tokio::time::sleep(self.retry.delay_before(attempt + 1)).await;
                         attempt += 1;
                     } else {
@@ -787,7 +817,7 @@ impl LocationOperationRunner<'_> {
         title: &PlannedTitle,
         progress: &mut RunProgress,
         plan: &OperationWorkPlan,
-        failed: &mut BTreeMap<String, (LocationReasonCode, String)>,
+        failed: &mut BTreeMap<String, PipelineFailure>,
     ) -> AppResult<()> {
         if self
             .store
@@ -835,7 +865,7 @@ impl LocationOperationRunner<'_> {
                     TitleCheckpointState::CompletedWithWarnings
                 };
                 let detail = finished_title_detail(&notes, &warnings);
-                self.settle_title(operation, title, state, detail, progress, plan, None)
+                self.settle_title(operation, title, state, detail, progress, plan, None, None)
                     .await?;
                 if let Some(hub) = self.transfers {
                     hub.title_finalized(&operation.id, started.elapsed());
@@ -846,7 +876,7 @@ impl LocationOperationRunner<'_> {
             Err(error) => {
                 failed.insert(
                     title.title_id.clone(),
-                    (classify_title_failure(phase, &error), error.to_string()),
+                    PipelineFailure::new(classify_title_failure(phase, &error), &error),
                 );
             }
         }

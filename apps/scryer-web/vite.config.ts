@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { constants as zlibConstants } from "node:zlib";
@@ -13,10 +13,72 @@ const DEV_WATCH_POLL_INTERVAL = Number.parseInt(
   10,
 );
 
+/** The port this dev server was asked for, which no other server can share. */
+function devServerPort(): string {
+  const args = process.argv;
+  const at = args.findIndex(
+    (arg) => arg === "--port" || arg.startsWith("--port="),
+  );
+  if (at < 0) return "3000";
+  const value = args[at].includes("=")
+    ? args[at].slice("--port=".length)
+    : args[at + 1];
+  return /^\d+$/.test(value ?? "") ? value! : "3000";
+}
+
+/**
+ * Writes `sw-precache.json`, the list of build chunks the service worker
+ * downloads in the background so lazy routes still load when the network
+ * drops. Locale dictionaries are left out: a page only needs its own, and the
+ * service worker caches that one when the page loads it. `files` lists every
+ * built asset so the service worker can drop cached files from older builds.
+ */
+function serviceWorkerPrecacheManifest(): Plugin {
+  return {
+    name: "scryer-sw-precache-manifest",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const precache: string[] = [];
+      const files: string[] = [];
+      for (const output of Object.values(bundle)) {
+        if (!output.fileName.startsWith("assets/")) {
+          continue;
+        }
+        files.push(output.fileName);
+        const isScriptOrStyle =
+          output.type === "chunk" || output.fileName.endsWith(".css");
+        const isLocale =
+          output.type === "chunk" &&
+          /\/locales\//.test(output.facadeModuleId ?? "");
+        if (isScriptOrStyle && !isLocale) {
+          precache.push(output.fileName);
+        }
+      }
+      this.emitFile({
+        type: "asset",
+        fileName: "sw-precache.json",
+        source: JSON.stringify({
+          version: 1,
+          precache: precache.sort(),
+          files: files.sort(),
+        }),
+      });
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => ({
   base: command === "serve" ? "/" : "./",
+  // Each dev server prebundles into its own folder. Servers sharing one
+  // replace each other's dependencies mid-session, and pages fail with
+  // "Failed to fetch dynamically imported module".
+  cacheDir:
+    command === "serve"
+      ? `node_modules/.vite/dev-${devServerPort()}`
+      : "node_modules/.vite",
   plugins: [
     react(),
+    serviceWorkerPrecacheManifest(),
     ...(mode === "production"
       ? [babel({ presets: [reactCompilerPreset()] })]
       : []),
@@ -47,6 +109,24 @@ export default defineConfig(({ command, mode }) => ({
       // Prebundle their CommonJS dependencies before the GraphQL worker starts.
       "graphql-language-service",
       "picomatch-browser",
+      // The code editor is lazy-loaded, and Vite otherwise finds CodeMirror
+      // only when the editor first opens. The re-bundle that follows changes
+      // every CodeMirror URL, so a page that already loaded fails its import
+      // with "Failed to fetch dynamically imported module".
+      "@codemirror/autocomplete",
+      "@codemirror/commands",
+      "@codemirror/lang-go",
+      "@codemirror/lang-javascript",
+      "@codemirror/lang-python",
+      "@codemirror/language",
+      "@codemirror/legacy-modes/mode/javascript",
+      "@codemirror/legacy-modes/mode/powershell",
+      "@codemirror/legacy-modes/mode/shell",
+      "@codemirror/legacy-modes/mode/xml",
+      "@codemirror/lint",
+      "@codemirror/state",
+      "@codemirror/theme-one-dark",
+      "@codemirror/view",
     ],
     // Worker query imports need Vite's worker transform, not dependency prebundling.
     exclude: ["graphiql/setup-workers/vite"],

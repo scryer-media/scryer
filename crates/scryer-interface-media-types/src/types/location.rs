@@ -8,8 +8,23 @@
 //! moves nothing states a verification depth that applies to no files.
 
 use super::{Long, MediaFacetValue, VerificationDepthValue};
-use async_graphql::{Enum, ID, InputObject, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, Json, SimpleObject};
 use chrono::{DateTime, Utc};
+
+/// Why one title in a location transfer did not simply finish: the sentence,
+/// and beside it the stable reason code and facts of the error that failed it.
+#[derive(SimpleObject, Clone)]
+pub struct LocationTransferTitleOutcomePayload {
+    /// The title's detail sentence, as `locationTransferTitleDetail` gives it.
+    pub detail: Option<String>,
+    /// Stable reason code of the error that failed the title, when it carried
+    /// one. Clients translate known codes and fall back to `detail`.
+    pub refusal_reason: Option<String>,
+    /// Facts that error carried, as one object keyed by fact name whose values
+    /// are a string or a list of strings, in the shape a GraphQL error
+    /// extension gives them. Null when the error carried none.
+    pub refusal_facts: Option<Json<serde_json::Value>>,
+}
 
 /// One title's live progress inside a location transfer, as Activity shows it.
 #[derive(SimpleObject, Clone)]

@@ -50,6 +50,9 @@ pub(crate) enum PlannedTitleScanRecord {
     New,
 }
 
+// disk-guard: the source signature is built from the platform's own metadata
+// fields (nanosecond mtime, last write time), which owner readings do not keep.
+#[allow(clippy::disallowed_methods)]
 pub(crate) async fn file_source_snapshot_from_path(
     path: &std::path::Path,
 ) -> AppResult<FileSourceSnapshot> {

@@ -1,3 +1,6 @@
+// disk-guard: this crate is the container entrypoint, one of the three crates clippy.toml exempts from the disk guard by name.
+#![allow(clippy::disallowed_methods)]
+
 use std::env;
 use std::ffi::{CString, OsString};
 use std::fs;

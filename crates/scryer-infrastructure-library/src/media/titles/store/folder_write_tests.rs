@@ -562,3 +562,65 @@ async fn folder_owner_read_matches_the_delete_preview_read() {
     assert_eq!(expected.len(), 2);
     assert_eq!(store.list_title_folder_owners().await.unwrap(), expected);
 }
+
+async fn insert_bound_pending_import(pool: &sqlx::SqlitePool, id: &str, reason_code: &str) {
+    sqlx::query(
+        "INSERT INTO library_scan_unmatched_items
+             (id, library_id, facet, title_id, scan_session_id, scan_root, item_path,
+              display_name, query, year_hint, reason_code, error_message,
+              search_attempts_json, status, size_bytes, created_at, updated_at)
+         VALUES (?1, 'movie_default_library', 'movie', 'emberfall', 'scan-fixture',
+                 '/srv/fixture-root', ?2, 'Emberfall', 'Emberfall', 2001, ?3, NULL,
+                 '[]', 'pending', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(id)
+    .bind(format!("/srv/fixture-root/{id}"))
+    .bind(reason_code)
+    .execute(pool)
+    .await
+    .expect("fixture pending import should insert");
+}
+
+async fn pending_import_count(pool: &sqlx::SqlitePool, id: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM library_scan_unmatched_items WHERE id = ?1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_new_title_clears_only_a_bound_row_that_is_an_ownership_conflict() {
+    let (store, pool) = store_with_titles(&["emberfall"]).await;
+    insert_bound_pending_import(
+        &pool,
+        "conflict-row",
+        scryer_application::location::conflicts::PENDING_REASON,
+    )
+    .await;
+    insert_bound_pending_import(&pool, "other-bound-row", "synthetic_other_reason").await;
+
+    let outcome = store
+        .create_or_get_existing_and_bind_pending_import(titled("cinderwake", None), "conflict-row")
+        .await
+        .expect("a conflict row is matched to the new title");
+    assert!(!outcome.reused_existing);
+    assert_eq!(pending_import_count(&pool, "conflict-row").await, 0);
+
+    let error = store
+        .create_or_get_existing_and_bind_pending_import(titled("ashgrove", None), "other-bound-row")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reason(error),
+        crate::error_reasons::MEDIA_PENDING_IMPORT_UNRESOLVED
+    );
+    assert_eq!(pending_import_count(&pool, "other-bound-row").await, 1);
+    let ashgrove: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM titles WHERE id = 'ashgrove'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ashgrove, 0, "the refused bind rolls the new title back");
+    let (emberfall_folder, _) = folder_of(&pool, "emberfall").await;
+    assert_eq!(emberfall_folder, None, "the other title is not touched");
+}

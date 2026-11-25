@@ -1,11 +1,11 @@
-//! Full-hash backfill: the slow convergence job (FR-047, plan D9).
+//! Full-hash backfill: the slow convergence job.
 //!
 //! Every other producer of a full BLAKE3 in this feature gets it for free —
 //! [`crate::location::verify`] hashes bytes it was already copying. This job
 //! exists for the catalog that was never copied: files that were scanned,
-//! hardlinked, or imported before 0205 existed, and files a scan invalidated
-//! (FR-046). It reads them for no other reason than to hash them, which is why
-//! everything below is about *not* getting in the way.
+//! hardlinked, or imported before full hashes were recorded, and files a scan
+//! invalidated. It reads them for no other reason than to hash them, which is
+//! why everything below is about *not* getting in the way.
 //!
 //! # Shape
 //!
@@ -16,8 +16,12 @@
 //! - **Resumable.** See the cursor note below.
 //! - **Skips** unavailable mounts, files an active location operation owns, and
 //!   files that already carry a current full hash.
+//! - **Never visits** a library whose backfill is turned off. Its files are
+//!   left out of the queue itself, so the job makes no probe and no read on
+//!   that library's disks. Their hashes are taken when something needs them:
+//!   [`crate::disk::Disk::full_hash`] reads the one file and records it.
 //!
-//! # The cursor (SC-007: interrupt and re-run without rework)
+//! # The cursor: interrupt and re-run without rework
 //!
 //! The queue is `full_blake3 IS NULL` ordered by `id` — literally migration
 //! 0205's `idx_media_files_full_hash_missing` partial index. Every file the job
@@ -232,7 +236,7 @@ enum BackfillSkip {
     /// The file, or the directory it should live in, is not readable — an
     /// unmounted share, a removed disk, a deleted file.
     UnavailableMount,
-    /// A live location operation owns the title or the root (FR-084/SC-007).
+    /// A live location operation owns the title or the root.
     OwnedByOperation,
     /// Something else hashed it between the queue page and this file's turn.
     AlreadyHashed,
@@ -304,17 +308,27 @@ pub struct FullHashBackfillFailure {
     pub media_file_id: String,
     pub path: String,
     pub reason: String,
+    /// The stable code for a failure a client can tell apart, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 impl FullHashBackfillSummary {
     /// Counts a failed file and records it by name while there is room.
-    pub(crate) fn record_failure(&mut self, media_file_id: &str, path: &str, reason: &str) {
+    pub(crate) fn record_failure(
+        &mut self,
+        media_file_id: &str,
+        path: &str,
+        reason: &str,
+        reason_code: Option<&str>,
+    ) {
         self.failed += 1;
         if self.failures.len() < FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES {
             self.failures.push(FullHashBackfillFailure {
                 media_file_id: media_file_id.to_string(),
                 path: path.to_string(),
                 reason: reason.to_string(),
+                reason_code: reason_code.map(str::to_string),
             });
         } else {
             self.failures_truncated = true;
@@ -376,7 +390,7 @@ impl OwnedScope {
 }
 
 impl AppUseCase {
-    /// One bounded pass over the full-hash backfill queue (FR-047).
+    /// One bounded pass over the full-hash backfill queue.
     ///
     /// Never returns an error for a file it could not read: an unreachable
     /// mount is a normal state for this job, not a job failure. Only a store or
@@ -446,7 +460,9 @@ impl AppUseCase {
         let io = std::sync::Arc::new(HashIoStats::default());
         let owned = self.full_hash_backfill_owned_scope().await?;
         let mut cursor = self.read_full_hash_backfill_cursor().await;
+        let mut persisted_cursor = cursor.clone();
         let mut summary = FullHashBackfillSummary::default();
+        let library_generation = &self.runtime.jobs.full_hash_library_generation;
 
         'sweep: while summary.examined < options.files_per_run {
             if cancellation.is_cancelled() {
@@ -457,6 +473,9 @@ impl AppUseCase {
             let page_size = options
                 .page_size
                 .min(u32::try_from(remaining).unwrap_or(u32::MAX));
+            // Taken before the page is read: a library turned off after this
+            // point shows as a changed generation before the next file.
+            let generation = library_generation.load(std::sync::atomic::Ordering::Acquire);
             let page = self
                 .services
                 .library
@@ -474,6 +493,12 @@ impl AppUseCase {
                 if cancellation.is_cancelled() {
                     summary.cancelled = true;
                     break 'sweep;
+                }
+                // A library's setting changed since this page was read. The
+                // rest of the page may belong to a library that is now off,
+                // so ask the queue again from here instead of reading it.
+                if library_generation.load(std::sync::atomic::Ordering::Acquire) != generation {
+                    continue 'sweep;
                 }
                 if started.elapsed() >= options.max_duration {
                     summary.stop_reason = Some(FullHashBackfillStopReason::TimeLimit);
@@ -508,16 +533,17 @@ impl AppUseCase {
                         skipped = true;
                         summary.record_skip(skip);
                     }
-                    Err(BackfillOutcome::Failed(reason)) => {
+                    Err(BackfillOutcome::Failed { reason, code }) => {
                         if cancellation.is_cancelled() {
                             summary.cancelled = true;
                             break 'sweep;
                         }
-                        summary.record_failure(&candidate.id, &candidate.file_path, &reason);
+                        summary.record_failure(&candidate.id, &candidate.file_path, &reason, code);
                         tracing::warn!(
                             media_file_id = %candidate.id,
                             path = %candidate.file_path,
                             reason = %reason,
+                            reason_code = code.unwrap_or(""),
                             "full-hash backfill could not hash a file; leaving it queued"
                         );
                     }
@@ -531,6 +557,7 @@ impl AppUseCase {
                 summary.examined += 1;
                 if !skipped {
                     self.write_full_hash_backfill_cursor(cursor.clone()).await;
+                    persisted_cursor = cursor.clone();
                 }
 
                 // Between every two files, unconditionally. Real work gets a
@@ -548,7 +575,10 @@ impl AppUseCase {
         }
 
         summary.resume_after_id = cursor.clone();
-        self.write_full_hash_backfill_cursor(cursor).await;
+        // A pass that moved nothing writes nothing.
+        if cursor != persisted_cursor {
+            self.write_full_hash_backfill_cursor(cursor).await;
+        }
         summary.stop_reason = Some(if summary.cancelled {
             FullHashBackfillStopReason::Cancelled
         } else if summary.completed_sweep {
@@ -588,11 +618,13 @@ impl AppUseCase {
         // directory" instantly, where opening the file itself can block on a
         // dead network mount.
         if let Some(parent) = path.parent()
-            && tokio::fs::metadata(parent).await.is_err()
+            && crate::disk::Disk::process().follow(parent).await.exists() != Some(true)
         {
             return Err(BackfillOutcome::Skipped(BackfillSkip::UnavailableMount));
         }
-        let before = tokio::fs::metadata(&path)
+        let disk = crate::disk::Disk::process();
+        let before = disk
+            .fingerprint_followed(&path)
             .await
             .map_err(|_| BackfillOutcome::Skipped(BackfillSkip::UnavailableMount))?;
 
@@ -605,7 +637,7 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(&candidate.id)
             .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+            .map_err(|error| BackfillOutcome::failed(error.to_string()))?;
         let current = match current {
             None => return Err(BackfillOutcome::Skipped(BackfillSkip::AlreadyHashed)),
             Some(file) if file.content_hashes.is_some() => {
@@ -614,29 +646,52 @@ impl AppUseCase {
             Some(file) => file,
         };
         if current.file_path != candidate.file_path || current.size_bytes != candidate.size_bytes {
-            return Err(BackfillOutcome::Failed(
-                "file changed before hashing".into(),
-            ));
+            return Err(BackfillOutcome::failed("file changed before hashing"));
+        }
+        // The mark just taken already holds the length on disk. A file that is
+        // not the size the catalog recorded can never publish a hash, so it is
+        // refused here rather than after reading every byte of it: the row is
+        // stale (an external re-tag, say), not the read.
+        if !before.is_len(current.size_bytes as u64) {
+            return Err(BackfillOutcome::Failed {
+                reason: format!(
+                    "size on disk ({} bytes) differs from the catalog ({} bytes); rescan the title",
+                    before
+                        .len()
+                        .map_or_else(|| "unknown".to_string(), |len| len.to_string()),
+                    current.size_bytes
+                ),
+                code: Some(crate::error_reasons::location::BACKFILL_SIZE_MISMATCH),
+            });
         }
 
         let hashes =
             hash_file_cancellable(path.clone(), io, cancellation.child_token(), Some(permit))
                 .await
-                .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+                .map_err(|error| BackfillOutcome::failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
-        let after = tokio::fs::metadata(&path)
-            .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
-        if !same_file_version(&before, &after) || bytes != after.len() {
-            return Err(BackfillOutcome::Failed("file changed while hashing".into()));
+        let after = disk.fingerprint_followed(&path).await.map_err(|reading| {
+            BackfillOutcome::failed(format!(
+                "cannot read {}: {}",
+                path.display(),
+                reading.describe_absence()
+            ))
+        })?;
+        if !before.compare(&after).is_untouched() || !after.is_len(bytes) {
+            return Err(BackfillOutcome::failed("file changed while hashing"));
         }
-        // The file held still, but it is not the size the catalog recorded:
-        // the row is stale (an external re-tag, say), not the read.
+        // The file held still and the mark before the read matched the
+        // catalog, so the bytes read can only differ if the reader and the
+        // mark disagree. Keep the guard: a hash is never published for a size
+        // the catalog does not hold.
         if bytes != current.size_bytes as u64 {
-            return Err(BackfillOutcome::Failed(format!(
-                "size on disk ({bytes} bytes) differs from the catalog ({} bytes); rescan the title",
-                current.size_bytes
-            )));
+            return Err(BackfillOutcome::Failed {
+                reason: format!(
+                    "size on disk ({bytes} bytes) differs from the catalog ({} bytes); rescan the title",
+                    current.size_bytes
+                ),
+                code: Some(crate::error_reasons::location::BACKFILL_SIZE_MISMATCH),
+            });
         }
 
         let published = self
@@ -645,14 +700,12 @@ impl AppUseCase {
             .media_files
             .update_media_file_content_hashes_if_unchanged(
                 &current,
-                &PersistedContentHashes::from_streamed(&hashes, Utc::now()),
+                &PersistedContentHashes::from_streamed(&hashes, Some(&after), Utc::now()),
             )
             .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+            .map_err(|error| BackfillOutcome::failed(error.to_string()))?;
         if !published {
-            return Err(BackfillOutcome::Failed(
-                "catalog changed while hashing".into(),
-            ));
+            return Err(BackfillOutcome::failed("catalog changed while hashing"));
         }
 
         Ok(Some(bytes))
@@ -732,7 +785,20 @@ impl AppUseCase {
 /// are not, but neither stops the run.
 enum BackfillOutcome {
     Skipped(BackfillSkip),
-    Failed(String),
+    Failed {
+        reason: String,
+        /// The stable code for a failure a client can tell apart.
+        code: Option<&'static str>,
+    },
+}
+
+impl BackfillOutcome {
+    fn failed(reason: impl Into<String>) -> Self {
+        Self::Failed {
+            reason: reason.into(),
+            code: None,
+        }
+    }
 }
 
 type BackfillPermits = (
@@ -757,6 +823,7 @@ fn duration_ms(value: Duration) -> u64 {
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
 /// means a later move can compare a destination read-back against a stored
 /// value instead of re-reading the source.
+#[allow(clippy::disallowed_methods)] // disk-guard: hinted handle
 async fn hash_file_cancellable(
     path: PathBuf,
     io: std::sync::Arc<HashIoStats>,
@@ -790,9 +857,11 @@ async fn hash_file_cancellable(
                         path.display()
                     ))
                 })?;
-                let before = file
-                    .metadata()
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let before = crate::disk::Mark::of(
+                    &file
+                        .metadata()
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                );
                 let mut hasher = StreamedContentHasher::new();
                 let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
                 loop {
@@ -828,15 +897,22 @@ async fn hash_file_cancellable(
                         std::sync::atomic::Ordering::Relaxed,
                     );
                 }
-                let after = std::fs::metadata(&path)
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let after = crate::disk::Disk::process()
+                    .fingerprint_followed_blocking(&path)
+                    .map_err(|reading| {
+                        AppError::Repository(format!(
+                            "cannot read {}: {}",
+                            path.display(),
+                            reading.describe_absence()
+                        ))
+                    })?;
                 if cancellation.is_cancelled() {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FULL_HASH_BACKFILL_CANCELLED,
                         "Full-hash backfill cancelled",
                     ));
                 }
-                if !same_file_version(&before, &after) {
+                if !before.compare(&after).is_untouched() {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FILE_CHANGED_WHILE_HASHING,
                         "file changed while hashing",
@@ -856,6 +932,7 @@ async fn hash_file_cancellable(
 }
 
 /// Opens a buffered, read-only handle with a sequential access hint where supported.
+#[allow(clippy::disallowed_methods)] // disk-guard: sequential-scan open hint
 fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -879,6 +956,8 @@ fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 /// Applied only to this short-lived reader thread, never to a runtime pool.
+// disk-guard: an I/O scheduling hint for this thread, not a filesystem call.
+#[allow(clippy::disallowed_methods)]
 fn hash_reader_priority() -> std::io::Result<()> {
     crate::background_worker_priority()?;
     #[cfg(target_os = "linux")]
@@ -905,27 +984,6 @@ fn hash_reader_priority() -> std::io::Result<()> {
     ));
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     Ok(())
-}
-
-pub(super) fn same_file_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
-    if before.len() != after.len()
-        || before.modified().ok() != after.modified().ok()
-        || before.created().ok() != after.created().ok()
-    {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev()
-            || before.ino() != after.ino()
-            || before.ctime() != after.ctime()
-            || before.ctime_nsec() != after.ctime_nsec()
-        {
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]

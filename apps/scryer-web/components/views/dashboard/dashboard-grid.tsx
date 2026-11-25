@@ -2,7 +2,7 @@ import "react-grid-layout/css/styles.css";
 import "./dashboard-grid.css";
 
 import * as React from "react";
-import { GripVertical, Plus, RotateCcw, X } from "lucide-react";
+import { GripVertical, Plus, RotateCcw, Settings2, X } from "lucide-react";
 import {
   ReactGridLayout,
   noCompactor,
@@ -22,6 +22,7 @@ import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { DASHBOARD_PANEL_ICONS } from "@/components/views/dashboard/dashboard-panel-icons";
 import { DASHBOARD_PANEL_RENDERERS } from "@/components/views/dashboard/dashboard-panel-registry";
+import { CONFIGURABLE_DASHBOARD_PANELS } from "@/components/views/dashboard/dashboard-panel-settings";
 import {
   DashboardGridFallback,
   type DashboardPanelData,
@@ -51,26 +52,30 @@ import {
   DASHBOARD_COLUMNS,
   DASHBOARD_MARGIN,
   DASHBOARD_PANELS,
-  DASHBOARD_PANEL_IDS,
+  DASHBOARD_PANEL_KINDS,
   DASHBOARD_ROW_HEIGHT,
   appendDashboardPanel,
   changedDashboardBreakpoints,
   dashboardBreakpointForWidth,
   dashboardLayoutInput,
   dashboardPanelDefaultSize,
+  dashboardPanelKind,
   dashboardPanelMinSize,
   dashboardPanelTier,
   effectiveDashboardLayouts,
-  isDashboardPanelId,
+  isInstancedDashboardPanelKind,
+  newDashboardPanelId,
   placeDashboardPanel,
   removeDashboardPanel,
   sameDashboardItems,
+  setDashboardPanelSettings,
   type DashboardBreakpoint,
   type DashboardLayoutItem,
   type DashboardLayouts,
-  type DashboardPanelId,
+  type DashboardPanelKind,
 } from "@/lib/utils/dashboard-layout";
 import { dashboardLayoutErrorMessage } from "@/lib/utils/dashboard-layout-error-message";
+import { selectorId } from "@/lib/utils/dom-ids";
 import {
   dashboardDropRegions,
   nearestOpenSpot,
@@ -295,9 +300,8 @@ function toGridLayout(
   breakpoint: DashboardBreakpoint,
 ): LayoutItem[] {
   return items.map((entry) => {
-    const min = isDashboardPanelId(entry.panelId)
-      ? dashboardPanelMinSize(entry.panelId, breakpoint)
-      : { w: 1, h: 1 };
+    const kind = dashboardPanelKind(entry.panelId);
+    const min = kind ? dashboardPanelMinSize(kind, breakpoint) : { w: 1, h: 1 };
     return {
       i: entry.panelId,
       x: entry.x,
@@ -310,18 +314,33 @@ function toGridLayout(
   });
 }
 
-function fromGridLayout(layout: Layout): DashboardLayoutItem[] {
+/**
+ * The grid's positions as layout items. The grid knows nothing of settings,
+ * so each panel takes its settings back from `previous` by id.
+ */
+function fromGridLayout(
+  layout: Layout,
+  previous: readonly DashboardLayoutItem[],
+): DashboardLayoutItem[] {
+  const settingsById = new Map(
+    previous.map((entry) => [entry.panelId, entry.settings]),
+  );
   return layout
     .filter(
-      (entry) => entry.i !== DROPPING_ITEM_ID && isDashboardPanelId(entry.i),
+      (entry) =>
+        entry.i !== DROPPING_ITEM_ID && dashboardPanelKind(entry.i) !== null,
     )
-    .map((entry) => ({
-      panelId: entry.i,
-      x: entry.x,
-      y: entry.y,
-      w: entry.w,
-      h: entry.h,
-    }));
+    .map((entry) => {
+      const settings = settingsById.get(entry.i);
+      return {
+        panelId: entry.i,
+        x: entry.x,
+        y: entry.y,
+        w: entry.w,
+        h: entry.h,
+        ...(settings ? { settings } : {}),
+      };
+    });
 }
 
 export function DashboardGrid({
@@ -343,9 +362,13 @@ export function DashboardGrid({
   );
   const [draft, setDraft] = React.useState<DashboardLayouts | null>(null);
   const [trayOpen, setTrayOpen] = React.useState(false);
-  const [dragPanelId, setDragPanelId] = React.useState<DashboardPanelId | null>(
-    null,
-  );
+  // The kind being dragged in from the tray. An instanced kind gets its id
+  // only when it lands, so a cancelled drag leaves nothing behind.
+  const [dragPanelKind, setDragPanelKind] =
+    React.useState<DashboardPanelKind | null>(null);
+  const [configuringPanelId, setConfiguringPanelId] = React.useState<
+    string | null
+  >(null);
   const [saving, setSaving] = React.useState(false);
   const [confirmReset, setConfirmReset] = React.useState(false);
 
@@ -446,6 +469,12 @@ export function DashboardGrid({
     () => new Set(items.map((entry) => entry.panelId)),
     [items],
   );
+  // An instanced kind can always be placed once more.
+  const isKindPlaced = React.useCallback(
+    (kind: DashboardPanelKind) =>
+      !isInstancedDashboardPanelKind(kind) && placed.has(kind),
+    [placed],
+  );
 
   const gridLayout = React.useMemo(
     () => toGridLayout(items, breakpoint),
@@ -478,7 +507,8 @@ export function DashboardGrid({
   const finish = React.useCallback(() => {
     setDraft(null);
     setTrayOpen(false);
-    setDragPanelId(null);
+    setDragPanelKind(null);
+    setConfiguringPanelId(null);
     onEditingChange(false);
   }, [onEditingChange]);
 
@@ -487,48 +517,51 @@ export function DashboardGrid({
       if (!editing) {
         return;
       }
-      const next = fromGridLayout(layout);
-      updateDraft(() => next);
+      updateDraft((current) => fromGridLayout(layout, current));
     },
     [editing, updateDraft],
   );
 
   const handleDrop = React.useCallback(
     (layout: Layout, item: LayoutItem | undefined) => {
-      const panelId = dragPanelId;
-      setDragPanelId(null);
-      if (!editing || !panelId || !item) {
+      const kind = dragPanelKind;
+      setDragPanelKind(null);
+      if (!editing || !kind || !item) {
         return;
       }
-      const rest = fromGridLayout(layout);
-      updateDraft(() =>
-        placeDashboardPanel(rest, panelId, breakpoint, {
+      updateDraft((current) => {
+        const rest = fromGridLayout(layout, current);
+        const panelId = newDashboardPanelId(
+          kind,
+          current.map((entry) => entry.panelId),
+        );
+        return placeDashboardPanel(rest, panelId, breakpoint, {
           x: item.x,
           y: item.y,
           w: item.w,
           h: item.h,
-        }),
-      );
+        });
+      });
     },
-    [breakpoint, dragPanelId, editing, updateDraft],
+    [breakpoint, dragPanelKind, editing, updateDraft],
   );
 
   const dropItemSize = React.useMemo(
     () =>
-      dragPanelId
-        ? dashboardPanelDefaultSize(dragPanelId, breakpoint)
+      dragPanelKind
+        ? dashboardPanelDefaultSize(dragPanelKind, breakpoint)
         : { w: 1, h: 1 },
-    [breakpoint, dragPanelId],
+    [breakpoint, dragPanelKind],
   );
 
   const trayDragging = Boolean(
-    dragPanelId && !placed.has(dragPanelId) && !stacked,
+    dragPanelKind && !isKindPlaced(dragPanelKind) && !stacked,
   );
   const [trayDragRows, setTrayDragRows] = React.useState<number | null>(null);
   const handleTrayDrag = React.useCallback(
-    (panelId: DashboardPanelId | null) => {
-      setDragPanelId(panelId);
-      setTrayDragRows(panelId ? rowsPastViewport() : null);
+    (kind: DashboardPanelKind | null) => {
+      setDragPanelKind(kind);
+      setTrayDragRows(kind ? rowsPastViewport() : null);
     },
     [rowsPastViewport],
   );
@@ -569,11 +602,11 @@ export function DashboardGrid({
   }, [columns, snapPanelId, stacked, width]);
 
   const handleDropDragOver = React.useCallback(() => {
-    if (!dragPanelId || placed.has(dragPanelId)) {
+    if (!dragPanelKind || isKindPlaced(dragPanelKind)) {
       return false;
     }
     return { w: dropItemSize.w, h: dropItemSize.h };
-  }, [dragPanelId, dropItemSize, placed]);
+  }, [dragPanelKind, dropItemSize, isKindPlaced]);
 
   const reportFailure = React.useCallback(
     (error: unknown, fallbackKey: string) => {
@@ -707,20 +740,31 @@ export function DashboardGrid({
     () =>
       items
         .map((entry) => {
-          if (!isDashboardPanelId(entry.panelId)) {
+          const kind = dashboardPanelKind(entry.panelId);
+          if (!kind) {
             return null;
           }
           const panelId = entry.panelId;
-          const tier = dashboardPanelTier(panelId, breakpoint, entry);
-          const title = t(DASHBOARD_PANELS[panelId].titleKey);
+          const tier = dashboardPanelTier(kind, breakpoint, entry);
+          const configurable = CONFIGURABLE_DASHBOARD_PANELS[kind];
+          const title =
+            configurable?.customName(entry.settings) ||
+            t(DASHBOARD_PANELS[kind].titleKey);
           return (
             <div
               key={panelId}
               data-panel-id={panelId}
+              data-panel-kind={kind}
               data-tier={tier}
               className="scry-dashboard-item"
             >
-              {DASHBOARD_PANEL_RENDERERS[panelId]({ data, tier, breakpoint })}
+              {DASHBOARD_PANEL_RENDERERS[kind]({
+                data,
+                tier,
+                breakpoint,
+                panelId,
+                settings: entry.settings,
+              })}
               {editing ? (
                 <div
                   className={DRAG_HANDLE_CLASS}
@@ -738,6 +782,19 @@ export function DashboardGrid({
                     >
                       {title}
                     </span>
+                    {configurable ? (
+                      <IconButton
+                        id={selectorId("dashboard-panel-configure", panelId)}
+                        appearance="boxed"
+                        className={cn(NO_DRAG_CLASS, "h-7 w-7")}
+                        label={t("dashboard.layout.configurePanel", {
+                          name: title,
+                        })}
+                        onClick={() => setConfiguringPanelId(panelId)}
+                      >
+                        <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </IconButton>
+                    ) : null}
                     <IconButton
                       appearance="boxed"
                       tone="delete"
@@ -763,6 +820,15 @@ export function DashboardGrid({
         ),
     [breakpoint, data, editing, items, t, updateDraft],
   );
+
+  // The panel whose settings dialog is open, while it is still placed here.
+  const configuringEntry =
+    editing && configuringPanelId
+      ? (items.find((entry) => entry.panelId === configuringPanelId) ?? null)
+      : null;
+  const configuringKind = configuringEntry
+    ? dashboardPanelKind(configuringEntry.panelId)
+    : null;
 
   return (
     <div ref={containerRef} className="flex min-w-0 flex-col gap-3">
@@ -909,14 +975,37 @@ export function DashboardGrid({
       <DashboardPanelTray
         open={editing && trayOpen}
         onOpenChange={setTrayOpen}
-        placed={placed}
+        isPlaced={isKindPlaced}
         onDragPanel={handleTrayDrag}
-        onAddPanel={(panelId) =>
+        onAddPanel={(kind) =>
           updateDraft((current) =>
-            appendDashboardPanel(current, panelId, breakpoint),
+            appendDashboardPanel(
+              current,
+              newDashboardPanelId(
+                kind,
+                current.map((entry) => entry.panelId),
+              ),
+              breakpoint,
+            ),
           )
         }
       />
+
+      {configuringEntry && configuringKind
+        ? CONFIGURABLE_DASHBOARD_PANELS[configuringKind]?.renderDialog({
+            panelId: configuringEntry.panelId,
+            settings: configuringEntry.settings,
+            onApply: (settings) =>
+              updateDraft((current) =>
+                setDashboardPanelSettings(
+                  current,
+                  configuringEntry.panelId,
+                  settings,
+                ),
+              ),
+            onClose: () => setConfiguringPanelId(null),
+          })
+        : null}
 
       <ConfirmDialog
         open={confirmReset}
@@ -949,15 +1038,16 @@ export function DashboardGrid({
 function DashboardPanelTray({
   open,
   onOpenChange,
-  placed,
+  isPlaced: isKindPlaced,
   onDragPanel,
   onAddPanel,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  placed: ReadonlySet<string>;
-  onDragPanel: (panelId: DashboardPanelId | null) => void;
-  onAddPanel: (panelId: DashboardPanelId) => void;
+  /** Never true for an instanced kind, which can always be added again. */
+  isPlaced: (kind: DashboardPanelKind) => boolean;
+  onDragPanel: (kind: DashboardPanelKind | null) => void;
+  onAddPanel: (kind: DashboardPanelKind) => void;
 }) {
   const t = useTranslate();
 
@@ -975,11 +1065,11 @@ function DashboardPanelTray({
           </SheetDescription>
         </SheetHeader>
         <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 pb-4">
-          {DASHBOARD_PANEL_IDS.map((panelId) => {
+          {DASHBOARD_PANEL_KINDS.map((panelId) => {
             const Icon = DASHBOARD_PANEL_ICONS[panelId];
             const spec = DASHBOARD_PANELS[panelId];
             const title = t(spec.titleKey);
-            const isPlaced = placed.has(panelId);
+            const isPlaced = isKindPlaced(panelId);
             return (
               <li
                 key={panelId}

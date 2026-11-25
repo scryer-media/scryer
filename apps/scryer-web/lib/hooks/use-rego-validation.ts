@@ -7,7 +7,7 @@ import { useTranslate } from "../context/translate-context";
 import {
   validateRuleSetMutation,
   validateRequestRuleMutation,
-  validateMaintenanceRuleMutation,
+  validateLifecycleRuleMutation,
 } from "../graphql/mutations";
 import type { RegoFamily } from "../utils/rego-assistance";
 import type { RegoValidationResult } from "../utils/rego-diagnostics";
@@ -19,7 +19,7 @@ import {
 const validators = {
   release: [validateRuleSetMutation, "validateRuleSet"],
   request: [validateRequestRuleMutation, "validateRequestRule"],
-  maintenance: [validateMaintenanceRuleMutation, "validateMaintenanceRule"],
+  lifecycle: [validateLifecycleRuleMutation, "validateLifecycleRule"],
 } as const;
 
 export function useRegoValidation(

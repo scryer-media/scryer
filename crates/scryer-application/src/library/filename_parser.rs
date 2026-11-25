@@ -1291,29 +1291,25 @@ fn immediate_parent_has_single_video_file(source_path: &Path) -> bool {
         return false;
     };
 
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return false;
-    };
+    use std::ops::ControlFlow;
+    // An entry the listing failed on is skipped; one whose kind cannot be
+    // read, or a second video, settles it.
     let mut video_count = 0usize;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            return false;
+    let visited = crate::disk::Disk::process().visit_blocking(parent, |entry| {
+        let Ok(entry) = entry else {
+            return ControlFlow::Continue(());
         };
-        if !file_type.is_file() {
-            continue;
+        match entry.kind() {
+            Err(_) => video_count = 2,
+            Ok(kind) if kind != crate::disk::EntryKind::File => {}
+            Ok(_) => video_count += usize::from(is_video_file(entry.path())),
         }
-
-        if is_video_file(&path) {
-            video_count += 1;
-            if video_count > 1 {
-                return false;
-            }
+        match video_count > 1 {
+            true => ControlFlow::Break(()),
+            false => ControlFlow::Continue(()),
         }
-    }
-
-    video_count == 1
+    });
+    visited.is_ok() && video_count == 1
 }
 
 fn fill_missing_release_metadata(

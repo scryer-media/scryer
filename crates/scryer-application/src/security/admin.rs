@@ -151,7 +151,16 @@ impl AppUseCase {
                     continue;
                 }
 
-                if let Some(space) = filesystem_space(&path) {
+                let space = self
+                    .runtime
+                    .health
+                    .storage_capacity
+                    .current_or_refresh(
+                        &path,
+                        crate::disk::capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
+                    )
+                    .await;
+                if let Some(space) = space {
                     let total = space.total_bytes;
                     let free = space.available_bytes;
                     let used = total.saturating_sub(free);

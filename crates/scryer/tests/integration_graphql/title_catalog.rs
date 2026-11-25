@@ -5067,7 +5067,7 @@ async fn define_title_tag(ctx: &TestContext, label: &str, description: Option<&s
         r#"mutation($input: CreateTitleTagDefinitionInput!) {
             createTitleTagDefinition(input: $input) {
                 definition { id label description titleCount }
-                counts { titles delayProfiles maintenanceRuleSets releaseRuleSets managedTagFilters }
+                counts { titles delayProfiles lifecycleRuleSets releaseRuleSets managedTagFilters }
             }
         }"#,
         json!({ "input": { "label": label, "description": description } }),
@@ -5182,7 +5182,7 @@ async fn graphql_title_tag_registry_round_trips_with_rewrite_counts() {
         r#"mutation($input: UpdateTitleTagDefinitionInput!) {
             updateTitleTagDefinition(input: $input) {
                 definition { id label description titleCount }
-                counts { titles delayProfiles maintenanceRuleSets releaseRuleSets managedTagFilters }
+                counts { titles delayProfiles lifecycleRuleSets releaseRuleSets managedTagFilters }
             }
         }"#,
         json!({
@@ -5199,7 +5199,7 @@ async fn graphql_title_tag_registry_round_trips_with_rewrite_counts() {
     assert_eq!(renamed["counts"]["delayProfiles"], 0);
     // No rules exist in this fixture; the counts are the warning surface for
     // sources a rename can never rewrite.
-    assert_eq!(renamed["counts"]["maintenanceRuleSets"], 0);
+    assert_eq!(renamed["counts"]["lifecycleRuleSets"], 0);
     assert_eq!(renamed["counts"]["releaseRuleSets"], 0);
     assert_eq!(renamed["counts"]["managedTagFilters"], 0);
     assert_eq!(stored_title_tags(&ctx, &first).await, vec!["archive"]);
@@ -5211,7 +5211,7 @@ async fn graphql_title_tag_registry_round_trips_with_rewrite_counts() {
             deleteTitleTagDefinition(id: $id) {
                 id
                 label
-                counts { titles delayProfiles maintenanceRuleSets releaseRuleSets managedTagFilters }
+                counts { titles delayProfiles lifecycleRuleSets releaseRuleSets managedTagFilters }
             }
         }"#,
         json!({ "id": definition_id }),

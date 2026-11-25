@@ -1,4 +1,4 @@
-//! Arbitration across request-rule votes (spec 0003 FR-011, plan §3.3).
+//! Arbitration across request-rule votes.
 //!
 //! Pure: votes and errors in, one verdict out. No repository, no clock, no
 //! permission lookup beyond the single boolean the caller resolved — which is
@@ -9,17 +9,21 @@
 //! — an author-declared `manual`, a rule the host held because a fact was
 //! unobservable, a rule that errored or timed out — collapses to manual review,
 //! and it collapses **above** approve, so no amount of approving rules can
-//! out-vote one rule that could not be evaluated (FR-012). Only when nothing
+//! out-vote one rule that could not be evaluated. Only when nothing
 //! denied and nothing was uncertain does an approve vote, or the library's
 //! existing Auto-Approve permission, decide.
 //!
 //! Tags are collected from every rule that actually ran, whatever it voted: "this
 //! is a kids' film" is true whether or not the rule had an opinion about
 //! approving it. Whether they are *applied* is the caller's decision — a denied
-//! request keeps its tags in the trace only (FR-050).
+//! request keeps its tags in the trace only.
 
-use scryer_domain::{RequestDecisionOutcome, RequestRuleEvaluationMode};
+use std::collections::BTreeMap;
+
+use scryer_domain::RequestDecisionOutcome;
 use scryer_rules::request::{RequestRuleDecision, RequestVote};
+use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
+use serde::{Deserialize, Serialize};
 
 /// Pseudo rule-set id recorded when the library's Auto-Approve permission — not
 /// a rule — is what approved the request. It is deliberately not a real id: the
@@ -40,9 +44,28 @@ pub const FALLBACK_NO_RULE_MATCHED: &str = "no_rule_matched";
 /// lets the trace, the pre-flight and the requests view say the permission
 /// approved rather than showing an approval with nothing behind it.
 pub const FALLBACK_LIBRARY_PERMISSION: &str = LIBRARY_PERMISSION_DECIDER;
+/// The rules would have approved, but two of them set one shaping head to
+/// different values, so a person picks.
+pub const FALLBACK_SHAPING_CONFLICT: &str = "shaping_conflict";
+/// The rules would have approved, but a shaping value cannot apply to this
+/// request: a quality profile that no longer exists, a monitor value the
+/// facet does not have, or an audio language Scryer does not know.
+pub const FALLBACK_SHAPING_INVALID: &str = "shaping_invalid";
+
+/// Every fallback code a decision can carry. Released codes are API: never
+/// renamed, reused or repurposed.
+pub const ALL_FALLBACKS: [&str; 7] = [
+    FALLBACK_RULE_MANUAL,
+    FALLBACK_HELD,
+    FALLBACK_ERROR,
+    FALLBACK_NO_RULE_MATCHED,
+    FALLBACK_LIBRARY_PERMISSION,
+    FALLBACK_SHAPING_CONFLICT,
+    FALLBACK_SHAPING_INVALID,
+];
 
 /// One rule's vote, already narrowed to the rules whose library scope covers
-/// this request (see [`super::engine`]). Carries the rule's identity and mode so
+/// this request (see [`super::engine`]). Carries the rule's identity so
 /// the trace can be read without a second lookup.
 #[derive(Clone, Debug)]
 pub struct ScopedVote {
@@ -50,7 +73,6 @@ pub struct ScopedVote {
     pub rule_set_name: String,
     pub revision_number: i64,
     pub content_hash: String,
-    pub mode: RequestRuleEvaluationMode,
     pub decision: RequestRuleDecision,
 }
 
@@ -61,7 +83,6 @@ pub struct ScopedError {
     pub rule_set_name: String,
     pub revision_number: i64,
     pub content_hash: String,
-    pub mode: RequestRuleEvaluationMode,
     pub message: String,
 }
 
@@ -84,6 +105,153 @@ pub struct Arbitration {
     /// Reason codes from the deciding rules, deduplicated, first appearance
     /// preserved.
     pub reasons: Vec<ArbitrationReason>,
+    /// What the shaping heads of every rule that ran set, each value with the
+    /// rule set that set it.
+    pub shaping: ArbitratedShaping,
+}
+
+/// One shaping value or notification, attributed to the rule set that set it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShapedValue {
+    pub value: RequestHeadValue,
+    pub rule_set_id: String,
+    pub rule_set_name: String,
+}
+
+/// A shaping head that could not be applied, with the rule sets that set it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShapingRefusal {
+    pub head: RequestActionHead,
+    pub rule_set_ids: Vec<String>,
+}
+
+/// The shaping every rule that ran agreed on, and what it disagreed on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArbitratedShaping {
+    /// One agreed value per shaping head that carries one.
+    #[serde(default)]
+    pub values: BTreeMap<RequestActionHead, ShapedValue>,
+    /// Heads two rules set to different values. Such a head has no value.
+    #[serde(default)]
+    pub conflicts: Vec<ShapingRefusal>,
+    /// Heads whose value cannot apply to this request. Such a head has no
+    /// value.
+    #[serde(default)]
+    pub invalid: Vec<ShapingRefusal>,
+    /// The notifications rules produced, one per rule, in evaluation order.
+    #[serde(default)]
+    pub notifications: Vec<ShapedValue>,
+}
+
+impl ArbitratedShaping {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn value(&self, head: RequestActionHead) -> Option<&ShapedValue> {
+        self.values.get(&head)
+    }
+
+    /// The agreed values, as one rule's shaping.
+    pub fn to_shaping(&self) -> RequestShaping {
+        let mut shaping = RequestShaping::default();
+        for (head, shaped) in &self.values {
+            shaping.set(*head, Some(shaped.value.clone()));
+        }
+        shaping
+    }
+
+    /// The notifications, in evaluation order, as the submitted event carries
+    /// them.
+    pub fn rule_notifications(&self) -> Vec<scryer_domain::RequestRuleNotification> {
+        self.notifications
+            .iter()
+            .filter_map(|shaped| match &shaped.value {
+                RequestHeadValue::Text(text) => Some(scryer_domain::RequestRuleNotification {
+                    rule_set_id: shaped.rule_set_id.clone(),
+                    rule_set_name: shaped.rule_set_name.clone(),
+                    text: text.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Arbitration {
+    /// Drop shaping values that cannot apply to this request. An approval
+    /// they were part of becomes manual review, decided by the rule sets that
+    /// set them.
+    pub fn refuse_invalid_shaping(&mut self, heads: &[RequestActionHead]) {
+        let mut refused_ids: Vec<String> = Vec::new();
+        for head in heads {
+            let Some(shaped) = self.shaping.values.remove(head) else {
+                continue;
+            };
+            push_unique(&mut refused_ids, &shaped.rule_set_id);
+            self.shaping.invalid.push(ShapingRefusal {
+                head: *head,
+                rule_set_ids: vec![shaped.rule_set_id],
+            });
+        }
+        if !refused_ids.is_empty() && self.policy_outcome == RequestDecisionOutcome::AutoApprove {
+            self.policy_outcome = RequestDecisionOutcome::ManualReview;
+            self.fallback_reason = Some(FALLBACK_SHAPING_INVALID);
+            self.deciding_rule_set_ids = refused_ids;
+        }
+    }
+}
+
+fn push_unique(ids: &mut Vec<String>, id: &str) {
+    if !ids.iter().any(|seen| seen == id) {
+        ids.push(id.to_string());
+    }
+}
+
+/// Collect the shaping of every rule that ran. A held rule did not run, and a
+/// rule that errored has no vote at all, so neither contributes.
+fn collect_shaping(votes: &[ScopedVote]) -> ArbitratedShaping {
+    let mut shaping = ArbitratedShaping::default();
+    for vote in votes.iter().filter(|vote| !vote.decision.held) {
+        for head in RequestActionHead::shaping() {
+            let Some(value) = vote.decision.shaping.get(head) else {
+                continue;
+            };
+            if let Some(conflict) = shaping.conflicts.iter_mut().find(|c| c.head == head) {
+                push_unique(&mut conflict.rule_set_ids, &vote.rule_set_id);
+                continue;
+            }
+            match shaping.values.get(&head) {
+                Some(agreed) if agreed.value == value => {}
+                Some(_) => {
+                    let agreed = shaping.values.remove(&head).expect("value present");
+                    let mut rule_set_ids = vec![agreed.rule_set_id];
+                    push_unique(&mut rule_set_ids, &vote.rule_set_id);
+                    shaping
+                        .conflicts
+                        .push(ShapingRefusal { head, rule_set_ids });
+                }
+                None => {
+                    shaping.values.insert(
+                        head,
+                        ShapedValue {
+                            value,
+                            rule_set_id: vote.rule_set_id.clone(),
+                            rule_set_name: vote.rule_set_name.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        if let Some(text) = &vote.decision.notify {
+            shaping.notifications.push(ShapedValue {
+                value: RequestHeadValue::Text(text.clone()),
+                rule_set_id: vote.rule_set_id.clone(),
+                rule_set_name: vote.rule_set_name.clone(),
+            });
+        }
+    }
+    shaping
 }
 
 /// One reason code, attributed to the rule that emitted it. The rule *name* is
@@ -95,17 +263,7 @@ pub struct ArbitrationReason {
     pub rule_set_name: String,
 }
 
-/// What Scryer did before request rules existed, and what it still does
-/// whenever no rule takes part.
-pub const fn legacy_outcome(permission_grants_auto_approve: bool) -> RequestDecisionOutcome {
-    if permission_grants_auto_approve {
-        RequestDecisionOutcome::AutoApprove
-    } else {
-        RequestDecisionOutcome::ManualReview
-    }
-}
-
-/// Arbitrate one request's votes (spec 0003 FR-011).
+/// Arbitrate one request's votes.
 ///
 /// | condition | outcome | deciders | fallback |
 /// |---|---|---|---|
@@ -114,23 +272,62 @@ pub const fn legacy_outcome(permission_grants_auto_approve: bool) -> RequestDeci
 /// | else any `approve` | `AutoApprove` | the approving rules | — |
 /// | else Auto-Approve permission | `AutoApprove` | `library_permission` | `library_permission` |
 /// | else | `ManualReview` | — | `no_rule_matched` |
+///
+/// Shaping values come from every rule that ran. When two of them set one
+/// head to different values, an `AutoApprove` becomes `ManualReview`, decided
+/// by the disagreeing rule sets, with fallback `shaping_conflict`.
 pub fn arbitrate(
     votes: &[ScopedVote],
     errors: &[ScopedError],
     permission_grants_auto_approve: bool,
 ) -> Arbitration {
-    let tags = collect_tags(votes);
+    let verdict = arbitrate_votes(votes, errors, permission_grants_auto_approve);
+    let mut arbitration = Arbitration {
+        policy_outcome: verdict.policy_outcome,
+        fallback_reason: verdict.fallback_reason,
+        deciding_rule_set_ids: verdict.deciding_rule_set_ids,
+        tags: collect_tags(votes),
+        reasons: verdict.reasons,
+        shaping: collect_shaping(votes),
+    };
+    if arbitration.policy_outcome == RequestDecisionOutcome::AutoApprove
+        && !arbitration.shaping.conflicts.is_empty()
+    {
+        let mut deciding: Vec<String> = Vec::new();
+        for conflict in &arbitration.shaping.conflicts {
+            for id in &conflict.rule_set_ids {
+                push_unique(&mut deciding, id);
+            }
+        }
+        arbitration.policy_outcome = RequestDecisionOutcome::ManualReview;
+        arbitration.fallback_reason = Some(FALLBACK_SHAPING_CONFLICT);
+        arbitration.deciding_rule_set_ids = deciding;
+    }
+    arbitration
+}
 
+/// The verdict the votes alone reach, before tags and shaping are collected.
+struct Verdict {
+    policy_outcome: RequestDecisionOutcome,
+    fallback_reason: Option<&'static str>,
+    deciding_rule_set_ids: Vec<String>,
+    reasons: Vec<ArbitrationReason>,
+}
+
+fn arbitrate_votes(
+    votes: &[ScopedVote],
+    errors: &[ScopedError],
+    permission_grants_auto_approve: bool,
+) -> Verdict {
     let denials: Vec<&ScopedVote> = votes
         .iter()
         .filter(|vote| vote.decision.vote == RequestVote::Deny)
         .collect();
     if !denials.is_empty() {
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::Deny,
             fallback_reason: None,
             deciding_rule_set_ids: rule_set_ids(&denials),
-            tags,
             reasons: reasons_from(&denials),
         };
     }
@@ -159,11 +356,10 @@ pub fn arbitrate(
                 deciding.push(error.rule_set_id.clone());
             }
         }
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::ManualReview,
             fallback_reason: Some(fallback_reason),
             deciding_rule_set_ids: deciding,
-            tags,
             reasons: reasons_from(&manuals),
         };
     }
@@ -173,30 +369,27 @@ pub fn arbitrate(
         .filter(|vote| vote.decision.vote == RequestVote::Approve)
         .collect();
     if !approvals.is_empty() {
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::AutoApprove,
             fallback_reason: None,
             deciding_rule_set_ids: rule_set_ids(&approvals),
-            tags,
             reasons: reasons_from(&approvals),
         };
     }
 
     if permission_grants_auto_approve {
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::AutoApprove,
             fallback_reason: Some(FALLBACK_LIBRARY_PERMISSION),
             deciding_rule_set_ids: vec![LIBRARY_PERMISSION_DECIDER.to_string()],
-            tags,
             reasons: Vec::new(),
         };
     }
 
-    Arbitration {
+    Verdict {
         policy_outcome: RequestDecisionOutcome::ManualReview,
         fallback_reason: Some(FALLBACK_NO_RULE_MATCHED),
         deciding_rule_set_ids: Vec::new(),
-        tags,
         reasons: Vec::new(),
     }
 }

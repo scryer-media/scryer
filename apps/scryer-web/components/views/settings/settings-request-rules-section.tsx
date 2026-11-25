@@ -3,28 +3,46 @@ import {
   regoDiagnostics,
 } from "@/lib/utils/rego-diagnostics";
 import * as React from "react";
-import {
-  BookOpen,
-  ChevronDown,
-  Copy,
-  Edit,
-  Plus,
-  Sparkles,
-  Trash2,
-  Users,
-} from "lucide-react";
+import { BookOpen, Copy, Edit, Plus, Sparkles, Trash2 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { HelpLabel } from "@/components/common/info-help";
+import {
+  GutterPanel,
+  GutterPanelButton,
+} from "@/components/common/gutter-panel";
+import {
+  RULE_REFERENCE_BODY_CLASS,
+  RuleSidePanelHeader,
+  useRuleSidePanels,
+} from "@/components/views/settings/rule-side-panels";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
+import type { RequestRulesSection } from "@/components/root/types";
+import { RequestRulesTabs } from "@/components/views/settings/request-rules-tabs";
+import {
+  FORM_SHELL,
+  PaneEmpty,
+  PaneError,
+  PaneSection,
+  RefreshButton,
+  TABLE_SHELL,
+  TOOLBAR_SELECT_LABEL,
+  TOOLBAR_SHELL,
+} from "@/components/views/settings/rule-pane-section";
+import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { formatUiDateTime } from "@/lib/utils/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { LibrarySelect } from "@/components/common/facet-select";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   Input,
   integerInputProps,
   sanitizeDigits,
 } from "@/components/ui/input";
+import { LibrarySingleSelect } from "@/components/common/library-single-select";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
@@ -37,6 +55,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
+import { RuleTablePager } from "@/components/views/settings/rule-table-pager";
+import { SortableHead } from "@/components/views/lists/sortable-head";
+import {
+  nextRuleTableSort,
+  ruleTablePage,
+  sortRequestRules,
+  type RequestRuleSortKey,
+  type RuleTableSort,
+} from "@/lib/utils/rule-table";
 import requestInputContract from "@/lib/contracts/request-input-contract.json";
 import {
   REQUEST_RULE_TEMPLATES,
@@ -50,11 +78,11 @@ import type {
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
-  RequestRulePreviewSource,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
   RequestRuleUserOption,
   RequestRuleValidationResult,
+  RequestRuleVoteRecord,
 } from "@/lib/types/request-rule-sets";
 import {
   REQUEST_FILTER_ALL,
@@ -63,11 +91,23 @@ import {
   requestDecisionOutcomeLabelKey,
   requestFallbackReasonLabelKey,
   isPersonTargetingRefusal,
-  requestRuleNamesRequesters,
   requestRuleReadsRequester,
+  partitionRequestVotes,
   requestVoteBadgeTone,
   requestVoteLabelKey,
+  REQUEST_STARTER_SOURCE,
 } from "@/lib/utils/request-rule-sets";
+import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
+import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
+import {
+  RequestDeclaredActionsSummary,
+  RequestRuleSourceFindings,
+  RequestShapingSummary,
+} from "@/components/views/settings/lifecycle-action-summary";
+import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
+import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import {
   settingsRequestPreviewTitleResultId,
   settingsRequestDecisionRowId,
@@ -75,11 +115,10 @@ import {
   settingsRequestRuleDeleteId,
   settingsRequestRuleEditId,
   settingsRequestRuleEnabledId,
-  settingsRequestRuleLibraryId,
   settingsRequestRuleNameId,
   settingsRequestRuleRowId,
   settingsRequestTemplateId,
-  settingsRequestUserId,
+  selectorId,
 } from "@/lib/utils/dom-ids";
 
 export type RequestQualityProfileOption = { id: string; name: string };
@@ -103,12 +142,27 @@ const PREVIEW_MONITOR_TYPES = [
 ];
 
 type SettingsRequestRulesSectionProps = {
-  /// The shipped expired-request-leases maintenance rule, shown first.
-  leaseRuleControl?: React.ReactNode;
+  /// Which pane of the page is open: the rule list, a request to try the
+  /// rules against, or the decisions they made.
+  section: RequestRulesSection;
   isEditorOpen: boolean;
   editingRuleSetId: string | null;
   ruleSetDraft: RequestRuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RequestRuleSetDraft>>;
+  /// Which source editor the form shows. Simple is only offered while the
+  /// draft is still the builder's.
+  builderMode: RuleEditorMode;
+  setBuilderMode: (mode: "simple" | "view") => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  setBuilderModel: (model: RuleBuilderModel) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  editAsRego: () => void;
+  builderOptions: RuleBuilderOptions;
+  /// Null until the served outputs are read, and after a failed read.
+  builderSchema: RuleBuilderSchema | null;
+  builderStatus: RuleBuilderSchemaStatus;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -121,22 +175,18 @@ type SettingsRequestRulesSectionProps = {
   ruleSetRecords: RequestRuleSetRecord[];
   libraries: LibraryRecord[];
   qualityProfiles: RequestQualityProfileOption[];
-  /// Accounts the picker can write into a matcher. Empty when the reader may
-  /// not list users, which is a permission answer rather than a page failure.
+  /// Accounts a preview can run as. Empty when the reader may not list users,
+  /// which is a permission answer rather than a page failure.
   users: RequestRuleUserOption[];
   copyRuleSet: (record: RequestRuleSetRecord) => void;
   editRuleSet: (record: RequestRuleSetRecord) => void;
   deleteRuleSet: (record: RequestRuleSetRecord) => void;
   validating: boolean;
   validationResult: RequestRuleValidationResult | null;
-  /// Rewrite whichever way the draft names people with these usernames.
-  applyRequesters: (usernames: string[]) => void;
   setRuleEnabled: (record: RequestRuleSetRecord, enabled: boolean) => void;
   /// Saving a rule that reads requester fields needs Manage permissions; the
   /// editor warns before save rather than after the API refuses.
   canManagePermissions: boolean;
-  previewSource: RequestRulePreviewSource;
-  setPreviewSource: (source: RequestRulePreviewSource) => void;
   previewRuleSetId: string;
   setPreviewRuleSetId: (id: string) => void;
   previewSample: RequestRulePreviewSample;
@@ -226,57 +276,54 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
   );
 }
 
+const REQUEST_TEMPLATES_PANEL_ID = "settings-request-template-gallery";
+const REQUEST_REFERENCE_PANEL_ID = "settings-request-reference-panel";
+type RequestSidePanel = "templates" | "reference";
+
 function RequestContextReference() {
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
+    <div>
+      <RuleSidePanelHeader
+        icon={<BookOpen className="h-4 w-4" />}
+        title={t("settings.refReqTitle")}
+      />
+      <div
+        id="settings-request-rules-reference"
+        className={RULE_REFERENCE_BODY_CLASS}
       >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <BookOpen className="h-4 w-4" />
-          {t("settings.refReqTitle")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.refReqSubtitle")}
-        </p>
-      </CardHeader>
-      {open ? (
-        <CardContent
-          id="settings-request-rules-reference"
-          className="space-y-6 text-sm"
-        >
-          <p className="text-muted-foreground">{t("settings.refReqIntro")}</p>
+        <p className="text-muted-foreground">{t("settings.refReqIntro")}</p>
 
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refReqOutputTitle")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refReqOutputIntro")}
-            </p>
-            <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refReqOutputApprove")}</li>
-              <li>{t("settings.refReqOutputDeny")}</li>
-              <li>{t("settings.refReqOutputManual")}</li>
-              <li>{t("settings.refReqOutputTags")}</li>
-              <li>{t("settings.refReqOutputReasons")}</li>
-              <li>{t("settings.refReqOutputNoPackage")}</li>
-            </ul>
-          </div>
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refReqOutputTitle")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refReqOutputIntro")}
+          </p>
+          <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+            <li>{t("settings.refReqOutputApprove")}</li>
+            <li>{t("settings.refReqOutputDeny")}</li>
+            <li>{t("settings.refReqOutputManual")}</li>
+            <li>{t("settings.refReqOutputSetQualityProfile")}</li>
+            <li>{t("settings.refReqOutputSetLeaseDays")}</li>
+            <li>{t("settings.refReqOutputSetMonitor")}</li>
+            <li>{t("settings.refReqOutputSetAudioLanguages")}</li>
+            <li>{t("settings.refReqOutputTags")}</li>
+            <li>{t("settings.refReqOutputNotify")}</li>
+            <li>{t("settings.refReqOutputReasons")}</li>
+            <li>{t("settings.refReqOutputShapingOutcome")}</li>
+            <li>{t("settings.refReqOutputNoSchedule")}</li>
+            <li>{t("settings.refReqOutputNoPackage")}</li>
+          </ul>
+        </div>
 
-          {REF_SECTIONS.map((section) => (
-            <RefFieldTable key={section.path} section={section} />
-          ))}
-        </CardContent>
-      ) : null}
-    </Card>
+        {REF_SECTIONS.map((section) => (
+          <RefFieldTable key={section.path} section={section} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -325,154 +372,210 @@ function RequestTemplateGallery({
   onApply: (template: RequestRuleTemplate) => void;
 }) {
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
-
   return (
-    <Card>
-      <CardHeader
-        id="settings-request-template-gallery-toggle"
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Sparkles className="h-4 w-4" />
-          {t("settings.requestTemplateGallery")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
+    <div>
+      <RuleSidePanelHeader
+        icon={<Sparkles className="h-4 w-4" />}
+        title={
+          <HelpLabel
+            label={t("settings.requestTemplateGallery")}
+            help={t("settings.requestTemplateGalleryTagNote")}
           />
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestTemplateGalleryDescription")}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestTemplateGalleryTagNote")}
-        </p>
-      </CardHeader>
-      {open ? (
-        <CardContent
-          id="settings-request-template-gallery"
-          className="@container"
-        >
-          <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2">
-            {REQUEST_RULE_TEMPLATES.map((template) => (
-              <RequestTemplateCard
-                key={template.id}
-                template={template}
-                onApply={(applied) => {
-                  onApply(applied);
-                  setOpen(false);
-                }}
-              />
-            ))}
-          </div>
-        </CardContent>
-      ) : null}
-    </Card>
+        }
+      />
+      <div className="grid grid-cols-1 gap-2 p-3">
+        {REQUEST_RULE_TEMPLATES.map((template) => (
+          <RequestTemplateCard
+            key={template.id}
+            template={template}
+            onApply={onApply}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
-/// Names the people a matcher is about. The picker never edits the matcher on
-/// its own: the operator ticks accounts and presses apply, and the rewrite lands
-/// in the editor where they can read it before saving.
-function RequestUserPicker({
-  users,
-  regoSource,
-  applyRequesters,
-  disabled,
+function DecisionVoteItem({
+  vote,
+  showError,
 }: {
-  users: RequestRuleUserOption[];
-  regoSource: string;
-  applyRequesters: (usernames: string[]) => void;
-  disabled: boolean;
+  vote: RequestRuleVoteRecord;
+  showError: boolean;
 }) {
   const t = useTranslate();
-  const [selected, setSelected] = React.useState<string[]>([]);
-  const writable = requestRuleNamesRequesters(regoSource);
-
+  const failed = vote.vote === null && vote.error !== null;
+  const labelKey = failed
+    ? "requests.voteFailed"
+    : requestVoteLabelKey(vote.vote);
   return (
-    <div id="settings-request-users-picker" className="space-y-2">
-      <Label className="block">{t("settings.requestRuleRequesters")}</Label>
-      <p className="text-xs text-muted-foreground">
-        {t("settings.requestRuleRequestersHelp")}
-      </p>
-      {users.length === 0 ? (
+    <li>
+      <span className="text-[var(--scry-ink2)]">{vote.ruleSetName}</span>{" "}
+      <Badge
+        tone={failed ? "negative" : requestVoteBadgeTone(vote.vote)}
+        className="text-[10px]"
+        title={vote.error ?? undefined}
+      >
+        {labelKey ? t(labelKey) : (vote.vote ?? "—")}
+        {vote.held ? ` · ${t("settings.requestDecisionHeld")}` : ""}
+      </Badge>
+      {vote.error && showError ? (
         <p
-          id="settings-request-users-empty"
-          className="text-xs text-muted-foreground"
+          data-code-font
+          className="mt-0.5 whitespace-pre-wrap text-xs text-[var(--scry-muted3)] [overflow-wrap:anywhere]"
         >
-          {t("settings.requestRuleRequestersUnavailable")}
-        </p>
-      ) : (
-        <div className="flex flex-wrap items-center gap-4">
-          {users.map((user) => (
-            <label key={user.id} className="flex items-center gap-2">
-              <Checkbox
-                id={settingsRequestUserId(user.id)}
-                checked={selected.includes(user.username)}
-                onCheckedChange={(value) =>
-                  setSelected((prev) =>
-                    value === true
-                      ? [...prev, user.username]
-                      : prev.filter((name) => name !== user.username),
-                  )
-                }
-              />
-              <span className="text-sm">{user.username}</span>
-            </label>
-          ))}
-        </div>
-      )}
-      {!writable ? (
-        <p
-          id="settings-request-users-no-target"
-          className="text-xs text-[var(--scry-warning-text)]"
-        >
-          {t("settings.requestRuleRequestersNoTarget")}
+          {vote.error}
         </p>
       ) : null}
-      <Button
-        id="settings-request-users-apply"
-        type="button"
-        variant="secondary"
-        size="sm"
-        disabled={disabled || selected.length === 0 || !writable}
-        onClick={() => applyRequesters(selected)}
-      >
-        <Users className="h-4 w-4" />
-        {t("settings.requestRuleRequestersApply")}
-      </Button>
+    </li>
+  );
+}
+
+/// The votes that decided, always shown; every other rule's vote only once the
+/// row is opened.
+function DecisionVotes({
+  decision,
+  expanded,
+  onExpand,
+}: {
+  decision: RequestRuleDecisionRecord;
+  expanded: boolean;
+  onExpand?: () => void;
+}) {
+  const t = useTranslate();
+  const { signal, rest } = partitionRequestVotes(decision.votes);
+  return (
+    <div className="space-y-1.5">
+      {signal.length > 0 ? (
+        <ul className="list-disc space-y-1 pl-4 text-sm">
+          {signal.map((vote) => (
+            <DecisionVoteItem
+              key={`${vote.ruleSetId}:${vote.revisionNumber}`}
+              vote={vote}
+              showError={expanded}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">
+          {t("settings.requestDecisionNoVotes")}
+        </p>
+      )}
+      {rest.length > 0 && expanded ? (
+        <ul className="list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+          {rest.map((vote) => (
+            <DecisionVoteItem
+              key={`${vote.ruleSetId}:${vote.revisionNumber}`}
+              vote={vote}
+              showError={expanded}
+            />
+          ))}
+        </ul>
+      ) : null}
+      {rest.length > 0 && !expanded ? (
+        <button
+          type="button"
+          onClick={onExpand}
+          className="text-xs text-[var(--scry-accent-text)] underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+        >
+          {t("settings.requestDecisionOtherRules", { count: rest.length })}
+        </button>
+      ) : null}
     </div>
   );
 }
 
-function DecisionVotes({ decision }: { decision: RequestRuleDecisionRecord }) {
+function DecisionRow({
+  decision,
+  index,
+  expanded,
+  onToggle,
+}: {
+  decision: RequestRuleDecisionRecord;
+  index: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const t = useTranslate();
-  if (decision.votes.length === 0) {
-    return (
-      <span className="text-muted-foreground">
-        {t("settings.requestDecisionNoVotes")}
-      </span>
-    );
-  }
+  const dateTimeFormat = useUiDateTimeFormat();
+  const { rest } = partitionRequestVotes(decision.votes);
+  const discloses =
+    rest.length > 0 || decision.votes.some((vote) => vote.error !== null);
+  const failedRules = decision.votes
+    .filter((vote) => vote.error !== null)
+    .map((vote) => vote.ruleSetName)
+    .sort((a, b) => a.localeCompare(b));
+  const fallbackText =
+    decision.fallbackReason === "error" && failedRules.length > 0
+      ? t("requests.fallbackErrorRules", { rules: failedRules.join(", ") })
+      : decision.fallbackReason
+        ? (() => {
+            const key = requestFallbackReasonLabelKey(decision.fallbackReason);
+            return key ? t(key) : decision.fallbackReason;
+          })()
+        : null;
+  const rowId = settingsRequestDecisionRowId(index);
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {decision.votes.map((vote) => {
-        const labelKey = requestVoteLabelKey(vote.vote);
-        return (
-          <Badge
-            key={`${vote.ruleSetId}:${vote.revisionNumber}`}
-            tone={requestVoteBadgeTone(vote.vote)}
-            className="text-[10px]"
-            title={vote.error ?? undefined}
-          >
-            {vote.ruleSetName}
-            {": "}
-            {labelKey ? t(labelKey) : (vote.vote ?? "—")}
-            {vote.held ? ` · ${t("settings.requestDecisionHeld")}` : ""}
-          </Badge>
-        );
-      })}
-    </div>
+    <TableRow
+      data-ui="settings-table-row"
+      id={rowId}
+      data-request-decision-outcome={decision.effectiveOutcome}
+      className="[&>td]:align-middle"
+    >
+      <TableCell className="w-[1%] pr-0">
+        {discloses ? (
+          <TableDisclosureButton
+            id={`${rowId}-toggle`}
+            expanded={expanded}
+            aria-label={t("settings.requestDecisionsColVotes")}
+            onClick={onToggle}
+          />
+        ) : null}
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
+        {formatUiDateTime(decision.evaluatedAt, dateTimeFormat, {
+          fallback: decision.evaluatedAt,
+        })}
+      </TableCell>
+      <TableCell>
+        <div className="space-y-1">
+          <OutcomeBadge outcome={decision.effectiveOutcome} />
+          {decision.policyOutcome !== decision.effectiveOutcome ? (
+            <p className="text-xs text-muted-foreground">
+              {t("settings.requestDecisionsPolicySaid", {
+                outcome: decision.policyOutcome,
+              })}
+            </p>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell>
+        <DecisionVotes
+          decision={decision}
+          expanded={expanded}
+          onExpand={onToggle}
+        />
+      </TableCell>
+      <TableCell className="text-muted-foreground">
+        <div className="space-y-1">
+          {decision.reasons.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {decision.reasons.map((reason) => (
+                <code
+                  key={`${reason.ruleName}:${reason.code}`}
+                  data-code-font
+                  className="rounded bg-muted px-1 py-0.5 text-xs"
+                >
+                  {reason.code}
+                </code>
+              ))}
+            </div>
+          ) : null}
+          {fallbackText ? <p className="text-xs">{fallbackText}</p> : null}
+          {decision.reasons.length === 0 && !fallbackText ? "—" : null}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -480,14 +583,10 @@ function DecisionVotes({ decision }: { decision: RequestRuleDecisionRecord }) {
 /// document the matcher actually saw, which is the only honest answer to "why
 /// did this not match".
 function RequestPreviewPanel({
-  isEditorOpen,
-  draftName,
   ruleSetRecords,
   libraries,
   qualityProfiles,
   users,
-  previewSource,
-  setPreviewSource,
   previewRuleSetId,
   setPreviewRuleSetId,
   previewSample,
@@ -497,15 +596,12 @@ function RequestPreviewPanel({
   previewing,
   previewResult,
   previewError,
-}: { draftName: string } & Pick<
+}: Pick<
   SettingsRequestRulesSectionProps,
-  | "isEditorOpen"
   | "ruleSetRecords"
   | "libraries"
   | "qualityProfiles"
   | "users"
-  | "previewSource"
-  | "setPreviewSource"
   | "previewRuleSetId"
   | "setPreviewRuleSetId"
   | "previewSample"
@@ -553,51 +649,34 @@ function RequestPreviewPanel({
     };
   }, [facet, searchPreviewTitles, titleQuery]);
 
-  const canPreviewDraft = isEditorOpen;
   const canRun =
     !previewing &&
     Boolean(previewSample.userId) &&
     Boolean(previewSample.libraryId) &&
     previewSample.externalIds.length > 0 &&
-    (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
+    Boolean(previewRuleSetId);
 
   const decision = previewResult?.decision ?? null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          {t("settings.requestPreviewTitle")}
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestPreviewSubtitle")}
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-3">
-          <SingleSelectField
-            id="settings-request-preview-source"
-            label={t("settings.requestPreviewSource")}
-            value={previewSource}
-            onValueChange={(value) =>
-              setPreviewSource(value as RequestRulePreviewSource)
-            }
-            options={[
-              {
-                value: "stored",
-                label: t("settings.requestPreviewSourceStored"),
-              },
-              {
-                value: "draft",
-                label: t("settings.requestPreviewSourceDraft"),
-                disabled: !canPreviewDraft,
-              },
-            ]}
-          />
-          {previewSource === "stored" ? (
-            <SingleSelectField
+    <PaneSection
+      id="settings-request-preview-section"
+      title={t("settings.requestPreviewTitle")}
+      help={t("settings.requestPreviewSubtitle")}
+    >
+      <div className={FORM_SHELL}>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              htmlFor="settings-request-preview-rule"
+              className="block text-sm font-medium text-[var(--scry-ink2)]"
+            >
+              {t("settings.requestPreviewRuleSelect")}
+            </label>
+            <FilterableSelect
               id="settings-request-preview-rule"
-              label={t("settings.requestPreviewRuleSelect")}
+              optionIdPrefix="settings-request-preview-rule"
+              filterByValue={false}
               placeholder={t("settings.requestPreviewRuleSelectPlaceholder")}
               value={previewRuleSetId}
               onValueChange={setPreviewRuleSetId}
@@ -606,19 +685,7 @@ function RequestPreviewPanel({
                 label: record.name,
               }))}
             />
-          ) : (
-            <div className="min-w-0 space-y-1.5">
-              <Label className="block">
-                {t("settings.requestPreviewRuleSelect")}
-              </Label>
-              <p
-                id="settings-request-preview-draft-name"
-                className="truncate text-xs text-muted-foreground"
-              >
-                {draftName || t("settings.requestPreviewSourceDraft")}
-              </p>
-            </div>
-          )}
+          </div>
           <SingleSelectField
             id="settings-request-preview-user"
             label={t("settings.requestPreviewUser")}
@@ -635,7 +702,7 @@ function RequestPreviewPanel({
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
-          <SingleSelectField
+          <LibrarySingleSelect
             id="settings-request-preview-library"
             label={t("settings.requestPreviewLibrary")}
             placeholder={t("settings.requestPreviewLibraryPlaceholder")}
@@ -643,10 +710,7 @@ function RequestPreviewPanel({
             onValueChange={(value) =>
               setPreviewSample((prev) => ({ ...prev, libraryId: value }))
             }
-            options={libraries.map((library) => ({
-              value: library.id,
-              label: library.name,
-            }))}
+            libraries={libraries}
           />
           <SingleSelectField
             id="settings-request-preview-profile"
@@ -692,10 +756,13 @@ function RequestPreviewPanel({
             ]}
           />
           {previewSample.leaseForever ? null : (
-            <label>
-              <Label className="mb-2 block">
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <label
+                htmlFor="settings-request-preview-lease-days"
+                className="block text-sm font-medium text-[var(--scry-ink2)]"
+              >
                 {t("settings.requestPreviewLeaseDays")}
-              </Label>
+              </label>
               <Input
                 id="settings-request-preview-lease-days"
                 {...integerInputProps}
@@ -709,7 +776,7 @@ function RequestPreviewPanel({
                   }))
                 }
               />
-            </label>
+            </div>
           )}
         </div>
 
@@ -808,7 +875,11 @@ function RequestPreviewPanel({
                 </Badge>
               ) : null}
             </div>
-            <DecisionVotes decision={decision} />
+            <DecisionVotes decision={decision} expanded />
+            <RequestShapingSummary
+              shaping={decision.shaping}
+              idPrefix="settings-request-preview-shaping"
+            />
             {decision.reasons.length > 0 ? (
               <div className="flex flex-wrap gap-1">
                 {decision.reasons.map((reason) => (
@@ -871,13 +942,9 @@ function RequestPreviewPanel({
               </pre>
             ) : null}
           </div>
-        ) : previewError ? null : (
-          <p className="text-xs text-muted-foreground">
-            {t("settings.requestPreviewEmpty")}
-          </p>
-        )}
-      </CardContent>
-    </Card>
+        ) : null}
+      </div>
+    </PaneSection>
   );
 }
 
@@ -920,150 +987,117 @@ function RequestDecisionsPanel({
   | "refreshDecisions"
 >) {
   const t = useTranslate();
+  const [expandedDecisions, setExpandedDecisions] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const toggleDecision = (key: string) =>
+    setExpandedDecisions((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          {t("settings.requestDecisionsTitle")}
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestDecisionsSubtitle")}
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <SingleSelectField
-            id="settings-request-decisions-outcome"
-            label={t("settings.requestDecisionsOutcomeFilter")}
-            value={decisionOutcomeFilter}
-            onValueChange={setDecisionOutcomeFilter}
-            options={DECISION_OUTCOME_FILTERS.map((outcome) => {
-              const labelKey =
-                outcome === REQUEST_FILTER_ALL
-                  ? "settings.requestDecisionsOutcomeAll"
-                  : requestDecisionOutcomeLabelKey(outcome);
-              return {
-                value: outcome,
-                ariaLabel: outcome,
-                label: labelKey ? t(labelKey) : outcome,
-              };
+    <PaneSection
+      id="settings-request-decisions-section"
+      title={t("settings.requestDecisionsTitle")}
+      count={
+        decisionsLoading && decisions.length === 0
+          ? undefined
+          : decisions.length
+      }
+      actions={
+        <RefreshButton
+          id="settings-request-decisions-refresh"
+          loading={decisionsLoading}
+          onClick={refreshDecisions}
+        />
+      }
+    >
+      <div className={TOOLBAR_SHELL}>
+        <SingleSelectField
+          id="settings-request-decisions-outcome"
+          label={t("settings.requestDecisionsOutcomeFilter")}
+          labelClassName={TOOLBAR_SELECT_LABEL}
+          size="compact"
+          chrome="toolbar"
+          className="md:w-[240px]"
+          value={decisionOutcomeFilter}
+          onValueChange={setDecisionOutcomeFilter}
+          options={DECISION_OUTCOME_FILTERS.map((outcome) => {
+            const labelKey =
+              outcome === REQUEST_FILTER_ALL
+                ? "settings.requestDecisionsOutcomeAll"
+                : requestDecisionOutcomeLabelKey(outcome);
+            return {
+              value: outcome,
+              ariaLabel: outcome,
+              label: labelKey ? t(labelKey) : outcome,
+            };
+          })}
+        />
+      </div>
+
+      <PaneError message={decisionsError} />
+
+      {decisions.length === 0 ? (
+        <PaneEmpty
+          id="settings-request-decisions-empty"
+          loading={decisionsLoading}
+        >
+          {t("settings.requestDecisionsEmpty")}
+        </PaneEmpty>
+      ) : (
+        <Table id="settings-request-decisions" wrapperClassName={TABLE_SHELL}>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[1%]" />
+              <TableHead className="w-[190px]">
+                {t("settings.requestDecisionsColTime")}
+              </TableHead>
+              <TableHead className="w-[150px]">
+                {t("settings.requestDecisionsColOutcome")}
+              </TableHead>
+              <TableHead className="min-w-[320px]">
+                {t("settings.requestDecisionsColVotes")}
+              </TableHead>
+              <TableHead>{t("settings.requestDecisionsColReasons")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {decisions.map((decision, index) => {
+              const key = decision.id ?? `${decision.evaluatedAt}:${index}`;
+              return (
+                <DecisionRow
+                  key={key}
+                  decision={decision}
+                  index={index}
+                  expanded={expandedDecisions.has(key)}
+                  onToggle={() => toggleDecision(key)}
+                />
+              );
             })}
-          />
-          <Button
-            id="settings-request-decisions-refresh"
-            type="button"
-            variant="secondary"
-            onClick={refreshDecisions}
-            disabled={decisionsLoading}
-          >
-            {decisionsLoading ? t("label.refreshing") : t("label.refresh")}
-          </Button>
-        </div>
-
-        {decisionsError ? (
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono text-[12px] leading-5 text-[var(--scry-danger-text)]">
-            {decisionsError}
-          </pre>
-        ) : null}
-
-        <div className="overflow-x-auto">
-          <Table id="settings-request-decisions">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[190px]">
-                  {t("settings.requestDecisionsColTime")}
-                </TableHead>
-                <TableHead className="w-[150px]">
-                  {t("settings.requestDecisionsColOutcome")}
-                </TableHead>
-                <TableHead>{t("settings.requestDecisionsColVotes")}</TableHead>
-                <TableHead>
-                  {t("settings.requestDecisionsColReasons")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {decisions.map((decision, index) => {
-                const fallbackKey = decision.fallbackReason
-                  ? requestFallbackReasonLabelKey(decision.fallbackReason)
-                  : null;
-                return (
-                  <TableRow
-                    key={decision.id ?? `${decision.evaluatedAt}:${index}`}
-                    data-ui="settings-table-row"
-                    id={settingsRequestDecisionRowId(index)}
-                    data-request-decision-outcome={decision.effectiveOutcome}
-                  >
-                    <TableCell className="text-muted-foreground">
-                      {decision.evaluatedAt}
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <OutcomeBadge outcome={decision.effectiveOutcome} />
-                        {decision.policyOutcome !==
-                        decision.effectiveOutcome ? (
-                          <p className="text-xs text-muted-foreground">
-                            {t("settings.requestDecisionsPolicySaid", {
-                              outcome: decision.policyOutcome,
-                            })}
-                          </p>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <DecisionVotes decision={decision} />
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      <div className="space-y-1">
-                        {decision.reasons.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {decision.reasons.map((reason) => (
-                              <code
-                                key={`${reason.ruleName}:${reason.code}`}
-                                data-code-font
-                                className="rounded bg-muted px-1 py-0.5 text-xs"
-                              >
-                                {reason.code}
-                              </code>
-                            ))}
-                          </div>
-                        ) : null}
-                        {decision.fallbackReason ? (
-                          <p className="text-xs">
-                            {fallbackKey
-                              ? t(fallbackKey)
-                              : decision.fallbackReason}
-                          </p>
-                        ) : null}
-                        {decision.reasons.length === 0 &&
-                        !decision.fallbackReason
-                          ? "—"
-                          : null}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {decisions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
-                    {t("settings.requestDecisionsEmpty")}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
+          </TableBody>
+        </Table>
+      )}
+    </PaneSection>
   );
 }
 
 export function SettingsRequestRulesSection({
+  section,
   isEditorOpen,
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  builderMode,
+  setBuilderMode,
+  editRegoSource,
+  setBuilderModel,
+  editAsRego,
+  builderOptions,
+  builderSchema,
+  builderStatus,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -1078,7 +1112,6 @@ export function SettingsRequestRulesSection({
   deleteRuleSet,
   validating,
   validationResult,
-  applyRequesters,
   setRuleEnabled,
   canManagePermissions,
   decisions,
@@ -1087,364 +1120,101 @@ export function SettingsRequestRulesSection({
   decisionOutcomeFilter,
   setDecisionOutcomeFilter,
   refreshDecisions,
-  leaseRuleControl,
   ...previewProps
 }: SettingsRequestRulesSectionProps) {
   const t = useTranslate();
+  const {
+    rootRef: sidePanelRootRef,
+    columnRef: sidePanelColumnRef,
+    buttonProps: sidePanelButtonProps,
+    panelProps: sidePanelProps,
+    close: closeSidePanel,
+  } = useRuleSidePanels<RequestSidePanel>(section === "rules");
+  // The rule list arrives whole; sorting and paging stay in the page.
+  const [ruleSort, setRuleSort] = React.useState<
+    RuleTableSort<RequestRuleSortKey>
+  >({ key: "name", descending: false });
+  const [rulePageIndex, setRulePageIndex] = React.useState(0);
+  const libraryNameById = React.useMemo(
+    () => new Map(libraries.map((library) => [library.id, library.name])),
+    [libraries],
+  );
+  const libraryLabel = React.useCallback(
+    (record: RequestRuleSetRecord) =>
+      record.libraryIds.length === 0
+        ? t("settings.requestRuleLibrariesAll")
+        : record.libraryIds
+            .map((libraryId) => libraryNameById.get(libraryId) ?? libraryId)
+            .join(", "),
+    [libraryNameById, t],
+  );
+  const sortedRules = React.useMemo(
+    () => sortRequestRules(ruleSetRecords, ruleSort, libraryLabel),
+    [ruleSetRecords, ruleSort, libraryLabel],
+  );
+  const rulePage = ruleTablePage(sortedRules, rulePageIndex);
+  const validationStatus = (
+    <EditorValidationStatus
+      id="settings-request-rule-validation"
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+      data-request-rule-valid={
+        validationResult ? String(validationResult.valid) : undefined
+      }
+      data-request-rule-person-targeting-refusal={
+        validationResult?.diagnostics?.some(isPersonTargetingRefusal)
+          ? "true"
+          : undefined
+      }
+    />
+  );
 
-  return (
-    <div id="settings-request-rules-section" className="space-y-4 text-sm">
-      <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
-        <div className="min-w-0 flex-1">
-          <div className="mx-auto w-full max-w-[1280px] space-y-4">
-            {leaseRuleControl}
-            <p
-              id="settings-request-rules-default"
-              className="text-[13px] leading-5 text-muted-foreground"
-            >
-              {t("settings.requestRulesDefault")}
-            </p>
+  // The starter rules and the input reference help write a rule, so their
+  // buttons sit on the tab strip only while the rule list is open.
+  const pageHead = (
+    <RequestRulesTabs
+      activeSection={section}
+      actions={
+        section === "rules" ? (
+          <>
+            <GutterPanelButton
+              panelId={REQUEST_TEMPLATES_PANEL_ID}
+              label={t("settings.requestTemplateGallery")}
+              icon={<Sparkles className="h-4 w-4" />}
+              {...sidePanelButtonProps("templates")}
+            />
+            <GutterPanelButton
+              panelId={REQUEST_REFERENCE_PANEL_ID}
+              label={t("settings.refReqTitle")}
+              icon={<BookOpen className="h-4 w-4" />}
+              {...sidePanelButtonProps("reference")}
+            />
+          </>
+        ) : null
+      }
+    />
+  );
 
-            <div className="overflow-hidden rounded border border-border bg-card">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                <CardTitle className="text-base text-foreground">
-                  {t("settings.requestRules")}
-                </CardTitle>
-                <RegoAiPromptDialog
-                  id="settings-request-rules-ai-prompt"
-                  ruleKind="request decision"
-                  inputContract={requestInputContract}
-                  outputContract={
-                    'Define one or more supported decisions: approve if { ... }, deny if { ... }, manual if { ... }, or tags contains "stable_tag" if { ... }.'
-                  }
-                />
-              </div>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t("label.name")}</TableHead>
-                      <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead className="w-[1%] text-center">
-                        {t("label.enabled")}
-                      </TableHead>
-                      <TableHead>
-                        {t("settings.requestRuleLibraries")}
-                      </TableHead>
-                      <TableHead className="text-center">
-                        {t("settings.requestRuleRevision")}
-                      </TableHead>
-                      <TableHead className="text-center">
-                        {t("settings.requestRuleDecisionCount")}
-                      </TableHead>
-                      <TableHead className="text-right">
-                        {t("label.actions")}
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {ruleSetRecords.map((record) => {
-                      const libraryNames =
-                        record.libraryIds.length === 0
-                          ? t("settings.requestRuleLibrariesAll")
-                          : record.libraryIds
-                              .map(
-                                (libraryId) =>
-                                  libraries.find(
-                                    (library) => library.id === libraryId,
-                                  )?.name ?? libraryId,
-                              )
-                              .join(", ");
-                      return (
-                        <TableRow
-                          data-ui="settings-table-row"
-                          key={record.id}
-                          id={settingsRequestRuleRowId(record.id)}
-                          data-request-rule-enabled={
-                            record.enabled ? "true" : "false"
-                          }
-                        >
-                          <TableCell className="font-medium">
-                            <span id={settingsRequestRuleNameId(record.name)}>
-                              {record.name}
-                            </span>
-                          </TableCell>
-                          <TableCell className="max-w-[220px] truncate text-muted-foreground">
-                            {record.description || "—"}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Checkbox
-                              id={settingsRequestRuleEnabledId(record.id)}
-                              size="large"
-                              checked={record.enabled}
-                              disabled={mutatingRuleSetId === record.id}
-                              aria-label={`${t("label.enabled")}: ${record.name}`}
-                              onCheckedChange={(checked) =>
-                                setRuleEnabled(record, checked === true)
-                              }
-                            />
-                          </TableCell>
-                          <TableCell className="max-w-[220px] truncate text-muted-foreground">
-                            {libraryNames}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            {record.currentRevisionNumber}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            {record.decisionCount}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <IconButton
-                                id={settingsRequestRuleCopyId(record.id)}
-                                label={t("settings.requestRuleCopy")}
-                                tone="neutral"
-                                onClick={() => copyRuleSet(record)}
-                              >
-                                <Copy className="h-4 w-4" />
-                              </IconButton>
-                              <IconButton
-                                id={settingsRequestRuleEditId(record.id)}
-                                label={t("label.edit")}
-                                tone="edit"
-                                onClick={() => editRuleSet(record)}
-                              >
-                                <Edit className="h-4 w-4" />
-                              </IconButton>
-                              <IconButton
-                                id={settingsRequestRuleDeleteId(record.id)}
-                                label={t("label.delete")}
-                                tone="delete"
-                                onClick={() => deleteRuleSet(record)}
-                                disabled={mutatingRuleSetId === record.id}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </IconButton>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                    {ruleSetRecords.length === 0 ? (
-                      <TableRow>
-                        <TableCell
-                          colSpan={7}
-                          className="text-muted-foreground"
-                        >
-                          {t("settings.noRequestRulesFound")}
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-
-            {isEditorOpen ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">
-                    {editingRuleSetId
-                      ? t("settings.requestRuleUpdate")
-                      : t("settings.requestRuleCreate")}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <form
-                    id="settings-request-rule-form"
-                    className="space-y-3"
-                    onSubmit={submitRuleSet}
-                  >
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <label>
-                        <Label className="mb-2 block">{t("label.name")}</Label>
-                        <Input
-                          id="settings-request-rule-name"
-                          value={ruleSetDraft.name}
-                          onChange={(event) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              name: event.target.value,
-                            }))
-                          }
-                          required
-                          placeholder="family_friendly_auto_approve"
-                        />
-                      </label>
-                      <label>
-                        <Label className="mb-2 block">
-                          {t("settings.ruleDescription")}
-                        </Label>
-                        <Input
-                          id="settings-request-rule-description"
-                          value={ruleSetDraft.description}
-                          onChange={(event) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              description: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div>
-                      <Label className="mb-2 block">
-                        {t("settings.ruleRegoSource")}
-                      </Label>
-                      <LazyRegoEditor
-                        ruleFamily="request"
-                        id="settings-request-rule-rego-source"
-                        value={ruleSetDraft.regoSource}
-                        onChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            regoSource: value,
-                          }))
-                        }
-                        diagnostics={regoDiagnostics(
-                          ruleSetDraft.regoSource,
-                          validationResult,
-                          t,
-                        )}
-                        feedback={
-                          <EditorValidationStatus
-                            id="settings-request-rule-validation"
-                            checking={validating}
-                            result={validationResult}
-                            formatError={(error) =>
-                              formatRegoValidationError(
-                                error,
-                                ruleSetDraft.regoSource,
-                              )
-                            }
-                            data-request-rule-valid={
-                              validationResult
-                                ? String(validationResult.valid)
-                                : undefined
-                            }
-                            data-request-rule-person-targeting-refusal={
-                              validationResult?.diagnostics?.some(
-                                isPersonTargetingRefusal,
-                              )
-                                ? "true"
-                                : undefined
-                            }
-                          />
-                        }
-                        minLines={12}
-                        maxLines={35}
-                      />
-                    </div>
-
-                    <RequestUserPicker
-                      users={users}
-                      regoSource={ruleSetDraft.regoSource}
-                      applyRequesters={applyRequesters}
-                      disabled={mutatingRuleSetId !== null}
-                    />
-
-                    <div>
-                      <Label className="mb-2 block">
-                        {t("settings.requestRuleLibraries")}
-                      </Label>
-                      <p className="mb-2 text-xs text-muted-foreground">
-                        {t("settings.requestRuleLibrariesHelp")}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-4">
-                        {libraries.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t("settings.requestRuleLibrariesAll")}
-                          </span>
-                        ) : null}
-                        {libraries.map((library) => (
-                          <label
-                            key={library.id}
-                            className="flex items-center gap-2"
-                          >
-                            <Checkbox
-                              id={settingsRequestRuleLibraryId(library.id)}
-                              checked={ruleSetDraft.libraryIds.includes(
-                                library.id,
-                              )}
-                              onCheckedChange={(value) => {
-                                setRuleSetDraft((prev) => ({
-                                  ...prev,
-                                  libraryIds:
-                                    value === true
-                                      ? [...prev.libraryIds, library.id]
-                                      : prev.libraryIds.filter(
-                                          (id) => id !== library.id,
-                                        ),
-                                }));
-                              }}
-                            />
-                            <span className="text-sm">{library.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.requestRuleSaveDisabledNote")}
-                    </p>
-
-                    {!canManagePermissions &&
-                    requestRuleReadsRequester(ruleSetDraft.regoSource) ? (
-                      <p
-                        id="settings-request-rule-requester-hint"
-                        className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-xs text-[var(--scry-warning-text)]"
-                      >
-                        {t("settings.requestRuleRequesterFieldsHint")}
-                      </p>
-                    ) : null}
-
-                    <div className="flex gap-2">
-                      <Button
-                        id="settings-request-rule-save"
-                        type="submit"
-                        disabled={mutatingRuleSetId !== null || validating}
-                      >
-                        {mutatingRuleSetId !== null
-                          ? t("label.saving")
-                          : editingRuleSetId
-                            ? t("settings.requestRuleUpdate")
-                            : t("settings.requestRuleCreate")}
-                      </Button>
-                      <Button
-                        id="settings-request-rule-cancel"
-                        type="button"
-                        variant="secondary"
-                        onClick={resetRuleSetDraft}
-                      >
-                        {t("label.cancel")}
-                      </Button>
-                    </div>
-                  </form>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            <div className="flex justify-center">
-              <AddNewButton
-                id="settings-request-rule-create"
-                icon={Plus}
-                label={t("settings.requestRuleCreateNew")}
-                onClick={startCreateRuleSet}
-                disabled={mutatingRuleSetId !== null}
-              />
-            </div>
-
+  // Trying a request and reading decisions are one pane each, in the same
+  // column width as the rule list so the tabs do not move between them. A
+  // draft open in the rule editor stays open, so it can still be tried here.
+  if (section !== "rules") {
+    return (
+      <div id="settings-request-rules-section" className="text-sm">
+        <div className="mx-auto w-full max-w-[1280px] space-y-6">
+          {pageHead}
+          {section === "try" ? (
             <RequestPreviewPanel
-              isEditorOpen={isEditorOpen}
-              draftName={ruleSetDraft.name}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               qualityProfiles={qualityProfiles}
               users={users}
               {...previewProps}
             />
-
+          ) : (
             <RequestDecisionsPanel
               decisions={decisions}
               decisionsLoading={decisionsLoading}
@@ -1453,13 +1223,350 @@ export function SettingsRequestRulesSection({
               setDecisionOutcomeFilter={setDecisionOutcomeFilter}
               refreshDecisions={refreshDecisions}
             />
-          </div>
-        </div>
-        <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
-          <RequestTemplateGallery onApply={applyTemplate} />
-          <RequestContextReference />
+          )}
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div
+      ref={sidePanelRootRef}
+      id="settings-request-rules-section"
+      className="space-y-4 text-sm"
+    >
+      <div
+        ref={sidePanelColumnRef}
+        className="mx-auto w-full max-w-[1280px] space-y-4"
+      >
+        <div className="pb-2">{pageHead}</div>
+
+        <div className="overflow-hidden rounded border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <CardTitle className="text-base text-foreground">
+              <HelpLabel
+                label={t("settings.requestRules")}
+                help={t("settings.requestRulesDefault")}
+              />
+            </CardTitle>
+            <RegoAiPromptDialog
+              id="settings-request-rules-ai-prompt"
+              ruleKind="request decision"
+              inputContract={requestInputContract}
+              outputContract={
+                'At least one vote or change. Votes: approve, deny, manual if { ... }. Changes, literals only: set_quality_profile := "name"; set_lease_days := 30 (0 forever, else 1-3650); set_monitor := MONITORED|UNMONITORED (movies), FUTURE_EPISODES|MISSING_AND_FUTURE_EPISODES|ALL_EPISODES|NONE (series, anime); set_required_audio_languages, set_preferred_audio_languages := ["eng"] (ISO 639-2); add_tags := ["tag"]; notify := "text". Optional reasons contains "id" if { ... }. Only reasons or notify is refused. No schedule.'
+              }
+            />
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {(
+                    [
+                      ["name", t("label.name"), undefined],
+                      ["description", t("settings.ruleDescription"), undefined],
+                      ["enabled", t("label.enabled"), "w-[1%] text-center"],
+                      [
+                        "libraries",
+                        t("settings.requestRuleLibraries"),
+                        undefined,
+                      ],
+                    ] as const
+                  ).map(([key, label, className]) => (
+                    <SortableHead
+                      key={key}
+                      id={selectorId("settings-request-rules-sort", key)}
+                      label={label}
+                      className={className}
+                      active={ruleSort.key === key}
+                      descending={ruleSort.descending}
+                      onSort={() => {
+                        setRuleSort((current) =>
+                          nextRuleTableSort(current, key),
+                        );
+                        setRulePageIndex(0);
+                      }}
+                    />
+                  ))}
+                  <TableHead>
+                    {t("settings.requestDeclaredActionsTitle")}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t("label.actions")}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rulePage.rows.map((record) => {
+                  const libraryNames = libraryLabel(record);
+                  return (
+                    <TableRow
+                      data-ui="settings-table-row"
+                      key={record.id}
+                      id={settingsRequestRuleRowId(record.id)}
+                      data-request-rule-enabled={
+                        record.enabled ? "true" : "false"
+                      }
+                    >
+                      <TableCell className="font-medium">
+                        <span id={settingsRequestRuleNameId(record.name)}>
+                          {record.name}
+                        </span>
+                      </TableCell>
+                      <TableCell className="max-w-[220px] truncate text-muted-foreground">
+                        {record.description || "—"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Checkbox
+                          id={settingsRequestRuleEnabledId(record.id)}
+                          size="large"
+                          checked={record.enabled}
+                          disabled={mutatingRuleSetId === record.id}
+                          aria-label={`${t("label.enabled")}: ${record.name}`}
+                          onCheckedChange={(checked) =>
+                            setRuleEnabled(record, checked === true)
+                          }
+                        />
+                      </TableCell>
+                      <TableCell className="max-w-[220px] truncate text-muted-foreground">
+                        {libraryNames}
+                      </TableCell>
+                      <TableCell className="max-w-[320px]">
+                        {record.declaredActions ? (
+                          <RequestDeclaredActionsSummary
+                            declared={record.declaredActions}
+                            idPrefix={selectorId(
+                              "settings-request-rule-declared-action",
+                              record.id,
+                            )}
+                          />
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <IconButton
+                            id={settingsRequestRuleCopyId(record.id)}
+                            label={t("settings.requestRuleCopy")}
+                            tone="neutral"
+                            onClick={() => copyRuleSet(record)}
+                          >
+                            <Copy className="h-4 w-4" />
+                          </IconButton>
+                          <IconButton
+                            id={settingsRequestRuleEditId(record.id)}
+                            label={t("label.edit")}
+                            tone="edit"
+                            onClick={() => editRuleSet(record)}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </IconButton>
+                          <IconButton
+                            id={settingsRequestRuleDeleteId(record.id)}
+                            label={t("label.delete")}
+                            tone="delete"
+                            onClick={() => deleteRuleSet(record)}
+                            disabled={mutatingRuleSetId === record.id}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </IconButton>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {ruleSetRecords.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-muted-foreground">
+                      {t("settings.noRequestRulesFound")}
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+          <RuleTablePager
+            idPrefix="settings-request-rules"
+            page={rulePage}
+            onPageChange={setRulePageIndex}
+          />
+        </div>
+
+        {isEditorOpen ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                {editingRuleSetId
+                  ? t("settings.requestRuleUpdate")
+                  : t("settings.requestRuleCreate")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form
+                id="settings-request-rule-form"
+                className="space-y-3"
+                onSubmit={submitRuleSet}
+              >
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label>
+                    <Label className="mb-2 block">{t("label.name")}</Label>
+                    <Input
+                      id="settings-request-rule-name"
+                      value={ruleSetDraft.name}
+                      onChange={(event) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          name: event.target.value,
+                        }))
+                      }
+                      required
+                      placeholder="family_friendly_auto_approve"
+                    />
+                  </label>
+                  <label>
+                    <Label className="mb-2 block">
+                      {t("settings.ruleDescription")}
+                    </Label>
+                    <Input
+                      id="settings-request-rule-description"
+                      value={ruleSetDraft.description}
+                      onChange={(event) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          description: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <RuleEditorSurface
+                  idPrefix="settings-request-rule"
+                  schema={builderSchema}
+                  builderStatus={builderStatus}
+                  variant={null}
+                  mode={builderMode}
+                  onModeChange={setBuilderMode}
+                  available
+                  onEditAsRego={editAsRego}
+                  model={ruleSetDraft.builderModel}
+                  onModelChange={setBuilderModel}
+                  options={builderOptions}
+                  generatedSource={ruleSetDraft.regoSource}
+                  feedback={validationStatus}
+                  starterSource={REQUEST_STARTER_SOURCE}
+                  editor={(readOnly, source) => (
+                    <LazyRegoEditor
+                      ruleFamily="request"
+                      id="settings-request-rule-rego-source"
+                      value={source}
+                      readOnly={readOnly}
+                      onChange={editRegoSource}
+                      diagnostics={regoDiagnostics(
+                        ruleSetDraft.regoSource,
+                        validationResult,
+                        t,
+                      )}
+                      feedback={validationStatus}
+                      minLines={12}
+                      maxLines={35}
+                    />
+                  )}
+                />
+
+                <RequestRuleSourceFindings
+                  source={ruleSetDraft.regoSource}
+                  checked={
+                    !validating &&
+                    validationResult !== null &&
+                    !validationResult.unavailable
+                  }
+                  warnings={validationResult?.warnings ?? []}
+                />
+
+                <div>
+                  <Label className="mb-2 block">
+                    {t("settings.requestRuleLibraries")}
+                  </Label>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    {t("settings.requestRuleLibrariesHelp")}
+                  </p>
+                  <LibrarySelect
+                    idPrefix="settings-request-rule-library"
+                    libraries={libraries}
+                    selected={ruleSetDraft.libraryIds}
+                    emptyLabel={t("settings.requestRuleLibrariesAll")}
+                    onChange={(libraryIds) =>
+                      setRuleSetDraft((prev) => ({ ...prev, libraryIds }))
+                    }
+                  />
+                </div>
+
+                {!canManagePermissions &&
+                requestRuleReadsRequester(ruleSetDraft.regoSource) ? (
+                  <p
+                    id="settings-request-rule-requester-hint"
+                    className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-xs text-[var(--scry-warning-text)]"
+                  >
+                    {t("settings.requestRuleRequesterFieldsHint")}
+                  </p>
+                ) : null}
+
+                <div className="flex gap-2">
+                  <Button
+                    id="settings-request-rule-save"
+                    type="submit"
+                    disabled={mutatingRuleSetId !== null || validating}
+                  >
+                    {mutatingRuleSetId !== null
+                      ? t("label.saving")
+                      : editingRuleSetId
+                        ? t("settings.requestRuleUpdate")
+                        : t("settings.requestRuleCreate")}
+                  </Button>
+                  <Button
+                    id="settings-request-rule-cancel"
+                    type="button"
+                    variant="secondary"
+                    onClick={resetRuleSetDraft}
+                  >
+                    {t("label.cancel")}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <div className="flex justify-center">
+          <AddNewButton
+            id="settings-request-rule-create"
+            icon={Plus}
+            label={t("settings.requestRuleCreateNew")}
+            onClick={startCreateRuleSet}
+            disabled={mutatingRuleSetId !== null}
+          />
+        </div>
+      </div>
+      <GutterPanel
+        id={REQUEST_TEMPLATES_PANEL_ID}
+        label={t("settings.requestTemplateGallery")}
+        {...sidePanelProps("templates")}
+      >
+        <RequestTemplateGallery
+          onApply={(template) => {
+            applyTemplate(template);
+            closeSidePanel();
+          }}
+        />
+      </GutterPanel>
+      <GutterPanel
+        id={REQUEST_REFERENCE_PANEL_ID}
+        label={t("settings.refReqTitle")}
+        {...sidePanelProps("reference")}
+      >
+        <RequestContextReference />
+      </GutterPanel>
     </div>
   );
 }

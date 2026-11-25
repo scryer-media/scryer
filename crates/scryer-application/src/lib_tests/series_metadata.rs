@@ -406,6 +406,89 @@ async fn series_hydration_clears_the_contiguous_number_of_episodes_it_no_longer_
 }
 
 #[tokio::test]
+async fn series_hydration_refreshes_an_episode_the_same_response_names_twice() {
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Twice Named Cour".into(),
+                facet: MediaFacet::Anime,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![ExternalId::new("tvdb_id", "880377")],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    let seasons = vec![SeasonMetadata {
+        tvdb_id: 880_003,
+        tmdb_id: None,
+        number: 1,
+        label: "Season 1".into(),
+        episode_type: "official".into(),
+    }];
+    let episode = |number: i32, name: &str| EpisodeMetadata {
+        tvdb_id: 880_400 + i64::from(number),
+        tmdb_id: None,
+        episode_number: number,
+        name: name.to_string(),
+        aired: "2026-01-01".into(),
+        runtime_minutes: 24,
+        is_filler: false,
+        is_recap: false,
+        overview: String::new(),
+        absolute_number: String::new(),
+        contiguous_absolute_number: None,
+        season_number: 1,
+        image_url: String::new(),
+    };
+
+    // The second row for episode 2 is judged against the episode the first
+    // row created, so it refreshes that episode instead of creating another.
+    app.create_series_seasons_and_episodes(
+        &title,
+        &seasons,
+        &[
+            episode(1, "Opening"),
+            episode(2, "First Spelling"),
+            episode(2, "Second Spelling"),
+            episode(3, "Closing"),
+        ],
+        &[],
+        &[],
+    )
+    .await;
+
+    let collection = app
+        .list_collections(&user, &title.id)
+        .await
+        .expect("list collections")
+        .into_iter()
+        .next()
+        .expect("collection created");
+    let mut stored = app
+        .list_episodes(&user, &collection.id)
+        .await
+        .expect("list episodes")
+        .into_iter()
+        .map(|episode| (episode.episode_number.unwrap_or_default(), episode.title))
+        .collect::<Vec<_>>();
+    stored.sort();
+    assert_eq!(
+        stored,
+        vec![
+            ("1".to_string(), Some("Opening".to_string())),
+            ("2".to_string(), Some("Second Spelling".to_string())),
+            ("3".to_string(), Some("Closing".to_string())),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn anime_hybrid_movie_mapping_creates_series_movie_link() {
     let (app, user) = bootstrap();
     let app = app.with_test_overrides(|services| {

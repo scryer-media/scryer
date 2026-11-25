@@ -1,5 +1,4 @@
 import { useRef, useState } from "react";
-import { useClient } from "urql";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { queueStandbyReleaseMutation } from "@/lib/graphql/mutations";
+import { useGrab } from "@/lib/hooks/use-grab";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { PendingReleaseItem } from "@/lib/types";
 
@@ -30,7 +29,7 @@ export function StandbyDownloadButton({
   release: PendingReleaseItem;
   onQueued: () => Promise<void>;
 }) {
-  const client = useClient();
+  const grab = useGrab();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const inFlight = useRef(false);
@@ -44,8 +43,8 @@ export function StandbyDownloadButton({
     setBusy(true);
     setErrorMessage(null);
     try {
-      const { data, error } = await client
-        .mutation(queueStandbyReleaseMutation, {
+      const outcome = await grab({
+        standby: {
           id: release.id,
           choice,
           confirmed:
@@ -56,10 +55,9 @@ export function StandbyDownloadButton({
                   clientType: conflict.downloadClientType,
                   itemId: conflict.downloadClientItemId,
                 })),
-        })
-        .toPromise();
-      if (error) throw error;
-      const result = data?.queueStandbyRelease;
+        },
+      });
+      const result = outcome.standby;
       if (result?.grabbed) {
         setConflicts([]);
         // Cancellation is best effort; the release is queued either way.

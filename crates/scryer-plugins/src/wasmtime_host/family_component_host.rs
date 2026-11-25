@@ -97,7 +97,12 @@ pub(crate) async fn dispatch_http_request(
     tokio::task::spawn_blocking(move || command_host.http_request(request))
         .await
         .map_err(|_| crate::plugin_http_host::HostHttpErrorKind::Transport)?
-        .map_err(|error| error.kind)
+        .map_err(|error| {
+            if let Some(reason) = error.reason {
+                tracing::debug!(reason, "plugin HTTP request refused by local indexer quota");
+            }
+            error.kind
+        })
 }
 
 /// A host call that did not produce response bytes, and where it went wrong.

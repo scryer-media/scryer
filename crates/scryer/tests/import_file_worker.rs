@@ -1,10 +1,13 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 // Must match `IMPORT_FILE_WORKER_PROTOCOL_VERSION` in
 // `scryer-infrastructure-workflow::workflow::file_importer`; the worker refuses
 // any other version before it reads the request.
-const PROTOCOL_VERSION: u16 = 2;
+const PROTOCOL_VERSION: u16 = 5;
 
 fn run_worker(request: &serde_json::Value) -> Vec<serde_json::Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_scryer"))

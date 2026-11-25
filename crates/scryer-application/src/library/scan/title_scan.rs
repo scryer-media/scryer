@@ -1,4 +1,5 @@
 use super::*;
+use crate::disk::{Disk, EntryKind};
 use crate::domain_events::DomainEventActor;
 use crate::library::movie_scan_scope::MovieScanScope;
 use crate::library_filename_parser::{
@@ -102,18 +103,19 @@ async fn discover_episodic_title_files_for_progress(
 /// mount, a permission problem) abort the scan so nothing downstream treats
 /// the tree as empty.
 async fn episodic_title_directory_present(title_dir: &Path) -> AppResult<bool> {
-    match tokio::fs::metadata(title_dir).await {
-        Ok(metadata) if metadata.is_dir() => Ok(true),
-        Ok(_) => Err(AppError::validation_refused(
+    let reading = Disk::process().follow(title_dir).await;
+    match reading.exists() {
+        Some(true) if reading.is(EntryKind::Directory) => Ok(true),
+        Some(true) => Err(AppError::validation_refused(
             crate::error_reasons::library::TITLE_DIRECTORY_NOT_DIRECTORY,
             format!(
                 "title directory is not a directory: {}",
                 title_dir.display()
             ),
         )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to inspect title directory {}: {error}",
+        Some(false) => Ok(false),
+        None => Err(AppError::Repository(format!(
+            "failed to inspect title directory {}: it could not be read",
             title_dir.display()
         ))),
     }
@@ -133,35 +135,22 @@ pub(crate) enum LibraryRootState {
 }
 
 pub(crate) async fn library_root_state(root: &Path) -> AppResult<LibraryRootState> {
-    match tokio::fs::metadata(root).await {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => return Ok(LibraryRootState::Missing),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(LibraryRootState::Missing);
-        }
-        Err(error) => {
+    let disk = Disk::process();
+    let reading = disk.follow(root).await;
+    match reading.exists() {
+        Some(true) if reading.is(EntryKind::Directory) => {}
+        Some(_) => return Ok(LibraryRootState::Missing),
+        None => {
             return Err(AppError::Repository(format!(
-                "failed to inspect library root {}: {error}",
+                "failed to inspect library root {}: it could not be read",
                 root.display()
             )));
         }
     }
-    let mut entries = tokio::fs::read_dir(root).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to read library root {}: {error}",
-            root.display()
-        ))
-    })?;
-    let has_entry = entries
-        .next_entry()
+    let has_entry = disk
+        .has_entries(root)
         .await
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read library root {}: {error}",
-                root.display()
-            ))
-        })?
-        .is_some();
+        .map_err(|error| AppError::Repository(format!("failed to read library root: {error}")))?;
     Ok(if has_entry {
         LibraryRootState::Populated
     } else {
@@ -203,19 +192,20 @@ async fn discover_movie_title_files(
             continue;
         }
 
-        match tokio::fs::metadata(&ordered_path_buf).await {
-            Ok(metadata) if metadata.is_file() => {}
-            Ok(metadata) if metadata.is_dir() => {
+        let reading = Disk::process().follow(&ordered_path_buf).await;
+        match reading.kind() {
+            Some(EntryKind::File) => {}
+            Some(EntryKind::Directory) => {
                 if seen_candidate_paths.insert(ordered_path.clone()) {
                     candidate_paths.push(ordered_path_buf);
                 }
                 continue;
             }
-            Ok(_) => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
+            Some(_) => continue,
+            None if reading.exists().is_some() => continue,
+            None => {
                 warn!(
-                    error = %error,
+                    reason = ?reading.unknown_reason(),
                     title_id = %title.id,
                     file_path = %ordered_path,
                     "failed to inspect tracked movie path during title scan discovery"
@@ -268,8 +258,9 @@ async fn discover_movie_title_files(
     }
 
     for candidate_path in candidate_paths {
-        match tokio::fs::metadata(&candidate_path).await {
-            Ok(metadata) if metadata.is_dir() => {
+        let reading = Disk::process().follow(&candidate_path).await;
+        match reading.kind() {
+            Some(EntryKind::Directory) => {
                 let files = app
                     .services
                     .library
@@ -285,7 +276,7 @@ async fn discover_movie_title_files(
                     return Ok(discovered_files);
                 }
             }
-            Ok(metadata) if metadata.is_file() => {
+            Some(EntryKind::File) => {
                 return Ok(vec![LibraryFile {
                     path: path_to_stored_string(&candidate_path),
                     display_name: candidate_path
@@ -299,10 +290,9 @@ async fn discover_movie_title_files(
                     source_signature_value: None,
                 }]);
             }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => warn!(
-                error = %error,
+            _ if reading.exists().is_some() => {}
+            _ => warn!(
+                reason = ?reading.unknown_reason(),
                 title_id = %title.id,
                 path = %candidate_path.display(),
                 "failed to inspect movie scan candidate path"
@@ -325,17 +315,14 @@ async fn tracked_movie_path_confirmed_missing(path: &Path) -> bool {
 /// unreachable (a vanished mount, a detached volume) rather than deleted, and
 /// the record must survive so a transient outage never retires real files.
 async fn tracked_media_path_confirmed_missing(path: &Path, anchor_dir: &Path) -> bool {
-    match tokio::fs::metadata(path).await {
-        Ok(_) => false,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            tokio::fs::metadata(anchor_dir)
-                .await
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false)
-        }
-        Err(error) => {
+    let disk = Disk::process();
+    let reading = disk.follow(path).await;
+    match reading.exists() {
+        Some(true) => false,
+        Some(false) => disk.follow(anchor_dir).await.is(EntryKind::Directory),
+        None => {
             warn!(
-                error = %error,
+                reason = ?reading.unknown_reason(),
                 path = %path.display(),
                 "failed to inspect tracked media path during stale cleanup"
             );

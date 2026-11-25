@@ -1,4 +1,6 @@
-//! In-memory schedule for user-defined scheduled scripts ("custom jobs").
+//! In-memory schedule for user-defined scheduled scripts ("custom jobs") and
+//! for lifecycle rules, each of which runs on a schedule of its own. Rules
+//! load and reload with the scripts and share the one timer.
 //!
 //! The schedule set is loaded from the script store only when the worker
 //! starts and when a scheduled script is created, updated, toggled or
@@ -144,19 +146,88 @@ impl CustomJobEntry {
     }
 }
 
-/// A script that came due, as handed to the dispatcher.
+/// What a due entry runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomJobTarget {
+    /// A scheduled script; the id is the script's.
+    Script,
+    /// A lifecycle rule: evaluate it, then act on what it decided. The id
+    /// is the rule's.
+    LifecycleRule,
+}
+
+/// A script or lifecycle rule that came due, as handed to the dispatcher.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DueCustomJob {
+    pub target: CustomJobTarget,
+    /// The script id, or the lifecycle rule id.
     pub script_id: String,
     pub trigger_source: JobTriggerSource,
     pub execution_mode: ExecutionMode,
 }
 
+/// A lifecycle rule that runs on its own schedule, as the source loads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledLifecycleRule {
+    pub id: String,
+    pub name: String,
+    pub schedule: ScriptSchedule,
+    /// When the rule's latest evaluation started, if it ever ran. A rule
+    /// newly scheduled (at start, or after a schedule edit) anchors here, so
+    /// a restart neither skips nor postpones its cadence.
+    pub last_run_at: Option<DateTime<Utc>>,
+    /// A sequence of this rule was interrupted mid-run, so it resumes at the
+    /// first fire rather than a full interval later.
+    pub in_flight: bool,
+}
+
+/// Longest stagger added to the fires of rules that are overdue when they are
+/// scheduled, so a restart does not start every overdue rule at once.
+pub const LIFECYCLE_RULE_OVERDUE_JITTER_SECONDS: u64 = 5 * 60;
+
+/// A per-rule stagger that is the same on every start: FNV-1a over the id.
+fn lifecycle_rule_jitter(rule_id: &str) -> chrono::Duration {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in rule_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    chrono::Duration::seconds((hash % LIFECYCLE_RULE_OVERDUE_JITTER_SECONDS) as i64)
+}
+
 #[derive(Default)]
 struct SchedulerState {
     entries: HashMap<String, CustomJobEntry>,
+    /// Lifecycle rules, keyed by rule id. Held apart from the scripts so
+    /// the two id spaces never collide and the scripts' job views never
+    /// list a rule.
+    rules: HashMap<String, CustomJobEntry>,
+    /// Rules whose fire is still running; a rule never overlaps itself.
+    running_rules: std::collections::HashSet<String>,
     /// The one deadline the worker's timer is armed for, if any.
     armed: Option<DateTime<Utc>>,
+}
+
+impl SchedulerState {
+    fn all_entries(&self) -> impl Iterator<Item = &CustomJobEntry> {
+        self.entries.values().chain(self.rules.values())
+    }
+}
+
+/// Marks a lifecycle rule's fire as running until it is dropped.
+pub struct LifecycleRuleFireGuard {
+    state: Arc<Mutex<SchedulerState>>,
+    rule_id: String,
+}
+
+impl Drop for LifecycleRuleFireGuard {
+    fn drop(&mut self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .running_rules
+            .remove(&self.rule_id);
+    }
 }
 
 /// Shared schedule state: written by the worker and the configuration-change
@@ -240,13 +311,26 @@ impl CustomJobScheduler {
 
     async fn load_and_apply(&self, source: &dyn CustomJobSource) -> AppResult<()> {
         let _load = self.load_lock.lock().await;
-        match source.load_scheduled_scripts().await {
-            Ok(scripts) => {
+        // Scripts and rules load and apply independently: one failing must
+        // not leave the other's schedule behind the store. Either failure
+        // keeps the set stale, so the worker retries both.
+        let scripts = source.load_scheduled_scripts().await;
+        let rules = source.load_scheduled_lifecycle_rules().await;
+        let mut failure = None;
+        match rules {
+            Ok(rules) => self.apply_lifecycle_rules(rules),
+            Err(error) => failure = Some(error),
+        }
+        match scripts {
+            Ok(scripts) => self.apply(scripts),
+            Err(error) => failure = Some(error),
+        }
+        match failure {
+            None => {
                 self.stale.store(false, Ordering::SeqCst);
-                self.apply(scripts);
                 Ok(())
             }
-            Err(error) => {
+            Some(error) => {
                 self.stale.store(true, Ordering::SeqCst);
                 Err(error)
             }
@@ -341,6 +425,78 @@ impl CustomJobScheduler {
         self.reload.notify_one();
     }
 
+    /// Replace the lifecycle rules with `rules` (every rule that is not
+    /// disabled). A rule whose schedule is unchanged keeps its anchor. A new
+    /// or re-scheduled rule anchors on its latest evaluation, or now if it
+    /// never ran. One that is overdue from that anchor, or has an
+    /// interrupted sequence, also fires once soon, after its own stagger;
+    /// its regular cadence then continues after that fire. A manual schedule is held
+    /// without a deadline. Wakes the worker.
+    pub fn apply_lifecycle_rules(&self, rules: Vec<ScheduledLifecycleRule>) {
+        let now = self.clock.now();
+        {
+            let mut state = self.lock();
+            let mut previous = std::mem::take(&mut state.rules);
+            for rule in rules {
+                let entry = match previous.remove(&rule.id) {
+                    Some(existing) if existing.schedule == rule.schedule => CustomJobEntry {
+                        name: rule.name,
+                        ..existing
+                    },
+                    _ => {
+                        let anchor = rule.last_run_at.map_or(now, |at| at.min(now));
+                        let first = next_fire(&rule.schedule, anchor, None);
+                        let catch_up = first.is_some()
+                            && (rule.in_flight || first.is_some_and(|at| at <= now));
+                        let startup_fire = catch_up.then(|| {
+                            now + CUSTOM_JOB_STARTUP_DELAY + lifecycle_rule_jitter(&rule.id)
+                        });
+                        CustomJobEntry {
+                            script_id: rule.id.clone(),
+                            name: rule.name,
+                            description: String::new(),
+                            // The regular cadence resumes after the catch-up
+                            // fire, never in the same moment as it.
+                            next_fire: match startup_fire {
+                                Some(at) => next_fire(&rule.schedule, anchor, Some(at)),
+                                None => first,
+                            },
+                            schedule_description: describe_schedule(&rule.schedule),
+                            schedule: rule.schedule,
+                            execution_mode: ExecutionMode::FireAndForget,
+                            run_on_startup: false,
+                            anchor,
+                            startup_fire,
+                        }
+                    }
+                };
+                state.rules.insert(rule.id, entry);
+            }
+        }
+        self.reload.notify_one();
+    }
+
+    /// When a lifecycle rule next runs on its schedule; `None` for a rule
+    /// that is disabled, manual, or not loaded yet.
+    pub fn lifecycle_rule_next_run_at(&self, rule_id: &str) -> Option<DateTime<Utc>> {
+        self.lock()
+            .rules
+            .get(rule_id)
+            .and_then(CustomJobEntry::next_run_at)
+    }
+
+    /// Claim a lifecycle rule's fire. `None` while an earlier fire of the
+    /// same rule is still running, so a slow run is never doubled up.
+    pub fn begin_lifecycle_rule_fire(&self, rule_id: &str) -> Option<LifecycleRuleFireGuard> {
+        if !self.lock().running_rules.insert(rule_id.to_string()) {
+            return None;
+        }
+        Some(LifecycleRuleFireGuard {
+            state: self.state.clone(),
+            rule_id: rule_id.to_string(),
+        })
+    }
+
     /// Queue the one run-on-startup fire for every script that asks for it.
     pub fn arm_startup_fires(&self, at: DateTime<Utc>) {
         let mut state = self.lock();
@@ -372,8 +528,7 @@ impl CustomJobScheduler {
     #[cfg(test)]
     fn earliest_deadline(&self) -> Option<DateTime<Utc>> {
         self.lock()
-            .entries
-            .values()
+            .all_entries()
             .filter_map(CustomJobEntry::next_run_at)
             .min()
     }
@@ -382,8 +537,7 @@ impl CustomJobScheduler {
     fn arm(&self) -> Option<DateTime<Utc>> {
         let mut state = self.lock();
         let deadline = state
-            .entries
-            .values()
+            .all_entries()
             .filter_map(CustomJobEntry::next_run_at)
             .min();
         state.armed = deadline;
@@ -395,30 +549,41 @@ impl CustomJobScheduler {
         self.lock().armed
     }
 
-    /// Take every fire due at `now` and advance those scripts only.
+    /// Take every fire due at `now` and advance those entries only. Scripts
+    /// come first, then lifecycle rules, each in id order.
     pub fn take_due(&self, now: DateTime<Utc>) -> Vec<DueCustomJob> {
         let mut due = Vec::new();
         let mut state = self.lock();
-        for entry in state.entries.values_mut() {
-            if entry.startup_fire.is_some_and(|at| at <= now) {
-                entry.startup_fire = None;
-                due.push(DueCustomJob {
-                    script_id: entry.script_id.clone(),
-                    trigger_source: JobTriggerSource::ScheduledStartup,
-                    execution_mode: entry.execution_mode,
-                });
+        let state = &mut *state;
+        for (target, entries) in [
+            (CustomJobTarget::Script, &mut state.entries),
+            (CustomJobTarget::LifecycleRule, &mut state.rules),
+        ] {
+            let mut taken = Vec::new();
+            for entry in entries.values_mut() {
+                if entry.startup_fire.is_some_and(|at| at <= now) {
+                    entry.startup_fire = None;
+                    taken.push(DueCustomJob {
+                        target,
+                        script_id: entry.script_id.clone(),
+                        trigger_source: JobTriggerSource::ScheduledStartup,
+                        execution_mode: entry.execution_mode,
+                    });
+                }
+                if let Some(scheduled) = entry.next_fire.filter(|at| *at <= now) {
+                    entry.anchor = scheduled;
+                    entry.next_fire = next_fire(&entry.schedule, scheduled, Some(now));
+                    taken.push(DueCustomJob {
+                        target,
+                        script_id: entry.script_id.clone(),
+                        trigger_source: schedule_trigger_source(&entry.schedule),
+                        execution_mode: entry.execution_mode,
+                    });
+                }
             }
-            if let Some(scheduled) = entry.next_fire.filter(|at| *at <= now) {
-                entry.anchor = scheduled;
-                entry.next_fire = next_fire(&entry.schedule, scheduled, Some(now));
-                due.push(DueCustomJob {
-                    script_id: entry.script_id.clone(),
-                    trigger_source: schedule_trigger_source(&entry.schedule),
-                    execution_mode: entry.execution_mode,
-                });
-            }
+            taken.sort_by(|a, b| a.script_id.cmp(&b.script_id));
+            due.extend(taken);
         }
-        due.sort_by(|a, b| a.script_id.cmp(&b.script_id));
         due
     }
 }
@@ -427,9 +592,14 @@ impl CustomJobScheduler {
 #[async_trait]
 pub trait CustomJobSource: Send + Sync {
     async fn load_scheduled_scripts(&self) -> AppResult<Vec<PostProcessingScript>>;
+
+    /// Every lifecycle rule that runs on a schedule of its own.
+    async fn load_scheduled_lifecycle_rules(&self) -> AppResult<Vec<ScheduledLifecycleRule>> {
+        Ok(Vec::new())
+    }
 }
 
-/// Starts a run for a due script. Must return promptly; the run itself
+/// Starts a run for a due script or rule. Must return promptly; the run itself
 /// executes in the background.
 #[async_trait]
 pub trait CustomJobDispatcher: Send + Sync {
@@ -628,6 +798,222 @@ mod tests {
         assert_eq!(
             scheduler.next_run_at("s"),
             Some(base() + chrono::Duration::seconds(3600))
+        );
+    }
+
+    fn rule(id: &str, schedule: ScriptSchedule) -> ScheduledLifecycleRule {
+        ScheduledLifecycleRule {
+            id: id.to_string(),
+            name: format!("rule {id}"),
+            schedule,
+            last_run_at: None,
+            in_flight: false,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lifecycle_rules_fire_on_their_own_schedules_beside_scripts() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        // A rule and a script may share an id; they never collide.
+        scheduler.apply(vec![script("same", every(600))]);
+        scheduler.apply_lifecycle_rules(vec![
+            rule("same", every(300)),
+            rule("manual", ScriptSchedule::Manual),
+        ]);
+        assert_eq!(
+            scheduler.entries().len(),
+            1,
+            "the script views list scripts only"
+        );
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("same"),
+            Some(base() + chrono::Duration::seconds(300))
+        );
+        assert_eq!(scheduler.lifecycle_rule_next_run_at("manual"), None);
+        assert_eq!(
+            scheduler.earliest_deadline(),
+            Some(base() + chrono::Duration::seconds(300))
+        );
+
+        let fired = scheduler.take_due(base() + chrono::Duration::seconds(600));
+        assert_eq!(
+            fired
+                .iter()
+                .map(|due| (due.target, due.script_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (CustomJobTarget::Script, "same"),
+                (CustomJobTarget::LifecycleRule, "same"),
+            ]
+        );
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("same"),
+            Some(base() + chrono::Duration::seconds(900))
+        );
+
+        // Reapplying scripts leaves the rules alone, and the reverse.
+        scheduler.apply(vec![]);
+        assert!(scheduler.lifecycle_rule_next_run_at("same").is_some());
+        scheduler.apply_lifecycle_rules(vec![]);
+        assert_eq!(scheduler.lifecycle_rule_next_run_at("same"), None);
+        assert_eq!(scheduler.earliest_deadline(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unchanged_rule_schedule_keeps_its_anchor_and_a_new_one_re_anchors() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        scheduler.apply_lifecycle_rules(vec![rule("r", every(600))]);
+        tokio::time::advance(std::time::Duration::from_secs(300)).await;
+        scheduler.apply_lifecycle_rules(vec![rule("r", every(600))]);
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("r"),
+            Some(base() + chrono::Duration::seconds(600))
+        );
+        scheduler.apply_lifecycle_rules(vec![rule("r", every(120))]);
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("r"),
+            Some(base() + chrono::Duration::seconds(300 + 120))
+        );
+    }
+
+    #[test]
+    fn a_rule_fire_never_overlaps_itself() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::System);
+        let first = scheduler
+            .begin_lifecycle_rule_fire("r")
+            .expect("first fire");
+        assert!(scheduler.begin_lifecycle_rule_fire("r").is_none());
+        assert!(scheduler.begin_lifecycle_rule_fire("other").is_some());
+        drop(first);
+        assert!(scheduler.begin_lifecycle_rule_fire("r").is_some());
+    }
+
+    fn rule_last_ran(
+        id: &str,
+        schedule: ScriptSchedule,
+        seconds_ago: i64,
+    ) -> ScheduledLifecycleRule {
+        ScheduledLifecycleRule {
+            last_run_at: Some(base() - chrono::Duration::seconds(seconds_ago)),
+            ..rule(id, schedule)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_restart_a_rule_keeps_the_cadence_of_its_last_run() {
+        // The process starts at base(); the rule last ran 200 s before.
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        scheduler.apply_lifecycle_rules(vec![
+            rule_last_ran("ran", every(600), 200),
+            rule("never", every(600)),
+        ]);
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("ran"),
+            Some(base() + chrono::Duration::seconds(400)),
+            "a restart neither postpones nor re-anchors the cadence"
+        );
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("never"),
+            Some(base() + chrono::Duration::seconds(600))
+        );
+        assert!(
+            scheduler
+                .take_due(base() + chrono::Duration::seconds(399))
+                .is_empty()
+        );
+        let fired = scheduler.take_due(base() + chrono::Duration::seconds(400));
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].script_id, "ran");
+        assert_eq!(fired[0].trigger_source, JobTriggerSource::ScheduledInterval);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rule_overdue_at_restart_fires_once_after_its_own_stable_stagger() {
+        let start = base() + CUSTOM_JOB_STARTUP_DELAY;
+        let jitter = lifecycle_rule_jitter("late");
+        assert_eq!(jitter, lifecycle_rule_jitter("late"), "same on every start");
+        assert!(jitter < chrono::Duration::seconds(LIFECYCLE_RULE_OVERDUE_JITTER_SECONDS as i64));
+        let catch_up = start + jitter;
+
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        // Overdue by far more than one interval: one catch-up, not a burst.
+        scheduler.apply_lifecycle_rules(vec![rule_last_ran("late", every(600), 5000)]);
+        assert_eq!(scheduler.lifecycle_rule_next_run_at("late"), Some(catch_up));
+        assert!(
+            scheduler
+                .take_due(catch_up - chrono::Duration::seconds(1))
+                .is_empty(),
+            "nothing fires the moment the process starts"
+        );
+        let fired = scheduler.take_due(catch_up);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].trigger_source, JobTriggerSource::ScheduledStartup);
+        let next = scheduler
+            .lifecycle_rule_next_run_at("late")
+            .expect("the cadence continues");
+        assert!(
+            next > catch_up,
+            "the regular fire never doubles the catch-up"
+        );
+        assert!(next <= catch_up + chrono::Duration::seconds(600));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_interrupted_sequence_resumes_without_waiting_a_full_interval() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        scheduler.apply_lifecycle_rules(vec![
+            ScheduledLifecycleRule {
+                in_flight: true,
+                ..rule_last_ran("busy", every(86_400), 60)
+            },
+            ScheduledLifecycleRule {
+                in_flight: true,
+                ..rule("manual", ScriptSchedule::Manual)
+            },
+        ]);
+        let catch_up = base() + CUSTOM_JOB_STARTUP_DELAY + lifecycle_rule_jitter("busy");
+        assert_eq!(scheduler.lifecycle_rule_next_run_at("busy"), Some(catch_up));
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("manual"),
+            None,
+            "a manual rule still never runs by itself"
+        );
+        let fired = scheduler.take_due(catch_up);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].script_id, "busy");
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("busy"),
+            Some(base() - chrono::Duration::seconds(60) + chrono::Duration::seconds(86_400))
+        );
+    }
+
+    /// Scripts fail to load; rules load fine.
+    struct ScriptOutageSource;
+
+    #[async_trait]
+    impl CustomJobSource for ScriptOutageSource {
+        async fn load_scheduled_scripts(&self) -> AppResult<Vec<PostProcessingScript>> {
+            Err(crate::AppError::Repository("fixture outage".to_string()))
+        }
+        async fn load_scheduled_lifecycle_rules(&self) -> AppResult<Vec<ScheduledLifecycleRule>> {
+            Ok(vec![rule("r", every(120))])
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_script_load_still_applies_the_rule_schedules() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        scheduler.apply_lifecycle_rules(vec![rule("r", every(600)), rule("gone", every(600))]);
+        assert!(scheduler.reload_from(&ScriptOutageSource).await.is_err());
+        assert_eq!(
+            scheduler.lifecycle_rule_next_run_at("r"),
+            Some(base() + chrono::Duration::seconds(120)),
+            "the rule edit applies although scripts failed"
+        );
+        assert_eq!(scheduler.lifecycle_rule_next_run_at("gone"), None);
+        assert!(
+            scheduler.stale.load(Ordering::SeqCst),
+            "the failed half is retried"
         );
     }
 

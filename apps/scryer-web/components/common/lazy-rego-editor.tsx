@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   LazyCodeEditor,
   type CodeEditorDiagnostic,
@@ -6,21 +6,38 @@ import {
 } from "@/components/common/lazy-code-editor";
 
 import { useTranslate } from "@/lib/context/translate-context";
-import type { RegoFamily } from "@/lib/utils/rego-assistance";
+import { useRuleOutputDescriptors } from "@/lib/hooks/use-rule-builder-schema";
+import {
+  REGO_FAMILY_OUTPUTS,
+  regoHeadAssists,
+  type RegoFamily,
+} from "@/lib/utils/rego-assistance";
 
 export type RegoEditorDiagnostic = CodeEditorDiagnostic;
 
 export type LazyRegoEditorProps = Omit<
   CodeEditorProps,
-  "language" | "regoFamily" | "regoTranslate"
-> & { ruleFamily: RegoFamily; feedback?: ReactNode };
+  "language" | "regoFamily" | "regoTranslate" | "regoHeads"
+> & {
+  ruleFamily: RegoFamily;
+  /// The rule's variant (a lifecycle rule's scope), which narrows the heads
+  /// offered. Null or absent offers every head.
+  ruleVariant?: string | null;
+  feedback?: ReactNode;
+};
 
 export function LazyRegoEditor({
   ruleFamily,
+  ruleVariant,
   feedback,
   ...props
 }: LazyRegoEditorProps) {
   const t = useTranslate();
+  const descriptors = useRuleOutputDescriptors(REGO_FAMILY_OUTPUTS[ruleFamily]);
+  const heads = useMemo(
+    () => regoHeadAssists(descriptors, t, ruleVariant),
+    [descriptors, t, ruleVariant],
+  );
   return (
     <div className="relative">
       <LazyCodeEditor
@@ -28,6 +45,7 @@ export function LazyRegoEditor({
         language="rego"
         regoFamily={ruleFamily}
         regoTranslate={t}
+        regoHeads={heads}
       />
       {feedback}
     </div>

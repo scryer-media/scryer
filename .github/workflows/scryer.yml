@@ -1081,14 +1081,19 @@ jobs:
             variant: portable
             build_lane: portable
             runner: ubuntu-26.04-arm
-            release_runner: linux_arm_release
+            release_runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-musl
             sccache_lane: pr-linux-arm64-cpu
             artifact_name: scryer-linux-arm64-portable
             archive_name: scryer-linux-arm64-portable.tar.gz
             release_profile: release
             install_nasm: false
-            extra_rustflags: ""
+            # LLVM schedules its machine outliner on every AArch64 build. It
+            # only outlines minsize functions, which this profile never makes,
+            # but it keeps every compiled function in memory until the end of
+            # the fat-LTO module: the final compile ran out of memory at
+            # 30 GiB here where x86 peaks at 14 GiB.
+            extra_rustflags: "-C llvm-args=-enable-machine-outliner=never"
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
@@ -1420,7 +1425,7 @@ jobs:
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
       AWS_LC_SYS_CMAKE_BUILDER: "0"
-      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
+      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'ci-throwaway' || matrix.release_profile }}
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
@@ -1935,7 +1940,7 @@ jobs:
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
       AWS_LC_SYS_CMAKE_BUILDER: "0"
-      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
+      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'ci-throwaway' || matrix.release_profile }}
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: ${{ github.workspace }}\.sccache

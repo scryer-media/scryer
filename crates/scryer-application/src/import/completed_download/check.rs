@@ -46,12 +46,12 @@ pub(crate) async fn check_with_lookup(
         let persisted_reason =
             crate::tracked_downloads::import_blocked_reason_for_tracked(app, td).await;
         if td.import_attempted {
-            if persisted_reason != Some(crate::tracked_downloads::ImportBlockedReason::AfterImport)
-            {
+            let reason = crate::tracked_downloads::ImportBlockedReason::after_import(td);
+            if persisted_reason != Some(reason) {
                 crate::tracked_downloads::persist_import_blocked_state_marker(
                     app,
                     td,
-                    crate::tracked_downloads::ImportBlockedReason::AfterImport,
+                    reason,
                     td.status_messages
                         .first()
                         .map(|message| message.text.as_str()),

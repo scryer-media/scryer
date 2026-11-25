@@ -673,6 +673,11 @@
           "descKey": "settings.refAudioStreamLanguage"
         },
         {
+          "field": "name",
+          "type": "string?",
+          "descKey": "settings.refAudioStreamName"
+        },
+        {
           "field": "bitrate_kbps",
           "type": "number?",
           "descKey": "settings.refAudioStreamBitrateKbps"

@@ -1,15 +1,12 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use scryer_application::{AppError, AppResult, RuleSetHistoryChange, RuleSetRepository};
 use scryer_domain::{
     Id, MediaFacet, RuleEvaluationPhase, RulePackInstallation, RulePackMember, RuleSet,
 };
-use sqlx::Row;
 use std::sync::Arc;
 
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
-};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::{
     canonical_json_arg, canonical_json_text, json_text_or, opt_json_text,
 };
@@ -66,33 +63,72 @@ impl RuleSetRepository for RuleSetStore {
     }
 
     async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
-        let args = rule_set_args(rule_set)?;
         execute_write(
             &self.datastore,
             "update_rule_set",
-            "UPDATE rule_sets
-                SET name = {}, description = {}, rego_source = {}, enabled = {},
-                    priority = {}, applied_facets = {}, updated_at = {},
-                    is_managed = {}, managed_key = {}, managed_tag_filter = {},
-                    evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}, disabled_reason_code = {}
-              WHERE id = {}",
-            vec![
-                args[1].clone(),
-                args[2].clone(),
-                args[3].clone(),
-                args[4].clone(),
-                args[5].clone(),
-                args[6].clone(),
-                args[8].clone(),
-                args[9].clone(),
-                args[10].clone(),
-                args[11].clone(),
-                args[12].clone(),
-                args[13].clone(),
-                args[14].clone(),
-                args[15].clone(),
-                args[0].clone(),
-            ],
+            UPDATE_RULE_SET_SQL,
+            update_rule_set_args(rule_set)?,
+        )
+        .await
+    }
+
+    async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT builder_model_json FROM rule_sets WHERE id = {}",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?;
+        match row {
+            Some(row) => row.opt_text("builder_model_json"),
+            None => Ok(None),
+        }
+    }
+
+    async fn create_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        let args = rule_set_args(rule_set)?;
+        let builder_args = builder_model_args(&rule_set.id, builder_model);
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "create_rule_set_with_builder_model",
+            move |tx| {
+                let args = args.clone();
+                let builder_args = builder_args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, &args).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), SET_BUILDER_MODEL_SQL, &builder_args)
+                        .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn update_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        let args = update_rule_set_args(rule_set)?;
+        let builder_args = builder_model_args(&rule_set.id, builder_model);
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "update_rule_set_with_builder_model",
+            move |tx| {
+                let args = args.clone();
+                let builder_args = builder_args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), UPDATE_RULE_SET_SQL, &args).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), SET_BUILDER_MODEL_SQL, &builder_args)
+                        .await?;
+                    Ok(())
+                })
+            },
         )
         .await
     }
@@ -162,6 +198,41 @@ impl RuleSetRepository for RuleSetStore {
               ORDER BY managed_key"
         );
         fetch_rule_sets(self.datastore.read_exec(), &sql, &[SqlArg::Text(pattern)]).await
+    }
+
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT name FROM rule_sets",
+            &[],
+        )
+        .await?;
+        rows.iter().map(|row| row.text("name")).collect()
+    }
+
+    async fn create_rule_sets(
+        &self,
+        rule_sets: &[RuleSet],
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        let rows: Arc<[Vec<SqlArg>]> = rule_sets
+            .iter()
+            .map(rule_set_args)
+            .collect::<AppResult<Vec<_>>>()?
+            .into();
+        let history: Arc<[RuleSetHistoryChange]> = history.into();
+        SqlRuntime::run_in_transaction(&self.datastore, "create_rule_sets", move |tx| {
+            let rows = rows.clone();
+            let history = history.clone();
+            Box::pin(async move {
+                for args in rows.iter() {
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, args).await?;
+                }
+                insert_rule_set_history(tx, &history).await?;
+                Ok(())
+            })
+        })
+        .await
     }
 
     async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
@@ -434,6 +505,45 @@ const INSERT_RULE_SET_SQL: &str = "INSERT INTO rule_sets
      exclusive_group, disabled_reason, disabled_reason_code)
  VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
+const UPDATE_RULE_SET_SQL: &str = "UPDATE rule_sets
+    SET name = {}, description = {}, rego_source = {}, enabled = {},
+        priority = {}, applied_facets = {}, updated_at = {},
+        is_managed = {}, managed_key = {}, managed_tag_filter = {},
+        evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}, disabled_reason_code = {}
+  WHERE id = {}";
+
+/// The builder document is written on its own statement so every other
+/// write of a rule row, pack installs included, leaves it untouched.
+const SET_BUILDER_MODEL_SQL: &str = "UPDATE rule_sets SET builder_model_json = {} WHERE id = {}";
+
+fn update_rule_set_args(rule_set: &RuleSet) -> AppResult<Vec<SqlArg>> {
+    let args = rule_set_args(rule_set)?;
+    Ok(vec![
+        args[1].clone(),
+        args[2].clone(),
+        args[3].clone(),
+        args[4].clone(),
+        args[5].clone(),
+        args[6].clone(),
+        args[8].clone(),
+        args[9].clone(),
+        args[10].clone(),
+        args[11].clone(),
+        args[12].clone(),
+        args[13].clone(),
+        args[14].clone(),
+        args[15].clone(),
+        args[0].clone(),
+    ])
+}
+
+fn builder_model_args(rule_set_id: &str, builder_model: Option<&str>) -> Vec<SqlArg> {
+    vec![
+        SqlArg::OptText(builder_model.map(str::to_string)),
+        SqlArg::Text(rule_set_id.to_string()),
+    ]
+}
+
 async fn fetch_rule_sets(
     exec: SqlExec<'_, '_>,
     sql: &str,
@@ -516,8 +626,8 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RuleSet> {
         disabled_reason: row.opt_text("disabled_reason")?,
         disabled_reason_code: row.opt_text("disabled_reason_code")?,
         applied_facets: applied_facets(row)?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
         is_managed: row.bool("is_managed")?,
         managed_key: row.opt_text("managed_key")?,
         managed_tag_filter: managed_tag_filter(row)?,
@@ -542,18 +652,6 @@ fn managed_tag_filter(row: &SqlRow) -> AppResult<Option<Vec<String>>> {
 fn applied_facets(row: &SqlRow) -> AppResult<Vec<MediaFacet>> {
     let raw = json_text_or(row, "applied_facets", "[]")?;
     Ok(serde_json::from_str(&raw).unwrap_or_default())
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }
 
 fn rule_pack_installation_args(installation: &RulePackInstallation) -> Vec<SqlArg> {
@@ -609,7 +707,7 @@ async fn row_to_rule_pack_installation(
         customizable: row.bool("customizable")?,
         auto_update: row.bool("auto_update")?,
         revision: row.i64("revision")?,
-        last_updated: timestamp_or_now(row, "last_updated")?,
+        last_updated: row.timestamp_or_now("last_updated")?,
         last_error: row.opt_text("last_error")?,
         members,
     })

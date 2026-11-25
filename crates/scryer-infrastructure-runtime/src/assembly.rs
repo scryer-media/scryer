@@ -32,13 +32,13 @@ use crate::postgres::{
 };
 use crate::queries::sql_runtime::StoreDatastore;
 use crate::{
-    AcquisitionStore, BlocklistStore, DomainEventStore, DownloadClientConfigStore,
-    DownloadClientStatusStore, DownloadQueueCommandStore, DownloadRegistryStore,
-    DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
-    FileSystemStagedNzbStore, HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker,
-    IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, LifecycleClaimStore, ListStore, LocationOperationStore,
-    MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore,
+    AcquisitionStore, ArchiveExtractionStore, BlocklistStore, DomainEventStore,
+    DownloadClientConfigStore, DownloadClientStatusStore, DownloadQueueCommandStore,
+    DownloadRegistryStore, DownloadSubmissionStore, ExternalImportMonitorStore,
+    ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore, HousekeepingStore, ImportStore,
+    InMemoryIndexerStatsTracker, IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore,
+    LibraryProbeStore, LibraryScanUnmatchedStore, LifecycleClaimStore, LifecycleEvaluationStore,
+    LifecycleRuleSetStore, ListStore, LocationOperationStore, MediaFileStore, MediaRequestStore,
     MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient, MigrationMode,
     NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
     ProxyConfigStore, QualityProfileStore, ReleaseStore, RequestRuleDecisionStore,
@@ -318,15 +318,17 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
 
 fn postgres_password(url: &url::Url) -> AppResult<String> {
     if let Some(password_file) = env_string("SCRYER_DB_PASSWORD_FILE") {
-        let password = std::fs::read_to_string(&password_file).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_PASSWORD_FILE_UNREADABLE,
-                format!(
-                    "failed to read SCRYER_DB_PASSWORD_FILE {}: {error}",
-                    password_file
-                ),
-            )
-        })?;
+        let password = scryer_application::disk::Disk::process()
+            .read_to_string_blocking(std::path::Path::new(&password_file))
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_PASSWORD_FILE_UNREADABLE,
+                    format!(
+                        "failed to read SCRYER_DB_PASSWORD_FILE {password_file}: {}",
+                        error.words()
+                    ),
+                )
+            })?;
         let password = password.trim_end().to_string();
         if password.is_empty() {
             return Err(AppError::validation_refused(
@@ -421,6 +423,30 @@ impl RuleSetRepository for DatastoreCustomizationStore {
         self.rule_sets.update_rule_set(rule_set).await
     }
 
+    async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>> {
+        self.rule_sets.get_rule_set_builder_model(id).await
+    }
+
+    async fn create_rule_set_with_builder_model(
+        &self,
+        rule_set: &scryer_domain::RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        self.rule_sets
+            .create_rule_set_with_builder_model(rule_set, builder_model)
+            .await
+    }
+
+    async fn update_rule_set_with_builder_model(
+        &self,
+        rule_set: &scryer_domain::RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        self.rule_sets
+            .update_rule_set_with_builder_model(rule_set, builder_model)
+            .await
+    }
+
     async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
         self.rule_sets.delete_rule_set(id).await
     }
@@ -455,6 +481,18 @@ impl RuleSetRepository for DatastoreCustomizationStore {
         self.rule_sets
             .list_rule_sets_by_managed_key_prefix(prefix)
             .await
+    }
+
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        self.rule_sets.list_rule_set_names().await
+    }
+
+    async fn create_rule_sets(
+        &self,
+        rule_sets: &[scryer_domain::RuleSet],
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        self.rule_sets.create_rule_sets(rule_sets, history).await
     }
 
     async fn list_rule_pack_installations(
@@ -1203,20 +1241,20 @@ impl DatastoreAssembly {
         }
     }
 
-    /// Built on demand: maintenance rules ship dark, so the store is not part
+    /// Built on demand: lifecycle rules ship dark, so the store is not part
     /// of the per-engine store set every assembly path constructs eagerly.
-    pub fn maintenance_rule_set_store(&self) -> Arc<MaintenanceRuleSetStore> {
-        Arc::new(MaintenanceRuleSetStore::new(self.datastore()))
+    pub fn lifecycle_rule_set_store(&self) -> Arc<LifecycleRuleSetStore> {
+        Arc::new(LifecycleRuleSetStore::new(self.datastore()))
     }
 
     /// Built on demand for the same reason: the evaluator ships behind an
     /// instance gate that defaults off, so its store is not part of the eager
     /// per-engine store set either.
-    pub fn maintenance_evaluation_store(&self) -> Arc<MaintenanceEvaluationStore> {
-        Arc::new(MaintenanceEvaluationStore::new(self.datastore()))
+    pub fn lifecycle_evaluation_store(&self) -> Arc<LifecycleEvaluationStore> {
+        Arc::new(LifecycleEvaluationStore::new(self.datastore()))
     }
 
-    /// Built on demand for the same reason as the maintenance stores: request
+    /// Built on demand for the same reason as the lifecycle stores: request
     /// rules ship dark behind the experimental gate, so nothing constructs the
     /// store eagerly (spec 0003 FR-013).
     pub fn request_rule_set_store(&self) -> Arc<RequestRuleSetStore> {
@@ -1419,6 +1457,11 @@ impl DatastoreAssembly {
         Arc::new(DownloadClientStatusStore::new(self.datastore()))
     }
 
+    /// One archive extraction per tracked download (migration 0357).
+    pub fn archive_extractions(&self) -> Arc<dyn scryer_application::ArchiveExtractionRepository> {
+        Arc::new(ArchiveExtractionStore::new(self.datastore()))
+    }
+
     pub fn download_registry(&self) -> Arc<dyn scryer_application::DownloadRegistryRepository> {
         match &self.stores {
             DatastoreStores::Sqlite {
@@ -1549,14 +1592,23 @@ impl DatastoreAssembly {
     /// restart the same way whichever database is configured, and the quota SQL
     /// runs on either dialect.
     pub fn indexer_stats_tracker(&self) -> Arc<InMemoryIndexerStatsTracker> {
-        match &self.stores {
-            DatastoreStores::Sqlite { db, .. } => {
-                Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
-            }
-            DatastoreStores::Postgres { db, .. } => {
-                Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
-            }
-        }
+        // The tracker shares the monthly limits the indexer config store
+        // keeps current, so admission never reads them per request.
+        let (datastore, monthly_limits) = match &self.stores {
+            DatastoreStores::Sqlite {
+                db,
+                indexer_config_store,
+                ..
+            } => (db.datastore(), indexer_config_store.monthly_limits()),
+            DatastoreStores::Postgres {
+                db,
+                indexer_config_store,
+                ..
+            } => (db.datastore(), indexer_config_store.monthly_limits()),
+        };
+        Arc::new(
+            InMemoryIndexerStatsTracker::new(Some(datastore)).with_monthly_limits(monthly_limits),
+        )
     }
 
     pub fn indexer_search_learning_repository(&self) -> Arc<dyn IndexerSearchLearningRepository> {
@@ -1714,7 +1766,7 @@ impl DatastoreAssembly {
                 .with_delay_profiles(self.delay_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
-                // Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+                // Lifecycle safety: live playback observation.
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
@@ -1746,8 +1798,8 @@ impl DatastoreAssembly {
                 .with_housekeeping(housekeeping_store.clone())
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
-                .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
-                .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
+                .with_lifecycle_rule_set_store(self.lifecycle_rule_set_store())
+                .with_lifecycle_evaluation_store(self.lifecycle_evaluation_store())
                 .with_request_rule_set_store(self.request_rule_set_store())
                 .with_request_rule_decision_store(self.request_rule_decision_store())
                 .with_lifecycle_claim_store(self.lifecycle_claim_store())
@@ -1757,6 +1809,7 @@ impl DatastoreAssembly {
                 .with_domain_events(domain_event_store.clone())
                 .with_download_registry(download_registry_store.clone())
                 .with_download_client_status(self.download_client_status())
+                .with_archive_extractions(self.archive_extractions())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())
@@ -1848,7 +1901,7 @@ impl DatastoreAssembly {
                 .with_delay_profiles(self.delay_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
-                // Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+                // Lifecycle safety: live playback observation.
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
@@ -1880,8 +1933,8 @@ impl DatastoreAssembly {
                 .with_housekeeping(housekeeping_store.clone())
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
-                .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
-                .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
+                .with_lifecycle_rule_set_store(self.lifecycle_rule_set_store())
+                .with_lifecycle_evaluation_store(self.lifecycle_evaluation_store())
                 .with_request_rule_set_store(self.request_rule_set_store())
                 .with_request_rule_decision_store(self.request_rule_decision_store())
                 .with_lifecycle_claim_store(self.lifecycle_claim_store())
@@ -1891,6 +1944,7 @@ impl DatastoreAssembly {
                 .with_domain_events(domain_event_store.clone())
                 .with_download_registry(download_registry_store.clone())
                 .with_download_client_status(self.download_client_status())
+                .with_archive_extractions(self.archive_extractions())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())
@@ -2025,11 +2079,13 @@ pub fn datastore_file_path(database_url: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
-    use scryer_application::maintenance_rules::{
-        MaintenanceActionSequence, MaintenanceActionStep, MaintenanceActionStepKind,
-        MaintenanceActionStepParameters, MaintenanceSearchCondition, MaintenanceSubjectKind,
+    use scryer_application::lifecycle_rules::{
+        LifecycleActionSequence, LifecycleActionStep, LifecycleActionStepKind,
+        LifecycleActionStepParameters, LifecycleSearchCondition, LifecycleSubjectKind,
     };
     use scryer_application::{
         AcquisitionScopeStateRepository, BACKUP_TABLE_CATALOG, BackupBundleExportRequest,
@@ -2389,7 +2445,7 @@ mod tests {
                 source_engine: "sqlite".into(),
                 secrets: BackupExportSecrets {
                     encryption_master_key: "test-master-key".into(),
-                    jwt_signing_secret: "test-jwt-secret".into(),
+                    jwt_signing_secret: Some("test-jwt-secret".into()),
                     smg_registration_secret: Some("test-smg-secret".into()),
                     smg_gateway_url: Some("https://smg.example.invalid/graphql".into()),
                 },
@@ -2546,11 +2602,16 @@ mod tests {
                 Some(1),
                 "inspected bundle should persist convergence coverage"
             );
+            assert_eq!(
+                inspected.row_counts.get("indexer_monthly_usage").copied(),
+                Some(1),
+                "backup must retain monthly usage so restore cannot replenish indexer quotas"
+            );
             for table in [
-                "maintenance_action_steps",
-                "maintenance_action_step_attempts",
-                "maintenance_action_job_receipts",
-                "maintenance_sequence_terminal_memberships",
+                "lifecycle_action_steps",
+                "lifecycle_action_step_attempts",
+                "lifecycle_action_job_receipts",
+                "lifecycle_sequence_terminal_memberships",
             ] {
                 assert_eq!(
                     inspected.row_counts.get(table).copied(),
@@ -2660,7 +2721,7 @@ mod tests {
                 source_engine: self.engine_name().to_string(),
                 secrets: BackupExportSecrets {
                     encryption_master_key: "test-master-key".to_string(),
-                    jwt_signing_secret: "test-jwt-secret".to_string(),
+                    jwt_signing_secret: Some("test-jwt-secret".to_string()),
                     smg_registration_secret: Some("test-smg-secret".to_string()),
                     smg_gateway_url: Some("https://smg.example.invalid/graphql".to_string()),
                 },
@@ -2773,9 +2834,12 @@ mod tests {
         for statement in [
             "INSERT INTO indexers
              (id, name, provider_type, base_url, is_enabled, enable_interactive_search,
-              enable_auto_search, created_at, updated_at)
+              enable_auto_search, max_requests_per_month, max_grabs_per_month, created_at, updated_at)
              VALUES ('backup-indexer', 'Fixture indexer', 'newznab', 'https://example.invalid',
-                     1, 1, 1, '2026-01-01', '2026-01-01')",
+                     1, 1, 1, 200, 20, '2026-01-01', '2026-01-01')",
+            "INSERT INTO indexer_monthly_usage
+             (indexer_id, month_start, request_count, grab_count, updated_at)
+             VALUES ('backup-indexer', '2026-01-01', 123, 7, '2026-01-02T03:04:05Z')",
             "INSERT INTO indexer_api_clients
              (id, name, enabled, protocols_json, lookup_id, secret_hash, key_generation,
               revision, created_at, updated_at)
@@ -2828,6 +2892,11 @@ mod tests {
 
     async fn verify_backup_matrix_lists(pool: &sqlx::SqlitePool) -> AppResult<()> {
         for (query, expected) in [
+            ("SELECT max_requests_per_month || ':' || max_grabs_per_month
+              FROM indexers WHERE id = 'backup-indexer'", "200:20"),
+            ("SELECT month_start || ':' || request_count || ':' || grab_count || ':' || updated_at
+              FROM indexer_monthly_usage WHERE indexer_id = 'backup-indexer'",
+             "2026-01-01:123:7:2026-01-02T03:04:05Z"),
             ("SELECT secret_hash FROM indexer_api_clients WHERE id = 'backup-client'",
              "fixture-hash"),
             ("SELECT categories_json FROM indexer_api_client_grants WHERE client_id = 'backup-client' AND indexer_id = 'backup-indexer'",
@@ -2973,15 +3042,14 @@ mod tests {
                 candidate_score: 100,
                 current_score: None,
                 score_delta: None,
-                explanation_json: Some(
-                    serde_json::json!({
+                explanation_json: Some(scryer_application::ReleaseDecisionExplanation::from_value(
+                    &serde_json::json!({
                         "quality_profile_decision": {
                             "scoring_log": [{"code": "backup_matrix", "delta": 100}],
                         },
                         "fingerprint": coverage_fingerprint,
-                    })
-                    .to_string(),
-                ),
+                    }),
+                )),
                 created_at: now.to_rfc3339(),
             })
             .await?;
@@ -3018,9 +3086,9 @@ mod tests {
         let now = chrono::Utc::now();
         let sequence = backup_matrix_search_sequence();
         sequence
-            .validate(MaintenanceSubjectKind::Movie)
+            .validate(LifecycleSubjectKind::Movie)
             .map_err(|error| AppError::Validation(error.to_string()))?;
-        let action_spec = serde_json::to_string(&sequence)
+        let declared_actions_json = serde_json::to_string(&sequence)
             .map_err(|error| AppError::Repository(error.to_string()))?;
         let sequence_hash = sequence
             .content_hash()
@@ -3028,15 +3096,13 @@ mod tests {
         let evidence = backup_matrix_sequence_evidence(&sequence, &sequence_hash);
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_rule_sets (
-                 id, name, enabled, evaluation_mode, effect_arming, created_at, updated_at
-             ) VALUES ({}, {}, {}, {}, {}, {}, {})",
+            "INSERT INTO lifecycle_rule_sets (
+                 id, name, state, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {})",
             &[
                 SqlArg::Text("backup-sequence-rule".to_string()),
                 SqlArg::Text("Backup sequence safety state".to_string()),
-                SqlArg::Bool(true),
-                SqlArg::Text("observe".to_string()),
-                SqlArg::Text("none".to_string()),
+                SqlArg::Text("dry_run".to_string()),
                 SqlArg::Timestamp(now),
                 SqlArg::Timestamp(now),
             ],
@@ -3044,16 +3110,16 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_rule_revisions (
-                 id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
-                 matcher_content_hash, created_at
+            "INSERT INTO lifecycle_rule_revisions (
+                 id, rule_set_id, revision_number, rego_source, declared_actions_json, grace_days,
+                 source_content_hash, created_at
              ) VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
             &[
                 SqlArg::Text("backup-sequence-revision".to_string()),
                 SqlArg::Text("backup-sequence-rule".to_string()),
                 SqlArg::I64(1),
                 SqlArg::Text("match := true".to_string()),
-                SqlArg::Text(action_spec),
+                SqlArg::Text(declared_actions_json),
                 SqlArg::I64(0),
                 SqlArg::Text("backup-sequence-matcher".to_string()),
                 SqlArg::Timestamp(now),
@@ -3063,7 +3129,7 @@ mod tests {
         SqlRuntime::execute(
             datastore.read_exec(),
             "INSERT INTO lifecycle_candidates (
-                 id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id,
+                 id, rule_set_id, revision_number, source_content_hash, title_id, library_id,
                  facet, subject_kind, subject_id, match_generation, state, state_reason,
                  reason_codes, action_kind, grace_days, first_matched_at, last_matched_at,
                  due_at, last_evaluated_at, created_at, updated_at, action_attempts
@@ -3096,7 +3162,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_action_steps (
+            "INSERT INTO lifecycle_action_steps (
                  candidate_id, match_generation, revision_number, step_id, rule_set_id,
                  title_id, subject_kind, subject_id, sequence_content_hash, step_kind,
                  intent_json, before_state_json, target_identity_json, provenance_json, state,
@@ -3127,7 +3193,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_action_step_attempts (
+            "INSERT INTO lifecycle_action_step_attempts (
                  id, candidate_id, match_generation, revision_number, step_id, attempt, state,
                  intent_json, before_state_json, target_identity_json, provenance_json,
                  started_at, finished_at, created_at, updated_at
@@ -3153,7 +3219,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_action_job_receipts (
+            "INSERT INTO lifecycle_action_job_receipts (
                  candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
                  schema_version, logical_request_key, request_hash, job_run_id, state,
                  reconciliation_evidence_json, created_at, updated_at
@@ -3177,8 +3243,8 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_sequence_terminal_memberships (
-                 id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
+            "INSERT INTO lifecycle_sequence_terminal_memberships (
+                 id, candidate_id, rule_set_id, revision_number, source_content_hash, title_id,
                  subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
                  expected_step_ids_json, completed_step_ids_json, created_at
              ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
@@ -3203,12 +3269,12 @@ mod tests {
         Ok(())
     }
 
-    fn backup_matrix_search_sequence() -> MaintenanceActionSequence {
-        MaintenanceActionSequence::new(vec![MaintenanceActionStep {
+    fn backup_matrix_search_sequence() -> LifecycleActionSequence {
+        LifecycleActionSequence::new(vec![LifecycleActionStep {
             id: "search".to_string(),
-            kind: MaintenanceActionStepKind::Search,
-            parameters: MaintenanceActionStepParameters::Search {
-                condition: MaintenanceSearchCondition::Unconditional,
+            kind: LifecycleActionStepKind::Search,
+            parameters: LifecycleActionStepParameters::Search {
+                condition: LifecycleSearchCondition::Unconditional,
             },
         }])
     }
@@ -3222,7 +3288,7 @@ mod tests {
     }
 
     fn backup_matrix_sequence_evidence(
-        sequence: &MaintenanceActionSequence,
+        sequence: &LifecycleActionSequence,
         sequence_hash: &str,
     ) -> BackupMatrixSequenceEvidence {
         let step = sequence
@@ -3411,7 +3477,7 @@ mod tests {
     ) -> AppResult<()> {
         let sequence = SqlRuntime::fetch_optional(
             datastore.read_exec(),
-            "SELECT revision.action_spec,
+            "SELECT revision.declared_actions_json,
                     candidate.action_kind,
                     step.sequence_content_hash,
                     step.intent_json,
@@ -3434,24 +3500,24 @@ mod tests {
                     membership.completed_step_ids_json,
                     membership.released_at
                FROM lifecycle_candidates candidate
-               JOIN maintenance_rule_revisions revision
+               JOIN lifecycle_rule_revisions revision
                  ON revision.rule_set_id = candidate.rule_set_id
                 AND revision.revision_number = candidate.revision_number
-               JOIN maintenance_action_steps step
+               JOIN lifecycle_action_steps step
                  ON step.candidate_id = candidate.id
                 AND step.match_generation = candidate.match_generation
                 AND step.revision_number = candidate.revision_number
-               JOIN maintenance_action_step_attempts attempt
+               JOIN lifecycle_action_step_attempts attempt
                  ON attempt.candidate_id = step.candidate_id
                 AND attempt.match_generation = step.match_generation
                 AND attempt.revision_number = step.revision_number
                 AND attempt.step_id = step.step_id
-               JOIN maintenance_action_job_receipts receipt
+               JOIN lifecycle_action_job_receipts receipt
                  ON receipt.candidate_id = step.candidate_id
                 AND receipt.match_generation = step.match_generation
                 AND receipt.revision_number = step.revision_number
                 AND receipt.step_id = step.step_id
-               JOIN maintenance_sequence_terminal_memberships membership
+               JOIN lifecycle_sequence_terminal_memberships membership
                  ON membership.candidate_id = candidate.id
               WHERE candidate.id = {}",
             &[SqlArg::Text("backup-sequence-candidate".to_string())],
@@ -3468,7 +3534,10 @@ mod tests {
         let expected_evidence =
             backup_matrix_sequence_evidence(&expected_sequence, &expected_sequence_hash);
 
-        assert_eq!(sequence.text("action_spec")?, expected_action_spec);
+        assert_eq!(
+            sequence.text("declared_actions_json")?,
+            expected_action_spec
+        );
         assert_eq!(sequence.text("action_kind")?, "action_sequence");
         assert_eq!(
             sequence.text("sequence_content_hash")?,

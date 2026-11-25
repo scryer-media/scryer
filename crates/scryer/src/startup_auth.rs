@@ -56,7 +56,8 @@ pub(crate) fn read_bootstrap_password() -> Result<Option<String>, String> {
         None
     };
     resolve_bootstrap_password(direct, file, |path| {
-        std::fs::read_to_string(path)
+        scryer_application::disk::Disk::process()
+            .read_to_string_blocking(std::path::Path::new(path))
             .map_err(|_| "cannot read SCRYER_ADMIN_PASSWORD_FILE as text".to_string())
     })
 }
