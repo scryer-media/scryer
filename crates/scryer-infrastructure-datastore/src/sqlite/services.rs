@@ -21,7 +21,42 @@ const SQLITE_SLOW_STATEMENT_MS: u64 = 2000;
 /// WAL frames into the main database.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 16_384;
 const MAX_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 262_144;
+/// Default per-connection page cache: 20 MiB (SQLite expresses a negative
+/// `cache_size` in KiB). With the default 16 connections that is up to ~312 MiB
+/// of resident page cache, which dominates RSS on small-RAM machines.
 const SQLITE_CACHE_SIZE_PRAGMA: i64 = -20_000;
+/// Operator override for the per-connection page cache, in KiB. Lower this on
+/// small-RAM hosts (the total is this value times
+/// `SCRYER_SQLITE_MAX_CONNECTIONS`); raise it for scan-heavy libraries with RAM
+/// to spare. Invalid values fall back to the shipped default.
+const SQLITE_CACHE_SIZE_ENV: &str = "SCRYER_SQLITE_CACHE_SIZE_KIB";
+const MIN_SQLITE_CACHE_SIZE_KIB: i64 = 512;
+const MAX_SQLITE_CACHE_SIZE_KIB: i64 = 262_144;
+
+fn sqlite_cache_size_pragma() -> i64 {
+    static IN_FORCE: std::sync::LazyLock<i64> = std::sync::LazyLock::new(|| {
+        parse_sqlite_cache_size_kib(std::env::var(SQLITE_CACHE_SIZE_ENV).ok().as_deref())
+            .map(|kib| -kib)
+            .unwrap_or(SQLITE_CACHE_SIZE_PRAGMA)
+    });
+    *IN_FORCE
+}
+
+fn parse_sqlite_cache_size_kib(raw: Option<&str>) -> Option<i64> {
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    match raw.parse::<i64>() {
+        Ok(kib) => Some(kib.clamp(MIN_SQLITE_CACHE_SIZE_KIB, MAX_SQLITE_CACHE_SIZE_KIB)),
+        Err(error) => {
+            tracing::warn!(
+                env = SQLITE_CACHE_SIZE_ENV,
+                value = raw,
+                %error,
+                "invalid SQLite cache size; using the shipped per-connection default"
+            );
+            None
+        }
+    }
+}
 
 fn sqlite_max_connections_from_env() -> u32 {
     std::env::var("SCRYER_SQLITE_MAX_CONNECTIONS")
@@ -196,8 +231,9 @@ impl SqliteServices {
                 // but never corrupts the database.
                 .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
                 .busy_timeout(std::time::Duration::from_millis(10_000))
-                // Negative means KiB: 20 MB of page cache per connection.
-                .pragma("cache_size", SQLITE_CACHE_SIZE_PRAGMA.to_string())
+                // Negative means KiB: the value is per connection, so the
+                // total is sqlite_cache_size_pragma() * pool size.
+                .pragma("cache_size", sqlite_cache_size_pragma().to_string())
                 .pragma(
                     "wal_autocheckpoint",
                     sqlite_wal_autocheckpoint_pages_from_env().to_string(),
@@ -273,5 +309,29 @@ impl SqliteServices {
             }
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_cache_size_override_is_bounded_and_falls_back() {
+        assert_eq!(parse_sqlite_cache_size_kib(None), None);
+        assert_eq!(parse_sqlite_cache_size_kib(Some("")), None);
+        assert_eq!(parse_sqlite_cache_size_kib(Some("  ")), None);
+        assert_eq!(parse_sqlite_cache_size_kib(Some("lots")), None);
+        assert_eq!(parse_sqlite_cache_size_kib(Some("4096")), Some(4096));
+        assert_eq!(parse_sqlite_cache_size_kib(Some(" 8192 ")), Some(8192));
+        // A zero or tiny cache would make scans thrash; clamp to the floor.
+        assert_eq!(
+            parse_sqlite_cache_size_kib(Some("0")),
+            Some(MIN_SQLITE_CACHE_SIZE_KIB)
+        );
+        assert_eq!(
+            parse_sqlite_cache_size_kib(Some("999999")),
+            Some(MAX_SQLITE_CACHE_SIZE_KIB)
+        );
     }
 }
