@@ -1799,6 +1799,65 @@ impl AppUseCase {
                 .get_by_id(&media_file.title_id)
                 .await
         {
+            if title.facet == scryer_domain::MediaFacet::Movie
+                && media_file.has_acquisition_provenance()
+                && self
+                    .unmonitor_deleted_movies_enabled()
+                    .await
+                    .unwrap_or(false)
+                && title.monitored
+            {
+                match self
+                    .services
+                    .library
+                    .media_files
+                    .list_media_files_for_title(&title.id)
+                    .await
+                {
+                    Ok(remaining) if remaining.is_empty() => {
+                        if let Err(error) = self
+                            .set_title_monitored(actor, &title.id, false)
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %error,
+                                title_id = %title.id,
+                                "failed to unmonitor movie after explicit file deletion"
+                            );
+                        } else if let Ok(Some(updated)) = self
+                            .services
+                            .catalog
+                            .titles
+                            .get_by_id(&title.id)
+                            .await
+                        {
+                            let _ = self
+                                .append_domain_event(new_title_domain_event(
+                                    actor,
+                                    &updated,
+                                    DomainEventPayload::TitleUpdated(
+                                        scryer_domain::TitleUpdatedEventData {
+                                            title: title_context_snapshot(&updated),
+                                            change_reason_code: Some(
+                                                scryer_domain::monitoring_change_reason::MOVIE_FILE_DELETED
+                                                    .to_string(),
+                                            ),
+                                            unmonitored_episode_ids: Vec::new(),
+                                            unmonitored_collection_ids: Vec::new(),
+                                        },
+                                    ),
+                                ))
+                                .await;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        title_id = %title.id,
+                        "failed to verify remaining movie files; left monitoring unchanged"
+                    ),
+                }
+            }
             let _ = self
                 .append_domain_event(new_title_domain_event(
                     actor,
@@ -1989,7 +2048,6 @@ impl AppUseCase {
         let mut deleted_episode_ids = std::collections::BTreeSet::new();
         let mut failed_episode_ids = std::collections::BTreeSet::new();
         let mut promotions = PrimaryPromotionBatch::default();
-
         for item in &items {
             let _ = self
                 .update_episode_file_deletion_progress(
@@ -2054,9 +2112,12 @@ impl AppUseCase {
             .difference(&failed_episode_ids)
             .cloned()
             .collect::<std::collections::BTreeSet<_>>();
-        let (unmonitored_episode_ids, unmonitored_collection_ids) = self
-            .unmonitor_deleted_episodes(&actor, &title_id, &fully_deleted_episode_ids)
-            .await;
+        let (unmonitored_episode_ids, unmonitored_collection_ids) = if delete_from_disk {
+            self.unmonitor_deleted_episodes(&actor, &title_id, &fully_deleted_episode_ids)
+                .await
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         info!(
             title_id = %title_id,
@@ -2113,6 +2174,27 @@ impl AppUseCase {
         }
     }
 
+    pub(crate) async fn unmonitor_deleted_episode_ids_only(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &std::collections::BTreeSet<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut unmonitored_episode_ids = Vec::new();
+        for episode_id in episode_ids {
+            match self.set_episode_monitored(actor, episode_id, false).await {
+                Ok(_) => unmonitored_episode_ids.push(episode_id.clone()),
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    episode_id = %episode_id,
+                    "failed to unmonitor episode after confirmed external file deletion"
+                ),
+            }
+        }
+        (unmonitored_episode_ids, Vec::new())
+    }
+
     /// Stop monitoring what the run actually deleted, returning the episode and
     /// season ids that were unmonitored.
     ///
@@ -2128,7 +2210,7 @@ impl AppUseCase {
     /// failure here is logged and skipped: the run still reports the file
     /// outcome it achieved instead of failing over monitoring it could not
     /// write.
-    async fn unmonitor_deleted_episodes(
+    pub(crate) async fn unmonitor_deleted_episodes(
         &self,
         actor: &User,
         title_id: &str,

@@ -323,6 +323,8 @@ fn from_general_settings(settings: scryer_application::GeneralSettings) -> Gener
         api_explorer_enabled: settings.api_explorer_enabled,
         experimental_features_enabled: settings.experimental_features_enabled,
         personalized_discovery_enabled: settings.personalized_discovery_enabled,
+        unmonitor_deleted_movies: settings.unmonitor_deleted_movies,
+        unmonitor_deleted_episodes: settings.unmonitor_deleted_episodes,
         srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
         keep_history_forever: settings.keep_history_forever,
         history_retention_days: settings.history_retention_days,

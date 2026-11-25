@@ -1,6 +1,8 @@
 use super::*;
 use crate::disk::{Disk, EntryKind};
-use crate::domain_events::DomainEventActor;
+use crate::domain_events::{
+    DomainEventActor, deleted_media_update, new_title_domain_event, title_context_snapshot,
+};
 use crate::library::movie_scan_scope::MovieScanScope;
 use crate::library_filename_parser::{
     LibraryFilenameExistingRecord, LibraryFilenameFallbackPolicy, LibraryFilenameParseInput,
@@ -886,6 +888,11 @@ async fn cleanup_missing_movie_title_records(
 ) -> bool {
     let mut title_updated = false;
     let mut lost_file = false;
+    let mut lost_downloaded_file = false;
+    let unmonitor_deleted_movies = app
+        .unmonitor_deleted_movies_enabled()
+        .await
+        .unwrap_or(false);
 
     let media_files = match app
         .services
@@ -944,6 +951,81 @@ async fn cleanup_missing_movie_title_records(
         } else {
             title_updated = true;
             lost_file = true;
+            lost_downloaded_file |= media_file.has_acquisition_provenance();
+            let _ = app
+                .append_domain_event(new_title_domain_event(
+                    DomainEventActor::system(),
+                    title,
+                    scryer_domain::DomainEventPayload::MediaFileDeleted(
+                        scryer_domain::MediaFileDeletedEventData {
+                            title: title_context_snapshot(title),
+                            media_updates: vec![deleted_media_update(media_file.file_path.clone())],
+                            file_id: Some(media_file.id.clone()),
+                            reason: scryer_domain::MediaFileDeletedReason::MissingOnDisk,
+                            episode_ids: Vec::new(),
+                        },
+                    ),
+                ))
+                .await;
+        }
+    }
+    if lost_file
+        && lost_downloaded_file
+        && unmonitor_deleted_movies
+        && title.monitored
+        && match app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+        {
+            Ok(remaining) => remaining.is_empty(),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title.id,
+                    "failed to verify remaining movie files before automatic unmonitoring"
+                );
+                false
+            }
+        }
+    {
+        let actor = scryer_domain::User::system_execution_actor();
+        if let Err(error) = app.set_title_monitored(&actor, &title.id, false).await {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                "failed to unmonitor movie after confirmed external file deletion"
+            );
+        } else {
+            title_updated = true;
+            let fresh_title = app
+                .services
+                .catalog
+                .titles
+                .get_by_id(&title.id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| title.clone());
+            let _ = app
+                .append_domain_event(new_title_domain_event(
+                    DomainEventActor::system(),
+                    &fresh_title,
+                    scryer_domain::DomainEventPayload::TitleUpdated(
+                        scryer_domain::TitleUpdatedEventData {
+                            title: title_context_snapshot(&fresh_title),
+                            change_reason_code: Some(
+                                scryer_domain::monitoring_change_reason::MOVIE_FILE_DELETED
+                                    .to_string(),
+                            ),
+                            unmonitored_episode_ids: Vec::new(),
+                            unmonitored_collection_ids: Vec::new(),
+                        },
+                    ),
+                ))
+                .await;
         }
     }
     if lost_file && title.monitored {
@@ -3535,6 +3617,8 @@ impl AppUseCase {
                 )
                 .await?;
                 let mut lost_scope_keys = Vec::new();
+                let mut lost_episode_ids = std::collections::BTreeSet::new();
+                let mut lost_downloaded_episode_ids = std::collections::BTreeSet::new();
                 let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
                 for stale_path in remaining_existing_paths {
                     let Some(record) = existing_records_by_path.get(&stale_path).cloned() else {
@@ -3568,18 +3652,51 @@ impl AppUseCase {
                             &title_episodes,
                             stored_episode_ids_by_file.get(&record.id),
                         ));
+                        if let Some(episode_ids) = stored_episode_ids_by_file.get(&record.id) {
+                            lost_episode_ids.extend(episode_ids.iter().cloned());
+                            if record.has_acquisition_provenance() {
+                                lost_downloaded_episode_ids.extend(episode_ids.iter().cloned());
+                            }
+                        }
+                        let _ = self
+                            .append_domain_event(new_title_domain_event(
+                                DomainEventActor::system(),
+                                &title,
+                                scryer_domain::DomainEventPayload::MediaFileDeleted(
+                                    scryer_domain::MediaFileDeletedEventData {
+                                        title: title_context_snapshot(&title),
+                                        media_updates: vec![deleted_media_update(
+                                            record.file_path.clone(),
+                                        )],
+                                        file_id: Some(record.id.clone()),
+                                        reason:
+                                            scryer_domain::MediaFileDeletedReason::MissingOnDisk,
+                                        episode_ids: stored_episode_ids_by_file
+                                            .get(&record.id)
+                                            .map(|ids| ids.iter().cloned().collect())
+                                            .unwrap_or_default(),
+                                    },
+                                ),
+                            ))
+                            .await;
                     }
                 }
                 let promoted_episode_ids = self
                     .finish_primary_promotion_batch(&actor_event, promotions)
                     .await;
+                let promoted_episode_ids_set = promoted_episode_ids
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>();
                 // An episode whose Additional file just became its Primary
                 // still has a file: its coverage stays as it is.
-                let promoted_scope_keys = promoted_episode_ids
-                    .into_iter()
+                let promoted_scope_keys = promoted_episode_ids_set
+                    .iter()
                     .filter_map(|episode_id| {
                         crate::acquisition::convergence::convergence_scope_key(
-                            &SubmissionScope::Episode { episode_id },
+                            &SubmissionScope::Episode {
+                                episode_id: episode_id.clone(),
+                            },
                             &title.id,
                         )
                     })
@@ -3588,6 +3705,90 @@ impl AppUseCase {
                 lost_scope_keys.sort_unstable();
                 lost_scope_keys.dedup();
                 reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;
+
+                if self
+                    .unmonitor_deleted_episodes_enabled()
+                    .await
+                    .unwrap_or(false)
+                {
+                    let mut fully_lost_episode_ids = std::collections::BTreeSet::new();
+                    let lost_episode_id_list = lost_episode_ids
+                        .iter()
+                        .filter(|episode_id| !promoted_episode_ids_set.contains(*episode_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !lost_episode_id_list.is_empty() {
+                        match self
+                            .services
+                            .library
+                            .media_files
+                            .list_live_media_files_for_episode_ids(&title.id, &lost_episode_id_list)
+                            .await
+                        {
+                            Ok(remaining_coverage) => {
+                                let covered_episode_ids = remaining_coverage
+                                    .iter()
+                                    .flat_map(|scoped| scoped.episode_ids.iter().cloned())
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                for episode_id in lost_episode_ids {
+                                    if promoted_episode_ids_set.contains(&episode_id) {
+                                        continue;
+                                    }
+                                    if !lost_downloaded_episode_ids.contains(&episode_id) {
+                                        continue;
+                                    }
+                                    if !covered_episode_ids.contains(&episode_id) {
+                                        fully_lost_episode_ids.insert(episode_id);
+                                    }
+                                }
+                            }
+                            Err(error) => warn!(
+                                error = %error,
+                                title_id = %title.id,
+                                "failed to verify remaining episode coverage; left episodes monitored"
+                            ),
+                        }
+                    }
+                    if !fully_lost_episode_ids.is_empty() {
+                        let actor = scryer_domain::User::system_execution_actor();
+                        let (unmonitored_episode_ids, unmonitored_collection_ids) = self
+                            .unmonitor_deleted_episode_ids_only(
+                                &actor,
+                                &title.id,
+                                &fully_lost_episode_ids,
+                            )
+                            .await;
+                        if !unmonitored_episode_ids.is_empty() {
+                            title_updated_after_scan = true;
+                            let fresh_title = self
+                                .services
+                                .catalog
+                                .titles
+                                .get_by_id(&title.id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .unwrap_or_else(|| title.clone());
+                            let _ = self
+                                .append_domain_event(new_title_domain_event(
+                                    DomainEventActor::system(),
+                                    &fresh_title,
+                                    scryer_domain::DomainEventPayload::TitleUpdated(
+                                        scryer_domain::TitleUpdatedEventData {
+                                            title: title_context_snapshot(&fresh_title),
+                                            change_reason_code: Some(
+                                                scryer_domain::monitoring_change_reason::EPISODE_FILE_DELETED
+                                                    .to_string(),
+                                            ),
+                                            unmonitored_episode_ids,
+                                            unmonitored_collection_ids,
+                                        },
+                                    ),
+                                ))
+                                .await;
+                        }
+                    }
+                }
 
                 // Only a folder the title already holds, or was granted by the
                 // claim above, is recorded here.

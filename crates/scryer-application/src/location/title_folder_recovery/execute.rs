@@ -858,6 +858,9 @@ impl TitleReconciler for RecoveryExecution<'_> {
                 &title,
                 DomainEventPayload::TitleUpdated(TitleUpdatedEventData {
                     title: title_context_snapshot(&title),
+                    change_reason_code: None,
+                    unmonitored_episode_ids: Vec::new(),
+                    unmonitored_collection_ids: Vec::new(),
                 }),
             );
             event.event_id = format!("{}:committed", operation.id);

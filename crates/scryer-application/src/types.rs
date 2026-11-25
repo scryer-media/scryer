@@ -1039,6 +1039,21 @@ pub struct TitleMediaFile {
 }
 
 impl TitleMediaFile {
+    /// Whether this row has evidence that Scryer acquired or imported the file.
+    ///
+    /// Ordinary library scans can discover and catalog files that existed
+    /// outside Scryer's acquisition workflow. They must not count as
+    /// previously downloaded for deletion-monitoring policy.
+    pub fn has_acquisition_provenance(&self) -> bool {
+        self.acquisition_score.is_some()
+            || self.grabbed_release_title.is_some()
+            || self.grabbed_at.is_some()
+            || self.original_file_path.is_some()
+            || self.release_listing_json.is_some()
+    }
+}
+
+impl TitleMediaFile {
     /// The view of this file an actor without privileged library access may
     /// see: the file name without its directory, and none of the acquisition
     /// provenance (release names, indexer, scoring, grab time, original path).

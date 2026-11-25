@@ -8484,6 +8484,14 @@ type GeneralSettingsPayload {
 	"""
 	personalizedDiscoveryEnabled: Boolean!
 	"""
+	Whether confirmed external movie-file removal unmonitors the fileless movie.
+	"""
+	unmonitorDeletedMovies: Boolean!
+	"""
+	Whether confirmed external episode-file removal unmonitors affected episodes.
+	"""
+	unmonitorDeletedEpisodes: Boolean!
+	"""
 	Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames.
 	"""
 	srrdbFilenameRecoveryEnabled: Boolean!
@@ -35822,6 +35830,14 @@ input UpdateGeneralSettingsInput {
 	Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
 	"""
 	personalizedDiscoveryEnabled: Boolean
+	"""
+	Whether confirmed external movie-file removal unmonitors the fileless movie. Omission preserves the saved setting.
+	"""
+	unmonitorDeletedMovies: Boolean
+	"""
+	Whether confirmed external episode-file removal unmonitors affected episodes. Omission preserves the saved setting.
+	"""
+	unmonitorDeletedEpisodes: Boolean
 	"""
 	Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames. Omission preserves the saved setting.
 	"""

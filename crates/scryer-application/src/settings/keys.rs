@@ -65,6 +65,12 @@ pub const API_EXPLORER_ENABLED_KEY: &str = "ui.api_explorer_enabled";
 // gateway. Stored in the positive sense; absent row means enabled, so existing
 // installs keep personalized discovery working with no data change.
 pub const DISCOVERY_PERSONALIZED_ENABLED_KEY: &str = "discovery.personalized_enabled";
+/// Automatically unmonitor a movie after its last tracked media file is confirmed missing.
+pub const UNMONITOR_MOVIES_AFTER_FILE_DELETION_KEY: &str =
+    "library.unmonitor_movies_after_file_deletion";
+/// Automatically unmonitor episodes after their last tracked media file is confirmed missing.
+pub const UNMONITOR_EPISODES_AFTER_FILE_DELETION_KEY: &str =
+    "library.unmonitor_episodes_after_file_deletion";
 // Rail-quality rollback levers. All four are unseeded and read like
 // `discovery.region`: an absent row means the default below, so an install that
 // never touches them gets the new behaviour, and an operator who hits a bad

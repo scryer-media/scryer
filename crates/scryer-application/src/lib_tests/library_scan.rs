@@ -1891,7 +1891,10 @@ async fn movie_title_scan_removes_missing_tracked_movie_file() {
 }
 
 /// The coverage receipts left for a movie whose tracked file vanished.
-async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
+async fn movie_lost_file_coverage_after_scan(
+    monitored: bool,
+    unmonitor_deleted_movies: bool,
+) -> (Vec<String>, bool) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_folder = tempdir.path().join("Quiet Lantern (2026)");
     std::fs::create_dir_all(&title_folder).expect("create movie folder");
@@ -1904,6 +1907,13 @@ async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
             SETTINGS_SCOPE_MEDIA,
             "movies.path",
             tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            UNMONITOR_MOVIES_AFTER_FILE_DELETION_KEY,
+            &unmonitor_deleted_movies.to_string(),
         )
         .await;
     let (app, user) = bootstrap_with_scan_unmatched_tracking(
@@ -1945,6 +1955,7 @@ async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
             file_path: movie_path.to_string_lossy().to_string(),
             size_bytes: 5,
             quality_label: Some("1080p".to_string()),
+            grabbed_release_title: Some("Quiet Lantern 2026 1080p".to_string()),
             ..Default::default()
         })
         .await
@@ -1969,19 +1980,43 @@ async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
             .is_empty()
     );
 
-    coverage.indexers_for_scope(&scope_key).await
+    let final_monitored = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("read final title")
+        .expect("title exists")
+        .monitored;
+
+    (
+        coverage.indexers_for_scope(&scope_key).await,
+        final_monitored,
+    )
 }
 
 #[tokio::test]
 async fn movie_title_scan_reopens_coverage_when_a_monitored_movie_loses_its_file() {
-    assert!(movie_lost_file_coverage_after_scan(true).await.is_empty());
+    let (coverage, monitored) = movie_lost_file_coverage_after_scan(true, false).await;
+    assert!(coverage.is_empty());
+    assert!(monitored, "the default-off policy preserves monitoring");
 }
 
 #[tokio::test]
 async fn movie_title_scan_keeps_coverage_when_an_unmonitored_movie_loses_its_file() {
-    assert_eq!(
-        movie_lost_file_coverage_after_scan(false).await,
-        vec!["indexer-a".to_string()]
+    let (coverage, monitored) = movie_lost_file_coverage_after_scan(false, false).await;
+    assert_eq!(coverage, vec!["indexer-a".to_string()]);
+    assert!(!monitored);
+}
+
+#[tokio::test]
+async fn movie_title_scan_unmonitors_after_confirmed_file_deletion_when_enabled() {
+    let (coverage, monitored) = movie_lost_file_coverage_after_scan(true, true).await;
+    assert!(coverage.is_empty());
+    assert!(
+        !monitored,
+        "the opt-in policy unmonitors a previously downloaded movie"
     );
 }
 
@@ -13726,6 +13761,7 @@ async fn series_library_scan_roles_after_primary_vanishes_for(
                     size_bytes: 256,
                     role,
                     quality_label: Some("1080p".to_string()),
+                    grabbed_release_title: Some("Lantern Vale 2026 1080p".to_string()),
                     ..Default::default()
                 })
                 .await

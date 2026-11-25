@@ -3268,6 +3268,8 @@ export const generalSettingsQuery = `query GeneralSettings {
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    unmonitorDeletedMovies
+    unmonitorDeletedEpisodes
     srrdbFilenameRecoveryEnabled
     keepHistoryForever
     historyRetentionDays

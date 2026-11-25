@@ -290,6 +290,50 @@ export function SettingsOverviewSection({
 
             <div className="flex items-center gap-3">
               <div className="flex min-w-0 items-center gap-1.5">
+                <Label>{t("settings.unmonitorDeletedMoviesLabel")}</Label>
+                <InfoHelp
+                  text={t("settings.unmonitorDeletedMoviesHelp")}
+                  ariaLabel={t("settings.unmonitorDeletedMoviesLabel")}
+                />
+              </div>
+              <SettingsToggleSwitch
+                checked={generalSettings.unmonitorDeletedMovies}
+                ariaLabel={t("settings.unmonitorDeletedMoviesLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ unmonitorDeletedMovies: nextValue });
+                  onGeneralSettingsCommit({
+                    unmonitorDeletedMovies: nextValue,
+                  });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Label>{t("settings.unmonitorDeletedEpisodesLabel")}</Label>
+                <InfoHelp
+                  text={t("settings.unmonitorDeletedEpisodesHelp")}
+                  ariaLabel={t("settings.unmonitorDeletedEpisodesLabel")}
+                />
+              </div>
+              <SettingsToggleSwitch
+                checked={generalSettings.unmonitorDeletedEpisodes}
+                ariaLabel={t("settings.unmonitorDeletedEpisodesLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({
+                    unmonitorDeletedEpisodes: nextValue,
+                  });
+                  onGeneralSettingsCommit({
+                    unmonitorDeletedEpisodes: nextValue,
+                  });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
                 <Label>{t("settings.srrdbFilenameRecoveryLabel")}</Label>
                 <InfoHelp
                   text={t("settings.srrdbFilenameRecoveryHelp")}

@@ -33,6 +33,8 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   apiExplorerEnabled: false,
   experimentalFeaturesEnabled: false,
   personalizedDiscoveryEnabled: true,
+  unmonitorDeletedMovies: false,
+  unmonitorDeletedEpisodes: false,
   srrdbFilenameRecoveryEnabled: false,
   keepHistoryForever: false,
   historyRetentionDays: 180,

@@ -955,6 +955,8 @@ export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($in
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    unmonitorDeletedMovies
+    unmonitorDeletedEpisodes
     srrdbFilenameRecoveryEnabled
     keepHistoryForever
     historyRetentionDays
