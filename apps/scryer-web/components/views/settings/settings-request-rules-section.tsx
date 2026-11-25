@@ -75,9 +75,11 @@ import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { LibraryRecord } from "@/lib/types";
 import type {
   RequestDecisionOutcome,
+  RequestEvaluationMode,
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
+  RequestRulePreviewSource,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
   RequestRuleUserOption,
@@ -183,10 +185,16 @@ type SettingsRequestRulesSectionProps = {
   deleteRuleSet: (record: RequestRuleSetRecord) => void;
   validating: boolean;
   validationResult: RequestRuleValidationResult | null;
-  setRuleEnabled: (record: RequestRuleSetRecord, enabled: boolean) => void;
+  applyRequesters: (usernames: string[]) => void;
+  setRuleMode: (
+    record: RequestRuleSetRecord,
+    mode: RequestEvaluationMode,
+  ) => void;
   /// Saving a rule that reads requester fields needs Manage permissions; the
   /// editor warns before save rather than after the API refuses.
   canManagePermissions: boolean;
+  previewSource: RequestRulePreviewSource;
+  setPreviewSource: (source: RequestRulePreviewSource) => void;
   previewRuleSetId: string;
   setPreviewRuleSetId: (id: string) => void;
   previewSample: RequestRulePreviewSample;
@@ -583,6 +591,11 @@ function DecisionRow({
 /// document the matcher actually saw, which is the only honest answer to "why
 /// did this not match".
 function RequestPreviewPanel({
+  isEditorOpen,
+  draftName,
+  canManagePermissions,
+  previewSource,
+  setPreviewSource,
   ruleSetRecords,
   libraries,
   qualityProfiles,

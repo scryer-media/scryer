@@ -25,9 +25,11 @@ import { useSessionUser } from "@/lib/hooks/use-auth";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { LibraryRecord } from "@/lib/types";
 import type {
+  RequestEvaluationMode,
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
+  RequestRulePreviewSource,
   RequestRuleSetDetail,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
@@ -83,7 +85,7 @@ import {
   createRequestRuleSetMutation,
   deleteRequestRuleSetMutation,
   previewRequestRuleMutation,
-  setRequestRuleEnabledMutation,
+  setRequestRuleEvaluationModeMutation,
   updateRequestRuleSourceMutation,
   updateRequestRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
@@ -97,6 +99,8 @@ function initialPreviewSample(): RequestRulePreviewSample {
   return {
     userId: "",
     libraryId: "",
+    kind: "ACQUISITION_REQUEST",
+    mediaIssue: { mediaFileId: "", reasonCode: "", remediation: "mark_bad" },
     externalIds: [],
     titleLabel: "",
     qualityProfileId: "",
@@ -163,6 +167,8 @@ export function SettingsRequestRulesContainer({
       isEditorOpen,
     );
 
+  const [previewSource, setPreviewSource] =
+    useState<RequestRulePreviewSource>("stored");
   const [previewRuleSetId, setPreviewRuleSetId] = useState("");
   const [previewSample, setPreviewSample] =
     useState<RequestRulePreviewSample>(initialPreviewSample);
@@ -663,15 +669,15 @@ export function SettingsRequestRulesContainer({
     }
   };
 
-  const setRuleEnabled = useCallback(
-    async (record: RequestRuleSetRecord, enabled: boolean) => {
-      if (enabled === record.enabled) return;
+  const setRuleMode = useCallback(
+    async (record: RequestRuleSetRecord, mode: RequestEvaluationMode) => {
+      if (mode === record.evaluationMode) return;
       setMutatingRuleSetId(record.id);
       try {
         const { error } = await client
-          .mutation(setRequestRuleEnabledMutation, {
+          .mutation(setRequestRuleEvaluationModeMutation, {
             ruleSetId: record.id,
-            enabled,
+            mode,
           })
           .toPromise();
         if (error) throw error;
@@ -719,18 +725,29 @@ export function SettingsRequestRulesContainer({
       const { data, error } = await client
         .mutation(previewRequestRuleMutation, {
           input: {
-            ruleSetId: previewRuleSetId,
-            sample: {
-              userId: previewSample.userId,
-              libraryId: previewSample.libraryId,
-              externalIds: previewSample.externalIds,
-              qualityProfileId: previewSample.qualityProfileId || null,
-              monitorType: previewSample.monitorType || null,
-              leaseForever: previewSample.leaseForever ? true : null,
-              leaseDays: previewSample.leaseForever
-                ? null
-                : clampRequestLeaseDays(previewSample.leaseDays),
-            },
+            ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
+            regoSource:
+              previewSource === "draft" ? ruleSetDraft.regoSource : null,
+            sample:
+              previewSample.kind === "MEDIA_ISSUE"
+                ? {
+                    userId: previewSample.userId,
+                    libraryId: previewSample.libraryId,
+                    kind: "media_issue",
+                    externalIds: [],
+                    mediaIssue: previewSample.mediaIssue,
+                  }
+                : {
+                    userId: previewSample.userId,
+                    libraryId: previewSample.libraryId,
+                    externalIds: previewSample.externalIds,
+                    qualityProfileId: previewSample.qualityProfileId || null,
+                    monitorType: previewSample.monitorType || null,
+                    leaseForever: previewSample.leaseForever ? true : null,
+                    leaseDays: previewSample.leaseForever
+                      ? null
+                      : clampRequestLeaseDays(previewSample.leaseDays),
+                  },
           },
         })
         .toPromise();
@@ -744,7 +761,14 @@ export function SettingsRequestRulesContainer({
     } finally {
       setPreviewing(false);
     }
-  }, [client, previewRuleSetId, previewSample, t]);
+  }, [
+    client,
+    previewRuleSetId,
+    previewSample,
+    previewSource,
+    ruleSetDraft.regoSource,
+    t,
+  ]);
 
   return (
     <>
@@ -776,9 +800,9 @@ export function SettingsRequestRulesContainer({
         deleteRuleSet={setPendingDeleteRuleSet}
         validating={validating}
         validationResult={validationResult}
-        setRuleEnabled={(record, enabled) =>
-          void setRuleEnabled(record, enabled)
-        }
+        setRuleMode={(record, mode) => void setRuleMode(record, mode)}
+        previewSource={previewSource}
+        setPreviewSource={setPreviewSource}
         canManagePermissions={canManagePermissions}
         previewRuleSetId={previewRuleSetId}
         setPreviewRuleSetId={setPreviewRuleSetId}

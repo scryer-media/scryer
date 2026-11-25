@@ -271,6 +271,7 @@ export function initialRequestRuleDraft(): RequestRuleSetDraft {
     description: "",
     regoSource: REQUEST_STARTER_SOURCE,
     libraryIds: [],
+    applicability: "ACQUISITION",
     builderModel: null,
   };
 }
@@ -293,6 +294,7 @@ export function requestRuleDraftFromDetail(
     description: detail.ruleSet.description ?? "",
     regoSource: detail.revision.regoSource,
     libraryIds: [...detail.ruleSet.libraryIds],
+    applicability: detail.ruleSet.applicability,
     builderModel: attachedRuleBuilderModel(
       binding.schema,
       detail.builderModel,
@@ -322,6 +324,7 @@ export function createRequestRuleSetInput(
     description: draft.description.trim() || null,
     regoSource: draft.regoSource,
     libraryIds: draft.libraryIds,
+    applicability: draft.applicability,
     builderModel: ruleBuilderModelToSave(binding, draft),
   };
 }
@@ -351,6 +354,7 @@ export function updateRequestRuleMetadataInput(
     name: draft.name.trim(),
     description: draft.description.trim() || null,
     libraryIds: draft.libraryIds,
+    applicability: draft.applicability,
   };
 }
 
@@ -449,6 +453,10 @@ const FALLBACK_REASON_LABEL_KEYS: Record<string, string> = {
   error: "requests.fallbackError",
   no_rule_matched: "requests.fallbackNoRuleMatched",
   library_permission: "requests.fallbackLibraryPermission",
+  shadow: "requests.fallbackShadow",
+  wider_hash_impact_unproven: "requests.fallbackWiderHashImpact",
+  media_issue_remediation_not_armed:
+    "requests.fallbackIssueRemediationNotArmed",
   shaping_conflict: "requests.fallbackShapingConflict",
   shaping_invalid: "requests.fallbackShapingInvalid",
 };
