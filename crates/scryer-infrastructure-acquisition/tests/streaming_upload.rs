@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::sync::{Arc, Mutex};
 
 use scryer_outbound_http::{OutboundHttpClient, RateLimitRegistry, RequestPolicy};

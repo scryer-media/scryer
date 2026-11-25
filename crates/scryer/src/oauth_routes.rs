@@ -169,6 +169,13 @@ async fn oauth_authorize_decision_inner(
     }
     let (user, authorization_source, auth_session_version, security_action_verified_until) =
         if authless_authorization {
+            if !crate::middleware::local_trust_allows_request_host(&state.app, &headers) {
+                return Err(Box::new(oauth_error(
+                    StatusCode::FORBIDDEN,
+                    "access_denied",
+                    "this host name cannot authorize OAuth clients without a login",
+                )));
+            }
             let user = state
                 .app
                 .find_or_create_default_user()

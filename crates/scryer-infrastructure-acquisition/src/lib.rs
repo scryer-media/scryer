@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 pub mod delay_profile_store;
 pub mod downloads;
 pub mod indexers;

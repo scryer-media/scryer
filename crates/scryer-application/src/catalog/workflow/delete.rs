@@ -235,11 +235,11 @@ impl AppUseCase {
         .await
     }
 
-    /// Maintenance-policy variant of [`Self::delete_title`] with files on disk
+    /// Lifecycle-policy variant of [`Self::delete_title`] with files on disk
     /// (RFC 137 §9.6). The same fresh-manifest fingerprint check applies; the
     /// human typed confirmation is replaced by the typed policy authorization,
     /// and the actor recorded on the logical cleanup is the system actor the
-    /// action handler runs as. Only the maintenance action executor calls this.
+    /// action handler runs as. Only the lifecycle action executor calls this.
     pub(crate) async fn delete_title_by_policy(
         &self,
         actor: &User,
@@ -272,7 +272,7 @@ impl AppUseCase {
         // choke point's own guarantee for any caller that did not.
         let _location_guard = self
             .acquire_location_title_mutation(
-                &crate::location::ownership_guard::MAINTENANCE_DELETE_ENTRY,
+                &crate::location::ownership_guard::LIFECYCLE_DELETE_ENTRY,
                 &title.id,
             )
             .await?;
@@ -288,6 +288,10 @@ impl AppUseCase {
         .await?;
         let deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
 
+        // A list that added the title would add it again at its next sync,
+        // and the rule would delete it again. The exclusion goes first: if it
+        // cannot be written the title stays, and the next pass retries both.
+        self.exclude_title_from_lists_that_added_it(&title).await?;
         self.delete_title_logical_cleanup(
             &title,
             actor,
@@ -972,7 +976,7 @@ impl AppUseCase {
         let doomed = pending
             .into_iter()
             .filter_map(|record| {
-                crate::maintenance_rules::safety::queued_import_title_id(&record)
+                crate::lifecycle_rules::safety::queued_import_title_id(&record)
                     .filter(|owner| id_set.contains(owner.as_str()))
                     .map(|_| record.id)
             })
@@ -1282,7 +1286,7 @@ impl AppUseCase {
         .await?;
         // Last, and only once the rows are gone: a lifecycle claim is a hold on
         // a title, and there is no title left to hold (spec 0003 FR-044).
-        // Releasing first would open a window in which a maintenance action
+        // Releasing first would open a window in which a lifecycle action
         // could act on a title whose claim had already been withdrawn.
         self.release_lifecycle_claims_for_deleted_title(&title.id)
             .await;
@@ -1726,7 +1730,7 @@ impl AppUseCase {
     }
 
     /// Delete one media file's disk paths (per `disk_deletion`) and catalog
-    /// row. Policy maintenance retains parent records; other deletions also
+    /// row. Policy lifecycle retains parent records; other deletions also
     /// remove any matching movie collection. The caller is responsible for
     /// the `ManageTitles` permission check.
     pub(crate) async fn delete_media_file_authorized(
@@ -2153,7 +2157,7 @@ impl AppUseCase {
     /// state that checking a whole season and deleting its files leaves behind;
     /// a partly deleted season stays monitored for the episodes it still has.
     /// The title is deliberately untouched — the same boundary
-    /// [`Self::unmonitor_maintenance_child`] keeps for scoped deletions.
+    /// [`Self::unmonitor_lifecycle_child`] keeps for scoped deletions.
     ///
     /// This is bookkeeping on top of deletions that already happened, so every
     /// failure here is logged and skipped: the run still reports the file
@@ -2828,10 +2832,11 @@ impl AppUseCase {
 /// title with no folder — is still on disk and must not be reported as gone.
 /// A read only; a path whose existence cannot be checked is not reported.
 async fn paths_no_longer_on_disk(paths: Vec<String>) -> Vec<String> {
+    let disk = crate::disk::Disk::process();
     let mut removed = Vec::with_capacity(paths.len());
     for path in paths {
         let on_disk = crate::stored_paths::stored_path_to_path_buf(&path);
-        if matches!(tokio::fs::try_exists(&on_disk).await, Ok(false)) {
+        if disk.follow(on_disk).await.exists() == Some(false) {
             removed.push(path);
         }
     }

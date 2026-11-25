@@ -1178,6 +1178,43 @@ pub fn effective_proxy_request_timeout(request_timeout_seconds: u32) -> Duration
     .min(INDEXER_HTTP_TIMEOUT)
 }
 
+/// Why [`read_body_bounded`] gave up on a response body.
+#[derive(Debug, Error)]
+pub enum BoundedBodyError {
+    /// The body is larger than the caller's limit.
+    #[error("response body is larger than {limit} bytes")]
+    TooLarge { limit: usize },
+    /// The connection failed while the body was read.
+    #[error("failed to read response body: {0}")]
+    Read(#[source] reqwest::Error),
+}
+
+/// Reads a response body whole, refusing it as soon as it passes `limit`
+/// bytes.
+///
+/// The limit applies to the bytes the caller receives. A client that
+/// decompresses responses hands over decoded chunks and drops the length
+/// header, so a small compressed body that expands past the limit is refused
+/// while it is read, never after it is held in memory. A declared length past
+/// the limit is refused before any of the body is read.
+pub async fn read_body_bounded(
+    mut response: Response,
+    limit: usize,
+) -> Result<Vec<u8>, BoundedBodyError> {
+    let declared = response.content_length();
+    if declared.is_some_and(|length| length > limit as u64) {
+        return Err(BoundedBodyError::TooLarge { limit });
+    }
+    let mut body = Vec::with_capacity(declared.map_or(0, |length| length as usize));
+    while let Some(chunk) = response.chunk().await.map_err(BoundedBodyError::Read)? {
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(BoundedBodyError::TooLarge { limit });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 #[derive(Debug, Error)]
 pub enum OutboundDestinationError {
     #[error("{label} URL is invalid: {message}")]
@@ -1695,29 +1732,132 @@ pub async fn prepare_plugin_http_target_with_extra_ca(
     label: &'static str,
     policy: &PluginEgressPolicy,
 ) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
+    prepare_plugin_http_target_with_extra_ca_inner(raw, extra_ca_bundle_pem, label, policy, None)
+        .await
+}
+
+/// [`prepare_plugin_http_target_with_extra_ca`] reusing the clients `cache`
+/// holds. The URL is validated and the destination resolved and checked
+/// against `policy` on every call, exactly as the uncached path does; only the
+/// client build is skipped, and only when the cache holds one built from the
+/// same host, the same validated addresses in the same order, the same trust
+/// bundle and the same body-decoding choice. Those are every input the build
+/// takes, so the reused client is configured identically: the same pinned
+/// addresses, redirects disabled, the standard timeout and the same TLS roots.
+pub async fn prepare_plugin_http_target_with_extra_ca_cached(
+    raw: &str,
+    extra_ca_bundle_pem: &str,
+    label: &'static str,
+    policy: &PluginEgressPolicy,
+    cache: &PinnedPluginHttpClientCache,
+) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
+    prepare_plugin_http_target_with_extra_ca_inner(
+        raw,
+        extra_ca_bundle_pem,
+        label,
+        policy,
+        Some(cache),
+    )
+    .await
+}
+
+async fn prepare_plugin_http_target_with_extra_ca_inner(
+    raw: &str,
+    extra_ca_bundle_pem: &str,
+    label: &'static str,
+    policy: &PluginEgressPolicy,
+    cache: Option<&PinnedPluginHttpClientCache>,
+) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
     let url = validate_operator_http_url(raw, label)?;
     let resolved_addrs = resolve_plugin_http_destination(&url, label, policy).await?;
     let host = url
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
         .to_string();
+    let key = PinnedPluginHttpClientKey {
+        host: host.clone(),
+        resolved_addrs: resolved_addrs.clone(),
+        extra_ca_bundle_pem: extra_ca_bundle_pem.to_string(),
+        decode_bodies: !policy.raw_bodies,
+    };
+    if let Some(client) = cache.and_then(|cache| cache.get(&key)) {
+        return Ok(PinnedPluginHttpTarget {
+            url,
+            host,
+            resolved_addrs,
+            client,
+        });
+    }
     let builder = reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)
         .map_err(|message| OutboundDestinationError::TrustBundle { label, message })?
         .redirect(reqwest::redirect::Policy::none())
         .resolve_to_addrs(&host, &resolved_addrs);
-    let client = with_body_decoding(builder, !policy.raw_bodies)
+    let client = with_body_decoding(builder, key.decode_bodies)
         .build()
         .map_err(|source| OutboundDestinationError::ClientBuild {
             label,
             host: host.clone(),
             source,
         })?;
+    if let Some(cache) = cache {
+        cache.insert(key, client.clone());
+    }
     Ok(PinnedPluginHttpTarget {
         url,
         host,
         resolved_addrs,
         client,
     })
+}
+
+/// Everything a pinned plugin client is built from.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PinnedPluginHttpClientKey {
+    host: String,
+    resolved_addrs: Vec<SocketAddr>,
+    extra_ca_bundle_pem: String,
+    decode_bodies: bool,
+}
+
+/// Most pinned clients one cache keeps; reaching it starts the cache afresh.
+const MAX_CACHED_PINNED_PLUGIN_CLIENTS: usize = 32;
+
+/// Pinned plugin clients built by
+/// [`prepare_plugin_http_target_with_extra_ca_cached`], keyed by every input
+/// of the build. Owned by one plugin host, so clients and their connection
+/// pools are never shared between hosts.
+#[derive(Default)]
+pub struct PinnedPluginHttpClientCache {
+    clients: Mutex<HashMap<PinnedPluginHttpClientKey, Client>>,
+}
+
+impl PinnedPluginHttpClientCache {
+    fn get(&self, key: &PinnedPluginHttpClientKey) -> Option<Client> {
+        self.clients.lock().ok()?.get(key).cloned()
+    }
+
+    fn insert(&self, key: PinnedPluginHttpClientKey, client: Client) {
+        let Ok(mut clients) = self.clients.lock() else {
+            return;
+        };
+        if clients.len() >= MAX_CACHED_PINNED_PLUGIN_CLIENTS && !clients.contains_key(&key) {
+            clients.clear();
+        }
+        clients.insert(key, client);
+    }
+
+    /// How many clients the cache holds.
+    pub fn len(&self) -> usize {
+        self.clients
+            .lock()
+            .map(|clients| clients.len())
+            .unwrap_or(0)
+    }
+
+    /// Whether the cache holds no client.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Same as [`prepare_plugin_http_target`] but for an already-parsed URL; use
@@ -2665,7 +2805,7 @@ impl OutboundHttpClient {
         &self.registry
     }
 
-    async fn send_builder_with_trusted_redirects<D>(
+    async fn send_builder_with_trusted_redirects<D, DFut>(
         &self,
         builder: RequestBuilder,
         request_label: &str,
@@ -2674,7 +2814,8 @@ impl OutboundHttpClient {
         observe_dispatch: &D,
     ) -> Result<Response, TrustedRedirectSendError>
     where
-        D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
     {
         let mut response = builder
             .send()
@@ -2703,7 +2844,9 @@ impl OutboundHttpClient {
                     "outbound HTTP redirect host RPS wait"
                 );
             }
-            observe_dispatch(&next_url).map_err(TrustedRedirectSendError::Rejected)?;
+            observe_dispatch(next_url.clone())
+                .await
+                .map_err(TrustedRedirectSendError::Rejected)?;
             response = self
                 .client
                 .get(next_url)
@@ -2820,6 +2963,35 @@ impl OutboundHttpClient {
         }
     }
 
+    /// Like [`Self::send_with_dispatch_observer`], but awaits a fallible
+    /// admission hook immediately before each actual request attempt. The hook
+    /// receives an owned URL so its future cannot borrow transport state.
+    pub async fn send_with_async_dispatch_observer<F, D, DFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
+    {
+        match self
+            .send_async_with_async_observers(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                |_| async {},
+                observe_dispatch,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
     /// Combines the 429 response hook with an actual-dispatch hook. The latter
     /// is invoked after local gates and once per initial retry attempt.
     pub async fn send_with_rate_limit_and_dispatch_observer<F, O, OFut, D>(
@@ -2850,6 +3022,38 @@ impl OutboundHttpClient {
         }
     }
 
+    /// Combines the 429 response hook with an awaited fallible dispatch hook.
+    /// Admission runs after local pacing/cooldown gates and once for every
+    /// retry and trusted redirect hop.
+    pub async fn send_with_rate_limit_and_async_dispatch_observer<F, O, OFut, D, DFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
+    {
+        match self
+            .send_async_with_async_observers(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                observe_rate_limited_response,
+                observe_dispatch,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
     async fn send_async_with_observers<F, Fut, E, O, OFut, D>(
         &self,
         policy: RequestPolicy,
@@ -2863,6 +3067,30 @@ impl OutboundHttpClient {
         O: Fn(Response) -> OFut,
         OFut: Future<Output = ()>,
         D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+    {
+        self.send_async_with_async_observers(
+            policy,
+            build_request,
+            observe_rate_limited_response,
+            move |url| std::future::ready(observe_dispatch(&url)),
+        )
+        .await
+    }
+
+    async fn send_async_with_async_observers<F, Fut, E, O, OFut, D, DFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundRequestError<E>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<RequestBuilder, E>>,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+        D: Fn(reqwest::Url) -> DFut + Send + Sync,
+        DFut: Future<Output = Result<(), OutboundHttpError>>,
     {
         let mut attempt = 0u32;
 
@@ -2967,7 +3195,9 @@ impl OutboundHttpClient {
                 );
             }
 
-            observe_dispatch(&dispatch_url).map_err(OutboundRequestError::Http)?;
+            observe_dispatch(dispatch_url.clone())
+                .await
+                .map_err(OutboundRequestError::Http)?;
             let builder = RequestBuilder::from_parts(request_client, request);
             let send_result = match policy.redirect_mode {
                 RedirectMode::NoFollow => builder
@@ -3942,6 +4172,115 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn cached_plugin_targets_reuse_a_client_only_for_the_same_build_inputs() {
+        let cache = PinnedPluginHttpClientCache::default();
+        let policy = PluginEgressPolicy::default();
+        let prepare = |raw: &'static str, policy: PluginEgressPolicy| {
+            let cache = &cache;
+            async move {
+                prepare_plugin_http_target_with_extra_ca_cached(
+                    raw,
+                    "",
+                    "plugin egress",
+                    &policy,
+                    cache,
+                )
+                .await
+            }
+        };
+
+        let first = prepare("http://127.0.0.1:8080/a", policy.clone())
+            .await
+            .expect("loopback prepares");
+        let second = prepare("http://127.0.0.1:8080/b?page=2", policy.clone())
+            .await
+            .expect("loopback prepares");
+        assert_eq!(
+            cache.len(),
+            1,
+            "the same host and addresses reuse one client"
+        );
+        assert_eq!(second.url().as_str(), "http://127.0.0.1:8080/b?page=2");
+        assert_eq!(first.resolved_addrs(), second.resolved_addrs());
+
+        // Another port pins another address; raw bodies change the build.
+        prepare("http://127.0.0.1:8081/", policy.clone())
+            .await
+            .expect("loopback prepares");
+        assert_eq!(cache.len(), 2);
+        prepare("http://127.0.0.1:8080/", policy.clone().with_raw_bodies())
+            .await
+            .expect("loopback prepares");
+        assert_eq!(cache.len(), 3);
+
+        // The policy still decides every request with clients cached.
+        for raw in PLUGIN_EGRESS_BLOCKED_TARGETS {
+            assert!(
+                matches!(
+                    prepare(raw, policy.clone()).await,
+                    Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
+                ),
+                "{raw} must stay blocked with a warm cache"
+            );
+        }
+        assert_eq!(cache.len(), 3);
+
+        // The cache stays bounded.
+        for port in 0..(MAX_CACHED_PINNED_PLUGIN_CLIENTS as u16 + 5) {
+            let raw: &'static str =
+                Box::leak(format!("http://127.0.0.1:{}/", 9000 + port).into_boxed_str());
+            prepare(raw, policy.clone())
+                .await
+                .expect("loopback prepares");
+            assert!(cache.len() <= MAX_CACHED_PINNED_PLUGIN_CLIENTS);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cached_plugin_client_serves_requests_like_a_fresh_one() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = vec![0u8; 4096];
+                let _ = socket.read(&mut buffer).await.unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nConnection: close\r\nContent-Length: 5\r\n\r\nmoved",
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let cache = PinnedPluginHttpClientCache::default();
+        let url = format!("http://{addr}/start");
+        for _ in 0..2 {
+            let target = prepare_plugin_http_target_with_extra_ca_cached(
+                &url,
+                "",
+                "plugin egress",
+                &PluginEgressPolicy::default(),
+                &cache,
+            )
+            .await
+            .expect("loopback prepares");
+            let response = target
+                .client()
+                .get(target.url().clone())
+                .send()
+                .await
+                .expect("request");
+            // Redirects stay unfollowed through a reused client.
+            assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+            assert_eq!(response.text().await.unwrap(), "moved");
+        }
+        assert_eq!(cache.len(), 1);
+        server.await.unwrap();
+    }
+
     fn validate_plugin_policy_ip(
         policy: &PluginEgressPolicy,
         raw: &str,
@@ -4848,6 +5187,44 @@ mod tests {
         assert_eq!(dispatches.load(Ordering::SeqCst), 2);
     }
 
+    #[tokio::test]
+    async fn async_dispatch_observer_is_awaited_and_can_reject_a_retry() {
+        let (url, hits) = spawn_http_server(vec![
+            http_response(429, &[("Retry-After", "bogus")], ""),
+            http_response(200, &[], "must not be requested"),
+        ])
+        .await;
+        let client =
+            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let observer_dispatches = Arc::clone(&dispatches);
+
+        let error = client
+            .send_with_rate_limit_and_async_dispatch_observer(
+                RequestPolicy::safe_read("test-server", "async-retry-observer")
+                    .with_max_retries(1)
+                    .with_backoff(Duration::from_millis(5), Duration::from_millis(5)),
+                || client.client().get(&url),
+                |_| async {},
+                move |_| {
+                    let dispatch = observer_dispatches.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if dispatch == 0 {
+                            Ok(())
+                        } else {
+                            Err(OutboundHttpError::DispatchRejected)
+                        }
+                    }
+                },
+            )
+            .await
+            .expect_err("the second asynchronous admission should reject the retry");
+
+        assert!(matches!(error, OutboundHttpError::DispatchRejected));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn retryable_transport_error_text_matches_transient_disconnects() {
         assert!(retryable_transport_error_text(
@@ -5639,6 +6016,54 @@ mod tests {
         });
 
         (format!("http://{address}/test"), hits)
+    }
+
+    /// A chunked answer carries no length, so only the read itself can stop
+    /// it: the same shape a decompressed answer reaches the reader in.
+    fn chunked_response(chunks: &[&str]) -> String {
+        let mut response = String::from(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+        );
+        for chunk in chunks {
+            response.push_str(&format!("{:x}\r\n{chunk}\r\n", chunk.len()));
+        }
+        response.push_str("0\r\n\r\n");
+        response
+    }
+
+    #[tokio::test]
+    async fn bounded_body_reads_a_body_within_the_limit_whole() {
+        let (url, _) = spawn_http_server(vec![
+            chunked_response(&["abcd", "efgh"]),
+            http_response(200, &[], "abcdefgh"),
+        ])
+        .await;
+        for _ in 0..2 {
+            let response = generic_reqwest_client().get(&url).send().await.unwrap();
+            let body = read_body_bounded(response, 8).await.expect("fits exactly");
+            assert_eq!(body, b"abcdefgh");
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_body_refuses_an_unlengthed_body_once_it_passes_the_limit() {
+        let (url, _) = spawn_http_server(vec![chunked_response(&["abcd", "efgh", "i"])]).await;
+        let response = generic_reqwest_client().get(&url).send().await.unwrap();
+        assert!(response.content_length().is_none());
+        let error = read_body_bounded(response, 8)
+            .await
+            .expect_err("past the limit");
+        assert!(matches!(error, BoundedBodyError::TooLarge { limit: 8 }));
+    }
+
+    #[tokio::test]
+    async fn bounded_body_refuses_a_declared_length_past_the_limit() {
+        let (url, _) = spawn_http_server(vec![http_response(200, &[], "abcdefghi")]).await;
+        let response = generic_reqwest_client().get(&url).send().await.unwrap();
+        let error = read_body_bounded(response, 8)
+            .await
+            .expect_err("declared past the limit");
+        assert!(matches!(error, BoundedBodyError::TooLarge { limit: 8 }));
     }
 
     fn bound_url_socket_addr(url: &str) -> SocketAddr {

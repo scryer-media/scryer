@@ -912,9 +912,8 @@ fn inferred_container_format_for_path(path: &Path) -> Option<String> {
 /// whose targets the native probe often cannot read.
 #[cfg(feature = "runtime-media-analysis")]
 fn path_is_symlink(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
+    crate::disk::Disk::process().fresh_blocking(path).kind()
+        == Some(crate::disk::EntryKind::Symlink)
 }
 
 fn media_review_hold(code: &'static str, message: impl Into<String>) -> ImportedFileGateDecision {

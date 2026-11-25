@@ -32,10 +32,15 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::media::monitor_selections::{
+    OWNER_KIND_TITLE, count_monitor_selection_rows,
+    count_monitor_selections_for_requests_created_title, delete_monitor_selection_tx,
+    delete_monitor_selections_for_requests_created_title_tx,
+};
 use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use scryer_infrastructure_sql::domain_event_payload::{
-    decode_domain_event_payload, encode_domain_event_payload,
+    DomainEventPayloadEncoder, decode_domain_event_payload,
 };
 
 /// Operation states a location operation can no longer be resumed from, so an
@@ -81,7 +86,7 @@ const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
     ("release_decisions", "title_id"),
     ("title_search_terms", "title_id"),
     ("title_external_ids", "title_id"),
-    ("maintenance_rule_exclusions", "title_id"),
+    ("lifecycle_rule_exclusions", "title_id"),
     ("media_server_user_media_signals", "scryer_title_id"),
     ("library_scan_unmatched_items", "title_id"),
 ];
@@ -92,14 +97,19 @@ const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
 /// drop — so they are neither counted nor deleted as source records.
 const OPERATION_VERIFICATIONS_TABLE: &str = "location_operation_verifications";
 
-/// Maintenance action evidence belongs to a candidate. Delete its leaf rows
+/// The candidates of the source's manual-import selections. The table has no
+/// foreign key to its selection, so the merge deletes them with the
+/// selections, as every other selection delete does.
+const MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE: &str = "manual_import_selection_candidates";
+
+/// Lifecycle action evidence belongs to a candidate. Delete its leaf rows
 /// before the candidate so the preview and outcome both account for every
 /// retired audit row, instead of hiding them behind the candidate cascade.
 const DROPPED_CANDIDATE_CHILD_TABLES: &[&str] = &[
-    "maintenance_action_step_attempts",
-    "maintenance_action_job_receipts",
-    "maintenance_action_steps",
-    "maintenance_sequence_terminal_memberships",
+    "lifecycle_action_step_attempts",
+    "lifecycle_action_job_receipts",
+    "lifecycle_action_steps",
+    "lifecycle_sequence_terminal_memberships",
     "lifecycle_action_runs",
 ];
 
@@ -166,10 +176,18 @@ impl TitleMergeRepository for TitleMergeStore {
             };
         }
         dropped_record_count +=
+            count_manual_import_selection_candidates(exec(), source_title_id).await?;
+        dropped_record_count +=
             count_rows(exec(), "lifecycle_candidates", "title_id", source_title_id).await?;
         for table in DROPPED_CANDIDATE_CHILD_TABLES {
             dropped_record_count += count_candidate_rows(exec(), table, source_title_id).await?;
         }
+        // The selections of the source and of the requests that created it
+        // retire with them.
+        dropped_record_count +=
+            count_monitor_selections_for_requests_created_title(exec(), source_title_id).await?;
+        dropped_record_count +=
+            count_monitor_selection_rows(exec(), OWNER_KIND_TITLE, source_title_id).await?;
 
         Ok(MergeCatalogSnapshot {
             current_operation_id: current_operation_id.map(str::to_string),
@@ -596,6 +614,29 @@ async fn count_rows(
     row.i64("row_count")
 }
 
+async fn count_manual_import_selection_candidates(
+    exec: SqlExec<'_, '_>,
+    source_title_id: &str,
+) -> AppResult<i64> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        &format!(
+            "SELECT COUNT(*) AS row_count FROM {MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}
+              WHERE selection_id IN (
+                  SELECT id FROM manual_import_selections WHERE title_id = {{}}
+              )"
+        ),
+        &[SqlArg::Text(source_title_id.to_string())],
+    )
+    .await?
+    .ok_or_else(|| {
+        AppError::Repository(format!(
+            "missing count for {MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}"
+        ))
+    })?;
+    row.i64("row_count")
+}
+
 async fn count_candidate_rows(
     exec: SqlExec<'_, '_>,
     table: &str,
@@ -874,6 +915,9 @@ async fn carry_history(
     )
     .await?;
 
+    // One zstd context for the run: each payload still encodes to exactly the
+    // bytes `encode_domain_event_payload` produces for it alone.
+    let mut encoder = DomainEventPayloadEncoder::new();
     let mut rewrites = Vec::new();
     for row in &rows {
         let Some(mut payload) = decode_payload(row)? else {
@@ -882,7 +926,7 @@ async fn carry_history(
         if !remap_payload_ids(&mut payload, map) {
             continue;
         }
-        let encoded = encode_domain_event_payload(&payload).map_err(|error| {
+        let encoded = encoder.encode(&payload).map_err(|error| {
             AppError::Repository(format!(
                 "failed to re-encode domain event {}: {error}",
                 row.text("event_id").unwrap_or_default()
@@ -957,13 +1001,36 @@ fn remap_payload_ids(payload: &mut Value, map: &MergeIdentityMap) -> bool {
 
 /// Retire every source-title record that is deliberately dropped by a merge.
 /// The candidate graph is removed from leaf to root, preserving exact preview
-/// and outcome counts for maintenance action evidence despite its cascades.
+/// and outcome counts for lifecycle action evidence despite its cascades.
 async fn purge_title_dependent_records(
     tx: &mut SqlTx<'_>,
     map: &MergeIdentityMap,
     current_operation_id: Option<&str>,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
+    // The source's media requests retire below, and their monitor selections
+    // have no foreign key to go with them.
+    let removed =
+        delete_monitor_selections_for_requests_created_title_tx(tx, &map.source_title_id).await?;
+    record(outcome, "retire:monitor_selections_media_request", removed);
+    // The source's manual-import selections retire below, and their candidates
+    // have no foreign key to go with them.
+    let removed = tx
+        .execute(
+            &format!(
+                "DELETE FROM {MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}
+                  WHERE selection_id IN (
+                      SELECT id FROM manual_import_selections WHERE title_id = {{}}
+                  )"
+            ),
+            &[SqlArg::Text(map.source_title_id.clone())],
+        )
+        .await?;
+    record(
+        outcome,
+        &format!("retire:{MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}"),
+        removed,
+    );
     for (table, column) in DROPPED_TITLE_TABLES {
         let removed = if *table == OPERATION_VERIFICATIONS_TABLE {
             // The merging operation's own proofs stay: its cleanup step, which
@@ -1017,6 +1084,10 @@ async fn retire_source_title(
     map: &MergeIdentityMap,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
+    // `monitor_selections` has no foreign key to the title, so its rows are
+    // cleared the way a title delete clears them.
+    let removed = delete_monitor_selection_tx(tx, OWNER_KIND_TITLE, &map.source_title_id).await?;
+    record(outcome, "retire:monitor_selections_title", removed);
     let removed = tx
         .execute(
             "DELETE FROM titles WHERE id = {}",

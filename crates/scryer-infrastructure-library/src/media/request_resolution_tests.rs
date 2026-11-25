@@ -292,6 +292,58 @@ async fn lifecycle_claim_extensions_never_shorten_and_survive_activation() {
     );
 }
 
+/// Activation passes in the claim's stored expiry when it has no duration.
+/// The store keeps that date even when it is already past, and the next
+/// `expire_due` closes the claim.
+#[tokio::test]
+async fn activation_keeps_a_stored_expiry_already_past_and_expire_due_closes_it() {
+    let store = test_store().await;
+    seed_resolution_requests(&store).await;
+    let claims = crate::media::lifecycle_claims::LifecycleClaimStore::new(store.datastore.clone());
+    let now = Utc::now();
+    let stored_expiry = now - chrono::Duration::days(3);
+    claims
+        .create(&scryer_domain::LifecycleClaim {
+            id: "synthetic-dormant-keep".into(),
+            title_id: "approved-title".into(),
+            library_id: "library-under-test".into(),
+            producer: scryer_domain::LifecycleClaimProducer::RequestLease,
+            producer_ref: Some("synthetic-request".into()),
+            kind: scryer_domain::LifecycleClaimKind::RetainUntil,
+            state: scryer_domain::LifecycleClaimState::Dormant,
+            duration_days: None,
+            starts_at: None,
+            expires_at: Some(stored_expiry),
+            created_by: None,
+            created_at: now,
+            updated_at: now,
+            released_reason: None,
+        })
+        .await
+        .unwrap();
+
+    claims
+        .activate("synthetic-dormant-keep", now, Some(stored_expiry), now)
+        .await
+        .unwrap();
+    let activated = claims.get("synthetic-dormant-keep").await.unwrap().unwrap();
+    assert_eq!(activated.state, scryer_domain::LifecycleClaimState::Active);
+    assert_eq!(activated.starts_at, Some(now));
+    assert_eq!(activated.expires_at, Some(stored_expiry));
+
+    let later = now + chrono::Duration::seconds(1);
+    assert_eq!(claims.expire_due(later).await.unwrap(), 1);
+    assert_eq!(
+        claims
+            .get("synthetic-dormant-keep")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        scryer_domain::LifecycleClaimState::Expired
+    );
+}
+
 #[tokio::test]
 async fn orphan_claim_reconciliation_is_bounded_retryable_and_preserves_existing_titles() {
     let store = test_store().await;
@@ -420,6 +472,7 @@ fn reopened_event(request: &MediaRequest) -> NewDomainEvent {
                 requested_quality_profile_name: None,
                 requested_monitor_type: None,
                 requested_lease_days: None,
+                rule_notifications: Vec::new(),
             },
         ),
     }

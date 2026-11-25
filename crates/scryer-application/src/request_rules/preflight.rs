@@ -1,10 +1,10 @@
-//! Pre-flight: tell a requester what will happen before they submit
-//! (spec 0003 FR-020, FR-021).
+//! Pre-flight: tell a requester what will happen before they submit.
 //!
-//! The dialog calls this as the requester changes library, profile, monitor, or
-//! lease. It runs the *same* enrichment and the *same* evaluation the submit
-//! will run — literally the same functions, through the same cache — so the
-//! banner and the outcome cannot disagree.
+//! The dialog stages the subject's metadata once when it opens, then calls the
+//! preview as the requester changes library, profile, monitor, or lease. The
+//! preview reads that staged record and runs the *same* evaluation the submit
+//! will run over the same record, so the banner and the outcome cannot
+//! disagree, and a preview never reaches SMG.
 //!
 //! Two things it deliberately does not do:
 //!
@@ -15,9 +15,9 @@
 //!   catalog-settings authority.
 //! - **It never errors for an evaluation failure.** A preview that 500s teaches
 //!   a requester nothing; a preview that says "this will need approval" is both
-//!   true (an unevaluable policy never approves) and useful.
+//!   true (rules that cannot be consulted never approve) and useful.
 
-use scryer_domain::{LibraryPermission, RequestDecisionOutcome, RequestRuleEvaluationMode, User};
+use scryer_domain::{LibraryPermission, RequestDecisionOutcome, User};
 
 use crate::media_requests::SubmitMediaRequestInput;
 use crate::request_rules::evaluation::{RequestDecisionReason, RequestEvaluationPurpose};
@@ -36,19 +36,80 @@ pub struct RequestPreflight {
     /// were unknown. The dialog says "metadata unavailable — will need
     /// approval" rather than pretending to a verdict it does not have.
     pub metadata_partial: bool,
-    /// `Enforce` when an enabled rule was consulted, `Disabled` when none was.
-    pub evaluation_mode: RequestRuleEvaluationMode,
+    /// False when no enabled rule covers the library, so the Auto-Approve
+    /// permission alone decided.
+    pub rules_consulted: bool,
     /// What the policy concluded, which differs from `outcome` only when the
     /// request was held because its tags could not be checked.
     pub policy_outcome: RequestDecisionOutcome,
-    /// Why the verdict fell back to needing approval, when it did: one of the
-    /// arbitration codes (`rule_manual`, `held`, `error`, `no_rule_matched`),
-    /// or `None` when a rule decided outright. It names the *shape* of the
+    /// Why the verdict is a fallback rather than a rule's own decision: one of
+    /// the arbitration codes (`rule_manual`, `held`, `error`, `no_rule_matched`,
+    /// `library_permission`, `shaping_conflict`, `shaping_invalid`), or `None`
+    /// when a rule decided outright. It names the *shape* of the
     /// fallback and never a rule, so it is safe on the requester's surface.
     pub fallback_reason: Option<String>,
+    /// What an approval would be changed to. The requester's surface shows
+    /// the values and the heads the rules disagreed on, never a notification.
+    pub shaping: crate::request_rules::ArbitratedShaping,
+}
+
+/// What staging a request subject established.
+#[derive(Clone, Debug)]
+pub struct StagedRequestMetadata {
+    /// True when the metadata could not be fully established, so a preview
+    /// or a submit will read some facts as unknown.
+    pub metadata_partial: bool,
 }
 
 impl AppUseCase {
+    /// Stage the metadata of a subject the requester picked: the one SMG read
+    /// every preview and the submit then share.
+    ///
+    /// Requires what a preview requires, [`LibraryPermission::Request`] on the
+    /// target library, and refuses before SMG is asked.
+    pub async fn stage_my_request_metadata(
+        &self,
+        actor: &User,
+        library_id: &str,
+        facet: scryer_domain::MediaFacet,
+        external_ids: Vec<scryer_domain::ExternalId>,
+    ) -> AppResult<StagedRequestMetadata> {
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id.trim())
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::LIBRARY_NOT_FOUND,
+                    "library not found",
+                )
+            })?;
+        if library.facet != facet {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::LIBRARY_FACET_MISMATCH,
+                "library facet does not match requested media facet",
+            ));
+        }
+        self.require_library_permission(actor, &library.id, LibraryPermission::Request)
+            .await?;
+        let external_ids =
+            crate::media_requests::normalize_media_request_external_ids(external_ids)?;
+        if external_ids.is_empty() {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::MEDIA_REQUESTS_INVALID,
+                "media requests must include SMG external identifiers",
+            ));
+        }
+        let staged = self
+            .stage_request_metadata(&facet, external_ids, true)
+            .await;
+        Ok(StagedRequestMetadata {
+            metadata_partial: staged.snapshot.partial,
+        })
+    }
+
     /// Evaluate a draft without persisting it.
     ///
     /// Requires exactly what submit requires — [`LibraryPermission::Request`] on
@@ -73,7 +134,10 @@ impl AppUseCase {
                 )
             })?;
         if library.facet != input.facet {
-            return Err(AppError::validation_refused(crate::error_reasons::request_rules::LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET, "library facet does not match requested media facet"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::LIBRARY_FACET_MISMATCH,
+                "library facet does not match requested media facet",
+            ));
         }
         self.require_library_permission(actor, &library.id, LibraryPermission::Request)
             .await?;
@@ -96,9 +160,20 @@ impl AppUseCase {
                 input.requested_preferred_audio_languages.clone(),
             )?;
 
-        // The same read-through cache the submit uses, so the two share one SMG
-        // call and therefore one set of facts (FR-021).
-        let enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
+        // The record the staging step stored, which is the one the submit
+        // reads: no SMG call and no write here, however often the dialog
+        // asks. A subject nobody staged has no metadata to judge, which reads
+        // as unavailable rather than as a reason to ask SMG.
+        let enrichment = match self
+            .staged_request_metadata(&input.facet, &external_ids)
+            .await
+        {
+            Some(staged) => staged,
+            None => crate::media_requests::MediaRequestMetadataEnrichment::unavailable(
+                external_ids,
+                crate::media_requests::SNAPSHOT_SOURCE_NOT_STAGED,
+            ),
+        };
         let external_ids = enrichment.external_ids.clone();
 
         // The profile is resolved exactly as submit resolves it, including the
@@ -118,6 +193,17 @@ impl AppUseCase {
             Err(_) => (None, None),
         };
 
+        // Normalized exactly as submit stores them, so a rule reading the
+        // monitor type sees the same value in the preview as at submit.
+        let monitor_type = crate::media_requests::normalize_requested_monitor_type(
+            &input.facet,
+            input.requested_monitor_type.clone(),
+        )?;
+        let monitor_selection = crate::media_requests::normalize_requested_monitor_selection(
+            monitor_type.as_deref(),
+            input.requested_monitor_selection.clone(),
+        )?;
+
         let draft = RequestDraft {
             kind: "acquisition_request".to_string(),
             media_issue: None,
@@ -131,8 +217,8 @@ impl AppUseCase {
             external_ids,
             quality_profile_id,
             quality_profile_name,
-            monitor_type: input.requested_monitor_type.clone(),
-            monitor_selection: input.requested_monitor_selection.clone(),
+            monitor_type,
+            monitor_selection,
             requested_lease_days,
             requested_required_audio_languages,
             requested_preferred_audio_languages,
@@ -153,16 +239,18 @@ impl AppUseCase {
         Ok(RequestPreflight {
             outcome: evaluation.effective_outcome,
             reasons: evaluation.reasons,
-            // Tags are shown whatever the outcome — a requester should see what
-            // an approval would stamp — but they are only ever *applied* by the
-            // approval path. `evaluation.tags` is already narrowed to labels the
-            // tag registry defines, so the banner cannot promise one that the
-            // approval would drop.
+            // Tags are shown for an approval and for a request that waits for
+            // a person, whose approval would stamp them; a denial has none.
+            // They are only ever *applied* by the approval path.
+            // `evaluation.tags` is already narrowed to labels the tag registry
+            // defines, so the banner cannot promise one that the approval
+            // would drop.
             tags: evaluation.tags,
             metadata_partial: evaluation.metadata_partial,
-            evaluation_mode: evaluation.evaluation_mode,
+            rules_consulted: evaluation.rules_consulted,
             policy_outcome: evaluation.policy_outcome,
             fallback_reason: evaluation.fallback_reason,
+            shaping: evaluation.shaping,
         })
     }
 }

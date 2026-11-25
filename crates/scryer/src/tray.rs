@@ -7,6 +7,8 @@
 //! [`shared`]; the platform modules own only the window, the menu, and the
 //! system integration each platform requires.
 #![cfg_attr(windows, windows_subsystem = "windows")]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 /// The window class and messages `scryer.exe` posts to this binary. Both
 /// binaries compile this file so they cannot drift apart.

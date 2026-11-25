@@ -3,7 +3,7 @@
 //! Every policy family that carries a fact snapshot uses the same envelope, the
 //! same two input namespaces derived from it, and the same rule for deciding
 //! that a policy must not be consulted at all. None of that is specific to
-//! maintenance — it is specific to *facts Scryer may fail to observe* — so it
+//! lifecycle — it is specific to *facts Scryer may fail to observe* — so it
 //! lives in the core where the next family inherits it rather than re-deriving
 //! a subtly different version of it.
 
@@ -158,23 +158,25 @@ pub fn unobservable_facts(document: &serde_json::Value) -> BTreeMap<String, Stri
         .collect()
 }
 
-fn nested_unknown_reason(observation: &serde_json::Value) -> Option<&str> {
-    match observation
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some(UNKNOWN_STATUS) => Some(
-            observation
-                .get("reason")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(UNKNOWN_STATUS),
-        ),
-        Some(_) => None,
-        None => observation
-            .as_object()?
-            .values()
-            .find_map(nested_unknown_reason),
+/// [`unobservable_facts`], plus the unobservable facts of each nested section
+/// that carries its own `observations`, qualified by the section's name:
+/// `season.monitored` for `document.season.observations.monitored`.
+pub fn unobservable_facts_in(
+    document: &serde_json::Value,
+    nested_sections: &[&str],
+) -> BTreeMap<String, String> {
+    let mut facts = unobservable_facts(document);
+    for section in nested_sections {
+        let Some(nested) = document.get(*section) else {
+            continue;
+        };
+        facts.extend(
+            unobservable_facts(nested)
+                .into_iter()
+                .map(|(name, reason)| (format!("{section}.{name}"), reason)),
+        );
     }
+    facts
 }
 
 /// Reason codes explaining why a rule cannot be consulted, deduplicated and in

@@ -689,6 +689,7 @@ fn app_with_repository_and_verifier(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(FacetRegistry::new()),
     )

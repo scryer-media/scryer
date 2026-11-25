@@ -1,236 +1,128 @@
-//! Verified copy machinery: one streaming pass, two hashers (D2).
+//! Verified copies, as the application records them.
 //!
-//! Every byte a location operation copies is read once at the source and fed to
-//! both a streaming CRC (the move-corruption check, FR-040) and a full-file
-//! BLAKE3 (the dedup identity, FR-041/D4). The CRC is what a full-depth
-//! destination read-back is compared against (FR-042); the BLAKE3 is persisted
-//! with the media file so dedup never has to re-read anything (D4).
-//!
-//! # Chosen CRC algorithm: CRC-64/NVME
-//!
-//! [`MOVE_CRC_ALGORITHM`] is `crc_turbo::CrcAlgorithm::Crc64Nvme`, persisted under
-//! the tag [`MoveCrcAlgorithm::Crc64Nvme`] so a future default change can never
-//! be mistaken for corruption.
-//!
-//! Measured with a throwaway harness (256 MiB in-memory buffer, 1 MiB update
-//! chunks, best of 7 passes, `crc-fast` and `blake3` at `opt-level = 3`) on an
-//! Apple M5 Max, native `aarch64-apple-darwin`. `crc-fast` reported the
-//! `aarch64-neon-pmull-sha3` tier for every candidate, i.e. the hardware-
-//! accelerated path was live throughout. The host was under heavy concurrent
-//! build load, so these are contended lower bounds — the ranges are the spread
-//! across four repeats of the whole sweep, and only the *relative* ordering is
-//! load-independent:
-//!
-//! | Candidate | Throughput |
-//! |---|---|
-//! | CRC-64/NVME | 0.36 – 0.58 GiB/s |
-//! | CRC-64/GO-ISO | 0.40 – 0.59 GiB/s |
-//! | CRC-64/XZ (ECMA-182) | 0.33 – 0.54 GiB/s |
-//! | CRC-32/ISCSI (Castagnoli) | 0.88 – 1.09 GiB/s |
-//! | CRC-32/ISO-HDLC | 0.52 – 1.08 GiB/s |
-//! | BLAKE3 (single-threaded, reference) | 1.27 – 2.31 GiB/s |
-//! | Combined pass (CRC-64/NVME + BLAKE3) | 0.26 – 0.46 GiB/s |
-//!
-//! Why CRC-64/NVME:
-//!
-//! - It is the fastest CRC-64 variant the crate offers on this hardware.
-//!   CRC-64/GO-ISO tied with it inside the measurement noise; CRC-64/XZ was
-//!   consistently last. NVME wins the tie as the crate's own headline reflected
-//!   CRC-64 (it has a dedicated `crc64_nvme()` entry point) and as a current
-//!   standard rather than a legacy one.
-//! - The CRC-32 variants are roughly twice as fast but 32 bits is too narrow a
-//!   check for multi-gigabyte media files, which is exactly the size class this
-//!   subsystem exists to move safely (C4: evidence scales with irreversibility).
-//! - The extra CRC-64 cost is not on the critical path. A copy is bounded by
-//!   device and network throughput, and the combined pass is bounded by BLAKE3,
-//!   which D2 requires regardless. Even contended, the combined pass exceeds any
-//!   spinning disk or network share this runs over.
-//!
-//! Re-measure if the default ever moves: `MoveCrcAlgorithm` exists so stored
-//! CRCs stay interpretable across such a change.
-//!
-//! # Depth-governed verification (FR-042/043, D3)
-//!
-//! [`VerifiedCopier`] performs the copy and then proves the destination at the
-//! requested depth:
-//!
-//! - **Full** (the default) re-reads the whole destination with the platform's
-//!   cache bypass engaged (`F_NOCACHE` on macOS, `POSIX_FADV_DONTNEED` on Linux)
-//!   and compares the read-back CRC and byte count against the values streamed
-//!   during the copy.
-//! - **Quick check** compares the destination's sampled head+tail proof against
-//!   the source's — [`crate::fs_integrity`]'s existing windows, not a second
-//!   sampling scheme — plus an exact size compare against the streamed size.
-//!
-//! Quick is the universal floor: when the full read-back cannot run, the result
-//! is the quick check stamped [`AppliedVerificationDepth::quick_fallback`] with
-//! a `detail` naming the reason, never a pass and never something weaker.
-//!
-//! # The partial-copy name (FR-033, "crash mid-copy is resumable")
-//!
-//! A copy that claims its own destination never writes under the destination's
-//! real name. It writes to a sibling [`partial_destination_path`] and promotes
-//! that name onto the destination with
-//! [`crate::fs_safety::promote_staged_file`], which never replaces anything.
-//! The consequence is the one resume depends on: after a crash, ENOSPC, or a
-//! dropped network mount, the destination name either does not exist (so the
-//! resumed run copies it cleanly) or holds a complete file (so the resumed run
-//! proves it). It is never a truncated file under the real name, which the old
-//! `create_new` claim would have turned into a permanent "File exists" failure.
-//!
-//! An abandoned partial is this operation's own work by construction — the
-//! ownership guard means no other operation may write these paths — so the next
-//! attempt removes it before copying rather than leaving litter behind.
+//! The disk service copies and proves ([`crate::disk::Disk::place`] with a
+//! recorded policy from [`crate::disk::placement`]). This module turns what
+//! it reports into the forms the application persists: the streamed hash pair
+//! ([`StreamedContentHashes`]), the requested and applied depth, and the
+//! per-file verification outcome.
 //!
 //! Nothing here deletes, recycles, or rolls anything back. A mismatched
-//! destination is kept exactly as written so it can be inspected, and the source
-//! is never touched: source removal is the executor's step, gated on
-//! [`FileVerificationOutcome::permits_source_removal`] (FR-044).
+//! destination is kept exactly as written so it can be inspected, and the
+//! source is never touched: source removal is the executor's step, gated on
+//! [`FileVerificationOutcome::permits_source_removal`].
 
-use std::fs::File;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
-use crc_turbo::CrcAlgorithm;
 
+use crate::disk::{
+    ContentHasher, ContentHashes, CrcKind, Depth, Disk, Phase, Placement, Progress, Proof, Refused,
+    Verdict, Watch,
+};
 use crate::location::model::{
     AppliedVerificationDepth, FileVerificationOutcome, FileVerificationRecord, MoveCrcAlgorithm,
     StreamedContentHashes, VerificationDepth,
 };
 use crate::{AppError, AppResult};
 
-/// The `crc-turbo` algorithm used for the streaming move-corruption check.
-pub const MOVE_CRC_ALGORITHM: CrcAlgorithm = CrcAlgorithm::Crc64Nvme;
+#[doc(hidden)]
+pub use crate::disk::ReadBackHandle;
+#[cfg(test)]
+pub(crate) use crate::disk::{CacheBypass, ReadBackOpener, open_cache_bypassed};
+pub use crate::disk::{
+    FILE_NAME_MAX_BYTES, RESUMABLE_STAGING_SUFFIX as PARTIAL_COPY_SUFFIX,
+    resumable_staging_path as partial_destination_path,
+};
 
-/// The persisted tag written alongside every CRC produced by
-/// [`MOVE_CRC_ALGORITHM`] (FR-041 "algorithm-tagged").
+/// The persisted tag written alongside every CRC a copy streams.
 pub const MOVE_CRC_ALGORITHM_TAG: MoveCrcAlgorithm = MoveCrcAlgorithm::Crc64Nvme;
 
-/// Feeds every copied buffer to both hashers so the source is read exactly once
-/// (D2). The CRC is the move-corruption check compared against the destination
-/// read-back (FR-040); the BLAKE3 is the dedup identity persisted with the media
-/// file (FR-041, D4).
-pub struct StreamedContentHasher {
-    crc: crc_turbo::Digest,
-    blake3: blake3::Hasher,
-    size_bytes: u64,
-}
+/// Feeds every buffer to the disk service's hashers and produces the pair
+/// persisted with the media file.
+#[derive(Default)]
+pub struct StreamedContentHasher(ContentHasher);
 
 impl StreamedContentHasher {
     pub fn new() -> Self {
-        Self {
-            crc: crc_turbo::Digest::new(MOVE_CRC_ALGORITHM),
-            blake3: blake3::Hasher::new(),
-            size_bytes: 0,
-        }
+        Self::default()
     }
 
     /// Absorb one buffer of copied bytes.
     pub fn update(&mut self, buffer: &[u8]) {
-        self.crc.update(buffer);
-        self.blake3.update(buffer);
-        self.size_bytes = self.size_bytes.saturating_add(buffer.len() as u64);
+        self.0.update(buffer);
     }
 
     /// Bytes absorbed so far.
     pub fn size_bytes(&self) -> u64 {
-        self.size_bytes
+        self.0.size_bytes()
     }
 
-    /// Finish both hashers and produce the pair persisted with the media file.
     pub fn finalize(self) -> StreamedContentHashes {
-        StreamedContentHashes {
-            size_bytes: self.size_bytes,
-            crc_algorithm: MOVE_CRC_ALGORITHM_TAG,
-            move_crc: self.crc.finalize(),
-            full_blake3: self.blake3.finalize().to_hex().to_string(),
-        }
+        persisted_hashes(self.0.finalize())
     }
 }
 
-impl Default for StreamedContentHasher {
-    fn default() -> Self {
-        Self::new()
+/// The pair persisted with a media file, from what a copy streamed.
+pub fn persisted_hashes(hashes: ContentHashes) -> StreamedContentHashes {
+    StreamedContentHashes {
+        size_bytes: hashes.size_bytes,
+        crc_algorithm: match hashes.crc_kind {
+            CrcKind::Crc64Nvme => MoveCrcAlgorithm::Crc64Nvme,
+        },
+        move_crc: hashes.crc,
+        full_blake3: hashes.blake3,
     }
 }
 
-/// The `crc-turbo` algorithm a persisted tag names, so a stored CRC stays
-/// comparable after the default moves.
-pub fn crc_algorithm_for(tag: MoveCrcAlgorithm) -> CrcAlgorithm {
-    match tag {
-        MoveCrcAlgorithm::Crc64Nvme => CrcAlgorithm::Crc64Nvme,
+fn disk_hashes(hashes: &StreamedContentHashes) -> ContentHashes {
+    ContentHashes {
+        size_bytes: hashes.size_bytes,
+        crc_kind: match hashes.crc_algorithm {
+            MoveCrcAlgorithm::Crc64Nvme => CrcKind::Crc64Nvme,
+        },
+        crc: hashes.move_crc,
+        blake3: hashes.full_blake3.clone(),
     }
 }
 
-// ── The verified copy ────────────────────────────────────────────────────────
+/// The disk service's depth for a configured one.
+pub(crate) fn disk_depth(depth: VerificationDepth) -> Depth {
+    match depth {
+        VerificationDepth::Quick => Depth::Quick,
+        VerificationDepth::Full => Depth::Full,
+    }
+}
 
-/// Bytes moved per copy iteration. One buffer is written and fed to both hashers
-/// before the next read, so the source is read exactly once (D2).
-const COPY_CHUNK_BYTES: usize = 1024 * 1024;
+fn assessment(proof: Proof) -> VerificationAssessment {
+    VerificationAssessment {
+        depth: match (proof.fell_back, proof.asked) {
+            (true, _) => AppliedVerificationDepth::quick_fallback(),
+            (false, Depth::Full) => AppliedVerificationDepth::exact(VerificationDepth::Full),
+            (false, _) => AppliedVerificationDepth::exact(VerificationDepth::Quick),
+        },
+        outcome: match proof.verdict {
+            Verdict::Verified => FileVerificationOutcome::Verified,
+            Verdict::Mismatch => FileVerificationOutcome::Mismatch,
+            Verdict::Unavailable => FileVerificationOutcome::Unavailable,
+        },
+        detail: proof.detail,
+    }
+}
 
-/// Bytes per read-back iteration. Kept equal to the copy chunk: the read-back is
-/// sequential and this is large enough that the per-call overhead disappears
-/// against device throughput.
-const READ_BACK_CHUNK_BYTES: usize = 1024 * 1024;
-
-/// Who reserved the destination name.
-///
-/// A copy must never widen a destination it does not hold: `rename(2)` and a
-/// plain `create` both replace silently, which is the failure
-/// [`crate::fs_safety`] exists to prevent.
+/// Who reserved the destination name of a copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DestinationClaim {
-    /// This copy claims the destination name itself (`create_new`), failing if
-    /// anything already holds it.
+    /// The copy claims the destination name itself, failing if anything
+    /// already holds it.
     ClaimHere,
-    /// The caller already claimed or staged the destination (as
-    /// [`crate::fs_safety`]'s movers do); open it for writing without creating.
+    /// The caller already claimed or staged the destination.
     AlreadyHeld,
 }
 
-/// Suffix the in-progress copy of a destination file carries until it is
-/// complete and promoted onto the real name.
-///
-/// Deterministic on purpose: the next attempt has to be able to *find* the
-/// partial a crashed attempt abandoned, and a random name would leave one
-/// behind on every interruption.
-pub const PARTIAL_COPY_SUFFIX: &str = ".scryer-partial";
-
-/// Where a copy writes while it is still in progress: a sibling of
-/// `destination` in the same directory, so the promotion is a rename inside one
-/// filesystem and the fsynced directory entry covers both names.
-///
-/// A destination name too long to carry the suffix within
-/// [`FILE_NAME_MAX_BYTES`] is shortened and given a hash of the whole name, so
-/// the staging name stays deterministic and two long names that share a
-/// prefix still stage apart.
-pub fn partial_destination_path(destination: &Path) -> PathBuf {
-    let name = destination.file_name().unwrap_or_default();
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-    if name.as_encoded_bytes().len() + PARTIAL_COPY_SUFFIX.len() <= FILE_NAME_MAX_BYTES {
-        let mut partial = name.to_os_string();
-        partial.push(PARTIAL_COPY_SUFFIX);
-        return parent.join(partial);
-    }
-    let hash = blake3::hash(name.as_encoded_bytes()).to_hex();
-    let hash = &hash.as_str()[..16];
-    let Some(name) = name.to_str() else {
-        return parent.join(format!("partial-{hash}{PARTIAL_COPY_SUFFIX}"));
-    };
-    let kept = crate::library::rename::truncate_utf8_bytes(
-        name,
-        FILE_NAME_MAX_BYTES - PARTIAL_COPY_SUFFIX.len() - hash.len() - 1,
-    );
-    parent.join(format!("{kept}-{hash}{PARTIAL_COPY_SUFFIX}"))
-}
-
-/// The longest file name, in bytes, the filesystems Scryer writes to accept.
-pub(crate) const FILE_NAME_MAX_BYTES: usize = 255;
-
 /// Observes bytes as they are written, so a caller can show intra-file progress
-/// for a copy that runs for hours (FR-091).
+/// for a copy that runs for hours.
 ///
 /// The sink is called on the blocking copy thread once per chunk and must do
 /// nothing but bookkeeping — the runner accumulates into an atomic and does the
@@ -291,6 +183,28 @@ impl CopyProgress {
     pub fn is_observed(&self) -> bool {
         self.0.is_some()
     }
+
+    /// These sinks as the disk service reports to them: each phase as it
+    /// starts, newly written bytes while copying, and the running total while
+    /// verifying.
+    pub(crate) fn disk_progress(&self) -> Progress {
+        if self.0.is_none() && self.1.is_none() {
+            return Progress::none();
+        }
+        let (sinks, written) = (self.clone(), AtomicU64::new(0));
+        Progress::to(move |phase, bytes| match phase {
+            Phase::Waiting => sinks.phase(scryer_domain::ImportTransferPhase::Waiting, 0),
+            Phase::Copying if bytes == 0 => {
+                written.store(0, Ordering::Relaxed);
+                sinks.phase(scryer_domain::ImportTransferPhase::Copying, 0);
+            }
+            Phase::Copying => {
+                sinks.advance(bytes.saturating_sub(written.swap(bytes, Ordering::Relaxed)));
+            }
+            Phase::Finishing => sinks.phase(scryer_domain::ImportTransferPhase::Finalizing, bytes),
+            Phase::Verifying => sinks.phase(scryer_domain::ImportTransferPhase::Verifying, bytes),
+        })
+    }
 }
 
 impl std::fmt::Debug for CopyProgress {
@@ -300,19 +214,6 @@ impl std::fmt::Debug for CopyProgress {
             .field("observed", &self.is_observed())
             .finish()
     }
-}
-
-/// One file's worth of verified-copy work.
-#[derive(Debug, Clone)]
-pub struct VerifiedCopyRequest {
-    pub source: PathBuf,
-    pub destination: PathBuf,
-    /// The operation's configured depth (FR-042); the applied depth may be the
-    /// quick floor instead.
-    pub depth: VerificationDepth,
-    pub claim: DestinationClaim,
-    /// Where intra-file byte progress is reported, when anyone is watching.
-    pub progress: CopyProgress,
 }
 
 /// What verifying one destination file concluded, without the identifiers that
@@ -330,30 +231,43 @@ pub struct VerificationAssessment {
 }
 
 /// Everything the executor needs to persist a [`FileVerificationRecord`] for one
-/// file, plus the source-removal gate (FR-044).
+/// file, plus the source-removal gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedFile {
     pub source_path: PathBuf,
     pub destination_path: PathBuf,
     /// Hashes streamed during the copy; `None` for a same-filesystem rename,
-    /// which copies no bytes (FR-032).
+    /// which copies no bytes.
     pub hashes: Option<StreamedContentHashes>,
     pub depth: AppliedVerificationDepth,
     pub outcome: FileVerificationOutcome,
     pub detail: Option<String>,
+    /// The stored mark of the destination the copy wrote, read through its
+    /// handle after the sync, which a hash of it is stored with. `None` when
+    /// nothing was copied or the handle could not say.
+    pub destination_mark: Option<String>,
+    /// The destination was already there and the quick check, which keeps no
+    /// hashes, proved it the source's copy. See [`Self::is_link`].
+    pub content_matched: bool,
 }
 
 impl VerifiedFile {
-    /// The FR-044 gate: only a verified destination unblocks touching the
-    /// source. Every source recycle/removal decision must read this, never the
-    /// absence of an error.
+    /// Whether no bytes were copied because the destination is the source's
+    /// own file, a rename or a second link: no hashes, and no content check
+    /// stood in for them.
+    pub fn is_link(&self) -> bool {
+        self.hashes.is_none() && !self.content_matched
+    }
+
+    /// Only a verified destination unblocks touching the source. Every source
+    /// recycle/removal decision must read this, never the absence of an error.
     pub fn permits_source_removal(&self) -> bool {
         self.outcome.permits_source_removal()
     }
 
-    /// The FR-032 fast path: a same-filesystem rename moved the file, so no
-    /// bytes were copied and there is nothing to verify. Recorded so the
-    /// operation's per-file history has no gaps.
+    /// A same-filesystem rename moved the file, so no bytes were copied and
+    /// there is nothing to verify. Recorded so the operation's per-file
+    /// history has no gaps.
     pub fn same_filesystem_rename(
         source: impl Into<PathBuf>,
         destination: impl Into<PathBuf>,
@@ -369,10 +283,12 @@ impl VerifiedFile {
                 "same-filesystem rename: no bytes were copied, so no verification pass was needed (FR-032)"
                     .to_string(),
             ),
+            destination_mark: None,
+            content_matched: false,
         }
     }
 
-    /// Attach the operation's identifiers and become the persisted row (D5).
+    /// Attach the operation's identifiers and become the persisted row.
     pub fn into_record(
         self,
         identity: FileVerificationIdentity<'_>,
@@ -388,6 +304,7 @@ impl VerifiedFile {
             depth: self.depth,
             outcome: self.outcome,
             detail: self.detail,
+            content_matched: self.content_matched,
             verified_at,
         }
     }
@@ -413,371 +330,206 @@ pub trait FileVerificationRecorder: Send + Sync {
     async fn record_file_verification(&self, record: FileVerificationRecord) -> AppResult<()>;
 }
 
-/// How the destination was opened for a full-depth read-back.
-pub enum ReadBackHandle {
-    /// Open and ready to read.
-    Ready { file: File, bypass: CacheBypass },
-    /// The read-back cannot run here; verification falls back to the quick floor
-    /// with this reason (FR-042).
-    Unsupported(String),
-    /// The destination itself could not be opened, so nothing can be proven.
-    Unavailable(String),
+pub(super) fn copy_refusal(refused: Refused, sentence: String) -> AppError {
+    match refused {
+        Refused::StagingOccupied => AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_OCCUPIED,
+            sentence,
+        ),
+        // A full destination or one Scryer may not write to stays so on a
+        // retry: each is a refusal with its own reason.
+        Refused::NoSpace => AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_NO_SPACE,
+            sentence,
+        ),
+        // A source Scryer may not read, and one that is not there, do not
+        // come back on a retry either, nor does a link where the copy was to
+        // write into a name it holds.
+        Refused::Denied(crate::disk::Side::Source)
+        | Refused::SourceMissing
+        | Refused::LinkNotFollowed => AppError::RepositoryFailed {
+            message: sentence,
+            reason: refused.reason(),
+        },
+        Refused::Denied(_) => AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_PERMISSION_DENIED,
+            sentence,
+        ),
+        // Storage that timed out or could not be reached carries its own
+        // variant and reason; every other refusal is a repository failure.
+        Refused::Unreachable(_) | Refused::TimedOut(_) => {
+            AppError::temporary_unavailable_reason(refused.reason(), sentence, None)
+        }
+        _ => AppError::Repository(sentence),
+    }
 }
 
-/// Whether the read-back is actually bypassing the page cache.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CacheBypass {
-    /// The platform's bypass is engaged for this descriptor.
-    Engaged,
-    /// This platform offers no bypass mechanism. FR-042 asks for cache bypass
-    /// "where the platform allows", so the full read-back still runs; the
-    /// weaker guarantee is noted in the record's detail.
-    NotAvailableOnPlatform,
-    /// The platform has a bypass but the filesystem rejected it for this file.
-    /// A cached full read-back is still stronger evidence than the quick floor,
-    /// so the read-back proceeds and the weaker guarantee is noted in the
-    /// record's detail rather than downgrading the applied depth.
-    Rejected(String),
-}
-
-/// Opens a destination for the full-depth read-back.
+/// Copy `source` onto `destination` as `policy`, a recorded-copy policy from
+/// [`crate::disk::placement`], says, and report what the copy streamed.
 ///
-/// Production uses [`open_cache_bypassed`]; tests inject failures to exercise
-/// the quick-floor fallback.
-pub type ReadBackOpener = Arc<dyn Fn(&Path) -> ReadBackHandle + Send + Sync>;
-
-/// Copies files with the streamed hash pair and proves the result at the
-/// configured depth.
-///
-/// Cheap to clone; the executor can hold one per operation.
-#[derive(Clone)]
-pub struct VerifiedCopier {
-    read_back_opener: ReadBackOpener,
-    progress: CopyProgress,
-}
-
-impl std::fmt::Debug for VerifiedCopier {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("VerifiedCopier")
-            .finish_non_exhaustive()
-    }
-}
-
-impl Default for VerifiedCopier {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl VerifiedCopier {
-    pub fn new() -> Self {
-        Self {
-            read_back_opener: Arc::new(open_cache_bypassed as fn(&Path) -> ReadBackHandle),
-            progress: CopyProgress::none(),
-        }
-    }
-
-    /// Substitute the read-back opener. The seam exists so the fallback path is
-    /// testable without an exotic filesystem.
-    pub fn with_read_back_opener(opener: ReadBackOpener) -> Self {
-        Self {
-            read_back_opener: opener,
-            progress: CopyProgress::none(),
-        }
-    }
-
-    pub fn with_progress(mut self, progress: CopyProgress) -> Self {
-        self.progress = progress;
-        self
-    }
-
-    /// Copy `source` onto `destination`, then prove the destination at
-    /// `depth`.
-    ///
-    /// Never returns a partial success: a copy failure is an error and leaves
-    /// whatever it wrote in place for the caller to roll back (the same
-    /// contract [`crate::fs_safety`] rolls back against). Verification failures
-    /// are outcomes, not errors — a mismatched destination is a fact to record
-    /// and surface, not an exception.
-    pub async fn copy_and_verify(&self, request: VerifiedCopyRequest) -> AppResult<VerifiedFile> {
-        let copier = self.clone().with_progress(request.progress.clone());
-        let hashes = self
-            .copy_with_progress(
-                &request.source,
-                &request.destination,
-                request.claim,
-                &request.progress,
-            )
-            .await?;
-        let assessment = copier
-            .verify(
-                &request.source,
-                &request.destination,
-                &hashes,
-                request.depth,
-            )
-            .await?;
-
-        Ok(VerifiedFile {
-            source_path: request.source,
-            destination_path: request.destination,
-            hashes: Some(hashes),
-            depth: assessment.depth,
-            outcome: assessment.outcome,
-            detail: assessment.detail,
-        })
-    }
-
-    /// One streaming copy pass with nobody watching the byte counter.
-    pub async fn copy(
-        &self,
-        source: &Path,
-        destination: &Path,
-        claim: DestinationClaim,
-    ) -> AppResult<StreamedContentHashes> {
-        self.copy_with_progress(source, destination, claim, &CopyProgress::none())
-            .await
-    }
-
-    /// One streaming copy pass: every buffer is written and fed to both hashers
-    /// (D2). The destination is fsynced, and its directory entry with it.
-    ///
-    /// A [`DestinationClaim::ClaimHere`] copy goes through
-    /// [`partial_destination_path`] and is promoted onto the destination only
-    /// once it is complete, so an interruption never leaves a truncated file
-    /// under the real name. A [`DestinationClaim::AlreadyHeld`] copy writes in
-    /// place: the caller already staged the name and owns the rollback.
-    pub async fn copy_with_progress(
-        &self,
-        source: &Path,
-        destination: &Path,
-        claim: DestinationClaim,
-        progress: &CopyProgress,
-    ) -> AppResult<StreamedContentHashes> {
-        progress.phase(scryer_domain::ImportTransferPhase::Waiting, 0);
-        let _permit = super::transfer::CopyCoordinator::shared()
-            .acquire_destination(destination)
-            .await;
-        progress.phase(scryer_domain::ImportTransferPhase::Copying, 0);
-        match claim {
-            DestinationClaim::AlreadyHeld => {
-                let source = source.to_path_buf();
-                let destination = destination.to_path_buf();
-                let progress = progress.clone();
-                spawn_verify_blocking(move || {
-                    copy_with_streamed_hashes(
-                        &source,
-                        &destination,
-                        DestinationClaim::AlreadyHeld,
-                        &progress,
-                    )
-                })
-                .await?
-            }
-            DestinationClaim::ClaimHere => {
-                self.copy_through_partial(source, destination, progress)
-                    .await
-            }
-        }
-    }
-
-    /// Copy to a caller-journaled staging name with an exclusive claim.
-    /// Recovery retains failed staging attempts; this path never removes or
-    /// truncates a file, including one that races the exclusive create.
-    pub(crate) async fn copy_to_journaled_staging(
-        &self,
-        source: &Path,
-        staging: &Path,
-        progress: &CopyProgress,
-    ) -> AppResult<StreamedContentHashes> {
-        progress.phase(scryer_domain::ImportTransferPhase::Waiting, 0);
-        let _permit = super::transfer::CopyCoordinator::shared()
-            .acquire_destination(staging)
-            .await;
-        progress.phase(scryer_domain::ImportTransferPhase::Copying, 0);
-        let source = source.to_path_buf();
-        let staging = staging.to_path_buf();
-        let progress = progress.clone();
-        spawn_verify_blocking(move || {
-            copy_with_streamed_hashes(&source, &staging, DestinationClaim::ClaimHere, &progress)
-        })
-        .await?
-    }
-
-    /// Write to the partial name, then promote it onto the destination.
-    async fn copy_through_partial(
-        &self,
-        source: &Path,
-        destination: &Path,
-        progress: &CopyProgress,
-    ) -> AppResult<StreamedContentHashes> {
-        let partial = partial_destination_path(destination);
-        // Whatever sits at the staging path stays there. The copier cannot tell
-        // an interrupted attempt's own partial from a user file that happens to
-        // carry the suffix, and only a caller holding a durable record of its
-        // own staged attempt can — `ConflictResolver` clears exactly that one
-        // before it asks for the copy, which is what makes a resumed run start
-        // from a clean file rather than appending to a truncated one.
-        ensure_partial_path_free(&partial).await?;
-
-        let hashes = {
-            let source = source.to_path_buf();
-            let partial = partial.clone();
-            let progress = progress.clone();
-            spawn_verify_blocking(move || {
-                Ok(copy_claiming_destination(
-                    &source,
-                    &partial,
-                    DestinationClaim::ClaimHere,
-                    &progress,
-                ))
-            })
-            .await??
-        };
-        let hashes = match hashes {
-            Ok(hashes) => hashes,
-            Err(failure) => {
-                // The source is untouched, so an incomplete partial this
-                // attempt created is worth nothing to anyone. A partial it
-                // never claimed — one that appeared after the free check, so
-                // the exclusive create failed — belongs to someone else and
-                // stays where it is.
-                if failure.claimed {
-                    remove_partial_best_effort(&partial).await;
-                }
-                return Err(failure.error);
-            }
-        };
-
-        if let Err(error) = crate::fs_safety::promote_staged_file(
-            &partial,
-            destination,
-            crate::fs_safety::MoveOptions::default(),
-        )
+/// A copy failure is an error. What the destination proved to be is in the
+/// answer, not an error: a mismatched destination is a fact to record and
+/// surface.
+pub async fn recorded_copy(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    policy: Placement,
+    progress: &CopyProgress,
+) -> AppResult<(StreamedContentHashes, Option<VerificationAssessment>)> {
+    recorded_copy_reporting(disk, source, destination, policy, progress)
         .await
-        {
-            remove_partial_best_effort(&partial).await;
-            return Err(AppError::Repository(format!(
-                "failed to place the completed copy at {}: {error}",
-                destination.display()
-            )));
-        }
+        .map(|copied| (copied.hashes, copied.proof))
+        .map_err(|failure| failure.error)
+}
 
-        // The promotion is a second directory-entry change, so the entry the
-        // reader will look for needs its own fsync.
-        sync_parent_directory_after_promotion(destination).await;
-        Ok(hashes)
-    }
+/// A copy that failed, and whether it changed what is under the destination
+/// name before it did. A copy that ran to the end and then failed counts as
+/// written.
+pub struct CopyFailure {
+    pub error: AppError,
+    pub destination_written: bool,
+}
 
-    /// Prove a destination file that is already there against its source, for
-    /// the crash window between a promotion and the verification record that
-    /// should have followed it.
-    ///
-    /// The destination is proven against the source's full hash: the one the
-    /// catalog already holds when `known` still describes the file on disk,
-    /// otherwise one recovered by reading the source once. A destination that
-    /// does not prove comes back as a [`FileVerificationOutcome::Mismatch`] —
-    /// never a silent removal, never a pass.
-    pub async fn verify_existing_destination(
-        &self,
-        source: &Path,
-        destination: &Path,
-        requested: VerificationDepth,
-        known: Option<&super::model::KnownSourceContent>,
-    ) -> AppResult<VerifiedFile> {
-        let _ = requested;
-        super::resolution::compare_existing(source, destination, &self.progress, known).await
-    }
+async fn recorded_copy_reporting(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    policy: Placement,
+    progress: &CopyProgress,
+) -> Result<RecordedCopy, CopyFailure> {
+    let watch = Watch {
+        progress: progress.disk_progress(),
+        cancel: crate::disk::Cancel::never(),
+    };
+    let placed = disk
+        .place_watched(source, destination, policy, watch)
+        .await
+        .map_err(|refusal| CopyFailure {
+            destination_written: refusal.destination_written,
+            error: copy_refusal(refusal.refused, refusal.to_string()),
+        })?;
+    let copied = placed.copied.ok_or_else(|| CopyFailure {
+        error: AppError::Repository(format!("the copy of {} recorded nothing", source.display())),
+        destination_written: true,
+    })?;
+    Ok(RecordedCopy {
+        hashes: persisted_hashes(copied.hashes),
+        proof: copied.proof.map(assessment),
+        mark: copied.mark.map(|mark| mark.to_stored()),
+    })
+}
 
-    /// Prove `destination` against the hashes streamed while it was written.
-    pub async fn verify(
-        &self,
-        source: &Path,
-        destination: &Path,
-        hashes: &StreamedContentHashes,
-        requested: VerificationDepth,
-    ) -> AppResult<VerificationAssessment> {
-        let copier = self.clone();
-        let source = source.to_path_buf();
-        let destination = destination.to_path_buf();
-        let hashes = hashes.clone();
-        spawn_verify_blocking(move || {
-            Ok(copier.verify_blocking(&source, &destination, &hashes, requested))
-        })
-        .await?
-    }
+/// What a recorded copy streamed, what its destination proved to be, and the
+/// stored mark of the file it wrote.
+struct RecordedCopy {
+    hashes: StreamedContentHashes,
+    proof: Option<VerificationAssessment>,
+    mark: Option<String>,
+}
 
-    /// Blocking twin of [`VerifiedCopier::verify`], for callers already on a
-    /// blocking thread (the download-client copy path, FR-045).
-    pub fn verify_blocking(
-        &self,
-        source: &Path,
-        destination: &Path,
-        hashes: &StreamedContentHashes,
-        requested: VerificationDepth,
-    ) -> VerificationAssessment {
-        self.progress
-            .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
-        match requested {
-            VerificationDepth::Quick => {
-                let (outcome, detail) = quick_check(source, destination, hashes);
-                VerificationAssessment {
-                    depth: AppliedVerificationDepth::exact(VerificationDepth::Quick),
-                    outcome,
-                    detail,
-                }
-            }
-            VerificationDepth::Full => self.full_verification(source, destination, hashes),
-        }
-    }
+/// [`recorded_copy`] under a policy that proves the copy, as the file the
+/// executor records.
+pub async fn copy_and_verify(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    policy: Placement,
+    progress: &CopyProgress,
+) -> AppResult<VerifiedFile> {
+    copy_and_verify_reporting(disk, source, destination, policy, progress)
+        .await
+        .map_err(|failure| failure.error)
+}
 
-    fn full_verification(
-        &self,
-        source: &Path,
-        destination: &Path,
-        hashes: &StreamedContentHashes,
-    ) -> VerificationAssessment {
-        match (self.read_back_opener)(destination) {
-            ReadBackHandle::Unavailable(reason) => VerificationAssessment {
-                depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
-                outcome: FileVerificationOutcome::Unavailable,
-                detail: Some(reason),
-            },
-            ReadBackHandle::Unsupported(reason) => {
-                quick_floor_fallback(source, destination, hashes, &reason)
-            }
-            ReadBackHandle::Ready { file, bypass } => {
-                #[cfg(test)]
-                whole_file_reads::note(destination);
-                match full_read_back(file, hashes, &self.progress) {
-                    Ok((outcome, detail)) => VerificationAssessment {
-                        depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
-                        outcome,
-                        detail: join_details(bypass_note(bypass), detail),
-                    },
-                    Err(reason) => quick_floor_fallback(source, destination, hashes, &reason),
-                }
-            }
-        }
-    }
+/// [`copy_and_verify`], saying on failure whether the destination name was
+/// written, for a caller whose name held a file before the copy.
+pub async fn copy_and_verify_reporting(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    policy: Placement,
+    progress: &CopyProgress,
+) -> Result<VerifiedFile, CopyFailure> {
+    let RecordedCopy {
+        hashes,
+        proof,
+        mark,
+    } = recorded_copy_reporting(disk, source, destination, policy, progress).await?;
+    let proof = proof.ok_or_else(|| CopyFailure {
+        error: AppError::Repository(format!("the copy of {} was not proven", source.display())),
+        destination_written: true,
+    })?;
+    Ok(VerifiedFile {
+        source_path: source.to_path_buf(),
+        destination_path: destination.to_path_buf(),
+        hashes: Some(hashes),
+        depth: proof.depth,
+        outcome: proof.outcome,
+        detail: proof.detail,
+        destination_mark: mark,
+        content_matched: false,
+    })
+}
+
+/// Prove `destination` against the hashes streamed while it was written.
+pub async fn verify(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    hashes: &StreamedContentHashes,
+    requested: VerificationDepth,
+) -> AppResult<VerificationAssessment> {
+    disk.prove_copy(
+        source,
+        destination,
+        disk_hashes(hashes),
+        disk_depth(requested),
+        Progress::none(),
+    )
+    .await
+    .map(assessment)
+    .map_err(join_failure)
+}
+
+/// Blocking twin of [`verify`], for callers already on a blocking thread (the
+/// download-client copy path).
+pub fn verify_blocking(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    hashes: &StreamedContentHashes,
+    requested: VerificationDepth,
+    progress: &CopyProgress,
+) -> VerificationAssessment {
+    assessment(disk.prove_copy_blocking(
+        source,
+        destination,
+        &disk_hashes(hashes),
+        disk_depth(requested),
+        &progress.disk_progress(),
+    ))
+}
+
+fn join_failure(said: String) -> AppError {
+    AppError::Repository(format!("verified copy task failed to join: {said}"))
 }
 
 /// Read one existing file end to end and produce its content hashes.
-///
-/// The same single streaming pass a copy uses (D2), against a file nothing is
-/// copying: the full-hash convergence job hashes files in place (FR-047).
 pub async fn hash_existing_file(path: &Path) -> AppResult<StreamedContentHashes> {
-    let path = path.to_path_buf();
-    spawn_verify_blocking(move || hash_source(&path)).await?
+    hash_existing_file_with_progress(path, CopyProgress::none()).await
 }
 
 pub async fn hash_existing_file_with_progress(
     path: &Path,
     progress: CopyProgress,
 ) -> AppResult<StreamedContentHashes> {
-    let path = path.to_path_buf();
-    spawn_verify_blocking(move || hash_source_with_progress(&path, &progress)).await?
+    Disk::process()
+        .hash_file(path, progress.disk_progress())
+        .await
+        .map_err(join_failure)?
+        .map(persisted_hashes)
+        .map_err(|refusal| AppError::Repository(refusal.to_string()))
 }
 
 /// The quick check alone, against the hashes a copy already recorded: the
@@ -788,281 +540,24 @@ pub async fn quick_recheck(
     destination: &Path,
     hashes: &StreamedContentHashes,
 ) -> AppResult<FileVerificationOutcome> {
-    let source = source.to_path_buf();
-    let destination = destination.to_path_buf();
-    let hashes = hashes.clone();
-    spawn_verify_blocking(move || Ok(quick_check(&source, &destination, &hashes).0)).await?
-}
-
-/// Test seam: how many times each path was read end to end by a hash or a
-/// full read-back, so a test can prove a step read nothing whole.
-#[cfg(test)]
-pub(crate) mod whole_file_reads {
-    use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
-
-    static READS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
-
-    pub(crate) fn note(path: &Path) {
-        *READS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .entry(path.to_path_buf())
-            .or_default() += 1;
-    }
-
-    pub(crate) fn count(path: &Path) -> usize {
-        READS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(path)
-            .copied()
-            .unwrap_or(0)
-    }
-}
-
-/// Runs one blocking filesystem step off the async runtime, the way
-/// [`crate::fs_integrity`] does.
-async fn spawn_verify_blocking<T, F>(work: F) -> AppResult<AppResult<T>>
-where
-    F: FnOnce() -> AppResult<T> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(work).await.map_err(|error| {
-        AppError::Repository(format!("verified copy task failed to join: {error}"))
-    })
-}
-
-/// Refuses a copy whose staging path is occupied, rather than removing whatever
-/// occupies it.
-///
-/// A file at `<destination>.scryer-partial` is *usually* an interrupted
-/// attempt's own work, but the copier has no way to prove that, and the one
-/// case it cannot prove — a user file that happens to carry the suffix, or a
-/// partial another operation is still writing — is the one where removing it is
-/// unrecoverable. So the occupied name fails the copy the same way an occupied
-/// destination does, and the source is left where it is. The caller that *can*
-/// prove ownership from its own durable record clears the partial before it
-/// asks for the copy (see [`crate::location::resolution::ConflictResolver`]).
-async fn ensure_partial_path_free(partial: &Path) -> AppResult<()> {
-    match tokio::fs::symlink_metadata(partial).await {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to inspect the destination staging path {}: {error}",
-            partial.display()
-        ))),
-        Ok(_) => Err(AppError::validation_refused(
-            crate::error_reasons::location::DESTINATION_OCCUPIED,
-            format!(
-                "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
-                partial.display()
-            ),
-        )),
-    }
-}
-
-/// Drops an incomplete partial after a failed attempt. Best effort: a stray
-/// partial costs a stat on the next attempt, never correctness, and the source
-/// it was copied from is untouched.
-async fn remove_partial_best_effort(partial: &Path) {
-    if let Err(error) = tokio::fs::remove_file(partial).await
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(
-            partial = %partial.display(),
-            %error,
-            "could not remove an incomplete partial copy; the next attempt will clear it"
-        );
-    }
+    let proof = Disk::process()
+        .prove_copy(
+            source,
+            destination,
+            disk_hashes(hashes),
+            Depth::Quick,
+            Progress::none(),
+        )
+        .await
+        .map_err(join_failure)?;
+    Ok(assessment(proof).outcome)
 }
 
 pub(crate) async fn sync_parent_directory_after_promotion(destination: &Path) {
-    let destination = destination.to_path_buf();
-    let _ = tokio::task::spawn_blocking(move || {
-        sync_parent_directory_best_effort(&destination);
-    })
-    .await;
-}
-
-/// Streams the source through both hashers without writing anything, so an
-/// already-placed destination can be compared against what a copy of that
-/// source would have produced.
-fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
-    hash_source_with_progress(source, &CopyProgress::none())
-}
-
-fn hash_source_with_progress(
-    source: &Path,
-    progress: &CopyProgress,
-) -> AppResult<StreamedContentHashes> {
-    #[cfg(test)]
-    whole_file_reads::note(source);
-    let mut input = File::open(source).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open copy source: {}: {error}",
-            source.display()
-        ))
-    })?;
-
-    let mut bytes = 0u64;
-    let mut hasher = StreamedContentHasher::new();
-    let mut buffer = vec![0u8; COPY_CHUNK_BYTES];
-    loop {
-        let read = input.read(&mut buffer).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read copy source: {}: {error}",
-                source.display()
-            ))
-        })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        bytes = bytes.saturating_add(read as u64);
-        progress.phase(scryer_domain::ImportTransferPhase::Verifying, bytes);
-    }
-    Ok(hasher.finalize())
-}
-
-/// Copies `source` into a destination this call either claims or was handed,
-/// hashing every buffer on the way through.
-fn copy_with_streamed_hashes(
-    source: &Path,
-    destination: &Path,
-    claim: DestinationClaim,
-    progress: &CopyProgress,
-) -> AppResult<StreamedContentHashes> {
-    copy_claiming_destination(source, destination, claim, progress).map_err(|failure| failure.error)
-}
-
-/// A failed copy, and whether the destination file was opened by it — the
-/// only case in which this attempt may treat what sits there as its own.
-#[derive(Debug)]
-struct CopyFailure {
-    error: AppError,
-    claimed: bool,
-}
-
-fn copy_claiming_destination(
-    source: &Path,
-    destination: &Path,
-    claim: DestinationClaim,
-    progress: &CopyProgress,
-) -> Result<StreamedContentHashes, CopyFailure> {
-    let unclaimed = |error| CopyFailure {
-        error,
-        claimed: false,
-    };
-    let mut input = File::open(source)
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to open copy source: {}: {error}",
-                source.display()
-            ))
-        })
-        .map_err(unclaimed)?;
-
-    let output = open_destination(destination, claim).map_err(unclaimed)?;
-    write_claimed_destination(source, destination, &mut input, output, progress).map_err(|error| {
-        CopyFailure {
-            error,
-            claimed: true,
-        }
-    })
-}
-
-fn write_claimed_destination(
-    source: &Path,
-    destination: &Path,
-    input: &mut File,
-    mut output: File,
-    progress: &CopyProgress,
-) -> AppResult<StreamedContentHashes> {
-    let mut hasher = StreamedContentHasher::new();
-    let mut buffer = vec![0u8; COPY_CHUNK_BYTES];
-    loop {
-        let read = input.read(&mut buffer).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read copy source: {}: {error}",
-                source.display()
-            ))
-        })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        output.write_all(&buffer[..read]).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to write copy destination: {}: {error}",
-                destination.display()
-            ))
-        })?;
-        progress.advance(read as u64);
-    }
-
-    output.flush().map_err(|error| {
-        AppError::Repository(format!(
-            "failed to flush copy destination: {}: {error}",
-            destination.display()
-        ))
-    })?;
-    let sync = crate::fs_safety::sync_written_file(&output).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to fsync copy destination: {}: {error}",
-            destination.display()
-        ))
-    })?;
-    if sync == crate::fs_safety::FileSync::Unsupported {
-        tracing::debug!(
-            destination = %destination.display(),
-            "copy destination filesystem does not support fsync; relying on copy verification"
-        );
-    }
-    drop(output);
-
-    // The file's own fsync does not promise its directory entry survives a
-    // crash. Best-effort because filesystems that reject a directory fsync are
-    // not a reason to fail a copy that otherwise succeeded.
-    sync_parent_directory_best_effort(destination);
-
-    // Carry the source's mode so a copy does not silently change access. The
-    // operation's configured permissions are applied afterwards by the executor
-    // (FR-031) and take precedence; this is only the floor, matching what
-    // `fs_safety` already does for its own cross-device copies.
-    carry_source_mode_best_effort(source, destination);
-
-    Ok(hasher.finalize())
-}
-
-fn open_destination(destination: &Path, claim: DestinationClaim) -> AppResult<File> {
-    let mut options = std::fs::OpenOptions::new();
-    match claim {
-        // `create_new` is the claim: it fails rather than replacing anything.
-        DestinationClaim::ClaimHere => options.write(true).create_new(true),
-        // The caller holds the name; opening without `create` means the claim,
-        // not this call, is what decided the file may be written.
-        DestinationClaim::AlreadyHeld => options.write(true).truncate(true),
-    };
-    options.open(destination).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open copy destination: {}: {error}",
-            destination.display()
-        ))
-    })
-}
-
-#[cfg(unix)]
-fn sync_parent_directory_best_effort(destination: &Path) {
-    let Some(parent) = destination.parent() else {
+    let Some(parent) = destination.parent().filter(|p| !p.as_os_str().is_empty()) else {
         return;
     };
-    if parent.as_os_str().is_empty() {
-        return;
-    }
-    if let Ok(directory) = File::open(parent)
-        && let Err(error) = directory.sync_all()
-    {
+    if let Err(error) = Disk::process().sync_dir(parent).await {
         tracing::debug!(
             parent = %parent.display(),
             %error,
@@ -1071,376 +566,106 @@ fn sync_parent_directory_best_effort(destination: &Path) {
     }
 }
 
-#[cfg(not(unix))]
-fn sync_parent_directory_best_effort(_destination: &Path) {}
-
-#[cfg(unix)]
-fn carry_source_mode_best_effort(source: &Path, destination: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let Ok(metadata) = std::fs::metadata(source) else {
-        return;
-    };
-    let mode = metadata.permissions().mode();
-    let _ = std::fs::set_permissions(destination, std::fs::Permissions::from_mode(mode));
-}
-
-#[cfg(not(unix))]
-fn carry_source_mode_best_effort(_source: &Path, _destination: &Path) {}
-
-// ── Depth: full ──────────────────────────────────────────────────────────────
-
-/// Reads the whole destination back and compares it against what the copy
-/// streamed.
-///
-/// `Err` means the read-back could not be completed, which is the FR-042
-/// fallback trigger, not a verdict on the content.
-fn full_read_back(
-    mut file: File,
-    hashes: &StreamedContentHashes,
-    progress: &CopyProgress,
-) -> Result<(FileVerificationOutcome, Option<String>), String> {
-    let mut digest = crc_turbo::Digest::new(crc_algorithm_for(hashes.crc_algorithm));
-    let mut read_bytes: u64 = 0;
-    let mut buffer = vec![0u8; READ_BACK_CHUNK_BYTES];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("destination read-back failed: {error}"))?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-        read_bytes = read_bytes.saturating_add(read as u64);
-        progress.phase(scryer_domain::ImportTransferPhase::Verifying, read_bytes);
-    }
-
-    if read_bytes != hashes.size_bytes {
-        return Ok((
-            FileVerificationOutcome::Mismatch,
-            Some(format!(
-                "destination is {read_bytes} bytes; {} bytes were copied",
-                hashes.size_bytes
-            )),
-        ));
-    }
-
-    let read_back_crc = digest.finalize();
-    if read_back_crc != hashes.move_crc {
-        tracing::warn!(
-            algorithm = hashes.crc_algorithm.as_str(),
-            expected = hashes.move_crc,
-            actual = read_back_crc,
-            "copy read-back mismatch"
-        );
-        return Ok((
-            FileVerificationOutcome::Mismatch,
-            Some("The copied file did not match the source. The source was preserved; retry the transfer.".into()),
-        ));
-    }
-
-    Ok((FileVerificationOutcome::Verified, None))
-}
-
-fn bypass_note(bypass: CacheBypass) -> Option<String> {
-    match bypass {
-        CacheBypass::Engaged => None,
-        CacheBypass::NotAvailableOnPlatform => Some(
-            "the destination read-back was not cache-bypassed: this platform offers no bypass mechanism"
-                .to_string(),
-        ),
-        CacheBypass::Rejected(reason) => Some(format!(
-            "the destination read-back was not cache-bypassed: {reason}"
-        )),
-    }
-}
-
-/// Opens the destination with the platform's page-cache bypass engaged.
-///
-/// macOS: `F_NOCACHE` on the descriptor, which keeps this read out of the
-/// unified buffer cache. Pages already resident from the write may still be
-/// served, so the bypass is a strong hint rather than a guarantee of a device
-/// read.
-///
-/// Linux: `POSIX_FADV_DONTNEED` over the whole file, issued after the copy's
-/// fsync so the clean pages can actually be dropped and the read-back has to go
-/// back to the device. `O_DIRECT` is deliberately not used: it demands
-/// block-aligned buffers and offsets and is unsupported on several filesystems
-/// media libraries live on (tmpfs, some network mounts), which would turn most
-/// full verifications into quick fallbacks.
-///
-/// Everywhere else: no mechanism is wired, so the read-back runs uncached and
-/// says so — FR-042 asks for bypass "where the platform allows".
-pub fn open_cache_bypassed(path: &Path) -> ReadBackHandle {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) => {
-            return ReadBackHandle::Unavailable(format!(
-                "could not open the destination for verification: {}: {error}",
-                path.display()
-            ));
-        }
-    };
-
-    engage_cache_bypass(file)
-}
-
-#[cfg(target_os = "macos")]
-fn engage_cache_bypass(file: File) -> ReadBackHandle {
-    use std::os::unix::io::AsRawFd;
-
-    // SAFETY: `file` owns the descriptor for the duration of the call.
-    let code = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_NOCACHE, 1) };
-    if code == -1 {
-        return ReadBackHandle::Ready {
-            file,
-            bypass: CacheBypass::Rejected(format!(
-                "F_NOCACHE was rejected for this file: {}",
-                std::io::Error::last_os_error()
-            )),
-        };
-    }
-    ReadBackHandle::Ready {
-        file,
-        bypass: CacheBypass::Engaged,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn engage_cache_bypass(file: File) -> ReadBackHandle {
-    use std::os::unix::io::AsRawFd;
-
-    // SAFETY: `file` owns the descriptor for the duration of the call. A length
-    // of 0 means "to end of file".
-    let code = unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
-    // posix_fadvise reports errors by return value, not errno.
-    if code != 0 {
-        return ReadBackHandle::Ready {
-            file,
-            bypass: CacheBypass::Rejected(format!(
-                "POSIX_FADV_DONTNEED was rejected for this file: {}",
-                std::io::Error::from_raw_os_error(code)
-            )),
-        };
-    }
-    ReadBackHandle::Ready {
-        file,
-        bypass: CacheBypass::Engaged,
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn engage_cache_bypass(file: File) -> ReadBackHandle {
-    ReadBackHandle::Ready {
-        file,
-        bypass: CacheBypass::NotAvailableOnPlatform,
-    }
-}
-
-// ── Depth: quick, and the floor ──────────────────────────────────────────────
-
-/// The FR-042 floor: whatever stopped the full read-back, the file still gets
-/// the quick check, stamped as a fallback with the reason.
-fn quick_floor_fallback(
-    source: &Path,
-    destination: &Path,
-    hashes: &StreamedContentHashes,
-    reason: &str,
-) -> VerificationAssessment {
-    let (outcome, detail) = quick_check(source, destination, hashes);
-    VerificationAssessment {
-        depth: AppliedVerificationDepth::quick_fallback(),
-        outcome,
-        detail: join_details(
-            Some(format!(
-                "full verification fell back to the quick check: {reason}"
-            )),
-            detail,
-        ),
-    }
-}
-
-/// Size compare against the streamed size, then the sampled head+tail proof of
-/// the destination against the source's.
-///
-/// The sampling is [`crate::fs_integrity`]'s, unchanged: same windows, same
-/// digest, so scan signatures and move verification can never disagree about
-/// what "the same file" means. Its blind spot travels with it — content between
-/// the two windows is not covered, which is exactly why full is the default.
-fn quick_check(
-    source: &Path,
-    destination: &Path,
-    hashes: &StreamedContentHashes,
-) -> (FileVerificationOutcome, Option<String>) {
-    let destination_size = match std::fs::metadata(destination) {
-        Ok(metadata) => metadata.len(),
-        Err(error) => {
-            return (
-                FileVerificationOutcome::Unavailable,
-                Some(format!(
-                    "could not stat the destination: {}: {error}",
-                    destination.display()
-                )),
-            );
-        }
-    };
-    if destination_size != hashes.size_bytes {
-        return (
-            FileVerificationOutcome::Mismatch,
-            Some(format!(
-                "destination is {destination_size} bytes; {} bytes were copied",
-                hashes.size_bytes
-            )),
-        );
-    }
-
-    let destination_proof = match crate::fs_integrity::import_content_proof(destination) {
-        Ok(proof) => proof,
-        Err(error) => {
-            return (
-                FileVerificationOutcome::Unavailable,
-                Some(format!("could not read the destination: {error}")),
-            );
-        }
-    };
-    // The source is still present: FR-044 forbids touching it until this passes.
-    // If it cannot be read, the comparison did not run, so nothing is proven.
-    let source_proof = match crate::fs_integrity::import_content_proof(source) {
-        Ok(proof) => proof,
-        Err(error) => {
-            return (
-                FileVerificationOutcome::Unavailable,
-                Some(format!(
-                    "could not re-read the source for the quick check: {error}"
-                )),
-            );
-        }
-    };
-
-    match crate::fs_integrity::verify_content_proofs(
-        &source.display().to_string(),
-        &source_proof,
-        &destination.display().to_string(),
-        &destination_proof,
-    ) {
-        Ok(()) => (FileVerificationOutcome::Verified, None),
-        Err(error) => (FileVerificationOutcome::Mismatch, Some(error.to_string())),
-    }
-}
-
-fn join_details(first: Option<String>, second: Option<String>) -> Option<String> {
-    match (first, second) {
-        (Some(first), Some(second)) => Some(format!("{first}; {second}")),
-        (Some(only), None) | (None, Some(only)) => Some(only),
-        (None, None) => None,
-    }
-}
-
-// ── The rename fast path (FR-032) ────────────────────────────────────────────
-
-/// Whether `source` and the volume `destination` will land on are the same
-/// filesystem, i.e. whether the move can be a rename that needs no verification
-/// pass at all (FR-032).
-///
-/// This is a pre-flight probe, complementary to
-/// [`crate::fs_safety::is_cross_device_error`], which classifies an `EXDEV` a
-/// rename already returned. Both directions fail safe: an unknown answer is
-/// `false`, and a `false` only ever costs a copy that is verified.
-///
-/// The destination usually does not exist yet, so the nearest existing ancestor
-/// directory is what gets compared.
+/// Whether a move from `source` to `destination` can be a rename that needs
+/// no verification pass at all. An unknown answer is `false`, and a `false`
+/// only ever costs a copy that is verified.
 pub async fn same_filesystem(source: &Path, destination: &Path) -> bool {
-    let source = source.to_path_buf();
-    let destination = destination.to_path_buf();
-    tokio::task::spawn_blocking(move || same_filesystem_blocking(&source, &destination))
-        .await
-        .unwrap_or(false)
+    Disk::process().renames_between(source, destination).await
 }
 
-#[cfg(unix)]
-fn same_filesystem_blocking(source: &Path, destination: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
+/// The recorded copy as the tests below drive it: one owner, and the policy
+/// each step asks the resolver for.
+#[cfg(test)]
+pub(crate) struct VerifiedCopier(pub(crate) Disk);
 
-    // `symlink_metadata`: a symlinked source lives on the filesystem holding the
-    // link, not the one holding its target.
-    let Ok(source_metadata) = std::fs::symlink_metadata(source) else {
-        return false;
-    };
-    let Some(anchor) = nearest_existing_ancestor(destination) else {
-        return false;
-    };
-    let Ok(destination_metadata) = std::fs::metadata(anchor) else {
-        return false;
-    };
-    source_metadata.dev() == destination_metadata.dev()
+#[cfg(test)]
+pub(crate) struct VerifiedCopyRequest {
+    pub(crate) source: PathBuf,
+    pub(crate) destination: PathBuf,
+    pub(crate) depth: VerificationDepth,
+    pub(crate) claim: DestinationClaim,
+    pub(crate) progress: CopyProgress,
 }
 
-#[cfg(not(unix))]
-fn same_filesystem_blocking(_source: &Path, _destination: &Path) -> bool {
-    // No cheap device probe here; the copy path verifies, so answering "no" only
-    // costs work, never safety.
-    false
-}
-
-#[cfg(unix)]
-fn nearest_existing_ancestor(path: &Path) -> Option<&Path> {
-    let mut candidate = Some(path);
-    while let Some(current) = candidate {
-        if current.as_os_str().is_empty() {
-            return None;
-        }
-        if std::fs::symlink_metadata(current).is_ok() {
-            return Some(current);
-        }
-        candidate = current.parent();
+#[cfg(test)]
+impl VerifiedCopier {
+    pub(crate) fn new() -> Self {
+        Self(Disk::process())
     }
-    None
+
+    pub(crate) fn with_read_back_opener(opener: ReadBackOpener) -> Self {
+        Self(Disk::process().with_read_back_opener(opener))
+    }
+
+    pub(crate) async fn copy(
+        &self,
+        source: &Path,
+        destination: &Path,
+        claim: DestinationClaim,
+    ) -> AppResult<StreamedContentHashes> {
+        self.copy_with_progress(source, destination, claim, &CopyProgress::none())
+            .await
+    }
+
+    pub(crate) async fn copy_with_progress(
+        &self,
+        source: &Path,
+        destination: &Path,
+        claim: DestinationClaim,
+        progress: &CopyProgress,
+    ) -> AppResult<StreamedContentHashes> {
+        let policy = crate::disk::placement::unproven_copy(claim);
+        recorded_copy(&self.0, source, destination, policy, progress)
+            .await
+            .map(|(hashes, _)| hashes)
+    }
+
+    pub(crate) async fn copy_and_verify(
+        &self,
+        request: VerifiedCopyRequest,
+    ) -> AppResult<VerifiedFile> {
+        let policy = crate::disk::placement::verified_copy(request.depth, request.claim);
+        copy_and_verify(
+            &self.0,
+            &request.source,
+            &request.destination,
+            policy,
+            &request.progress,
+        )
+        .await
+    }
+
+    pub(crate) async fn verify(
+        &self,
+        source: &Path,
+        destination: &Path,
+        hashes: &StreamedContentHashes,
+        requested: VerificationDepth,
+    ) -> AppResult<VerificationAssessment> {
+        verify(&self.0, source, destination, hashes, requested).await
+    }
+
+    pub(crate) async fn verify_existing_destination(
+        &self,
+        source: &Path,
+        destination: &Path,
+        requested: VerificationDepth,
+        known: Option<&super::model::KnownSourceContent>,
+    ) -> AppResult<VerifiedFile> {
+        super::resolution::compare_existing(
+            source,
+            destination,
+            &CopyProgress::none(),
+            known,
+            requested,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A partial that appeared after the free check makes the exclusive create
-    /// fail; that file was never this attempt's, so the failure reports it
-    /// unclaimed and the caller leaves it in place.
-    #[test]
-    fn a_claim_lost_to_an_existing_partial_is_not_this_attempts_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source.mkv");
-        let partial = temp.path().join("dest.mkv.partial");
-        std::fs::write(&source, b"incoming").unwrap();
-        std::fs::write(&partial, b"someone else's").unwrap();
-        let failure = copy_claiming_destination(
-            &source,
-            &partial,
-            DestinationClaim::ClaimHere,
-            &CopyProgress::none(),
-        )
-        .expect_err("the exclusive create fails");
-        assert!(!failure.claimed);
-        assert_eq!(std::fs::read(&partial).unwrap(), b"someone else's");
-    }
-
-    /// A failure after this attempt created the file reports it claimed, so
-    /// the incomplete partial is cleared.
-    #[cfg(unix)]
-    #[test]
-    fn a_failure_after_the_claim_is_this_attempts_file() {
-        let temp = tempfile::tempdir().unwrap();
-        // Opening a directory succeeds on unix; reading it fails after the claim.
-        let source = temp.path().join("source-dir");
-        std::fs::create_dir(&source).unwrap();
-        let partial = temp.path().join("dest.mkv.partial");
-        let failure = copy_claiming_destination(
-            &source,
-            &partial,
-            DestinationClaim::ClaimHere,
-            &CopyProgress::none(),
-        )
-        .expect_err("reading a directory fails");
-        assert!(failure.claimed);
-    }
 
     /// The streamed pair must match the one-shot values for the same bytes, and
     /// the CRC must be the algorithm the persisted tag claims.
@@ -1460,13 +685,13 @@ mod tests {
         assert_eq!(hashes.crc_algorithm, MoveCrcAlgorithm::Crc64Nvme);
         assert_eq!(
             hashes.move_crc,
-            crc_turbo::checksum(MOVE_CRC_ALGORITHM, &data)
+            crc_turbo::checksum(crc_turbo::CrcAlgorithm::Crc64Nvme, &data)
         );
         assert_eq!(hashes.full_blake3, blake3::hash(&data).to_hex().to_string());
     }
 
     /// A single flipped bit must change both the CRC and the BLAKE3 — the whole
-    /// point of the streamed pair (FR-040, SC-006).
+    /// point of the streamed pair.
     #[test]
     fn streamed_hashes_detect_a_flipped_bit() {
         let clean: Vec<u8> = (0..1024 * 1024u32)
@@ -1497,10 +722,14 @@ mod tests {
             Ok(MOVE_CRC_ALGORITHM_TAG)
         );
         assert!(MoveCrcAlgorithm::from_setting("crc32_iscsi").is_err());
-        assert_eq!(
-            crc_algorithm_for(MOVE_CRC_ALGORITHM_TAG),
-            MOVE_CRC_ALGORITHM
-        );
+
+        let mut sample = StreamedContentHasher::new();
+        sample.update(b"synthetic payload");
+        let stored = sample.finalize();
+        assert_eq!(stored.crc_algorithm, MOVE_CRC_ALGORITHM_TAG);
+        let on_disk = disk_hashes(&stored);
+        assert_eq!(on_disk.crc_kind, CrcKind::Crc64Nvme);
+        assert_eq!(persisted_hashes(on_disk), stored);
     }
 
     // ── Verified copy ────────────────────────────────────────────────────────
@@ -1568,7 +797,7 @@ mod tests {
         assert_eq!(hashes.crc_algorithm, MOVE_CRC_ALGORITHM_TAG);
         assert_eq!(
             hashes.move_crc,
-            crc_turbo::checksum(MOVE_CRC_ALGORITHM, &data)
+            crc_turbo::checksum(crc_turbo::CrcAlgorithm::Crc64Nvme, &data)
         );
         assert_eq!(hashes.full_blake3, blake3::hash(&data).to_hex().to_string());
         assert_eq!(
@@ -1588,7 +817,7 @@ mod tests {
         assert_eq!(second.hashes.expect("hashes"), hashes);
     }
 
-    /// SC-006: a byte flipped after the write is caught before the source may be
+    /// A byte flipped after the write is caught before the source may be
     /// touched.
     #[tokio::test]
     async fn full_verification_detects_a_flipped_byte() {
@@ -1672,7 +901,7 @@ mod tests {
     /// and last window only, so a same-size change between them is outside its
     /// guarantee (`fs_integrity` documents the same limit for scans). This is
     /// exactly why full is the default depth — the same file fails at full
-    /// depth. Quick's promise is "verified (quick)", and FR-043 makes that
+    /// depth. Quick's promise is "verified (quick)", and the record makes that
     /// visible so the reduced guarantee is auditable, never silent.
     #[tokio::test]
     async fn quick_verification_does_not_cover_the_unsampled_middle() {
@@ -1712,7 +941,7 @@ mod tests {
         );
     }
 
-    /// FR-042 floor: when the full read-back cannot run, the file still gets the
+    /// The floor: when the full read-back cannot run, the file still gets the
     /// quick check, stamped as a fallback with the reason.
     #[tokio::test]
     async fn a_read_back_that_cannot_run_falls_back_to_the_quick_floor() {
@@ -1842,7 +1071,7 @@ mod tests {
         }
     }
 
-    /// FR-033's crash rule, from the writing side: while the copy is running,
+    /// The crash rule, from the writing side: while the copy is running,
     /// the destination's real name does not exist at all — the bytes are going
     /// to the partial. A crash at any point during the copy therefore leaves
     /// either nothing or a complete file under the destination name, never a
@@ -1853,7 +1082,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.bin");
-        let data = write_pattern(&source, COPY_CHUNK_BYTES * 2 + 4096);
+        let data = write_pattern(&source, 1024 * 1024 * 2 + 4096);
         let destination = dir.path().join("destination.bin");
         let partial = partial_destination_path(&destination);
 
@@ -1966,7 +1195,7 @@ mod tests {
 
     /// The same window, with a file that is *not* this operation's finished
     /// work: it is reported as a mismatch, never removed and never assumed
-    /// good (C4).
+    /// good.
     #[tokio::test]
     async fn an_unrecorded_destination_that_does_not_match_is_a_mismatch() {
         let dir = tempfile::tempdir().unwrap();
@@ -2048,7 +1277,7 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), data);
     }
 
-    /// FR-032: a same-filesystem rename copies nothing, so its record carries no
+    /// A same-filesystem rename copies nothing, so its record carries no
     /// hashes — and still unblocks the executor's cleanup.
     #[test]
     fn a_same_filesystem_rename_records_no_hashes() {
@@ -2108,9 +1337,223 @@ mod tests {
         assert!(!hashes.full_blake3.is_empty());
     }
 
-    /// The FR-032 pre-flight: two paths under one temp directory are on one
-    /// filesystem, and a source that is not there answers "no" rather than
-    /// guessing.
+    /// A copy whose staged name cannot be read for a lasting reason, here a
+    /// parent that is a file, is a repository failure with no reason code,
+    /// not the temporarily-unavailable variant.
+    #[tokio::test]
+    async fn a_destination_under_a_file_is_not_reported_as_temporarily_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, 16);
+        let blocker = dir.path().join("not-a-folder");
+        write_pattern(&blocker, 1);
+        let error = recorded_copy(
+            &Disk::process(),
+            &source,
+            &blocker.join("destination.bin"),
+            crate::disk::placement::verified_copy(
+                VerificationDepth::Quick,
+                DestinationClaim::ClaimHere,
+            ),
+            &CopyProgress::none(),
+        )
+        .await
+        .expect_err("refused");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        assert_eq!(std::fs::read(&blocker).unwrap().len(), 1);
+    }
+
+    /// Storage that did not answer is the one refusal reported as temporarily
+    /// unavailable, with its reason, and the runner waits it out; a denied or
+    /// failed read is not.
+    #[test]
+    fn only_unreachable_storage_is_reported_as_temporarily_unavailable() {
+        let refused = |refused| copy_refusal(refused, "synthetic".to_owned());
+        let unreachable = refused(Refused::Unreachable(crate::disk::Side::Destination));
+        assert!(matches!(
+            unreachable,
+            AppError::TemporaryUnavailable {
+                reason: Some(crate::disk::reason::DISK_PATH_UNREACHABLE),
+                ..
+            }
+        ));
+        assert!(crate::location::executor::move_error_is_transient(
+            &unreachable
+        ));
+        // A timeout keeps its own reason instead of reading as unreachable.
+        let timed_out = refused(Refused::TimedOut(crate::disk::Side::Source));
+        assert!(matches!(
+            timed_out,
+            AppError::TemporaryUnavailable {
+                reason: Some(crate::disk::reason::DISK_TIMED_OUT),
+                ..
+            }
+        ));
+        assert!(crate::location::executor::move_error_is_transient(
+            &timed_out
+        ));
+        assert!(matches!(refused(Refused::Failed), AppError::Repository(_)));
+    }
+
+    /// A full destination, one Scryer may not write to, and a source that is
+    /// not there each carry their own reason and are not retried; a timed
+    /// out or unreachable one still is.
+    #[test]
+    fn lasting_copy_refusals_carry_their_reason_and_are_not_retried() {
+        use crate::error_reasons::location;
+        let refused = |refused| copy_refusal(refused, "synthetic".to_owned());
+        for (lasting, reason) in [
+            (Refused::NoSpace, location::DESTINATION_NO_SPACE),
+            (
+                Refused::Denied(crate::disk::Side::Destination),
+                location::DESTINATION_PERMISSION_DENIED,
+            ),
+            (
+                Refused::Denied(crate::disk::Side::Source),
+                crate::disk::reason::DISK_PERMISSION_DENIED,
+            ),
+            (
+                Refused::SourceMissing,
+                crate::disk::reason::DISK_PATH_MISSING,
+            ),
+            (
+                Refused::LinkNotFollowed,
+                crate::disk::reason::DISK_LINK_NOT_FOLLOWED,
+            ),
+        ] {
+            let error = refused(lasting);
+            assert_eq!(error.reason(), Some(reason), "{lasting:?}");
+            assert!(
+                !crate::location::executor::move_error_is_transient(&error),
+                "{lasting:?}"
+            );
+        }
+        for side in [crate::disk::Side::Source, crate::disk::Side::Destination] {
+            assert!(crate::location::executor::move_error_is_transient(
+                &refused(Refused::Unreachable(side))
+            ));
+            assert!(crate::location::executor::move_error_is_transient(
+                &refused(Refused::TimedOut(side))
+            ));
+        }
+    }
+
+    /// Sets a path's mode and puts the old one back when dropped, so a
+    /// failed assertion never leaves a fixture unreadable or read-only.
+    #[cfg(unix)]
+    struct ModeFor {
+        path: PathBuf,
+        restore: u32,
+    }
+
+    #[cfg(unix)]
+    impl ModeFor {
+        fn set(path: &Path, mode: u32) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let restore = std::fs::metadata(path).unwrap().permissions().mode();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+            Self {
+                path: path.to_path_buf(),
+                restore,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ModeFor {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.restore));
+        }
+    }
+
+    #[cfg(unix)]
+    async fn refused_copy(source: PathBuf, destination: PathBuf) -> AppError {
+        recorded_copy(
+            &Disk::process(),
+            &source,
+            &destination,
+            crate::disk::placement::verified_copy(
+                VerificationDepth::Quick,
+                DestinationClaim::ClaimHere,
+            ),
+            &CopyProgress::none(),
+        )
+        .await
+        .expect_err("refused")
+    }
+
+    /// A copy into a folder Scryer may not write to, and one from a source
+    /// that is not there, reach the caller with their reasons.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_denied_destination_and_a_missing_source_reach_the_caller_with_their_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, 16);
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        {
+            let _mode = ModeFor::set(&locked, 0o555);
+            // A process that may write anyway (root) cannot be refused here.
+            let probe = locked.join("probe.bin");
+            if std::fs::File::create_new(&probe).is_ok() {
+                std::fs::remove_file(&probe).unwrap();
+            } else {
+                let denied = refused_copy(source.clone(), locked.join("destination.bin")).await;
+                assert_eq!(
+                    denied.reason(),
+                    Some(crate::error_reasons::location::DESTINATION_PERMISSION_DENIED),
+                    "{denied:?}"
+                );
+            }
+        }
+        assert!(std::fs::read_dir(&locked).unwrap().next().is_none());
+
+        let missing = refused_copy(
+            dir.path().join("missing.bin"),
+            dir.path().join("destination.bin"),
+        )
+        .await;
+        assert_eq!(
+            missing.reason(),
+            Some(crate::disk::reason::DISK_PATH_MISSING),
+            "{missing:?}"
+        );
+        assert!(!dir.path().join("destination.bin").exists());
+        assert_eq!(std::fs::read(&source).unwrap().len(), 16);
+    }
+
+    /// A source Scryer may not read is the source's refusal, not the
+    /// destination's, and it is not retried.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_source_that_may_not_be_read_is_refused_as_the_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, 16);
+        let destination = dir.path().join("destination.bin");
+        {
+            let _mode = ModeFor::set(&source, 0o000);
+            // A process that may read anyway (root) cannot be refused here.
+            if std::fs::File::open(&source).is_ok() {
+                return;
+            }
+            let denied = refused_copy(source.clone(), destination.clone()).await;
+            assert_eq!(
+                denied.reason(),
+                Some(crate::disk::reason::DISK_PERMISSION_DENIED),
+                "{denied:?}"
+            );
+            assert!(!crate::location::executor::move_error_is_transient(&denied));
+        }
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read(&source).unwrap().len(), 16);
+    }
+
+    /// Two paths under one temp directory are on one filesystem, and a source
+    /// that is not there answers "no" rather than guessing.
     #[tokio::test]
     async fn same_filesystem_probe_answers_for_a_destination_that_does_not_exist_yet() {
         let dir = tempfile::tempdir().unwrap();
@@ -2118,8 +1561,11 @@ mod tests {
         write_pattern(&source, 16);
         let destination = dir.path().join("nested/not-created-yet/destination.bin");
 
-        #[cfg(unix)]
-        assert!(same_filesystem(&source, &destination).await);
+        // Unix and Windows move without copying, so both answer yes.
+        assert_eq!(
+            same_filesystem(&source, &destination).await,
+            cfg!(any(unix, windows))
+        );
 
         assert!(
             !same_filesystem(&dir.path().join("missing.bin"), &destination).await,

@@ -4,8 +4,9 @@ use scryer_application::{
     AppError, AppResult, UiCatalogViewMode, UiCatalogViewSetting, UiCatalogViewUpdate,
     UiDashboardBreakpoint, UiDashboardLayout, UiDashboardLayoutItem, UiDateTimeFormat,
     UiDefaultLandingView, UiDensity, UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet,
-    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UserExternalAccountRepository, UserLoginSnapshot, UserRepository, UserUiSettingsRepository,
+    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme, UiTourOutcome,
+    UiTourProgress, UserExternalAccountRepository, UserLoginSnapshot, UserRepository,
+    UserUiSettingsRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, LibraryGrant, User,
@@ -13,6 +14,9 @@ use scryer_domain::{
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
+
+/// `monitor_selections.owner_kind` for a media request's selection.
+const MONITOR_SELECTION_OWNER_MEDIA_REQUEST: &str = "media_request";
 
 #[derive(Clone)]
 pub struct UserStore {
@@ -161,8 +165,48 @@ impl UserRepository for UserStore {
         rows.iter().map(row_to_user).collect()
     }
 
+    async fn list_usernames(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT username FROM users",
+            &[],
+        )
+        .await?;
+        rows.iter().map(|row| row.text("username")).collect()
+    }
+
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>> {
         load_user_by_id(self.datastore.read_exec(), id).await
+    }
+
+    async fn account_timestamps(
+        &self,
+        user_id: &str,
+    ) -> AppResult<Option<scryer_application::UserAccountTimestamps>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT created_at, last_login_at FROM users WHERE id = {}",
+            &[SqlArg::Text(user_id.to_string())],
+        )
+        .await?;
+        row.map(|row| {
+            Ok(scryer_application::UserAccountTimestamps {
+                created_at: row.opt_timestamp("created_at")?,
+                last_login_at: row.opt_timestamp("last_login_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn record_sign_in(&self, user_id: &str, at: chrono::DateTime<Utc>) -> AppResult<()> {
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "record_user_sign_in",
+            "UPDATE users SET last_login_at = {} WHERE id = {}",
+            vec![SqlArg::Timestamp(at), SqlArg::Text(user_id.to_string())],
+        )
+        .await?;
+        Ok(())
     }
 
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>> {
@@ -493,6 +537,22 @@ impl UserRepository for UserStore {
         SqlRuntime::run_in_transaction(&self.datastore, "delete_user", move |tx| {
             let id = id.clone();
             Box::pin(async move {
+                // The user's media requests go with the user by cascade, but
+                // their monitor selections have no foreign key to the request,
+                // so they are cleared first: exactly the rows of the requests
+                // the cascade is about to remove.
+                tx.execute(
+                    "DELETE FROM monitor_selections
+                      WHERE owner_kind = {}
+                        AND owner_id IN (
+                            SELECT id FROM media_requests WHERE created_by_user_id = {}
+                        )",
+                    &[
+                        SqlArg::Text(MONITOR_SELECTION_OWNER_MEDIA_REQUEST.to_string()),
+                        SqlArg::Text(id.clone()),
+                    ],
+                )
+                .await?;
                 let rows = tx
                     .execute(
                         "DELETE FROM users WHERE id = {}",
@@ -624,9 +684,9 @@ impl UserUiSettingsRepository for UserStore {
                 for item in &layout.items {
                     tx.execute(
                         "INSERT INTO user_ui_dashboard_layout_items (
-                             user_id, breakpoint, panel_id, x, y, w, h
+                             user_id, breakpoint, panel_id, x, y, w, h, settings_json
                          )
-                         VALUES ({}, {}, {}, {}, {}, {}, {})",
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(user_id.clone()),
                             SqlArg::Text(breakpoint.clone()),
@@ -635,6 +695,9 @@ impl UserUiSettingsRepository for UserStore {
                             SqlArg::I64(i64::from(item.y)),
                             SqlArg::I64(i64::from(item.w)),
                             SqlArg::I64(i64::from(item.h)),
+                            SqlArg::OptText(
+                                item.settings.as_ref().map(|settings| settings.to_string()),
+                            ),
                         ],
                     )
                     .await?;
@@ -682,6 +745,46 @@ impl UserUiSettingsRepository for UserStore {
                 })
             },
         )
+        .await
+    }
+
+    async fn record_tours(
+        &self,
+        user_id: &str,
+        tour_ids: &[String],
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings> {
+        let user_id = user_id.to_string();
+        let tour_ids = tour_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "record_user_ui_tours", move |tx| {
+            let user_id = user_id.clone();
+            let tour_ids = tour_ids.clone();
+            Box::pin(async move {
+                if !tour_ids.is_empty() {
+                    let now = Utc::now();
+                    let values = vec!["({}, {}, {}, {})"; tour_ids.len()].join(", ");
+                    let mut args = Vec::with_capacity(tour_ids.len() * 4);
+                    for tour_id in &tour_ids {
+                        args.push(SqlArg::Text(user_id.clone()));
+                        args.push(SqlArg::Text(tour_id.clone()));
+                        args.push(SqlArg::Text(outcome.as_str().to_string()));
+                        args.push(SqlArg::Timestamp(now));
+                    }
+                    tx.execute(
+                        &format!(
+                            "INSERT INTO user_ui_tours (user_id, tour_id, outcome, recorded_at)
+                             VALUES {values}
+                             ON CONFLICT(user_id, tour_id) DO UPDATE SET
+                                 outcome = excluded.outcome,
+                                 recorded_at = excluded.recorded_at"
+                        ),
+                        &args,
+                    )
+                    .await?;
+                }
+                load_ui_settings_by_user_id_tx(tx, &user_id).await
+            })
+        })
         .await
     }
 }
@@ -1160,8 +1263,8 @@ async fn save_initial_auth_setting_tx(tx: &mut SqlTx<'_>, key: &str, value: bool
 
 async fn insert_user_tx(tx: &mut SqlTx<'_>, user: &User) -> AppResult<()> {
     tx.execute(
-        "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status)
-         VALUES ({}, {}, {}, {}, {}, {})",
+        "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status, created_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(user.id.clone()),
             SqlArg::Text(user.username.clone()),
@@ -1169,6 +1272,9 @@ async fn insert_user_tx(tx: &mut SqlTx<'_>, user: &User) -> AppResult<()> {
             SqlArg::Bool(user.password_change_required),
             SqlArg::Text(user.account_kind.as_str().to_string()),
             SqlArg::Text(user.login_status().as_storage_str().to_string()),
+            // SQLite's column defaults to '', so without this an account
+            // never records when it was created.
+            SqlArg::Timestamp(Utc::now()),
         ],
     )
     .await?;
@@ -1287,6 +1393,7 @@ async fn load_ui_settings_by_user_id(
     settings.table_columns = load_ui_table_columns(datastore.read_exec(), user_id).await?;
     settings.catalog_views = load_ui_catalog_views(datastore.read_exec(), user_id).await?;
     settings.dashboard_layouts = load_ui_dashboard_layouts(datastore.read_exec(), user_id).await?;
+    settings.tours = load_ui_tours(datastore.read_exec(), user_id).await?;
     Ok(Some(settings))
 }
 
@@ -1307,6 +1414,7 @@ async fn load_ui_settings_by_user_id_tx(
     settings.table_columns = load_ui_table_columns(SqlExec::Tx(tx), user_id).await?;
     settings.catalog_views = load_ui_catalog_views(SqlExec::Tx(tx), user_id).await?;
     settings.dashboard_layouts = load_ui_dashboard_layouts(SqlExec::Tx(tx), user_id).await?;
+    settings.tours = load_ui_tours(SqlExec::Tx(tx), user_id).await?;
     Ok(settings)
 }
 
@@ -1462,6 +1570,7 @@ fn row_to_ui_settings(row: &SqlRow) -> AppResult<UiSettings> {
         table_columns: Vec::new(),
         catalog_views: Vec::new(),
         dashboard_layouts: Vec::new(),
+        tours: Vec::new(),
         created_at: Some(row.timestamp("created_at")?),
         updated_at: Some(row.timestamp("updated_at")?),
     })
@@ -1492,6 +1601,32 @@ fn row_to_ui_table_column(row: &SqlRow) -> AppResult<UiTableColumnSetting> {
         column_order: row.i32("column_order")?,
         visible: row.bool("visible")?,
     })
+}
+
+/// Loads the guided tours the user has finished or skipped. One row per tour
+/// the web has ever shipped, served by the primary key.
+async fn load_ui_tours(exec: SqlExec<'_, '_>, user_id: &str) -> AppResult<Vec<UiTourProgress>> {
+    let rows = SqlRuntime::fetch_all(
+        exec,
+        "SELECT tour_id, outcome, recorded_at
+           FROM user_ui_tours
+          WHERE user_id = {}
+          ORDER BY tour_id",
+        &[SqlArg::Text(user_id.to_string())],
+    )
+    .await?;
+    rows.iter()
+        .map(|row| {
+            let outcome = row.text("outcome")?;
+            Ok(UiTourProgress {
+                tour_id: row.text("tour_id")?,
+                outcome: UiTourOutcome::parse(&outcome).ok_or_else(|| {
+                    AppError::Repository(format!("unknown ui tour outcome {outcome:?}"))
+                })?,
+                recorded_at: row.timestamp("recorded_at")?,
+            })
+        })
+        .collect()
 }
 
 async fn load_ui_catalog_views(
@@ -1527,7 +1662,7 @@ async fn load_ui_dashboard_layouts(
     let rows = SqlRuntime::fetch_all(
         exec,
         "SELECT layouts.breakpoint, layouts.column_count,
-                items.panel_id, items.x, items.y, items.w, items.h
+                items.panel_id, items.x, items.y, items.w, items.h, items.settings_json
            FROM user_ui_dashboard_layouts layouts
            LEFT JOIN user_ui_dashboard_layout_items items
              ON items.user_id = layouts.user_id
@@ -1561,10 +1696,19 @@ async fn load_ui_dashboard_layouts(
                 y: row.i32("y")?,
                 w: row.i32("w")?,
                 h: row.i32("h")?,
+                settings: parse_ui_dashboard_panel_settings(row.opt_text("settings_json")?),
             });
         }
     }
     Ok(layouts)
+}
+
+/// Reads a panel's stored settings. Rows saved before panels had settings hold
+/// NULL; text that no longer parses as a JSON object is treated as no settings
+/// so one damaged panel cannot keep the dashboard from loading.
+fn parse_ui_dashboard_panel_settings(value: Option<String>) -> Option<serde_json::Value> {
+    let parsed = serde_json::from_str::<serde_json::Value>(&value?).ok()?;
+    parsed.is_object().then_some(parsed)
 }
 
 fn parse_ui_dashboard_breakpoint(value: String) -> AppResult<UiDashboardBreakpoint> {
@@ -1878,7 +2022,9 @@ mod tests {
                 account_kind TEXT NOT NULL DEFAULT 'local',
                 status TEXT NOT NULL DEFAULT 'active',
                 auth_session_version TEXT,
-                locale TEXT
+                locale TEXT,
+                created_at TEXT NOT NULL DEFAULT '',
+                last_login_at TEXT
             )",
         )
         .execute(&pool)
@@ -1966,6 +2112,51 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create dashboard layout tables");
+        sqlx::query("ALTER TABLE user_ui_dashboard_layout_items ADD COLUMN settings_json TEXT")
+            .execute(&pool)
+            .await
+            .expect("add dashboard panel settings");
+        sqlx::query(
+            "CREATE TABLE user_ui_tours (
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                tour_id TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (outcome IN ('completed', 'skipped')),
+                recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, tour_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create user_ui_tours table");
+        // Only the columns the user delete reads: a request's owner, and the
+        // owner-keyed selection rows that have no foreign key to it.
+        sqlx::query(
+            "CREATE TABLE media_requests (
+                id TEXT PRIMARY KEY NOT NULL,
+                created_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create media_requests table");
+        sqlx::query(
+            "CREATE TABLE monitor_selections (
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                entry_kind TEXT NOT NULL,
+                entry_key TEXT NOT NULL,
+                label TEXT,
+                external_ids_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (owner_kind, owner_id, entry_kind, entry_key),
+                CHECK (owner_kind IN ('title', 'media_request')),
+                CHECK (entry_kind IN ('season', 'series_movie'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create monitor_selections table");
         sqlx::query(
             "CREATE UNIQUE INDEX idx_user_external_accounts_provider_identity
                ON user_external_accounts(provider, connection_id, external_user_id)",
@@ -2455,6 +2646,7 @@ mod tests {
             "user_ui_dashboard_layout_items" => {
                 "SELECT COUNT(*) FROM user_ui_dashboard_layout_items WHERE user_id = ?"
             }
+            "user_ui_tours" => "SELECT COUNT(*) FROM user_ui_tours WHERE user_id = ?",
             other => panic!("unexpected table {other}"),
         };
         sqlx::query_scalar(sql)
@@ -2471,6 +2663,7 @@ mod tests {
             y,
             w: 2,
             h: 3,
+            settings: None,
         }
     }
 
@@ -2559,6 +2752,82 @@ mod tests {
             .await
             .expect("save layout again");
         assert!(saved.hide_sponsor_button);
+    }
+
+    #[tokio::test]
+    async fn ui_tours_record_in_one_write_take_the_latest_outcome_and_cascade() {
+        let store = test_store().await;
+        let user_a = test_user("tourist_a");
+        let user_b = test_user("tourist_b");
+        UserRepository::create(&store, user_a.clone())
+            .await
+            .expect("create user a");
+        UserRepository::create(&store, user_b.clone())
+            .await
+            .expect("create user b");
+
+        let fresh = UserUiSettingsRepository::get_by_user_id(&store, &user_a.id)
+            .await
+            .expect("load settings")
+            .expect("user exists");
+        assert!(fresh.tours.is_empty(), "no tour has been shown yet");
+
+        let recorded = UserUiSettingsRepository::record_tours(
+            &store,
+            &user_a.id,
+            &["onboarding".to_string(), "release-0.23.0".to_string()],
+            UiTourOutcome::Skipped,
+        )
+        .await
+        .expect("record tours");
+        let outcomes: Vec<_> = recorded
+            .tours
+            .iter()
+            .map(|tour| (tour.tour_id.as_str(), tour.outcome))
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                ("onboarding", UiTourOutcome::Skipped),
+                ("release-0.23.0", UiTourOutcome::Skipped),
+            ]
+        );
+
+        // Recording a tour again keeps one row and takes the new outcome.
+        let replayed = UserUiSettingsRepository::record_tours(
+            &store,
+            &user_a.id,
+            &["onboarding".to_string()],
+            UiTourOutcome::Completed,
+        )
+        .await
+        .expect("record onboarding again");
+        assert_eq!(replayed.tours.len(), 2);
+        assert_eq!(replayed.tours[0].tour_id, "onboarding");
+        assert_eq!(replayed.tours[0].outcome, UiTourOutcome::Completed);
+        assert_eq!(
+            UserUiSettingsRepository::get_by_user_id(&store, &user_a.id)
+                .await
+                .expect("reload")
+                .expect("user exists")
+                .tours,
+            replayed.tours
+        );
+
+        // Nothing leaks to the other user.
+        let other = UserUiSettingsRepository::get_by_user_id(&store, &user_b.id)
+            .await
+            .expect("load other user")
+            .expect("other user exists");
+        assert!(other.tours.is_empty());
+
+        UserRepository::delete(&store, &user_a.id)
+            .await
+            .expect("delete user");
+        assert_eq!(
+            count_user_rows(&store, "user_ui_tours", &user_a.id).await,
+            0
+        );
     }
 
     #[tokio::test]
@@ -2661,6 +2930,54 @@ mod tests {
         ] {
             assert_eq!(count_user_rows(&store, table, &user.id).await, 0, "{table}");
         }
+    }
+
+    #[tokio::test]
+    async fn dashboard_panel_settings_round_trip_and_tolerate_rows_without_them() {
+        let store = test_store().await;
+        let user = UserRepository::create(&store, test_user("panel_settings_user"))
+            .await
+            .expect("create user");
+        let configured = UiDashboardLayoutItem {
+            settings: Some(serde_json::json!({ "actions": ["delete_files"], "name": "Soon" })),
+            ..dashboard_item("lifecycle-upcoming--k3x9a2", 0, 0)
+        };
+        let plain = dashboard_item("panel-one", 4, 0);
+        let saved = UserUiSettingsRepository::set_dashboard_layout(
+            &store,
+            &user.id,
+            UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Lg,
+                columns: 12,
+                items: vec![configured.clone(), plain.clone()],
+            },
+        )
+        .await
+        .expect("save layout");
+        assert_eq!(saved.dashboard_layouts[0].items, vec![configured, plain]);
+
+        // A row whose stored text is not an object reads as a panel without settings.
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "damage_dashboard_panel_settings",
+            "UPDATE user_ui_dashboard_layout_items SET settings_json = {} WHERE panel_id = {}",
+            vec![
+                SqlArg::Text("not json".into()),
+                SqlArg::Text("lifecycle-upcoming--k3x9a2".into()),
+            ],
+        )
+        .await
+        .expect("damage settings");
+        let loaded = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load settings")
+            .expect("settings exist");
+        assert!(
+            loaded.dashboard_layouts[0]
+                .items
+                .iter()
+                .all(|item| item.settings.is_none())
+        );
     }
 
     #[tokio::test]
@@ -3325,5 +3642,61 @@ mod tests {
             .await
             .expect("list accounts");
         assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_user_clears_the_monitor_selections_of_their_media_requests() {
+        let store = test_store().await;
+        UserRepository::create(&store, test_user("user_a"))
+            .await
+            .expect("create user a");
+        UserRepository::create(&store, test_user("user_b"))
+            .await
+            .expect("create user b");
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("SQLite fixture required")
+        };
+        sqlx::raw_sql(
+            "INSERT INTO media_requests (id, created_by_user_id) VALUES
+                 ('request-a1', 'user_a'), ('request-a2', 'user_a'), ('request-b1', 'user_b');
+             INSERT INTO monitor_selections (owner_kind, owner_id, entry_kind, entry_key,
+                                             created_at, updated_at) VALUES
+                 ('media_request', 'request-a1', 'season', '1', 'now', 'now'),
+                 ('media_request', 'request-a1', 'season', '2', 'now', 'now'),
+                 ('media_request', 'request-a2', 'season', '1', 'now', 'now'),
+                 ('media_request', 'request-b1', 'season', '1', 'now', 'now'),
+                 ('title', 'request-a1', 'season', '1', 'now', 'now'),
+                 ('title', 'title-1', 'season', '1', 'now', 'now');",
+        )
+        .execute(pool)
+        .await
+        .expect("seed requests and selections");
+
+        UserRepository::delete(&store, "user_a")
+            .await
+            .expect("delete user");
+
+        let remaining: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT owner_kind, owner_id, entry_key FROM monitor_selections
+              ORDER BY owner_kind, owner_id, entry_key",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("list selections");
+        assert_eq!(
+            remaining,
+            vec![
+                ("media_request".into(), "request-b1".into(), "1".into()),
+                // A title-owned row is never a request's, even when its owner
+                // id happens to match one.
+                ("title".into(), "request-a1".into(), "1".into()),
+                ("title".into(), "title-1".into(), "1".into()),
+            ]
+        );
+        let requests: Vec<String> = sqlx::query_scalar("SELECT id FROM media_requests ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("list requests");
+        assert_eq!(requests, vec!["request-b1".to_string()]);
     }
 }

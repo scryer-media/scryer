@@ -75,91 +75,10 @@ pub struct AppRuntimeCatalogState {
     pub(crate) artwork_wait_reason: Arc<tokio::sync::RwLock<String>>,
     pub title_image_maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub title_image_cache_clear_scheduled: Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) media_request_enrichment: MediaRequestEnrichmentCache,
     /// Test seam: times the hydration worker yielded to a scan-owned facet,
     /// mirroring `scryer_title_metadata_hydration_scan_owned_yields_total`.
     #[cfg(test)]
     pub(crate) title_hydration_scan_yields: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-/// How long one media-request enrichment stays reusable. Long enough that a requester who
-/// previews a decision, changes their profile a few times, and then submits is judged against one
-/// SMG read (FR-021); short enough that a metadata correction shows up in the next request.
-pub const MEDIA_REQUEST_ENRICHMENT_CACHE_TTL: std::time::Duration =
-    std::time::Duration::from_secs(300);
-
-/// Upper bound on cached enrichments. This is a per-process convenience cache, not a store: the
-/// bound is what keeps a burst of distinct drafts from turning it into a leak.
-pub const MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY: usize = 256;
-
-/// Read-through cache in front of SMG for media-request enrichment.
-///
-/// Deliberately a `std::sync::Mutex<HashMap<..>>` rather than a new dependency: entries are
-/// small, the map is bounded at [`MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY`], and every operation
-/// is a few pointer moves with no await inside the lock.
-///
-/// It does **not** single-flight: two simultaneous first calls for the same subject both reach
-/// SMG and the second insert wins. That is a duplicate read, never a wrong answer, and the
-/// alternative (a per-key lock held across an SMG round trip) is a far worse failure mode.
-#[derive(Clone, Default)]
-pub(crate) struct MediaRequestEnrichmentCache {
-    entries: Arc<std::sync::Mutex<MediaRequestEnrichmentEntries>>,
-}
-
-/// One cached enrichment: when it was stored, and what was stored.
-type MediaRequestEnrichmentEntry = (
-    std::time::Instant,
-    Arc<crate::media_requests::MediaRequestMetadataEnrichment>,
-);
-
-/// The cache's map, keyed by the enrichment subject.
-type MediaRequestEnrichmentEntries = HashMap<String, MediaRequestEnrichmentEntry>;
-
-impl MediaRequestEnrichmentCache {
-    pub(crate) fn get(
-        &self,
-        key: &str,
-    ) -> Option<Arc<crate::media_requests::MediaRequestMetadataEnrichment>> {
-        let now = std::time::Instant::now();
-        let mut entries = self.entries.lock().ok()?;
-        match entries.get(key) {
-            Some((stored_at, value))
-                if now.duration_since(*stored_at) < MEDIA_REQUEST_ENRICHMENT_CACHE_TTL =>
-            {
-                Some(Arc::clone(value))
-            }
-            Some(_) => {
-                entries.remove(key);
-                None
-            }
-            None => None,
-        }
-    }
-
-    pub(crate) fn insert(
-        &self,
-        key: String,
-        value: Arc<crate::media_requests::MediaRequestMetadataEnrichment>,
-    ) {
-        let now = std::time::Instant::now();
-        let Ok(mut entries) = self.entries.lock() else {
-            return;
-        };
-        entries.retain(|_, (stored_at, _)| {
-            now.duration_since(*stored_at) < MEDIA_REQUEST_ENRICHMENT_CACHE_TTL
-        });
-        while entries.len() >= MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY {
-            let Some(oldest) = entries
-                .iter()
-                .min_by_key(|(_, (stored_at, _))| *stored_at)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            entries.remove(&oldest);
-        }
-        entries.insert(key, (now, value));
-    }
 }
 
 pub const DOWNLOAD_QUEUE_SNAPSHOT_STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -492,6 +411,7 @@ impl DownloadQueueSnapshotCache {
         record: &scryer_domain::ImportRecord,
         error_code: Option<scryer_domain::ImportErrorCode>,
         error_message: Option<String>,
+        reason_code: Option<String>,
     ) {
         let mut pending = self.pending.lock().await;
         if pending.is_none() {
@@ -529,11 +449,11 @@ impl DownloadQueueSnapshotCache {
         item.import_error_message = error_message.clone();
         if error_message.is_some() {
             item.attention_reason = error_message;
-            item.attention_reason_code = Some(
+            item.attention_reason_code = Some(reason_code.unwrap_or_else(|| {
                 error_code
                     .map(|code| format!("IMPORT_{}", code.as_str().to_ascii_uppercase()))
-                    .unwrap_or_else(|| "IMPORT_FAILED".to_string()),
-            );
+                    .unwrap_or_else(|| "IMPORT_FAILED".to_string())
+            }));
         }
         item.import_transfer_phase = record.import_transfer_phase;
         item.import_transfer_bytes = record.import_transfer_bytes;
@@ -866,7 +786,7 @@ mod download_queue_snapshot_cache_tests {
             updated_at: "2026-08-27T01:48:38Z".to_string(),
         };
 
-        cache.stage_import_record(&record, None, None).await;
+        cache.stage_import_record(&record, None, None, None).await;
         cache.commit_pending().await;
 
         let snapshot = cache.snapshot().await;
@@ -2315,8 +2235,12 @@ pub struct AppRuntimeImportState {
     pub external_import_warmup_orchestrator: ExternalImportMonitorWarmupOrchestrator,
     pub external_import_apply_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) source_import: Arc<crate::source_import::SourceImportRuntime>,
+    pub(crate) rule_import: Arc<crate::rule_import::RuleImportRuntime>,
     pub external_import_source_chunk_cleanup_done: Arc<tokio::sync::Mutex<bool>>,
     pub(crate) same_path_upgrade_guard_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) archive_extractions_in_flight:
+        crate::import::archive_extraction::ArchiveExtractionsInFlight,
+    pub(crate) archive_workspace_upkeep: crate::import::archive_extraction::ArchiveWorkspaceUpkeep,
 }
 
 #[derive(Clone)]
@@ -2352,6 +2276,9 @@ pub struct AppRuntimeJobState {
     /// Image maintenance queues FIFO; hash backfill only tries immediate admission.
     pub(crate) background_disk_maintenance: Arc<tokio::sync::Mutex<()>>,
     pub(crate) full_hash_shutdown: tokio_util::sync::CancellationToken,
+    /// Bumped whenever a library's full-hash backfill setting changes, so a
+    /// run in progress drops the page it holds and asks the queue again.
+    pub(crate) full_hash_library_generation: Arc<std::sync::atomic::AtomicU64>,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
     pub interactive_operation_guards: InteractiveOperationGuardTable,
@@ -2372,11 +2299,17 @@ pub struct AppRuntimeJobState {
         Arc<std::sync::RwLock<Option<application_updater::macos_bundle::BundleSignatureCheck>>>,
     /// Single-flight guard for the interactive acquisition-search job — mirrors `title_deletion_lock`.
     pub acquisition_search_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes the same-item check and run start of single-item
+    /// acquisition searches, so one item is never searched twice at once.
+    pub(crate) acquisition_search_start_lock: Arc<tokio::sync::Mutex<()>>,
     /// In-memory schedule of enabled scheduled scripts; the jobs query reads
     /// each script's next run from it.
     pub custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler,
     /// Serializes the overlap check and run start for scheduled scripts.
     pub(crate) custom_job_start_lock: Arc<tokio::sync::Mutex<()>>,
+    /// When this process started. A lifecycle execution lease last
+    /// touched before it belongs to a worker that no longer exists.
+    pub(crate) process_started_at: chrono::DateTime<chrono::Utc>,
     /// Cancelled at shutdown; every running script (scheduled, manual or
     /// post-import) is asked to exit and then killed when it fires.
     pub(crate) script_shutdown: tokio_util::sync::CancellationToken,
@@ -2387,6 +2320,10 @@ pub struct AppRuntimeJobState {
 #[derive(Clone)]
 pub struct AppRuntimeHealthState {
     pub results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
+    /// The canonical free-space owner: every capacity figure Scryer reads
+    /// comes through it. Request rules read its cache and never call a share
+    /// while the requester waits.
+    pub(crate) storage_capacity: crate::disk::capacity::StorageCapacity,
 }
 
 #[derive(Clone)]
@@ -2512,6 +2449,8 @@ pub struct AppRuntimeIntegrationState {
     pub(crate) managed_caps_unanswered:
         Arc<crate::integration::indexer_caps_cache::UnansweredCapsRequests>,
     pub(crate) navigation_badge_facts: NavigationBadgeFactsCache,
+    /// The lifecycle executor's playback picture, kept for one pass.
+    pub(crate) lifecycle_playback: crate::lifecycle_rules::LifecyclePlaybackCache,
 }
 
 /// The unfiltered facts behind the navigation badges.
@@ -2595,6 +2534,7 @@ pub struct AppRuntimeSecurityState {
     pub(super) recovery_admin_login_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) trusted_proxies: crate::rate_limit_proxy_policy::TrustedProxyRuntime,
     pub(crate) public_url: crate::public_url::PublicUrlRuntime,
+    pub(crate) local_trust: crate::local_trust::LocalTrustRuntime,
     pub(crate) service_settings_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -2643,6 +2583,7 @@ impl AppRuntimeState {
                 recovery_admin_login_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 trusted_proxies: Default::default(),
                 public_url: Default::default(),
+                local_trust: Default::default(),
                 service_settings_lock: Default::default(),
             },
             events: AppRuntimeEventState {
@@ -2674,7 +2615,6 @@ impl AppRuntimeState {
                 title_image_cache_clear_scheduled: Arc::new(std::sync::atomic::AtomicBool::new(
                     false,
                 )),
-                media_request_enrichment: MediaRequestEnrichmentCache::default(),
                 #[cfg(test)]
                 title_hydration_scan_yields: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
@@ -2731,8 +2671,11 @@ impl AppRuntimeState {
                     ExternalImportMonitorWarmupOrchestrator::default(),
                 external_import_apply_lock: Arc::new(tokio::sync::Mutex::new(())),
                 source_import: Default::default(),
+                rule_import: Default::default(),
                 external_import_source_chunk_cleanup_done: Arc::new(tokio::sync::Mutex::new(false)),
                 same_path_upgrade_guard_lock: Arc::new(tokio::sync::Mutex::new(())),
+                archive_extractions_in_flight: Default::default(),
+                archive_workspace_upkeep: Default::default(),
             },
             library: AppRuntimeLibraryState {
                 library_scan_tracker: LibraryScanTracker::new(),
@@ -2756,6 +2699,7 @@ impl AppRuntimeState {
                 full_hash_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
                 background_disk_maintenance: Arc::new(tokio::sync::Mutex::new(())),
                 full_hash_shutdown: tokio_util::sync::CancellationToken::new(),
+                full_hash_library_generation: Arc::default(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
                 interactive_operation_guards: InteractiveOperationGuardTable::default(),
@@ -2766,14 +2710,17 @@ impl AppRuntimeState {
                 #[cfg(not(windows))]
                 application_upgrade_bundle_signature_check: Arc::new(std::sync::RwLock::new(None)),
                 acquisition_search_lock: Arc::new(tokio::sync::Mutex::new(())),
+                acquisition_search_start_lock: Arc::new(tokio::sync::Mutex::new(())),
                 score_refresh: Arc::new(crate::quality::evaluations::ScoreRefreshRuntime::default()),
                 custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler::default(),
                 custom_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                process_started_at: chrono::Utc::now(),
                 script_shutdown: tokio_util::sync::CancellationToken::new(),
                 script_runs: tokio_util::task::TaskTracker::new(),
             },
             health: AppRuntimeHealthState {
                 results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+                storage_capacity: crate::disk::capacity::StorageCapacity::process(),
             },
             plugins: AppRuntimePluginState {
                 settings_write_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -2788,6 +2735,7 @@ impl AppRuntimeState {
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
                 managed_caps_unanswered: Arc::default(),
                 navigation_badge_facts: NavigationBadgeFactsCache::default(),
+                lifecycle_playback: Default::default(),
             },
         }
     }

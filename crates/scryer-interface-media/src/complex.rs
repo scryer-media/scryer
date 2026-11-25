@@ -5,15 +5,42 @@ use scryer_interface_core::{
 };
 
 use crate::mappers::{
-    fallback_episode_media_availability, from_collection, from_discovery_item,
-    from_download_queue_item, from_episode, from_episode_media_availability, from_library_settings,
-    from_pending_release, from_release_decision, from_series_movie_link, from_submission_scope,
-    from_title, from_title_credit, from_title_list_membership, from_title_media_file,
-    from_title_rating_summary, from_wanted_item,
+    ExplanationSelection, fallback_episode_media_availability, from_collection,
+    from_discovery_item, from_download_queue_item, from_episode, from_episode_media_availability,
+    from_library_settings, from_pending_release, from_release_decision_selecting,
+    from_series_movie_link, from_submission_scope, from_title, from_title_credit,
+    from_title_list_membership, from_title_media_file, from_title_rating_summary,
+    from_wanted_item_selecting,
 };
 use crate::types::*;
 
 const RELATION_PAGE_MAX_LIMIT: i32 = 300;
+
+/// What a release-decisions page query reads: the total is counted only for
+/// `totalCount` or `hasMore`, and explanations are parsed only for the item
+/// fields that read them.
+#[derive(Clone, Copy, Debug)]
+struct ReleaseDecisionsPageSelection {
+    total: bool,
+    explanation: ExplanationSelection,
+}
+
+impl ReleaseDecisionsPageSelection {
+    fn of(ctx: &Context<'_>) -> Self {
+        let look_ahead = ctx.look_ahead();
+        let items = look_ahead.field("items");
+        Self {
+            total: look_ahead.field("totalCount").exists() || look_ahead.field("hasMore").exists(),
+            explanation: ExplanationSelection::of(items),
+        }
+    }
+}
+
+/// The explanation fields a resolver returning one wanted item reads from its
+/// latest decision.
+fn wanted_item_explanation_selection(ctx: &Context<'_>) -> ExplanationSelection {
+    ExplanationSelection::of(ctx.look_ahead().field("latestReleaseDecision"))
+}
 
 fn from_media_server_playback_link(
     link: scryer_application::MediaServerPlaybackLink,
@@ -32,6 +59,31 @@ fn title_scope_from_facet(facet: MediaFacetValue) -> ContentScopeValue {
         MediaFacetValue::Series => ContentScopeValue::Series,
         MediaFacetValue::Anime => ContentScopeValue::Anime,
     }
+}
+
+/// A title's stored content ratings, through the request's loader when there is one, so
+/// sibling fields and titles in a list share one read.
+async fn title_content_ratings(
+    ctx: &Context<'_>,
+    title_id: &str,
+) -> GqlResult<Vec<scryer_application::ContentRating>> {
+    if let Some(loaders) = loaders_from_ctx(ctx) {
+        return Ok(loaders
+            .content_ratings
+            .load_one(title_id.to_string())
+            .await?
+            .unwrap_or_default());
+    }
+    let app = app_from_ctx(ctx)?;
+    let actor = actor_from_ctx(ctx)?;
+    Ok(app
+        .list_title_content_ratings(&actor, &[title_id.to_string()])
+        .await
+        .map_err(to_gql_error)?
+        .into_iter()
+        .next()
+        .map(|(_, ratings)| ratings)
+        .unwrap_or_default())
 }
 
 /// Whether the caller holds privileged access to `library_id`. Nested fields
@@ -128,6 +180,31 @@ impl LibraryPayload {
 
 #[ComplexObject]
 impl LibraryPayload {
+    /// Whether the background full-hash job reads this library's files. Off,
+    /// a file's full hash is read only when something needs it, one file at a
+    /// time. Readable by anyone who can see the library.
+    async fn full_hash_backfill_enabled(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let enabled = match loaders_from_ctx(ctx) {
+            Some(loaders) => {
+                loaders
+                    .library_full_hash_backfill
+                    .load_one(self.id.to_string())
+                    .await?
+            }
+            None => app_from_ctx(ctx)?
+                .library_full_hash_backfill_enabled(std::slice::from_ref(&*self.id))
+                .await
+                .map_err(to_gql_error)?
+                .remove(self.id.as_str()),
+        };
+        enabled.ok_or_else(|| {
+            to_gql_error(scryer_application::AppError::not_found_reason(
+                scryer_application::error_reasons::settings::LIBRARY_NOT_FOUND,
+                format!("library {}", self.id.as_str()),
+            ))
+        })
+    }
+
     /// Required audio languages a new title in this library inherits: the
     /// library's own, else its facet's. An empty list requires none. The
     /// `original` token stays unresolved. Readable by anyone who can see the
@@ -566,6 +643,24 @@ impl TitlePayload {
                 .map_err(to_gql_error)
         })
         .await
+    }
+
+    /// Content ratings from the title's last metadata refresh, one entry per
+    /// country in the provider's order. Empty until the title is refreshed.
+    async fn content_ratings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<DiscoveryContentRatingPayload>> {
+        let ratings = title_content_ratings(ctx, self.id.as_ref()).await?;
+        Ok(crate::mappers::content_rating_payloads(&ratings))
+    }
+
+    /// US certification label, such as `PG-13`, or null when the title has
+    /// none. It is chosen the way the `certification_label` request rule fact
+    /// chooses it, from the ratings stored at the last metadata refresh.
+    async fn certification_label(&self, ctx: &Context<'_>) -> GqlResult<Option<String>> {
+        let ratings = title_content_ratings(ctx, self.id.as_ref()).await?;
+        Ok(scryer_application::request_rules::content_ratings_us_certification_label(&ratings))
     }
 
     /// Public lists this title is on or has left, lists it is still on
@@ -1056,6 +1151,11 @@ impl TitlePayload {
             let actor = actor_from_ctx(ctx)?;
             let limit = relation_page_limit(limit);
             let offset = relation_page_offset(offset);
+            let selection = ExplanationSelection::of(
+                ctx.look_ahead()
+                    .field("items")
+                    .field("latestReleaseDecision"),
+            );
             let (items, _total_count) = app
                 .list_acquisition_scope_states(
                     &actor,
@@ -1069,8 +1169,11 @@ impl TitlePayload {
                         library_ids: Vec::new(),
                         title_search: None,
                         latest_decision_codes: Vec::new(),
+                        mismatch_recovery_eligible_only: false,
                         limit: i64::from(limit),
                         offset: i64::from(offset),
+                        // The page carries no total.
+                        skip_total: true,
                     },
                 )
                 .await
@@ -1078,7 +1181,7 @@ impl TitlePayload {
             Ok(WantedItemsPagePayload {
                 items: items
                     .into_iter()
-                    .map(from_wanted_item)
+                    .map(|item| from_wanted_item_selecting(item, selection))
                     .collect::<scryer_application::AppResult<Vec<_>>>()
                     .map_err(to_gql_error)?,
             })
@@ -1113,6 +1216,7 @@ impl TitlePayload {
                     has_more: false,
                 });
             }
+            let selection = ReleaseDecisionsPageSelection::of(ctx);
             let (decisions, total_count) = app
                 .list_release_decisions_page(
                     &actor,
@@ -1121,13 +1225,14 @@ impl TitlePayload {
                         title_id: Some(self.id.to_string()),
                         limit: i64::from(limit),
                         offset: i64::from(offset),
+                        skip_total: !selection.total,
                     },
                 )
                 .await
                 .map_err(to_gql_error)?;
             let items = decisions
                 .into_iter()
-                .map(from_release_decision)
+                .map(|decision| from_release_decision_selecting(decision, selection.explanation))
                 .collect::<scryer_application::AppResult<Vec<_>>>()
                 .map_err(to_gql_error)?;
             let has_more = i64::from(offset).saturating_add(items.len() as i64) < total_count;
@@ -1481,8 +1586,9 @@ impl EpisodePayload {
                 .title_wanted_item
                 .load_one((self.title_id.to_string(), self.id.to_string()))
                 .await?;
+            let selection = wanted_item_explanation_selection(ctx);
             return state
-                .map(from_wanted_item)
+                .map(|item| from_wanted_item_selecting(item, selection))
                 .transpose()
                 .map_err(to_gql_error);
         }
@@ -1497,7 +1603,9 @@ impl EpisodePayload {
                 .map_err(to_gql_error)?
                 .into_iter()
                 .find(|state| state.episode_id.as_deref() == Some(self.id.as_str()))
-                .map(from_wanted_item)
+                .map(|item| {
+                    from_wanted_item_selecting(item, wanted_item_explanation_selection(ctx))
+                })
                 .transpose()
                 .map_err(to_gql_error)?;
             Ok(wanted_item)
@@ -1708,6 +1816,7 @@ impl WantedItemPayload {
             let actor = actor_from_ctx(ctx)?;
             let limit = relation_page_limit(limit.min(i64::from(i32::MAX)) as i32);
             let offset = relation_page_offset(offset);
+            let selection = ReleaseDecisionsPageSelection::of(ctx);
             let (decisions, total_count) = app
                 .list_release_decisions_page(
                     &actor,
@@ -1716,13 +1825,14 @@ impl WantedItemPayload {
                         title_id: None,
                         limit: i64::from(limit),
                         offset: i64::from(offset),
+                        skip_total: !selection.total,
                     },
                 )
                 .await
                 .map_err(to_gql_error)?;
             let items = decisions
                 .into_iter()
-                .map(from_release_decision)
+                .map(|decision| from_release_decision_selecting(decision, selection.explanation))
                 .collect::<scryer_application::AppResult<Vec<_>>>()
                 .map_err(to_gql_error)?;
             let has_more = i64::from(offset).saturating_add(items.len() as i64) < total_count;
@@ -1810,7 +1920,11 @@ impl ReleaseDecisionPayload {
                 .wanted_item
                 .load_one(self.wanted_item_id.to_string())
                 .await?;
-            return item.map(from_wanted_item).transpose().map_err(to_gql_error);
+            let selection = wanted_item_explanation_selection(ctx);
+            return item
+                .map(|item| from_wanted_item_selecting(item, selection))
+                .transpose()
+                .map_err(to_gql_error);
         }
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
@@ -1819,7 +1933,9 @@ impl ReleaseDecisionPayload {
                 .get_wanted_item(&actor, self.wanted_item_id.as_ref())
                 .await
                 .map_err(to_gql_error)?
-                .map(from_wanted_item)
+                .map(|item| {
+                    from_wanted_item_selecting(item, wanted_item_explanation_selection(ctx))
+                })
                 .transpose()
                 .map_err(to_gql_error)?;
             Ok(item)
@@ -1975,7 +2091,11 @@ impl PendingReleasePayload {
                 .wanted_item_for_management
                 .load_one(self.wanted_item_id.to_string())
                 .await?;
-            return item.map(from_wanted_item).transpose().map_err(to_gql_error);
+            let selection = wanted_item_explanation_selection(ctx);
+            return item
+                .map(|item| from_wanted_item_selecting(item, selection))
+                .transpose()
+                .map_err(to_gql_error);
         }
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
@@ -1984,7 +2104,9 @@ impl PendingReleasePayload {
                 .get_wanted_item_for_management(&actor, self.wanted_item_id.as_ref())
                 .await
                 .map_err(to_gql_error)?
-                .map(from_wanted_item)
+                .map(|item| {
+                    from_wanted_item_selecting(item, wanted_item_explanation_selection(ctx))
+                })
                 .transpose()
                 .map_err(to_gql_error)?;
             Ok(wanted_item)

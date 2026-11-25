@@ -3,8 +3,8 @@ use scryer_domain::AppPermission;
 
 use scryer_interface_core::{app_from_ctx, require_config_app_permission, to_gql_error};
 use scryer_interface_media::mappers::{
-    from_manual_plugin_preview, from_plugin_install_progress, from_plugin_installation,
-    from_registry_plugin,
+    from_manual_plugin_preview, from_plugin_catalog_status, from_plugin_install_progress,
+    from_plugin_installation, from_registry_plugin,
 };
 use scryer_interface_media::types::*;
 
@@ -43,6 +43,20 @@ impl PluginMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(plugins.into_iter().map(from_registry_plugin).collect())
+    }
+
+    /// Clear the warnings left by the last backup restore and return the resulting plugin catalog status. Nothing else in the status changes.
+    async fn dismiss_plugin_restore_warnings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<PluginCatalogStatusPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let status = app
+            .dismiss_plugin_restore_warnings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_plugin_catalog_status(status))
     }
 
     /// Start background installation of a catalog plugin and return the initial progress snapshot.

@@ -17,9 +17,9 @@ pub(crate) async fn replay_historical_postgres(
     pool: &PgPool,
     through_version: i64,
 ) -> AppResult<()> {
-    if !(140..254).contains(&through_version) {
+    if !(140..=278).contains(&through_version) {
         return Err(AppError::Repository(format!(
-            "historical PostgreSQL fixture target {through_version} must be between 140 and 253"
+            "historical PostgreSQL fixture target {through_version} must be between 140 and 278"
         )));
     }
     let mut bundle = datastore::migrations::load_source_migration_catalog()?;

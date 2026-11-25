@@ -204,6 +204,30 @@ impl LibraryMutations {
         Ok(payload)
     }
 
+    /// Turn the background full-hash job on or off for one library. Off, the
+    /// job never reads the library's files, and a file's full hash is read
+    /// only when something needs it.
+    async fn set_library_full_hash_backfill(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Library identity and whether the background full-hash job reads its files."
+        )]
+        input: SetLibraryFullHashBackfillInput,
+    ) -> GqlResult<LibraryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let library = app
+            .set_library_full_hash_backfill(&actor, input.library_id.as_ref(), input.enabled)
+            .await
+            .map_err(to_gql_error)?;
+        let root_title_counts = app
+            .library_root_title_counts()
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_library(library, &root_title_counts))
+    }
+
     /// Accept a background job that deletes the library identified by the
     /// supplied ID and removes its titles from the catalog. Files on disk are
     /// left alone.

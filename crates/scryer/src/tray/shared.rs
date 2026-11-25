@@ -19,6 +19,10 @@ use std::process::{Child, Command, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use scryer_application::disk::{
+    Access, Disk, EntryKind, Open, Parents, PathReading, Removal, Remove,
+};
+
 /// The port the wrapper starts `scryer` on, and the port it expects the UI to
 /// answer on. Users who want a different port run the server themselves; the
 /// wrapper owns this one.
@@ -118,7 +122,7 @@ pub(crate) fn app_url(port: u16) -> String {
 /// active phase whose owning process is a live Scryer server counts; an
 /// unreadable, stale or ownerless record never holds the wrapper open.
 fn restore_processing_active(profile: &Path, owner_is_live_server: impl Fn(u32) -> bool) -> bool {
-    let Ok(bytes) = std::fs::read(profile.join("restore-job.json")) else {
+    let Ok(bytes) = Disk::process().read_blocking(&profile.join("restore-job.json")) else {
         return false;
     };
     let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -168,7 +172,11 @@ fn restore_owner_is_live_server(pid: u32) -> bool {
         return false;
     };
     let expected = wrapper.with_file_name(SERVER_EXECUTABLE);
-    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
+    let disk = Disk::process();
+    let canonical = |path: &Path| {
+        disk.canonicalize_blocking(path)
+            .unwrap_or_else(|_| path.into())
+    };
     canonical(&image) == canonical(&expected)
 }
 
@@ -196,7 +204,9 @@ fn process_image(pid: u32) -> Option<PathBuf> {
 /// The executable a live process runs, or `None` when it is not running.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn process_image(pid: u32) -> Option<PathBuf> {
-    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    Disk::process()
+        .read_link_blocking(Path::new(&format!("/proc/{pid}/exe")))
+        .ok()
 }
 
 /// Where the desktop wrapper keeps the server's configuration, database and
@@ -654,7 +664,9 @@ pub(crate) enum SupervisedServer {
 #[cfg(target_os = "macos")]
 pub(crate) fn running_app_bundle() -> Option<PathBuf> {
     let wrapper = std::env::current_exe().ok()?;
-    let resolved = std::fs::canonicalize(&wrapper).unwrap_or(wrapper);
+    let resolved = Disk::process()
+        .canonicalize_blocking(&wrapper)
+        .unwrap_or(wrapper);
     application_updater::installation::macos_app_bundle_path(&resolved).map(Path::to_path_buf)
 }
 
@@ -761,12 +773,15 @@ impl ServerSupervisor {
     /// creates its own subdirectories, but it is started with an explicit log
     /// file path, and it cannot create the directory that path lives in.
     pub(crate) fn ensure_profile_dirs(&self) -> Result<(), String> {
-        std::fs::create_dir_all(self.logs_dir()).map_err(|error| {
-            format!(
-                "failed to create Scryer desktop profile at {}: {error}",
-                self.profile_dir.display()
-            )
-        })
+        Disk::process()
+            .create_dir_blocking(&self.logs_dir(), Parents::Create)
+            .map_err(|error| {
+                format!(
+                    "failed to create Scryer desktop profile at {}: {}",
+                    self.profile_dir.display(),
+                    error.words()
+                )
+            })
     }
 
     /// Start the server unless something is already serving the port.
@@ -800,7 +815,10 @@ impl ServerSupervisor {
 
         let server_executable = self.server_executable()?;
         let log_file = self.log_file();
-        self.log_offset = std::fs::metadata(&log_file).map_or(0, |metadata| metadata.len());
+        self.log_offset = match Disk::process().follow_blocking(&log_file) {
+            PathReading::Known { len: Some(len), .. } => len,
+            _ => 0,
+        };
         let mut command = Command::new(&server_executable);
         configure_environment(&mut command, &self.profile_dir, std::env::vars_os())?;
         command
@@ -1002,7 +1020,7 @@ impl ServerSupervisor {
         let wrapper = std::env::current_exe()
             .map_err(|error| format!("failed to resolve {WRAPPER_EXECUTABLE} path: {error}"))?;
         let server = wrapper.with_file_name(SERVER_EXECUTABLE);
-        if !server.is_file() {
+        if Disk::process().follow_blocking(&server).kind() != Some(EntryKind::File) {
             return Err(format!(
                 "{SERVER_EXECUTABLE} was not found beside {WRAPPER_EXECUTABLE} at {}",
                 server.display()
@@ -1034,7 +1052,7 @@ const LOG_TAIL_BYTES: u64 = 64 * 1024;
 
 /// The last error the server logged at or after `offset` in `log_file`.
 fn last_logged_error(log_file: &Path, offset: u64) -> Option<String> {
-    let mut file = std::fs::File::open(log_file).ok()?;
+    let mut file = Disk::process().open_blocking(log_file, Open::read()).ok()?;
     let len = file.metadata().ok()?.len();
     // A log the server rotated as it opened it starts again at zero.
     let offset = if offset > len { 0 } else { offset };
@@ -1105,22 +1123,34 @@ pub(crate) fn remove_desktop_profile(profile_dir: &Path) -> Vec<String> {
             profile_dir.display()
         )];
     }
-    let entries = match std::fs::read_dir(profile_dir) {
+    let disk = Disk::process();
+    let entries = match disk.list_blocking(profile_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(error) => return vec![format!("cannot read {}: {error}", profile_dir.display())],
+        Err(error) if error.reason() == scryer_application::disk::reason::DISK_PATH_MISSING => {
+            return Vec::new();
+        }
+        Err(error) => {
+            return vec![format!(
+                "cannot read {}: {}",
+                profile_dir.display(),
+                error.words()
+            )];
+        }
     };
     let mut problems = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let kept = entry.file_name().to_str().is_some_and(|name| {
-            KEPT_PROFILE_FOLDERS
-                .iter()
-                .any(|kept| name.eq_ignore_ascii_case(kept))
-        });
+    for entry in entries {
+        let path = entry.path;
+        let kept = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                KEPT_PROFILE_FOLDERS
+                    .iter()
+                    .any(|kept| name.eq_ignore_ascii_case(kept))
+            });
         if kept {
             // Refused, as intended, while the folder holds anything.
-            let _ = std::fs::remove_dir(&path);
+            let _ = disk.remove_blocking(&path, Remove::EmptyDir);
             continue;
         }
         match remove_path(&path) {
@@ -1129,9 +1159,9 @@ pub(crate) fn remove_desktop_profile(profile_dir: &Path) -> Vec<String> {
             Err(error) => problems.push(format!("cannot remove {}: {error}", path.display())),
         }
     }
-    let _ = std::fs::remove_dir(profile_dir);
+    let _ = disk.remove_blocking(profile_dir, Remove::EmptyDir);
     if let Some(vendor_dir) = profile_dir.parent() {
-        let _ = std::fs::remove_dir(vendor_dir);
+        let _ = disk.remove_blocking(vendor_dir, Remove::EmptyDir);
     }
     problems
 }
@@ -1145,7 +1175,7 @@ pub(crate) fn remove_desktop_profile(profile_dir: &Path) -> Vec<String> {
 /// temporary directory, and it is the property that actually matters — the
 /// cleanup must not be able to escape into a media library, which lives
 /// outside the profile and is never named by it. Entries inside the profile
-/// are removed with `symlink_metadata`, so a junction or symlink planted there
+/// are read without following links, so a junction or symlink planted there
 /// is unlinked rather than followed out of the profile.
 fn is_desktop_profile_shape(path: &Path) -> bool {
     if !path.is_absolute() {
@@ -1173,11 +1203,24 @@ fn is_desktop_profile_shape(path: &Path) -> bool {
 /// Remove a file, or a folder and everything below it. A link is removed
 /// itself, never what it points at.
 fn remove_path(path: &Path) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(path)?.file_type().is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
+    let disk = Disk::process();
+    let removal = match disk.uncached_blocking(path) {
+        PathReading::Known {
+            kind: EntryKind::Directory,
+            ..
+        } => disk.remove_blocking(path, Remove::Tree),
         // Windows removes a link to a folder as a folder.
-        std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
+        PathReading::Known { .. } => disk
+            .remove_blocking(path, Remove::File)
+            .or_else(|_| disk.remove_blocking(path, Remove::EmptyDir)),
+        PathReading::Missing { .. } => return Err(std::io::ErrorKind::NotFound.into()),
+        PathReading::Unreachable { .. } | PathReading::NotObserved => {
+            return Err(std::io::Error::other("the entry could not be read"));
+        }
+    };
+    match removal? {
+        Removal::Removed => Ok(()),
+        Removal::AlreadyAbsent => Err(std::io::ErrorKind::NotFound.into()),
     }
 }
 
@@ -1185,19 +1228,15 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
 /// This stream is separate from tracing and the web-accessible log ring.
 fn configure_server_console(command: &mut Command, logs_dir: &Path) -> Result<(), String> {
     let path = logs_dir.join("console.log");
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let output = options.open(&path).map_err(|error| {
-        format!(
-            "failed to capture server console at {}: {error}",
-            path.display()
-        )
-    })?;
+    let output = Disk::process()
+        .open_blocking(&path, Open::append().with_access(Access::OwnerOnly))
+        .map_err(|error| {
+            format!(
+                "failed to capture server console at {}: {}",
+                path.display(),
+                error.words()
+            )
+        })?;
     command.stderr(output);
     Ok(())
 }

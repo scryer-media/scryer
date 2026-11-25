@@ -5,6 +5,12 @@
 //! right now. These are the cheap server-local session endpoints the RFC names:
 //! Plex `/status/sessions`, Jellyfin and Emby `/Sessions`.
 //!
+//! Each playing session is reported as what it plays, normalized by the same
+//! functions the watch-signal adapters use ([`normalize_jellyfin_item`],
+//! [`normalize_plex_item`]): the provider's item id, the series' item id and
+//! episode numbers of an episode, external ids, and file paths. Attributing
+//! that to a Scryer title is the lifecycle safety check's job, not this one's.
+//!
 //! Two rules shape everything here:
 //!
 //! * **No connection may take down the probe.** A server that is offline,
@@ -25,22 +31,30 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppResult, ConnectionPlaybackActivity, MediaServerConnectionRepository,
-    MediaServerPlaybackProbe, PlaybackActivitySnapshot, PlaybackProbeStatus,
+    MediaServerPlaybackProbe, PlaybackActivitySnapshot, PlaybackProbeStatus, PlayingMedia,
 };
 use scryer_domain::{MediaServerConnection, MediaServerProvider};
-use scryer_outbound_http::generic_reqwest_client;
+use scryer_outbound_http::{generic_reqwest_client, read_body_bounded};
 use serde_json::Value;
 use url::Url;
 
 use crate::jellyfin::JellyfinAuth;
+use crate::media_server_signals::{normalize_jellyfin_item, normalize_plex_item, plex_file_paths};
 
 /// Per-connection budget for a session read.
 ///
 /// Deliberately far below [`scryer_outbound_http::STANDARD_HTTP_TIMEOUT`]: this
 /// is a LAN call to a server that answers from memory, and it sits in front of
-/// a maintenance action. A slow server should be reported as unknown quickly,
+/// a lifecycle action. A slow server should be reported as unknown quickly,
 /// not block the sweep for a minute.
 const PLAYBACK_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The most bytes a session answer may decode to. A session list is usually a
+/// few kilobytes per client, but a server can attach each client's whole play
+/// queue to its session, so a busy shared server answers in megabytes. The
+/// limit only stops an answer that never ends, which reads as an unreadable
+/// response.
+const PLAYBACK_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Plex's own service host. A Plex connection whose base URL is still this has
 /// no selected server, so there is no session endpoint to ask.
@@ -77,6 +91,7 @@ impl MediaServerPlaybackProbe for HttpMediaServerPlaybackProbe {
             activity.push(ConnectionPlaybackActivity {
                 connection_id: connection.id.clone(),
                 provider: connection.provider.clone(),
+                path_mappings: connection.path_mappings.clone(),
                 status: probe_connection(&self.client, connection).await,
             });
         }
@@ -114,8 +129,8 @@ pub(crate) async fn probe_connection(
     }
 }
 
-/// Plex: `GET /status/sessions` with the stored token. Active when the
-/// container reports a non-zero size.
+/// Plex: `GET /status/sessions` with the stored token. Each `Metadata` entry
+/// is one playing session.
 async fn probe_plex(client: &reqwest::Client, base_url: &str, token: &str) -> PlaybackProbeStatus {
     let url = match session_url(base_url, "status/sessions") {
         Ok(url) => url,
@@ -131,27 +146,62 @@ async fn probe_plex(client: &reqwest::Client, base_url: &str, token: &str) -> Pl
     }
 
     let request = client.get(url).header("X-Plex-Token", token);
-    let body = match fetch_json(request).await {
-        Ok(body) => body,
-        Err(status) => return status,
-    };
+    match fetch_json(request).await {
+        Ok(body) => plex_sessions_status(&body),
+        Err(status) => status,
+    }
+}
 
-    // Plex answers `{"MediaContainer": {"size": N, "Metadata": [...]}}`. The
-    // size field is the count; `Metadata` is absent entirely when idle.
-    let container = match body.get("MediaContainer") {
-        Some(container) => container,
-        None => return PlaybackProbeStatus::Unreachable("unreadable response".into()),
+/// A `/status/sessions` body. Plex answers
+/// `{"MediaContainer": {"size": N, "Metadata": [...]}}`, with `Metadata`
+/// absent entirely when idle.
+///
+/// A container whose `size` counts more sessions than its `Metadata` lists
+/// reports the rest as unreadable sessions, so they hold as unattributed
+/// rather than vanish.
+fn plex_sessions_status(body: &Value) -> PlaybackProbeStatus {
+    let Some(container) = body.get("MediaContainer") else {
+        return PlaybackProbeStatus::Unreachable("unreadable response".into());
     };
-    let size = container.get("size").and_then(playback_count).or_else(|| {
-        container
-            .get("Metadata")
-            .and_then(Value::as_array)
-            .map(|sessions| sessions.len() as u32)
-    });
-    match size {
-        Some(0) => PlaybackProbeStatus::Idle,
-        Some(count) => PlaybackProbeStatus::ActiveSessions(count),
-        None => PlaybackProbeStatus::Unreachable("unreadable response".into()),
+    let listed = container.get("Metadata").and_then(Value::as_array);
+    let size = container.get("size").and_then(playback_count);
+    if listed.is_none() && size.is_none() {
+        return PlaybackProbeStatus::Unreachable("unreadable response".into());
+    }
+    let mut sessions = listed
+        .into_iter()
+        .flatten()
+        .map(plex_playing_media)
+        .collect::<Vec<_>>();
+    let counted = size.map_or(0, |size| size as usize);
+    while sessions.len() < counted {
+        sessions.push(PlayingMedia::Other {
+            provider_item_id: None,
+            name: None,
+            file_paths: Vec::new(),
+        });
+    }
+    if sessions.is_empty() {
+        PlaybackProbeStatus::Idle
+    } else {
+        PlaybackProbeStatus::Playing(sessions)
+    }
+}
+
+/// One Plex session's item: a movie or episode by `ratingKey`,
+/// `grandparentRatingKey`, `Guid` and `Media.Part.file`; a music track as
+/// audio; anything else by its rating key and files.
+fn plex_playing_media(entry: &Value) -> PlayingMedia {
+    if let Some(item) = normalize_plex_item(entry) {
+        return PlayingMedia::Video(blank_play_state(item));
+    }
+    if entry.get("type").and_then(Value::as_str) == Some("track") {
+        return PlayingMedia::Audio;
+    }
+    PlayingMedia::Other {
+        provider_item_id: entry.get("ratingKey").and_then(scalar_text),
+        name: entry.get("title").and_then(scalar_text),
+        file_paths: plex_file_paths(entry),
     }
 }
 
@@ -196,31 +246,82 @@ async fn probe_emby(
 }
 
 /// A `/Sessions` body, as Jellyfin and Emby both shape it. A session counts
-/// as active only when it carries a `NowPlayingItem`; idle clients stay
+/// as playing only when it carries a `NowPlayingItem`; idle clients stay
 /// connected and are listed regardless.
 fn sessions_status(body: &Value) -> PlaybackProbeStatus {
     let Some(sessions) = body.as_array() else {
         return PlaybackProbeStatus::Unreachable("unreadable response".into());
     };
-    let active = sessions
+    let playing = sessions
         .iter()
-        .filter(|session| {
-            session
-                .get("NowPlayingItem")
-                .is_some_and(|item| !item.is_null())
-        })
-        .count() as u32;
-    if active == 0 {
+        .filter_map(|session| session.get("NowPlayingItem"))
+        .filter(|item| !item.is_null())
+        .map(jellyfin_playing_media)
+        .collect::<Vec<_>>();
+    if playing.is_empty() {
         PlaybackProbeStatus::Idle
     } else {
-        PlaybackProbeStatus::ActiveSessions(active)
+        PlaybackProbeStatus::Playing(playing)
     }
+}
+
+/// One `NowPlayingItem`: a movie or episode by `Id`, `SeriesId`,
+/// `ProviderIds`, the episode numbers and `Path`; an audio item as audio;
+/// anything else by its id and path.
+fn jellyfin_playing_media(item: &Value) -> PlayingMedia {
+    if let Some(normalized) = normalize_jellyfin_item(item) {
+        return PlayingMedia::Video(blank_play_state(normalized));
+    }
+    let audio = ["MediaType", "Type"].into_iter().any(|key| {
+        item.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case("audio"))
+    });
+    if audio {
+        return PlayingMedia::Audio;
+    }
+    PlayingMedia::Other {
+        provider_item_id: item.get("Id").and_then(scalar_text),
+        name: item.get("Name").and_then(scalar_text),
+        file_paths: item.get("Path").and_then(scalar_text).into_iter().collect(),
+    }
+}
+
+/// A session's item carries no play state: the normalizers read user data a
+/// session item does not have, and nothing downstream may read it as a play.
+fn blank_play_state(
+    mut item: scryer_application::ProviderPlayedItem,
+) -> scryer_application::ProviderPlayedItem {
+    item.played = false;
+    item.play_count = 0;
+    item.last_played_at = None;
+    item.is_favorite = false;
+    item
+}
+
+/// A trimmed, non-empty string or number.
+fn scalar_text(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::String(text) => text.trim().to_string(),
+        Value::Number(number) => number.to_string(),
+        _ => return None,
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 /// Sends a session request that already carries its credential and decodes
 /// its body, mapping every failure to an `Unreachable` status carrying a
 /// terse, credential-free reason.
 async fn fetch_json(request: reqwest::RequestBuilder) -> Result<Value, PlaybackProbeStatus> {
+    fetch_json_bounded(request, PLAYBACK_RESPONSE_MAX_BYTES).await
+}
+
+/// [`fetch_json`] with the body limit given, so tests can reach it with a
+/// small one.
+async fn fetch_json_bounded(
+    request: reqwest::RequestBuilder,
+    limit: usize,
+) -> Result<Value, PlaybackProbeStatus> {
     let response = request
         .header("Accept", "application/json")
         .timeout(PLAYBACK_PROBE_TIMEOUT)
@@ -234,10 +335,11 @@ async fn fetch_json(request: reqwest::RequestBuilder) -> Result<Value, PlaybackP
             status.as_u16()
         )));
     }
-    response
-        .json::<Value>()
+    let unreadable = || PlaybackProbeStatus::Unreachable("unreadable response".into());
+    let body = read_body_bounded(response, limit)
         .await
-        .map_err(|_| PlaybackProbeStatus::Unreachable("unreadable response".into()))
+        .map_err(|_| unreadable())?;
+    serde_json::from_slice::<Value>(&body).map_err(|_| unreadable())
 }
 
 /// The session endpoint for a stored base URL. Mirrors the media-server URL
@@ -446,7 +548,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(1));
+        assert_eq!(status.playing_sessions(), 1, "{status:?}");
     }
 
     #[tokio::test]
@@ -484,7 +586,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(1));
+        assert_eq!(status.playing_sessions(), 1, "{status:?}");
     }
 
     // ── Plex ────────────────────────────────────────────────────────────────
@@ -514,7 +616,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(2));
+        assert_eq!(status.playing_sessions(), 2, "{status:?}");
     }
 
     #[tokio::test]
@@ -560,7 +662,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(1));
+        assert_eq!(status.playing_sessions(), 1, "{status:?}");
     }
 
     #[tokio::test]
@@ -683,7 +785,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(2));
+        assert_eq!(status.playing_sessions(), 2, "{status:?}");
     }
 
     #[tokio::test]
@@ -730,7 +832,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(1));
+        assert_eq!(status.playing_sessions(), 1, "{status:?}");
     }
 
     #[tokio::test]
@@ -876,6 +978,143 @@ mod tests {
         );
     }
 
+    // ── What each session plays ─────────────────────────────────────────────
+
+    #[test]
+    fn a_jellyfin_episode_session_reports_its_item_series_numbers_and_path() {
+        // The shape Jellyfin 10.x gives a `NowPlayingItem` for an episode.
+        let status = sessions_status(&json!([
+            {"Id": "idle-client"},
+            {"Id": "watching", "NowPlayingItem": {
+                "Id": "ep-1",
+                "Type": "Episode",
+                "MediaType": "Video",
+                "Name": "Pilot",
+                "SeriesId": "series-1",
+                "ParentIndexNumber": 1,
+                "IndexNumber": 2,
+                "ProviderIds": {"Tvdb": "555"},
+                "Path": "/tv/Show/S01E02.mkv"
+            }}
+        ]));
+        let PlaybackProbeStatus::Playing(sessions) = status else {
+            panic!("expected one playing session, got {status:?}");
+        };
+        let [PlayingMedia::Video(item)] = sessions.as_slice() else {
+            panic!("expected a video session, got {sessions:?}");
+        };
+        assert_eq!(item.provider_item_id, "ep-1");
+        assert_eq!(item.kind, scryer_domain::MediaServerSignalKind::Episode);
+        assert_eq!(item.series_provider_item_id.as_deref(), Some("series-1"));
+        assert_eq!(
+            (item.season_number, item.episode_number),
+            (Some(1), Some(2))
+        );
+        assert_eq!(item.file_paths, vec!["/tv/Show/S01E02.mkv".to_string()]);
+        assert!(!item.played && item.play_count == 0 && item.last_played_at.is_none());
+    }
+
+    #[test]
+    fn a_jellyfin_movie_session_reports_its_provider_ids() {
+        let status = sessions_status(&json!([
+            {"NowPlayingItem": {"Id": "m-1", "Type": "Movie", "ProviderIds": {"Tmdb": "13595"}}}
+        ]));
+        let PlaybackProbeStatus::Playing(sessions) = status else {
+            panic!("expected playing");
+        };
+        let [PlayingMedia::Video(item)] = sessions.as_slice() else {
+            panic!("expected a video session, got {sessions:?}");
+        };
+        assert_eq!(
+            item.external_ids.get("tmdb").map(String::as_str),
+            Some("13595")
+        );
+    }
+
+    #[test]
+    fn audio_and_unrecognised_jellyfin_sessions_are_told_apart() {
+        let status = sessions_status(&json!([
+            {"NowPlayingItem": {"Id": "song", "Type": "Audio", "MediaType": "Audio"}},
+            {"NowPlayingItem": {"Id": "home", "Type": "Video", "Name": "Clip", "Path": "/v/clip.mp4"}},
+            {"NowPlayingItem": {"Name": "no id at all"}}
+        ]));
+        let PlaybackProbeStatus::Playing(sessions) = status else {
+            panic!("expected playing");
+        };
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0], PlayingMedia::Audio);
+        assert_eq!(
+            sessions[1],
+            PlayingMedia::Other {
+                provider_item_id: Some("home".to_string()),
+                name: Some("Clip".to_string()),
+                file_paths: vec!["/v/clip.mp4".to_string()],
+            }
+        );
+        assert!(matches!(
+            &sessions[2],
+            PlayingMedia::Other {
+                provider_item_id: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_plex_episode_session_reports_its_rating_keys_and_file() {
+        let status = plex_sessions_status(&json!({
+            "MediaContainer": {"size": 2, "Metadata": [
+                {
+                    "type": "episode",
+                    "ratingKey": "101",
+                    "grandparentRatingKey": "100",
+                    "parentIndex": 3,
+                    "index": 4,
+                    "title": "Episode Four",
+                    "Guid": [{"id": "tvdb://777"}],
+                    "Media": [{"Part": [{"file": "/data/tv/Show/S03E04.mkv"}]}]
+                },
+                {"type": "track", "ratingKey": "9", "title": "Song"}
+            ]}
+        }));
+        let PlaybackProbeStatus::Playing(sessions) = status else {
+            panic!("expected playing");
+        };
+        let [PlayingMedia::Video(item), PlayingMedia::Audio] = sessions.as_slice() else {
+            panic!("expected an episode and a track, got {sessions:?}");
+        };
+        assert_eq!(item.provider_item_id, "101");
+        assert_eq!(item.series_provider_item_id.as_deref(), Some("100"));
+        assert_eq!(
+            (item.season_number, item.episode_number),
+            (Some(3), Some(4))
+        );
+        assert_eq!(
+            item.file_paths,
+            vec!["/data/tv/Show/S03E04.mkv".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_plex_size_beyond_the_listed_sessions_reports_unreadable_sessions() {
+        // A session Plex counts but does not describe still holds.
+        let status = plex_sessions_status(&json!({"MediaContainer": {"size": "2", "Metadata": [
+            {"type": "movie", "ratingKey": "5", "title": "A"}
+        ]}}));
+        let PlaybackProbeStatus::Playing(sessions) = status else {
+            panic!("expected playing");
+        };
+        assert_eq!(sessions.len(), 2);
+        assert!(matches!(sessions[0], PlayingMedia::Video(_)));
+        assert!(matches!(
+            sessions[1],
+            PlayingMedia::Other {
+                provider_item_id: None,
+                ..
+            }
+        ));
+    }
+
     // ── Fan-out ─────────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -954,10 +1193,7 @@ mod tests {
         let snapshot = probe.active_playback().await.expect("probe");
 
         assert_eq!(snapshot.connections.len(), 3);
-        assert_eq!(
-            snapshot.connections[0].status,
-            PlaybackProbeStatus::ActiveSessions(1)
-        );
+        assert_eq!(snapshot.connections[0].status.playing_sessions(), 1);
         assert_eq!(snapshot.connections[1].status, PlaybackProbeStatus::Idle);
         assert_eq!(
             snapshot.connections[2].status,
@@ -975,5 +1211,30 @@ mod tests {
         // Reporting "no connections" here would read as Clear, so this is the
         // one failure the probe must surface as an error.
         assert!(probe.active_playback().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_session_answer_past_the_byte_limit_is_unreadable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "NowPlayingItem": { "Name": "x".repeat(4096) } }
+            ])))
+            .mount(&server)
+            .await;
+        let url = session_url(&server.uri(), "Sessions").expect("session URL");
+        let client = generic_reqwest_client();
+
+        let body = fetch_json_bounded(client.get(url.clone()), PLAYBACK_RESPONSE_MAX_BYTES)
+            .await
+            .expect("the answer fits the standard limit");
+        assert_eq!(sessions_status(&body).playing_sessions(), 1);
+        assert_eq!(
+            fetch_json_bounded(client.get(url), 1024)
+                .await
+                .expect_err("past the limit"),
+            PlaybackProbeStatus::Unreachable("unreadable response".to_string())
+        );
     }
 }

@@ -1,5 +1,6 @@
-use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult, SimpleObject};
-use scryer_application::WantedSearchOutcome;
+use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult};
+use scryer_application::{AppUseCase, WantedSearchOutcome};
+use scryer_domain::User;
 
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, to_gql_error};
 use scryer_interface_media::types::*;
@@ -29,21 +30,6 @@ pub struct StandbyConflictIdentityInput {
     pub client_type: String,
     /// The client's own id for the job.
     pub item_id: String,
-}
-
-/// The result of asking to queue a saved standby candidate.
-#[derive(SimpleObject)]
-pub struct QueueStandbyReleasePayload {
-    /// Whether the release is now queued (or already was).
-    pub grabbed: bool,
-    /// Running downloads of this title that still need the operator's choice.
-    pub conflicts: Vec<QueueDownloadConflictPayload>,
-    /// Conflicts whose client accepted the cancel request. Scryer stops
-    /// tracking them; a client may still finish a job it was post-processing.
-    pub cancelled: Vec<QueueDownloadConflictPayload>,
-    /// Conflicts whose cancel request failed. They keep running and stay
-    /// tracked; the release is queued anyway.
-    pub cancel_failed: Vec<QueueDownloadConflictPayload>,
 }
 
 /// Shared builder for the media-request approval search outcome. The convergence
@@ -77,45 +63,7 @@ impl WantedMutations {
     ) -> GqlResult<QueueStandbyReleasePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let choice = match choice {
-            StandbyQueueChoiceValue::Check => scryer_application::StandbyQueueChoice::Check,
-            StandbyQueueChoiceValue::Queue => scryer_application::StandbyQueueChoice::Queue,
-            StandbyQueueChoiceValue::CancelAndQueue => {
-                scryer_application::StandbyQueueChoice::CancelAndQueue
-            }
-        };
-        let confirmed = confirmed
-            .into_iter()
-            .map(|item| {
-                scryer_application::ClientJobLocator::new(
-                    item.client_id.as_ref().map(|id| id.as_str()),
-                    item.client_type,
-                    item.item_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        let outcome = app
-            .queue_standby_release(&actor, id.as_str(), choice, &confirmed)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(QueueStandbyReleasePayload {
-            grabbed: outcome.grabbed,
-            conflicts: outcome
-                .conflicts
-                .into_iter()
-                .map(crate::downloads::queue_download_conflict_payload)
-                .collect(),
-            cancelled: outcome
-                .cancelled
-                .into_iter()
-                .map(crate::downloads::queue_download_conflict_payload)
-                .collect(),
-            cancel_failed: outcome
-                .cancel_failed
-                .into_iter()
-                .map(crate::downloads::queue_download_conflict_payload)
-                .collect(),
-        })
+        queue_standby_release(&app, &actor, id, choice, confirmed).await
     }
 
     /// Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
@@ -178,15 +126,7 @@ impl WantedMutations {
     ) -> GqlResult<ForceGrabPendingReleasePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let id = id.to_string();
-        let grabbed = app
-            .force_grab_pending_release(&actor, &id)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(ForceGrabPendingReleasePayload {
-            id: ID::from(id),
-            grabbed,
-        })
+        force_grab_pending_release(&app, &actor, id).await
     }
 
     /// Dismiss a pending release so it is not considered for the current pending state.
@@ -300,4 +240,70 @@ impl WantedMutations {
             .map_err(to_gql_error)?;
         Ok(CancelAcquisitionSearchPayload { id, accepted })
     }
+}
+
+/// Queue a saved standby candidate, confirming title-wide conflicts first.
+pub(crate) async fn queue_standby_release(
+    app: &AppUseCase,
+    actor: &User,
+    id: ID,
+    choice: StandbyQueueChoiceValue,
+    confirmed: Vec<StandbyConflictIdentityInput>,
+) -> GqlResult<QueueStandbyReleasePayload> {
+    let choice = match choice {
+        StandbyQueueChoiceValue::Check => scryer_application::StandbyQueueChoice::Check,
+        StandbyQueueChoiceValue::Queue => scryer_application::StandbyQueueChoice::Queue,
+        StandbyQueueChoiceValue::CancelAndQueue => {
+            scryer_application::StandbyQueueChoice::CancelAndQueue
+        }
+    };
+    let confirmed = confirmed
+        .into_iter()
+        .map(|item| {
+            scryer_application::ClientJobLocator::new(
+                item.client_id.as_ref().map(|id| id.as_str()),
+                item.client_type,
+                item.item_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    let outcome = app
+        .queue_standby_release(actor, id.as_str(), choice, &confirmed)
+        .await
+        .map_err(to_gql_error)?;
+    Ok(QueueStandbyReleasePayload {
+        grabbed: outcome.grabbed,
+        conflicts: outcome
+            .conflicts
+            .into_iter()
+            .map(crate::downloads::queue_download_conflict_payload)
+            .collect(),
+        cancelled: outcome
+            .cancelled
+            .into_iter()
+            .map(crate::downloads::queue_download_conflict_payload)
+            .collect(),
+        cancel_failed: outcome
+            .cancel_failed
+            .into_iter()
+            .map(crate::downloads::queue_download_conflict_payload)
+            .collect(),
+    })
+}
+
+/// Grab a pending release now.
+pub(crate) async fn force_grab_pending_release(
+    app: &AppUseCase,
+    actor: &User,
+    id: ID,
+) -> GqlResult<ForceGrabPendingReleasePayload> {
+    let id = id.to_string();
+    let grabbed = app
+        .force_grab_pending_release(actor, &id)
+        .await
+        .map_err(to_gql_error)?;
+    Ok(ForceGrabPendingReleasePayload {
+        id: ID::from(id),
+        grabbed,
+    })
 }

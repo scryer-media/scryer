@@ -6,23 +6,23 @@
 //! keep the media once it arrives, not about how long the grab takes. Starting
 //! that clock is what this module does, at the moment the title's first import
 //! completes — and, for the imports that happened while the hook was missing or
-//! failing, at the start of every maintenance evaluation pass.
+//! failing, at the start of every lifecycle evaluation pass.
 //!
 //! Nothing here fails the caller. An import that cannot start a lease is still
-//! a completed import, and an unreadable claim store makes maintenance facts
+//! a completed import, and an unreadable claim store makes lifecycle facts
 //! unknown (which holds rules) rather than stopping the pass.
 
 use chrono::{DateTime, Duration, Utc};
 use scryer_domain::{LifecycleClaim, LifecycleClaimState};
 use tracing::warn;
 
-use crate::maintenance_rules::facts::first_imported_instant;
+use crate::lifecycle_rules::facts::first_imported_instant;
 use crate::{AppResult, AppUseCase};
 
 /// How many dormant claims one reconcile pass will look at.
 ///
 /// The sweep is a safety net, not the primary path — the import hook is — so it
-/// is bounded to keep a backlog from making the maintenance job's runtime
+/// is bounded to keep a backlog from making the lifecycle job's runtime
 /// unbounded. Anything past the bound is picked up by the next pass, and the
 /// claims are read oldest-first, so the backlog drains in the order it formed.
 pub const LIFECYCLE_CLAIM_DORMANT_SWEEP_LIMIT: usize = 500;
@@ -36,12 +36,12 @@ pub const CLAIM_RELEASE_TITLE_DELETED: &str = "title_deleted";
 impl AppUseCase {
     /// Start every dormant claim on a title, at `now`.
     ///
-    /// Called from the import path when a title's import completes. A retention
-    /// claim's window is `duration_days` from this instant; a keep claim has no
-    /// expiry at all. (A keep is created active by the approval, so finding a
-    /// dormant one here means an older or partial write — it is activated with
-    /// no expiry rather than left stuck, because a keep with an unstarted clock
-    /// would hold the title forever without ever reading as active.)
+    /// Called from the import path when a title's import completes. A claim
+    /// with a positive `duration_days` closes at the later of its stored
+    /// expiry and `duration_days` from this instant. A claim without one keeps
+    /// its stored expiry as it is, including one already past, which the next
+    /// pass then expires. A claim with neither a duration nor a stored expiry
+    /// never closes.
     ///
     /// The repository's `activate` is conditional on the claim still being
     /// dormant, so a replayed import cannot restart a window the requester has
@@ -109,11 +109,11 @@ impl AppUseCase {
                 );
             }
             // Never fails the import: the title is on disk either way, and the
-            // reconcile sweep in the maintenance pass picks the claim up.
+            // reconcile sweep in the lifecycle pass picks the claim up.
             Err(error) => warn!(
                 title_id,
                 error = %error,
-                "could not start request lease clocks at import; the maintenance pass will retry"
+                "could not start request lease clocks at import; the lifecycle pass will retry"
             ),
         }
     }
@@ -121,7 +121,7 @@ impl AppUseCase {
     /// Expire what has run out and start what has already arrived.
     ///
     /// Returns `(expired, activated)`. Both halves are best-effort and logged:
-    /// this runs at the head of the maintenance evaluation job, and a claim
+    /// this runs at the head of the lifecycle evaluation job, and a claim
     /// store that is down must not stop rules from evaluating (their claim
     /// facts go unknown on their own, which holds any rule that reads one).
     pub(crate) async fn reconcile_lifecycle_claims(&self, now: DateTime<Utc>) -> (u64, u64) {
@@ -134,7 +134,7 @@ impl AppUseCase {
             )
             .await
         {
-            warn!(error = %error, "could not release orphaned lifecycle claims; the next maintenance pass will retry");
+            warn!(error = %error, "could not release orphaned lifecycle claims; the next lifecycle pass will retry");
         }
         let expired = match claims.expire_due(now).await {
             Ok(expired) => expired,
@@ -186,7 +186,7 @@ impl AppUseCase {
     }
 
     /// Release every live claim on a deleted title. Best effort: the title row
-    /// is already gone; the maintenance sweep retries any claims left behind.
+    /// is already gone; the lifecycle sweep retries any claims left behind.
     pub(crate) async fn release_lifecycle_claims_for_deleted_title(&self, title_id: &str) {
         match self
             .services
@@ -223,15 +223,19 @@ impl AppUseCase {
     }
 }
 
-/// When a claim's window closes, given the instant its clock starts. A claim
-/// without a positive duration never closes.
+/// When a claim's window closes, given the instant its clock starts. An
+/// operator's explicit expiry, even one granted before the first import
+/// starts the clock, is kept: with a positive duration the later of it and
+/// the duration's end wins, and without one it stands as stored. A claim
+/// with neither never closes.
 fn claim_expiry(claim: &LifecycleClaim, starts_at: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    claim.duration_days.filter(|days| *days > 0).map(|days| {
-        // An operator's explicit extension is a minimum expiry, even
-        // when granted before the first import starts the clock.
-        let duration_expiry = starts_at + Duration::days(days);
+    let Some(days) = claim.duration_days.filter(|days| *days > 0) else {
+        return claim.expires_at;
+    };
+    let duration_expiry = starts_at + Duration::days(days);
+    Some(
         claim
             .expires_at
-            .map_or(duration_expiry, |expiry| expiry.max(duration_expiry))
-    })
+            .map_or(duration_expiry, |expiry| expiry.max(duration_expiry)),
+    )
 }

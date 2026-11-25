@@ -546,6 +546,10 @@ pub struct IndexerConfigUpdate {
     pub rate_limit_burst: Option<i64>,
     /// Omission keeps the stored budget, `Some(None)` clears it.
     pub max_queries_per_minute: Option<Option<i64>>,
+    /// Omission keeps the stored monthly request limit; `Some(None)` clears it.
+    pub max_requests_per_month: Option<Option<i64>>,
+    /// Omission keeps the stored monthly grab limit; `Some(None)` clears it.
+    pub max_grabs_per_month: Option<Option<i64>>,
     pub is_enabled: Option<bool>,
     pub enable_interactive_search: Option<bool>,
     pub enable_auto_search: Option<bool>,
@@ -597,6 +601,9 @@ pub struct NewProxyConfig {
     /// WireGuard only: `PersistentKeepalive`. `None` takes the engine's
     /// default; `Some(0)` switches it off.
     pub tunnel_keepalive_seconds: Option<u16>,
+    /// Challenge solvers only: the id of an enabled transport proxy or tunnel
+    /// to reach the solver through. `None` reaches it directly.
+    pub reach_through_proxy_config_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -634,6 +641,10 @@ pub struct ProxyConfigUpdate {
     /// value, `Some(None)` restores the engine's default.
     pub tunnel_mtu: Option<Option<u16>>,
     pub tunnel_keepalive_seconds: Option<Option<u16>>,
+    /// Challenge solvers only, tri-state: omission keeps the stored route,
+    /// `Some(None)` reaches the solver directly again, `Some(Some(id))` names
+    /// the transport proxy or tunnel to reach it through.
+    pub reach_through_proxy_config_id: Option<Option<String>>,
 }
 
 impl ProxyConfigUpdate {
@@ -653,6 +664,7 @@ impl ProxyConfigUpdate {
             || self.tunnel_dns_servers.is_some()
             || self.tunnel_mtu.is_some()
             || self.tunnel_keepalive_seconds.is_some()
+            || self.reach_through_proxy_config_id.is_some()
     }
 }
 
@@ -674,6 +686,8 @@ impl IndexerConfigUpdate {
             || self.rate_limit_seconds.is_some()
             || self.rate_limit_burst.is_some()
             || self.max_queries_per_minute.is_some()
+            || self.max_requests_per_month.is_some()
+            || self.max_grabs_per_month.is_some()
             || self.is_enabled.is_some()
             || self.enable_interactive_search.is_some()
             || self.enable_auto_search.is_some()
@@ -1055,8 +1069,15 @@ pub struct AcquisitionScopeStatesQuery {
     pub library_ids: Vec<String>,
     pub title_search: Option<String>,
     pub latest_decision_codes: Vec<String>,
+    /// Only scopes eligible for title-mismatch recovery: wanted, with at
+    /// least one release decision, and every decision a title mismatch.
+    /// The same rule sets `AcquisitionScopeState::mismatch_recovery_eligible`.
+    pub mismatch_recovery_eligible_only: bool,
     pub limit: i64,
     pub offset: i64,
+    /// The caller reads no total, so it is not counted and comes back as 0.
+    /// Only the use case's paged read looks at it; a store ignores it.
+    pub skip_total: bool,
 }
 
 /// Which scope an acquisition state row is about, without the rest of the row.
@@ -1068,12 +1089,72 @@ pub struct AcquisitionScopeCoordinates {
     pub series_movie_link_id: Option<String>,
 }
 
+/// The acquisition state rows of one title in one status, counted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcquisitionScopeStatusTally {
+    pub status: AcquisitionScopeStatus,
+    pub count: i64,
+    /// How many of these rows are eligible for title-mismatch recovery.
+    pub mismatch_recovery_eligible: i64,
+    /// The newest `last_search_at` among these rows.
+    pub latest_search_at: Option<String>,
+}
+
+/// One scope under a title, as the acquisition state row for it is keyed.
+/// Each arm matches at most one row of the title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcquisitionScopeKey<'a> {
+    Episode(&'a str),
+    /// The collection's own row. Episode rows carry their collection id too,
+    /// so they never match this arm.
+    Collection(&'a str),
+    SeriesMovieLink(&'a str),
+    /// The title's own row: no episode, collection or series-movie link.
+    Title,
+}
+
+impl<'a> AcquisitionScopeKey<'a> {
+    /// The key `state`'s own row is stored under. The episode identity wins,
+    /// then the collection, then the series-movie link, then the bare title.
+    pub fn of(state: &'a AcquisitionScopeState) -> Self {
+        if let Some(episode_id) = state.episode_id.as_deref() {
+            Self::Episode(episode_id)
+        } else if let Some(collection_id) = state.collection_id.as_deref() {
+            Self::Collection(collection_id)
+        } else if let Some(link_id) = state.series_movie_link_id.as_deref() {
+            Self::SeriesMovieLink(link_id)
+        } else {
+            Self::Title
+        }
+    }
+
+    /// Whether `state` is this scope's row, given it belongs to the title.
+    pub fn matches(&self, state: &AcquisitionScopeState) -> bool {
+        match *self {
+            Self::Episode(episode_id) => state.episode_id.as_deref() == Some(episode_id),
+            Self::Collection(collection_id) => {
+                state.episode_id.is_none() && state.collection_id.as_deref() == Some(collection_id)
+            }
+            Self::SeriesMovieLink(link_id) => {
+                state.series_movie_link_id.as_deref() == Some(link_id)
+            }
+            Self::Title => {
+                state.episode_id.is_none()
+                    && state.collection_id.is_none()
+                    && state.series_movie_link_id.is_none()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseDecisionsQuery {
     pub wanted_item_id: Option<String>,
     pub title_id: Option<String>,
     pub limit: i64,
     pub offset: i64,
+    /// The caller reads no total, so it is not counted and comes back as 0.
+    pub skip_total: bool,
 }
 
 /// Ordering for a paged pending-releases read. Preserves the historic per-call
@@ -1458,6 +1539,15 @@ pub struct MediaIssueRecycleIntent {
     pub preview_fingerprint: String,
 }
 
+/// The key of one blocklist row, as a search-time exclusion reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlocklistMatch {
+    /// Empty blocks the name on every indexer.
+    pub indexer_id: String,
+    pub normalized_release_name: String,
+    pub info_hash: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Interactive,
@@ -1566,15 +1656,38 @@ impl std::fmt::Debug for DownloadClientAddRequest {
 }
 
 impl DownloadClientAddRequest {
+    // Torrent labels commonly use "localized / original / season", not the
+    // legacy NZB "name / password" convention. Keep explicit password markers.
+    fn allow_slash_password(&self) -> bool {
+        !matches!(
+            self.source_kind,
+            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri)
+        ) && !matches!(
+            self.resolved_download_artifact,
+            Some(
+                ResolvedDownloadArtifact::TorrentFile { .. }
+                    | ResolvedDownloadArtifact::Magnet { .. }
+            )
+        )
+    }
+
     pub fn source_title_without_password(&self) -> Option<String> {
         self.source_title.as_deref().map(|name| {
-            crate::import::archive_passwords::release_name_without_password(name).to_string()
+            crate::import::archive_passwords::release_name_without_password_with_slash(
+                name,
+                self.allow_slash_password(),
+            )
+            .to_string()
         })
     }
 
     pub fn release_title_without_password(&self) -> Option<String> {
         self.release_title.as_deref().map(|name| {
-            crate::import::archive_passwords::release_name_without_password(name).to_string()
+            crate::import::archive_passwords::release_name_without_password_with_slash(
+                name,
+                self.allow_slash_password(),
+            )
+            .to_string()
         })
     }
 
@@ -1603,7 +1716,12 @@ impl DownloadClientAddRequest {
             .into_iter()
             .flatten()
         {
-            if let Some(password) = crate::import::archive_passwords::release_name_password(name) {
+            if let Some(password) =
+                crate::import::archive_passwords::release_name_password_with_slash(
+                    name,
+                    self.allow_slash_password(),
+                )
+            {
                 candidates.push(&password);
             }
         }

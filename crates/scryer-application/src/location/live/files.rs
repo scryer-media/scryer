@@ -287,6 +287,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 verified_at: chrono::Utc::now(),
+                content_matched: false,
             })
             .await
             .unwrap();

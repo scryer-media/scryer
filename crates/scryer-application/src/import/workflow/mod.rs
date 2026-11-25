@@ -1,14 +1,14 @@
 mod sidecars;
 
+use crate::disk::{Disk, EntryKind, PathReading, Removal, Remove, reason};
 use crate::helpers::parse_usable_release_title;
 use crate::import::srrdb::{crc32_iso_hdlc_of_file, srrdb_lookup_applies};
 #[cfg(test)]
 use crate::import_title_resolution::normalize_imdb_id;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{
-    AcquisitionScopeCompleteTransition, AcquisitionScopeStatesQuery, AppError, AppResult,
-    AppUseCase, ClientJobLocator, DownloadSubmission, DownloadSubmissionIdentity, ImportArtifact,
-    ParsedReleaseMetadata, SubmissionScope,
+    AppError, AppResult, AppUseCase, ClientJobLocator, DownloadSubmission,
+    DownloadSubmissionIdentity, ImportArtifact, ParsedReleaseMetadata, SubmissionScope,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     apply_remote_path_mappings_to_completed_download,
     domain_events::{
@@ -37,6 +37,29 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// The name an import writes its copy under, beside `dest`, until the copy
+/// is whole: the destination's whole file name with `.tmp_import` added, so
+/// two imports into one folder whose names differ only in their extension
+/// never share it, and a destination is never its own staged name.
+pub fn import_staging_path(dest: &Path) -> PathBuf {
+    let mut name = dest.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp_import");
+    dest.with_file_name(name)
+}
+
+/// The staged names a cancelled import clears: the one it writes now, and
+/// the one imports wrote before, the destination's extension replaced by
+/// `tmp_import`, which may be left from an import cancelled under that
+/// spelling. A name that is the destination itself is never one of them.
+fn cancelled_import_staging_paths(dest: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![import_staging_path(dest)];
+    let earlier = dest.with_extension("tmp_import");
+    if earlier != dest && !paths.contains(&earlier) {
+        paths.push(earlier);
+    }
+    paths
+}
 use std::time::{Duration, Instant};
 
 const IMPORT_TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -270,16 +293,18 @@ pub(crate) async fn import_file_with_record_progress(
         .await;
 
     if matches!(&result, Err(AppError::Canceled(_))) {
-        let temporary_destination = dest.with_extension("tmp_import");
-        if let Err(error) = std::fs::remove_file(&temporary_destination)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                import_id,
-                path = %temporary_destination.display(),
-                error = %error,
-                "failed to remove cancelled import temporary destination"
-            );
+        for temporary_destination in cancelled_import_staging_paths(dest) {
+            if let Err(error) = Disk::process()
+                .remove(&temporary_destination, Remove::File)
+                .await
+            {
+                tracing::warn!(
+                    import_id,
+                    path = %temporary_destination.display(),
+                    error = %error,
+                    "failed to remove cancelled import temporary destination"
+                );
+            }
         }
     }
 
@@ -290,6 +315,19 @@ pub(crate) async fn import_file_with_record_progress(
     active_stream.finish().await;
 
     let result = result?;
+    if result.source_disposition == scryer_domain::ImportSourceDisposition::IsLibraryFile
+        && completed.is_some()
+    {
+        record_library_file_for_download(app, import_id, source, dest).await?;
+    }
+    if result.library_file_unsettled && completed.is_some() {
+        record_library_files_unsettled(
+            app,
+            import_id,
+            &[crate::UnsettledLibraryFile::new(source, dest)],
+        )
+        .await?;
+    }
     let finalization_permit = app
         .runtime
         .imports
@@ -302,6 +340,254 @@ pub(crate) async fn import_file_with_record_progress(
         _finalization_permit: finalization_permit,
         destination_permit: Arc::new(destination_permit),
     })
+}
+
+/// The import's file is the library file, and a download client still holds
+/// an entry for it. The import's row records that the client may remove its
+/// entry but never its data; a terminal cleanup reads that with the download's
+/// holds. With no download identity to record it under, or a record that does
+/// not land, the import refuses as the destination being its own source, so
+/// nothing is left for a client to remove with its data.
+pub(crate) async fn record_library_file_for_download(
+    app: &AppUseCase,
+    import_id: &str,
+    source: &Path,
+    dest: &Path,
+) -> AppResult<()> {
+    let recorded = app
+        .services
+        .workflow
+        .imports
+        .record_library_holds_download_payload(import_id)
+        .await;
+    match recorded {
+        Ok(true) => Ok(()),
+        outcome => {
+            if let Err(error) = &outcome {
+                tracing::warn!(import_id, error = %error,
+                    "could not record that the download's file is the library file");
+            }
+            Err(AppError::ManualReconciliationRefused {
+                message: format!(
+                    "import destination {} is the source {} itself, and the download's data could not be kept from its client; nothing was removed",
+                    dest.display(),
+                    source.display()
+                ),
+                reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
+                facts: Vec::new(),
+            })
+        }
+    }
+}
+
+/// The import left the download's files `files` on library files without
+/// telling whether each is the library file itself, and a download client
+/// still holds an entry for them. The import's row records them, so a
+/// cleanup about to remove the download's data settles them first. With no
+/// download identity to record them under, or a record that does not land,
+/// the import refuses as an unknown alias, so nothing is left for a client to
+/// remove with its data.
+pub(crate) async fn record_library_files_unsettled(
+    app: &AppUseCase,
+    import_id: &str,
+    files: &[crate::UnsettledLibraryFile],
+) -> AppResult<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let recorded = app
+        .services
+        .workflow
+        .imports
+        .record_library_files_unsettled(import_id, files)
+        .await;
+    match recorded {
+        Ok(true) => Ok(()),
+        outcome => {
+            if let Err(error) = &outcome {
+                tracing::warn!(import_id, error = %error,
+                    "could not record that a library file may be the download's file");
+            }
+            let file = &files[0];
+            Err(AppError::RepositoryFailed {
+                message: format!(
+                    "could not tell whether library file {} is the download's file {} itself, and the question could not be kept for the download's cleanup; nothing was removed",
+                    file.library().display(),
+                    file.source().display()
+                ),
+                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+            })
+        }
+    }
+}
+
+/// An import of the download's file `source` that ends on the library file
+/// at `library_path` without placing anything, as a re-run that finds the
+/// file already imported: whether the two are one entry is asked here before
+/// a client may remove the download with its data. A row with no
+/// library-holds mark has not been checked, so this runs whether or not one
+/// is recorded. One entry records the mark, so the client removes its entry
+/// only; separate entries, or a file that is gone, record nothing. Where the
+/// cheap reads cannot tell, the download's file is never set aside, since
+/// the import keeps it and it may be seeding: the answer is
+/// [`LibraryFileSameness::Unsettled`], which the caller records for the
+/// download's cleanup. A check that fails refuses as an unknown alias,
+/// keeping everything.
+///
+/// The check runs through the file importer, in the source's turn, since it
+/// may put back a source an earlier check set aside.
+///
+/// A source that reads missing may be the download's file an earlier check
+/// set aside and could not put back: a nonempty regular file at its
+/// set-aside name is renamed back, never replacing anything, and the check
+/// goes on with it; an empty one there is removed. One that cannot go back
+/// refuses with the name it is kept at.
+///
+/// Probes: one read of each file; where the source reads missing, one read of
+/// its set-aside name, and, when a file is put back, its rename and the
+/// source's read again.
+pub(crate) async fn settle_already_imported_source(
+    app: &AppUseCase,
+    import_id: &str,
+    source: &Path,
+    library_path: &Path,
+) -> AppResult<LibraryFileSameness> {
+    let sameness = app
+        .services
+        .workflow
+        .file_importer
+        .library_file_sameness_without_set_aside(source, library_path)
+        .await?;
+    if sameness == LibraryFileSameness::Same {
+        record_library_file_for_download(app, import_id, source, library_path).await?;
+    }
+    Ok(sameness)
+}
+
+/// Whether a library file is the download's file itself, as far as reads
+/// that never move the download's file can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryFileSameness {
+    /// One entry: the library file is the download's file.
+    Same,
+    /// Separate entries, or one of the two is gone.
+    Apart,
+    /// The reads could not tell; only setting the download's file aside can.
+    Unsettled,
+}
+
+/// Whether the library file at `library_path` is the download's file
+/// `source` itself, as [`settle_already_imported_source`] asks. The caller
+/// keeps any other work on `source` in this process from running meanwhile:
+/// the set-aside test moves the source for a moment.
+pub fn library_file_is_import_source_blocking(
+    source: &Path,
+    library_path: &Path,
+) -> AppResult<bool> {
+    library_file_sameness_blocking(source, library_path, true)
+        .map(|sameness| sameness == LibraryFileSameness::Same)
+}
+
+/// Whether the library file at `library_path` is the download's file
+/// `source` itself, as far as reads that never set the download's file aside
+/// can tell; [`LibraryFileSameness::Unsettled`] where only the set-aside test
+/// of [`library_file_is_import_source_blocking`] could. The caller keeps any
+/// other work on `source` in this process from running meanwhile: a source an
+/// earlier check set aside is put back first.
+pub fn library_file_sameness_without_set_aside_blocking(
+    source: &Path,
+    library_path: &Path,
+) -> AppResult<LibraryFileSameness> {
+    library_file_sameness_blocking(source, library_path, false)
+}
+
+fn library_file_sameness_blocking(
+    source: &Path,
+    library_path: &Path,
+    set_aside: bool,
+) -> AppResult<LibraryFileSameness> {
+    use crate::disk::{AsideRemoval, PutBackAside, Sameness};
+    use LibraryFileSameness::{Apart, Same, Unsettled};
+    let unknown = |why: &str| AppError::RepositoryFailed {
+        message: format!(
+            "could not tell whether library file {} is the download's file {} itself: {why}; nothing was removed",
+            library_path.display(),
+            source.display()
+        ),
+        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+    };
+    // The download's file waits at `at` for an operator; nothing was removed.
+    let kept_aside = |at: &Path, why: String| AppError::ManualReconciliationRefused {
+        message: format!(
+            "the download's file {} was set aside at {} while telling whether library file {} is it, and could not be put back{why}; nothing was removed",
+            source.display(),
+            at.display(),
+            library_path.display()
+        ),
+        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+        facts: vec![crate::RefusalFact {
+            key: crate::error_reasons::import::KEPT_PATH_FACT,
+            value: crate::RefusalFactValue::Text(at.display().to_string()),
+        }],
+    };
+    if source == library_path {
+        return Ok(Same);
+    }
+    let disk = Disk::process();
+    let read_source = || match disk.fingerprint_blocking(source) {
+        Ok(mark) => Ok(Some(mark)),
+        Err(reading) if reading.exists() == Some(false) => Ok(None),
+        Err(_) => Err(unknown("the download's file did not read")),
+    };
+    let source_mark = match read_source()? {
+        Some(mark) => mark,
+        // An earlier check may have left the download's file at its
+        // set-aside name: it goes back first, as an import's start does.
+        None => match disk.put_back_set_aside_source_blocking(source) {
+            PutBackAside::PutBack => match read_source()? {
+                Some(mark) => mark,
+                None => return Ok(Apart),
+            },
+            PutBackAside::Nothing => return Ok(Apart),
+            PutBackAside::SourceNameTaken { at } => {
+                return Err(kept_aside(
+                    &at,
+                    ", because the source's name holds something again".into(),
+                ));
+            }
+            PutBackAside::Failed { at, error } => {
+                tracing::error!(
+                    source = %source.display(),
+                    at = %at.display(),
+                    error = %error,
+                    "a download's file left at its set-aside name could not be put back"
+                );
+                return Err(kept_aside(&at, format!(": {error}")));
+            }
+        },
+    };
+    let kept = match disk.fingerprint_blocking(library_path) {
+        Ok(mark) => mark,
+        Err(reading) if reading.exists() == Some(false) => return Ok(Apart),
+        Err(_) => return Err(unknown("the library file did not read")),
+    };
+    if !kept.has_other_names() && source_mark.same_file(&kept) == Sameness::Same {
+        return Ok(Same);
+    }
+    if !disk.adoption_needs_set_aside(source, &source_mark, library_path, &kept) {
+        return Ok(Apart);
+    }
+    if !set_aside {
+        return Ok(Unsettled);
+    }
+    match disk.tell_apart_by_set_aside_blocking(source, &source_mark, library_path, &kept) {
+        AsideRemoval::Apart => Ok(Apart),
+        AsideRemoval::SameEntry => Ok(Same),
+        AsideRemoval::PutBackFailed { at, .. } | AsideRemoval::SetAsideMoved { at, .. } => {
+            Err(kept_aside(&at, String::new()))
+        }
+        _ => Err(unknown("the set-aside test did not tell")),
+    }
 }
 
 impl AppUseCase {
@@ -398,14 +684,19 @@ impl CoordinatedImportFileResult {
             self.result.destination_disposition,
             scryer_domain::ImportDestinationDisposition::Created
         );
+        let (input, hashes) = self.with_landed_facts(input);
         let claimed = app
             .services
             .library
             .media_files
-            .claim_import_destination(input, &associations)
+            .claim_import_destination(&input, &associations, hashes.as_ref())
             .await?;
-        self.persist_content_hashes(app, &claimed.media_file_id)
-            .await;
+        if hashes.is_some() {
+            tracing::debug!(
+                media_file_id = %claimed.media_file_id,
+                "recorded import content hashes with the destination's size and signature"
+            );
+        }
         Ok(CoordinatedMediaFilePersistence {
             media_file_id: claimed.media_file_id,
             reused_existing: matches!(
@@ -416,46 +707,49 @@ impl CoordinatedImportFileResult {
         })
     }
 
-    /// Persist what the copy proved about this file (FR-041/045, migration
-    /// 0205).
+    /// The row as the copy left the file: the destination's signature read
+    /// from the mark taken once it landed, and what the copy proved about its
+    /// bytes. The claim writes the size, the signature and the hashes
+    /// together, so a row never pairs a hash with another file's signature.
     ///
-    /// Only a copy has hashes to persist: a hardlink or same-filesystem rename
-    /// moved no bytes, so it carries no verification and leaves the columns
-    /// alone for the backfill job (FR-047) to fill in later.
-    ///
-    /// A write failure is logged, never propagated. The bytes are already
-    /// placed and proven; losing the hash costs a later backfill pass, while
-    /// failing the import here would cost the user a completed download.
-    async fn persist_content_hashes(&self, app: &AppUseCase, media_file_id: &str) {
+    /// Only a proven copy has hashes: a hardlink or same-filesystem rename
+    /// moved no bytes and leaves the columns for the backfill job to fill.
+    /// A destination with no mark keeps no signature, so its hash is read
+    /// again before the disk owner answers with it.
+    fn with_landed_facts(
+        &self,
+        input: &crate::InsertMediaFileInput,
+    ) -> (
+        crate::InsertMediaFileInput,
+        Option<crate::location::model::PersistedContentHashes>,
+    ) {
+        let mut input = input.clone();
         let Some(verification) = self.result.verification.as_ref() else {
-            return;
+            return (input, None);
         };
-        if !verification.permits_source_removal() {
-            return;
-        }
-
-        let hashes = crate::location::model::PersistedContentHashes::from_streamed(
-            &verification.hashes,
-            Utc::now(),
-        );
-        match app
-            .services
-            .library
-            .media_files
-            .update_media_file_content_hashes(media_file_id, &hashes)
-            .await
-        {
-            Ok(()) => tracing::debug!(
-                media_file_id,
-                depth = %verification.depth.label(),
-                "persisted import content hashes"
-            ),
-            Err(error) => tracing::warn!(
-                error = %error,
-                media_file_id,
-                "failed to persist import content hashes; the backfill job will recompute them"
-            ),
-        }
+        let mark = verification
+            .destination_mark
+            .as_deref()
+            .and_then(crate::disk::Mark::from_stored)
+            .filter(|mark| {
+                mark.len()
+                    .is_some_and(|len| i64::try_from(len).ok() == Some(input.size_bytes))
+            });
+        let signature = mark
+            .as_ref()
+            .and_then(crate::disk::Mark::modified)
+            .and_then(crate::file_source_signature::file_source_signature_from_modified);
+        input.source_signature_scheme = signature.as_ref().map(|s| s.scheme.clone());
+        input.source_signature_value = signature.map(|s| s.value);
+        let hashes = verification.permits_source_removal().then(|| {
+            crate::location::model::PersistedContentHashes::from_verified(
+                &verification.hashes,
+                &verification.depth,
+                mark.as_ref(),
+                Utc::now(),
+            )
+        });
+        (input, hashes)
     }
 
     pub(crate) fn destination_permit(&self) -> ImportDestinationPermit {

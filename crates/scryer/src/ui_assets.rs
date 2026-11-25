@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use brotli::Decompressor;
-use tokio::fs;
+use scryer_application::disk::{Disk, EntryKind};
 
 use crate::base_path::BasePath;
 use crate::middleware::index_page;
@@ -151,7 +151,7 @@ pub(crate) fn resolve_ui_asset_mode() -> UiAssetMode {
     }
 
     let default_dist_dir = PathBuf::from("./crates/scryer/ui");
-    if default_dist_dir.exists() {
+    if Disk::process().follow_blocking(&default_dist_dir).exists() == Some(true) {
         return UiAssetMode::Filesystem(default_dist_dir);
     }
 
@@ -320,7 +320,8 @@ pub(crate) async fn serve_ui_path(
     head_only: bool,
     preferred_encoding: UiContentEncoding,
 ) -> Response {
-    if !dist_dir.exists() {
+    let disk = Disk::process();
+    if disk.follow(dist_dir).await.exists() != Some(true) {
         return serve_fallback_ui(request_path).await;
     }
 
@@ -340,24 +341,23 @@ pub(crate) async fn serve_ui_path(
     }
 
     let candidate = dist_dir.join(relative_path);
-    let canonical = match candidate.canonicalize() {
+    let canonical = match disk.canonicalize(candidate).await {
         Ok(path) => path,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
-    let canonical_root = match dist_dir.canonicalize() {
+    let canonical_root = match disk.canonicalize(dist_dir).await {
         Ok(path) => path,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
     if !canonical.starts_with(&canonical_root) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match fs::metadata(&canonical).await {
-        Ok(metadata) if metadata.is_file() => {
+    match disk.follow(&canonical).await.kind() {
+        Some(EntryKind::File) => {
             let brotli_candidate = dist_dir.join(format!("{relative_path}.br"));
-            if let Ok(brotli_canonical) = brotli_candidate.canonicalize()
+            if let Ok(brotli_canonical) = disk.canonicalize(brotli_candidate).await
                 && brotli_canonical.starts_with(&canonical_root)
-                && let Ok(brotli_meta) = fs::metadata(&brotli_canonical).await
-                && brotli_meta.is_file()
+                && disk.follow(&brotli_canonical).await.kind() == Some(EntryKind::File)
             {
                 match preferred_encoding {
                     UiContentEncoding::Brotli => {
@@ -383,7 +383,6 @@ pub(crate) async fn serve_ui_path(
             }
             serve_file(canonical, head_only).await
         }
-        Ok(metadata) if metadata.is_dir() => StatusCode::NOT_FOUND.into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -472,7 +471,7 @@ pub(crate) fn infer_content_type(path: &Path) -> &'static str {
 }
 
 pub(crate) async fn serve_file(path: PathBuf, head_only: bool) -> Response {
-    match fs::read(&path).await {
+    match Disk::process().read(&path).await {
         Ok(bytes) => {
             let asset_path = path.to_string_lossy();
             let relative_key = relative_asset_key(&asset_path);
@@ -513,7 +512,7 @@ async fn serve_file_precompressed(
     content_encoding: &'static str,
     head_only: bool,
 ) -> Response {
-    match fs::read(&compressed_path).await {
+    match Disk::process().read(&compressed_path).await {
         Ok(bytes) => {
             let asset_path = original_path.to_string_lossy();
             let relative_key = relative_asset_key(&asset_path);
@@ -540,7 +539,7 @@ async fn serve_file_gzip_from_brotli(
     cache_key: &str,
     head_only: bool,
 ) -> Response {
-    match fs::read(&brotli_path).await {
+    match Disk::process().read(&brotli_path).await {
         Ok(bytes) => match gzip_from_brotli_cached(cache_key, &bytes) {
             Ok(gzip_bytes) => {
                 let asset_path = original_path.to_string_lossy();
@@ -643,7 +642,7 @@ fn gzip_compress_bytes(raw_bytes: &[u8]) -> std::io::Result<Vec<u8>> {
 
 pub(crate) async fn serve_index_html(dist_dir: &Path, head_only: bool) -> Response {
     let index = dist_dir.join("index.html");
-    match fs::read(&index).await {
+    match Disk::process().read(&index).await {
         Ok(index_html) => {
             let index_html = render_index_html(&index_html);
             let content_len = index_html.len().to_string();

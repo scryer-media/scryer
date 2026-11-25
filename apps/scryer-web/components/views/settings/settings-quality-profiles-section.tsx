@@ -35,7 +35,11 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { DEFAULT_MIN_UPGRADE_SCORE_DELTA } from "@/lib/utils/quality-profiles";
+import {
+  DEFAULT_MIN_MISSING_EPISODES_FOR_PACK,
+  DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
+  DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+} from "@/lib/utils/quality-profiles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import type { QualityDecisionGate } from "@/lib/constants/quality-decision-gates";
 import { decisionPipelineUsesTierCutoff } from "@/lib/utils/quality-decision-pipeline";
@@ -103,6 +107,8 @@ type QualityProfileCriteriaPayload = {
   min_score_to_grab: number | null;
   cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  min_missing_episodes_for_pack: number;
+  min_missing_percent_for_series_pack: number;
   decision_pipeline: QualityDecisionGate[];
 };
 
@@ -128,6 +134,8 @@ type QualityProfileDraft = {
   min_score_to_grab: number | null;
   cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  min_missing_episodes_for_pack: number;
+  min_missing_percent_for_series_pack: number;
   decision_pipeline: QualityDecisionGate[];
 };
 
@@ -1529,6 +1537,83 @@ export function SettingsQualityProfilesSection({
                         })}
                       </div>
                     </details>
+
+                    {/* Pack thresholds */}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="space-y-2">
+                        <Label className="inline-flex items-center gap-2">
+                          {t("qualityProfile.minMissingEpisodesForPack")}
+                          <InfoHelp
+                            ariaLabel={t(
+                              "qualityProfile.minMissingEpisodesForPack",
+                            )}
+                            text={t(
+                              "qualityProfile.minMissingEpisodesForPackInfo",
+                            )}
+                          />
+                        </Label>
+                        <Input
+                          id={selectorId(
+                            "settings-quality-profile-min-missing-episodes-for-pack",
+                          )}
+                          {...signedIntegerInputProps}
+                          min={1}
+                          value={
+                            qualityProfileDraft.min_missing_episodes_for_pack
+                          }
+                          onChange={(event) => {
+                            const raw = event.target.value.trim();
+                            const parsed = Number(raw);
+                            updateQualityProfileDraft({
+                              min_missing_episodes_for_pack:
+                                raw === "" ||
+                                !Number.isInteger(parsed) ||
+                                parsed < 1
+                                  ? DEFAULT_MIN_MISSING_EPISODES_FOR_PACK
+                                  : parsed,
+                            });
+                          }}
+                        />
+                      </label>
+
+                      <label className="space-y-2">
+                        <Label className="inline-flex items-center gap-2">
+                          {t("qualityProfile.minMissingPercentForSeriesPack")}
+                          <InfoHelp
+                            ariaLabel={t(
+                              "qualityProfile.minMissingPercentForSeriesPack",
+                            )}
+                            text={t(
+                              "qualityProfile.minMissingPercentForSeriesPackInfo",
+                            )}
+                          />
+                        </Label>
+                        <Input
+                          id={selectorId(
+                            "settings-quality-profile-min-missing-percent-for-series-pack",
+                          )}
+                          {...signedIntegerInputProps}
+                          min={0}
+                          max={100}
+                          value={
+                            qualityProfileDraft.min_missing_percent_for_series_pack
+                          }
+                          onChange={(event) => {
+                            const raw = event.target.value.trim();
+                            const parsed = Number(raw);
+                            updateQualityProfileDraft({
+                              min_missing_percent_for_series_pack:
+                                raw === "" ||
+                                !Number.isInteger(parsed) ||
+                                parsed < 0 ||
+                                parsed > 100
+                                  ? DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK
+                                  : parsed,
+                            });
+                          }}
+                        />
+                      </label>
+                    </div>
 
                     {/* Upgrade behavior */}
                     <div className="space-y-3">

@@ -1,4 +1,6 @@
 pub mod assets;
+#[cfg(test)]
+mod audience_favorites_upgrade_tests;
 pub mod blake3_identities;
 #[cfg(test)]
 #[path = "blake3_identities_upgrade_tests.rs"]
@@ -6,6 +8,8 @@ mod blake3_identities_upgrade_tests;
 #[cfg(test)]
 #[path = "blocklist_release_identity_upgrade_tests.rs"]
 mod blocklist_release_identity_upgrade_tests;
+#[cfg(test)]
+mod blocklist_title_release_name_index_upgrade_tests;
 pub mod canonical_download_identity;
 #[cfg(test)]
 mod catalog_sort_indexes_upgrade_tests;
@@ -32,6 +36,10 @@ mod legacy_monitor_snapshot_upgrade_tests;
 #[cfg(test)]
 mod lifecycle_claims_one_operator_keep_upgrade_tests;
 #[cfg(test)]
+mod lifecycle_rule_state_upgrade_tests;
+#[cfg(test)]
+mod lifecycle_rule_targets_upgrade_tests;
+#[cfg(test)]
 mod list_search_mode_upgrade_tests;
 #[cfg(test)]
 mod media_content_blocks_upgrade_tests;
@@ -48,11 +56,21 @@ pub mod post_processing_output;
 #[cfg(test)]
 mod query_audit_indexes_upgrade_tests;
 pub mod release_url_scrub;
+#[cfg(test)]
+mod remove_user_maintenance_rules_upgrade_tests;
+#[cfg(test)]
+mod rename_maintenance_to_lifecycle_upgrade_tests;
 pub mod repair_root_title_folders;
 #[cfg(test)]
+mod request_rule_actions_upgrade_tests;
+#[cfg(test)]
 mod request_rules_enable_only_upgrade_tests;
+#[cfg(test)]
+mod rule_migrations_dialect_parity_tests;
 pub mod rule_set_runtime_wrapper;
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod single_connection_runner_tests;
 pub mod synthetic_root_ids;
 #[cfg(test)]
@@ -275,6 +293,34 @@ async fn replay_catalog_into_fresh_db_with_context(
     .await
 }
 
+/// Apply an existing database's pending migrations through `through_version`
+/// only, the way an upgrade applies them. Tests use it to look at an upgrade
+/// part-way through; startup always runs [`run_migrations`].
+#[doc(hidden)]
+pub async fn run_upgrade_migrations_through(
+    pool: &SqlitePool,
+    through_version: i64,
+) -> AppResult<()> {
+    let catalog = embedded_catalog()?;
+    let payload_bytes = embedded_payload_bytes()?;
+    let mut conn = acquire_migration_connection(pool).await?;
+    let conn = &mut *conn;
+    ensure_migration_ledger_shape(conn).await?;
+    let applied = load_applied_migrations(conn).await?;
+    validate_known_migrations(&applied, &catalog, &payload_bytes)?;
+    crate::sql::spellfix_retirement::retire_spellfix_virtual_table_on(conn).await?;
+    apply_version_range(
+        conn,
+        &catalog,
+        &payload_bytes,
+        MigrationInstallKind::Upgrade,
+        1,
+        through_version.min(catalog.max_version()),
+        &MigrationHookContext::default(),
+    )
+    .await
+}
+
 #[allow(dead_code)]
 pub async fn run_migrations(pool: &SqlitePool, mode: MigrationMode) -> AppResult<()> {
     run_migrations_with_hook_context(pool, mode, MigrationHookContext::default()).await
@@ -345,6 +391,29 @@ pub async fn run_migrations_with_hook_context(
     }
 
     Ok(())
+}
+
+/// Upgrades an existing database through `through_version` and no further,
+/// so an upgrade test can observe its own migration before a later one
+/// rewrites the same rows.
+#[cfg(test)]
+pub(crate) async fn run_upgrade_through(pool: &SqlitePool, through_version: i64) -> AppResult<()> {
+    let catalog = embedded_catalog()?;
+    let payload_bytes = embedded_payload_bytes()?;
+    let mut conn = acquire_migration_connection(pool).await?;
+    let conn = &mut *conn;
+    ensure_migration_ledger_shape(conn).await?;
+    crate::sql::spellfix_retirement::retire_spellfix_virtual_table_on(conn).await?;
+    apply_version_range(
+        conn,
+        &catalog,
+        &payload_bytes,
+        MigrationInstallKind::Upgrade,
+        1,
+        through_version,
+        &MigrationHookContext::default(),
+    )
+    .await
 }
 
 /// The one connection a migration run uses from start to finish.

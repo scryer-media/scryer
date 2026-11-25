@@ -454,6 +454,73 @@ async fn queue_document_round_trips_and_an_unreadable_one_is_left_alone() {
     assert_eq!(std::fs::read(store.path()).unwrap(), b"{not json");
 }
 
+#[tokio::test]
+async fn starting_removes_only_the_earlier_staging_files_of_the_queue_and_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = HttpStateStore::for_client(dir.path(), "invented-client");
+    let state_dir = dir.path().join(".scryer-http");
+    let progress_dir = state_dir.join("progress");
+    store.initialize().await.unwrap();
+    std::fs::create_dir_all(&progress_dir).unwrap();
+
+    let queue_leftover = state_dir.join("queue-invented-client.json.next");
+    let progress_leftover = progress_dir.join("invented-job.json.next");
+    std::fs::write(&queue_leftover, b"old queue").unwrap();
+    std::fs::write(&progress_leftover, b"old progress").unwrap();
+
+    let live_progress = store.progress_path("invented-job");
+    let kept_files = [
+        live_progress.clone(),
+        // Staging siblings in the disk owner's own naming.
+        progress_dir.join(".scry-sf-0a1b2c3d4.partial"),
+        state_dir.join(".scry-sf-5e6f7a8b9.partial"),
+        // Another client's queue staging, and names that are not the
+        // store's staging names.
+        state_dir.join("queue-other-client.json.next"),
+        progress_dir.join("notes.txt.next"),
+        progress_dir.join("odd.name.json.next"),
+    ];
+    for kept in &kept_files {
+        std::fs::write(kept, b"keep").unwrap();
+    }
+    let directory_at_legacy_name = progress_dir.join("invented-folder.json.next");
+    std::fs::create_dir(&directory_at_legacy_name).unwrap();
+    std::fs::write(directory_at_legacy_name.join("inside"), b"keep").unwrap();
+    #[cfg(unix)]
+    let link_at_legacy_name = {
+        let target = dir.path().join("link-target");
+        std::fs::write(&target, b"keep").unwrap();
+        let link = progress_dir.join("invented-link.json.next");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        (link, target)
+    };
+
+    store.remove_legacy_staging().await;
+
+    assert!(!queue_leftover.exists());
+    assert!(!progress_leftover.exists());
+    assert!(store.path().is_file());
+    for kept in &kept_files {
+        assert_eq!(std::fs::read(kept).unwrap(), b"keep", "{}", kept.display());
+    }
+    assert!(directory_at_legacy_name.join("inside").is_file());
+    #[cfg(unix)]
+    {
+        let (link, target) = &link_at_legacy_name;
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(target).unwrap(), b"keep");
+    }
+
+    // A second pass finds nothing to remove and changes nothing.
+    let queue_before = std::fs::read(store.path()).unwrap();
+    store.remove_legacy_staging().await;
+    assert_eq!(std::fs::read(store.path()).unwrap(), queue_before);
+    for kept in &kept_files {
+        assert_eq!(std::fs::read(kept).unwrap(), b"keep");
+    }
+    assert!(directory_at_legacy_name.join("inside").is_file());
+}
+
 // ---------------------------------------------------------------------------
 // selection
 
@@ -1381,6 +1448,8 @@ fn a_mixed_set_of_refusals_names_the_last_one() {
 fn transport_proxy(base_url: &str) -> scryer_domain::ProxyConfig {
     let created_at = Utc::now();
     scryer_domain::ProxyConfig {
+        reach_through_proxy_config_id: None,
+        reach_through: None,
         id: format!("proxy-{}", uuid::Uuid::new_v4()),
         name: "Synthetic Proxy".to_string(),
         provider_type: scryer_domain::ProxyProviderType::Http,

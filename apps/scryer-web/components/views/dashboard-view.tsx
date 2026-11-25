@@ -2,7 +2,7 @@ import * as React from "react";
 import {
   ArrowDownToLine,
   ArrowUp,
-  CircleAlert,
+  ShieldBan,
   FileVideo,
   Hourglass,
   Pencil,
@@ -898,7 +898,7 @@ function ImportActivityRow({
             disabled={busy}
             onClick={() => onMarkFailed(item)}
           >
-            <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+            <ShieldBan className="h-3.5 w-3.5" aria-hidden="true" />
           </IconButton>
         ) : null}
         <IconButton

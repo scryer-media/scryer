@@ -3,6 +3,10 @@ use quick_xml::{Reader, Writer};
 use scryer_domain::{Episode, Title};
 use std::io::Cursor;
 
+use crate::disk::reason::DISK_DESTINATION_EXISTS;
+use crate::disk::{Disk, DiskError, Link, LinkOutcome, Open, Parents, Remove};
+use std::path::Path;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -1246,68 +1250,60 @@ pub(crate) enum NfoWriteOutcome {
 
 /// Write `content` to `path` only if nothing is there.
 ///
-/// The content is written in full to a uniquely named temp file in the same
-/// directory and only then published to the final name, so a write that dies
-/// halfway — a full disk, a mount that drops — never leaves a truncated
-/// sidecar at the real path for every later import to mistake for an
-/// operator's own file.
-///
-/// Publishing is a hard link rather than a rename: a rename would clobber a
-/// file that appeared in the meantime, and `link` fails with `AlreadyExists`
-/// instead. A second importer writing the same folder — or a media server
-/// that wrote its own sidecar a millisecond ago — therefore cannot lose the
-/// race and be overwritten. Filesystems that cannot hard link (some SMB,
-/// FUSE and exFAT mounts) fall back to `create_new` on the destination
-/// itself, which is no-clobber too but has to clean up after a failed write.
-///
-/// The only files this ever removes are the temp file it just created and,
-/// on the fallback path, a destination file it created itself in this same
-/// call. Never fails the import: a sidecar is metadata, not the media.
-pub(crate) async fn write_nfo_if_absent(path: &std::path::Path, content: &str) -> NfoWriteOutcome {
-    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+/// The content is written in full and synced to a hidden sibling, then hard
+/// linked to the final name. A link never replaces a sidecar that appeared in
+/// the meantime, and a write that dies halfway never leaves a truncated one at
+/// the real name for a later import to mistake for an operator's own file.
+/// Where hard links are unavailable the file is created in place, still
+/// without replacing anything, and removed again if writing it fails. The
+/// sibling goes either way. Never fails the import: a sidecar is metadata,
+/// not the media.
+pub(crate) async fn write_nfo_if_absent(path: &Path, content: &str) -> NfoWriteOutcome {
+    let disk = Disk::process();
+    if disk.follow(path).await.exists() == Some(true) {
         tracing::debug!(path = %path.display(), "NFO sidecar already exists; leaving it as it is");
         return NfoWriteOutcome::SkippedExisting;
     }
-
     if let Some(parent) = path.parent()
-        && let Err(error) = tokio::fs::create_dir_all(parent).await
+        && let Err(error) = disk.create_dir(parent, Parents::Create).await
     {
-        tracing::warn!(
-            error = %error,
-            path = %path.display(),
-            "failed to create the directory for an NFO sidecar"
-        );
+        tracing::warn!(error = %error, path = %path.display(), "failed to create the directory for an NFO sidecar");
         return NfoWriteOutcome::Failed;
     }
-
-    let temp_path = nfo_temp_path(path);
-    let temp = match write_nfo_temp_file(&temp_path, content).await {
-        Ok(()) => temp_path,
-        Err(error) => {
-            tracing::warn!(error = %error, path = %path.display(), "failed to write NFO sidecar");
-            remove_best_effort(&temp_path).await;
-            return NfoWriteOutcome::Failed;
-        }
-    };
-
-    publish_staged_nfo(&temp, path, content).await
+    let staged = crate::disk::staging_path_for(path);
+    if let Err(error) = write_new(&disk, &staged, content, true).await {
+        tracing::warn!(error = %error, path = %path.display(), "failed to write NFO sidecar");
+        return NfoWriteOutcome::Failed;
+    }
+    let published = disk.link(&staged, path, Link::Hard).await;
+    publish_staged(&disk, published, &staged, path, content).await
 }
 
-/// Link the staged content into place under the real name and drop the staging
-/// file, whatever the outcome.
-async fn publish_staged_nfo(
-    temp: &std::path::Path,
-    path: &std::path::Path,
+/// Finish publishing the staged content to `path` after its hard link came
+/// back as `published`, never replacing a file there, and drop the staging
+/// file whatever the outcome.
+async fn publish_staged(
+    disk: &Disk,
+    published: Result<LinkOutcome, DiskError>,
+    staged: &Path,
+    path: &Path,
     content: &str,
 ) -> NfoWriteOutcome {
-    let published = tokio::fs::hard_link(temp, path).await;
-    remove_best_effort(temp).await;
-    match published {
+    let _ = disk.remove(staged, Remove::File).await;
+    let written = match published {
+        Ok(LinkOutcome::Linked) => Ok(()),
+        Err(error) if error.reason() == DISK_DESTINATION_EXISTS => Err(error),
+        _ => {
+            tracing::debug!(path = %path.display(), "hard links are unavailable here; writing the NFO sidecar in place");
+            write_new(disk, path, content, false).await
+        }
+    };
+    match written {
         Ok(()) => {
             tracing::info!(path = %path.display(), "wrote NFO sidecar");
             NfoWriteOutcome::Written
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+        Err(error) if error.reason() == DISK_DESTINATION_EXISTS => {
             tracing::debug!(
                 path = %path.display(),
                 "NFO sidecar appeared while it was being written; leaving it as it is"
@@ -1315,106 +1311,36 @@ async fn publish_staged_nfo(
             NfoWriteOutcome::SkippedExisting
         }
         Err(error) => {
-            // No hard links on this filesystem. `create_new` still refuses to
-            // clobber; it just cannot promise the content lands whole.
-            tracing::debug!(
-                error = %error,
-                path = %path.display(),
-                "hard links are unavailable here; writing the NFO sidecar in place"
-            );
-            write_nfo_in_place(path, content).await
-        }
-    }
-}
-
-/// A temp name beside `path`, unique across the concurrent writers of one
-/// process and across processes sharing the folder.
-fn nfo_temp_path(path: &std::path::Path) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    let stem = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "sidecar".to_string());
-    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let name = format!(".{stem}.scryer-{}-{sequence}.tmp", std::process::id());
-    match path.parent() {
-        Some(parent) => parent.join(name),
-        None => std::path::PathBuf::from(name),
-    }
-}
-
-/// Write the whole content to a freshly created temp file and get it onto the
-/// device before anything links it into place.
-async fn write_nfo_temp_file(temp_path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    use tokio::io::AsyncWriteExt;
-
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temp_path)
-        .await?;
-    file.write_all(content.as_bytes()).await?;
-    file.flush().await?;
-    file.sync_all().await?;
-    Ok(())
-}
-
-/// Fallback for filesystems without hard links: `create_new` the destination
-/// and write into it. If the write fails, the half-written file is one this
-/// call created moments ago and nobody else has seen, so it is removed again
-/// rather than left to look like an operator's own sidecar.
-async fn write_nfo_in_place(path: &std::path::Path, content: &str) -> NfoWriteOutcome {
-    use tokio::io::AsyncWriteExt;
-
-    let file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await;
-    let mut file = match file {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            tracing::debug!(
-                path = %path.display(),
-                "NFO sidecar appeared while it was being written; leaving it as it is"
-            );
-            return NfoWriteOutcome::SkippedExisting;
-        }
-        Err(error) => {
             tracing::warn!(error = %error, path = %path.display(), "failed to write NFO sidecar");
-            return NfoWriteOutcome::Failed;
+            NfoWriteOutcome::Failed
+        }
+    }
+}
+
+/// Create `path`, which must not exist yet, and write `content` into it,
+/// synced when `durable`. A failed write removes the file this call created;
+/// a refused create leaves whatever is there alone.
+async fn write_new(
+    disk: &Disk,
+    path: &Path,
+    content: &str,
+    durable: bool,
+) -> Result<(), DiskError> {
+    let mut file = disk.open(path, Open::create_new()).await?;
+    let written = match disk
+        .write_through(path, &mut file, content.as_bytes())
+        .await
+    {
+        Ok(()) if durable => disk.finish(path, file).await.map(drop),
+        written => {
+            drop(file);
+            written
         }
     };
-
-    let written = async {
-        file.write_all(content.as_bytes()).await?;
-        file.flush().await
+    if written.is_err() {
+        let _ = disk.remove(path, Remove::File).await;
     }
-    .await;
-    if let Err(error) = written {
-        tracing::warn!(error = %error, path = %path.display(), "failed to write NFO sidecar");
-        remove_best_effort(path).await;
-        return NfoWriteOutcome::Failed;
-    }
-
-    tracing::info!(path = %path.display(), "wrote NFO sidecar");
-    NfoWriteOutcome::Written
-}
-
-/// Remove a file this call created itself. A failure here is worth a line in
-/// the log and nothing more: the sidecar write has already been decided.
-async fn remove_best_effort(path: &std::path::Path) {
-    if let Err(error) = tokio::fs::remove_file(path).await
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::debug!(
-            error = %error,
-            path = %path.display(),
-            "failed to clean up a temporary NFO sidecar file"
-        );
-    }
+    written
 }
 
 fn finish_xml(buf: Cursor<Vec<u8>>) -> String {
@@ -3284,30 +3210,6 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
         assert_eq!(entries.len(), 1, "{entries:?}");
     }
 
-    /// The publish step is a link, not a rename, so a file that appeared while
-    /// the content was being staged keeps its own bytes.
-    #[tokio::test]
-    async fn write_nfo_if_absent_publishing_never_clobbers_an_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("tvshow.nfo");
-        let existing = "<tvshow>\n  <title>Written by someone else</title>\n</tvshow>\n";
-
-        // Enter at the publish step the way a writer does when the file
-        // appeared after its own existence check passed.
-        let ours = "<tvshow><title>Ours</title></tvshow>\n";
-        let temp_path = nfo_temp_path(&path);
-        write_nfo_temp_file(&temp_path, ours).await.unwrap();
-        stdfs::write(&path, existing).unwrap();
-
-        let outcome = publish_staged_nfo(&temp_path, &path, ours).await;
-
-        assert_eq!(outcome, NfoWriteOutcome::SkippedExisting);
-        assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
-        assert!(!temp_path.exists(), "the staging file outlived the publish");
-    }
-
-    /// A destination whose directory is gone fails without leaving anything
-    /// half-written beside it.
     #[tokio::test]
     async fn write_nfo_if_absent_fails_cleanly_when_the_directory_is_unwritable() {
         let dir = tempfile::tempdir().unwrap();
@@ -3324,29 +3226,128 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
         assert_eq!(stdfs::read_to_string(&blocker).unwrap(), "not a directory");
     }
 
-    /// The fallback taken when the filesystem has no hard links is no-clobber
-    /// in its own right.
+    /// The publish step links rather than renames, so a file that appeared
+    /// after the existence check keeps its own bytes.
     #[tokio::test]
-    async fn write_nfo_in_place_never_replaces_an_existing_file() {
+    async fn publishing_never_clobbers_a_file_that_appeared_after_the_check() {
+        let disk = Disk::process();
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("tvshow.nfo");
-        let existing = "<tvshow>\n  <title>Written by someone else</title>\n</tvshow>\n";
+        let path = dir.path().join("Invented Show - S01E01.nfo");
+        let existing = "<episodedetails><title>Someone else's</title></episodedetails>\n";
+        let ours = "<episodedetails><title>Ours</title></episodedetails>\n";
+        let staged = crate::disk::staging_path_for(&path);
+        write_new(&disk, &staged, ours, true).await.unwrap();
         stdfs::write(&path, existing).unwrap();
 
-        let outcome = write_nfo_in_place(&path, "<tvshow><title>Ours</title></tvshow>\n").await;
+        let published = disk.link(&staged, &path, Link::Hard).await;
+        let outcome = publish_staged(&disk, published, &staged, &path, ours).await;
 
         assert_eq!(outcome, NfoWriteOutcome::SkippedExisting);
         assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
+        assert!(!staged.exists(), "the staging file outlived the publish");
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = stdfs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Stage `ours` beside `path` and settle a publish whose link came back
+    /// as `published`.
+    async fn settle_staged(
+        path: &Path,
+        ours: &str,
+        published: Result<LinkOutcome, DiskError>,
+    ) -> NfoWriteOutcome {
+        let disk = Disk::process();
+        let staged = crate::disk::staging_path_for(path);
+        write_new(&disk, &staged, ours, true).await.unwrap();
+        let outcome = publish_staged(&disk, published, &staged, path, ours).await;
+        assert!(!staged.exists(), "the staging file outlived the publish");
+        outcome
     }
 
     #[tokio::test]
-    async fn write_nfo_in_place_writes_a_missing_file() {
+    async fn without_hard_links_the_sidecar_is_written_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Invented Show - S01E01.nfo");
+        let ours = "<episodedetails><title>Ours</title></episodedetails>\n";
+
+        let outcome = settle_staged(&path, ours, Ok(LinkOutcome::NotPossible)).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::Written);
+        assert_eq!(stdfs::read_to_string(&path).unwrap(), ours);
+        assert_eq!(names_in(dir.path()), ["Invented Show - S01E01.nfo"]);
+    }
+
+    #[tokio::test]
+    async fn without_hard_links_a_file_that_appeared_after_the_check_keeps_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Invented Show - S01E01.nfo");
+        let existing = "<episodedetails><title>Someone else's</title></episodedetails>\n";
+        stdfs::write(&path, existing).unwrap();
+
+        let outcome =
+            settle_staged(&path, "<episodedetails/>\n", Ok(LinkOutcome::NotPossible)).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::SkippedExisting);
+        assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
+        assert_eq!(names_in(dir.path()), ["Invented Show - S01E01.nfo"]);
+    }
+
+    /// A link that failed outright falls back to writing in place; when that
+    /// fails too, nothing is left behind, neither the sidecar nor the stage.
+    #[tokio::test]
+    async fn a_failed_publish_leaves_no_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        stdfs::write(dir.path().join("invented-neighbour.nfo"), "kept").unwrap();
+        // A name no filesystem accepts makes the in-place write fail.
+        let path = dir.path().join(format!("{}.nfo", "n".repeat(300)));
+        // A link whose source is missing is one the disk refuses outright.
+        let refused = Disk::process()
+            .link(dir.path().join("invented-missing.tmp"), &path, Link::Hard)
+            .await
+            .expect_err("a missing source cannot be linked");
+
+        let outcome = settle_staged(&path, "<episodedetails/>\n", Err(refused)).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::Failed);
+        assert_eq!(names_in(dir.path()), ["invented-neighbour.nfo"]);
+        assert_eq!(
+            stdfs::read_to_string(dir.path().join("invented-neighbour.nfo")).unwrap(),
+            "kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_new_refuses_an_existing_file_and_keeps_its_bytes() {
+        let disk = Disk::process();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tvshow.nfo");
+        let existing = "<tvshow><title>Invented Show</title></tvshow>\n";
+        stdfs::write(&path, existing).unwrap();
+
+        for durable in [false, true] {
+            let error = write_new(&disk, &path, "<tvshow/>\n", durable)
+                .await
+                .expect_err("an existing file is refused");
+            assert_eq!(error.reason(), DISK_DESTINATION_EXISTS);
+            assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
+        }
+    }
+
+    #[tokio::test]
+    async fn write_new_writes_a_missing_file() {
+        let disk = Disk::process();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tvshow.nfo");
 
-        let outcome = write_nfo_in_place(&path, "<tvshow/>\n").await;
+        write_new(&disk, &path, "<tvshow/>\n", false).await.unwrap();
 
-        assert_eq!(outcome, NfoWriteOutcome::Written);
         assert_eq!(stdfs::read_to_string(&path).unwrap(), "<tvshow/>\n");
     }
 

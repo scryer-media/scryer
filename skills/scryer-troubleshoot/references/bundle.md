@@ -2,29 +2,29 @@
 
 `GET $SCRYER_URL/api/diagnostics/bundle` returns a zstd-compressed tar
 (`scryer-diagnostics-<version>-<YYYYMMDDTHHMMSSZ>.tar.zst`, format version 1).
-It needs the **Manage system settings** permission. Scryer builds it in
-memory and writes nothing to disk. The compressed size cap is 8 MiB.
+Needs **Manage system settings**. Built in memory; nothing written to disk.
+Compressed size cap 8 MiB.
 
-Refusals are a JSON object with an `error` sentence and a `reason` code:
+Refusals: JSON object with an `error` sentence and a `reason` code:
 
-| HTTP | reason | meaning |
-|---|---|---|
-| 401 | `HTTP_DIAGNOSTICS_AUTHENTICATION_REQUIRED` | key, session or authless access not accepted; a step-up or enrollment-only session also lands here |
-| 403 | `HTTP_DIAGNOSTICS_PERMISSION_DENIED` | the user lacks Manage system settings |
-| 500 | `HTTP_DIAGNOSTICS_BUNDLE_FAILED` | Scryer failed to assemble the bundle |
+- 401 `HTTP_DIAGNOSTICS_AUTHENTICATION_REQUIRED`: key, session or authless
+  access not accepted; a step-up or enrollment-only session also lands here.
+- 403 `HTTP_DIAGNOSTICS_PERMISSION_DENIED`: user lacks Manage system settings.
+- 500 `HTTP_DIAGNOSTICS_BUNDLE_FAILED`: Scryer failed to assemble the bundle.
 
-The same button is in the web UI under **System > Service Logs**.
+Same button in the web UI under **System > Service Logs**.
 
 ## Members
 
-| member | always there? | read it how |
-|---|---|---|
-| `manifest.json` | yes | read whole (small) |
-| `summary.json` | yes | jq extracts only |
-| `environment.json` | yes | jq extracts only |
-| `logs/buffer.log` | unless sanitizing failed or known values were incomplete | `log-search.sh` |
-| `logs/file.log` | only when file logging is configured (`SCRYER_LOG_FILE`) | `log-search.sh` |
-| `metrics.prom` | only when metrics are enabled (`SCRYER_METRICS`); first to go at the size cap | grep named families |
+- `manifest.json`: always; read whole (small).
+- `summary.json`: always; jq extracts only.
+- `environment.json`: always; jq extracts only.
+- `logs/buffer.log`: unless sanitizing failed or known values were
+  incomplete; `log-search.sh`.
+- `logs/file.log`: only when file logging is configured (`SCRYER_LOG_FILE`);
+  `log-search.sh`.
+- `metrics.prom`: only when metrics are enabled (`SCRYER_METRICS`); first to
+  go at the size cap; grep named families.
 
 Never read a log or `metrics.prom` whole.
 
@@ -38,18 +38,18 @@ Never read a log or `metrics.prom` whole.
 `sanitization`: `best_effort` (always true), `passes` (in order:
 structured_field_names, secret_patterns, urls, emails,
 paths_keep_file_name, known_values, host_port, bare_hosts, ip_addresses),
-`path_policy` (`keep_file_name` or `redact_all`), `known_values` (a count of
+`path_policy` (`keep_file_name` or `redact_all`), `known_values` (count of
 configured values replaced), `short_values_not_replaced`,
 `vocabulary_values_not_replaced`.
 
-Omission reasons you may see:
+Omission reasons:
 
 - `file_logging_not_configured`, `metrics_disabled`, `size_cap`
 - `sanitizer_failed`
 - `known_values_incomplete:<sources>`: Scryer could not read every configured
-  value it needs to scrub, so it drops `logs/buffer.log`, `logs/file.log` and
-  `metrics.prom` together. Note this in any bug report; the operator can
-  paste filtered log lines from the UI instead.
+  value it must scrub, so it drops `logs/buffer.log`, `logs/file.log` and
+  `metrics.prom` together. Note this in any bug report; operator can paste
+  filtered log lines from the UI instead.
 - `read_failed:<not_found|validation|temporarily_unavailable|error>` on a
   `summary.*` section
 - `no_instance_wide_count` (`summary.wanted_items`; always omitted)
@@ -66,17 +66,17 @@ active file and the two newest rotated `.gz` archives) and `size_cap`
 
 ### Logs
 
-`logs/buffer.log` is the in-memory ring of the last 1000 lines.
-With the default `SCRYER_LOG_FORMAT=json` each line is
+`logs/buffer.log`: in-memory ring of the last 1000 lines. With default
+`SCRYER_LOG_FORMAT=json` each line is
 `{"timestamp", "level", "target", "fields": {"message", ...}, "context"}`;
-`level` is uppercase (`INFO`, `WARN`, `ERROR`). The text format uses local
-time. Live lines are also available through the `serviceLogs(limit)` query
-(1 to 2000 lines), but that output is not sanitized; prefer the bundle.
+`level` uppercase (`INFO`, `WARN`, `ERROR`). Text format uses local time.
+Live lines also via the `serviceLogs(limit)` query (1 to 2000 lines), but
+that output is not sanitized; prefer the bundle.
 
 ### summary.json sections
 
-Counts and tallies only; names appear as pseudonyms such as
-`indexer-1(newznab)` or `quality-profile-2`.
+Counts and tallies only; names as pseudonyms such as `indexer-1(newznab)` or
+`quality-profile-2`.
 
 | section | keys |
 |---|---|
@@ -92,7 +92,7 @@ Counts and tallies only; names appear as pseudonyms such as
 | `proxies` | total, by_provider_type |
 | `lists` | total, enabled, by_scope |
 | `plugins` | [{plugin_id, version, plugin_type, provider_type, builtin, enabled, sdk_version, support_tier}] |
-| `health_checks` | [{kind, severity}] |
+| `health_checks` | [{kind, severity, reason, facts}] |
 | `job_runs` | sampled (last 500), by_job{key:{statuses, latest_status, latest_started_at, latest_trigger}} |
 | `titles` | total, monitored, movie, series, anime |
 | `download_queue` | items, by_state, by_client_type |
@@ -116,7 +116,7 @@ Counts and tallies only; names appear as pseudonyms such as
 | `metrics` | enabled, renderable |
 | `logging` | file_logging_enabled, log_filter |
 | `time_and_locale` | utc_offset_seconds, locale |
-| `scryer_variables` | every `SCRYER_*` name; values shown only for SCRYER_LOG_FORMAT, SCRYER_METRICS, SCRYER_AUTH_ENABLED, SCRYER_PACKAGE, else `<set>` |
+| `scryer_variables` | every `SCRYER_*` name; values shown only for SCRYER_LOG_FORMAT, SCRYER_METRICS, SCRYER_AUTH_ENABLED, SCRYER_MCP_ENABLED, SCRYER_PACKAGE, else `<set>` |
 | `datastore` | engine, current_migration_key |
 | `setup_complete` | bool |
 | `smg_compatibility_notice` | present, status, minimum_version, your_version, has_upgrade_deadline |
@@ -126,8 +126,8 @@ Counts and tallies only; names appear as pseudonyms such as
 | `network_configuration` | public_url_configured, trusted_proxies_configured, trusted_proxy_count |
 | `filesystems` | roots[{root, role, exists, filesystem_type, total_bytes, available_bytes, device_group}], same_filesystem_pairs |
 
-`filesystems.roots[].role` is `library_root` or `download_root`; a pair in
-`same_filesystem_pairs` means hardlinks between those roots are possible.
+`filesystems.roots[].role`: `library_root` or `download_root`. A pair in
+`same_filesystem_pairs` = hardlinks between those roots possible.
 
 ## Which sections matter per symptom
 
@@ -154,7 +154,7 @@ jq '.filesystems' "$B/environment.json"
 grep -E '^(scryer_indexer_errors_total|scryer_download_client_up|scryer_health_check_status)' "$B/metrics.prom" | head -n 40
 ```
 
-Metric families present in builds with metrics on:
+Metric families (builds with metrics on):
 `scryer_indexer_errors_total`, `scryer_indexer_backoff_active`,
 `scryer_indexer_queries_total`, `scryer_download_client_up`,
 `scryer_health_check_status` (labels `source`, `status`),

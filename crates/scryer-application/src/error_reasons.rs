@@ -136,9 +136,9 @@ pub mod library {
     pub const SCAN_ALREADY_RUNNING: &str = "LIBRARY_SCAN_ALREADY_RUNNING";
     /// Library roots must be unique within a library.
     pub const ROOT_DUPLICATED: &str = "LIBRARY_ROOT_DUPLICATED";
-    /// Library root the selected item is already used by the selected value.
+    /// This library root is already used by another library.
     pub const ROOT_ALREADY_ASSIGNED: &str = "LIBRARY_ROOT_ALREADY_ASSIGNED";
-    /// Library root the selected item cannot be used.
+    /// This library root cannot be used.
     pub const ROOT_CANNOT_USED: &str = "LIBRARY_ROOT_CANNOT_USED";
     /// Library was not found.
     pub const RESOURCE_NOT_FOUND: &str = "LIBRARY_RESOURCE_NOT_FOUND";
@@ -169,7 +169,7 @@ pub mod library {
     pub const SCAN_SESSION_NOT_FOUND: &str = "LIBRARY_SCAN_SESSION_NOT_FOUND";
     /// Library scan session is not cancelable.
     pub const SCAN_CANCEL_UNAVAILABLE: &str = "LIBRARY_SCAN_CANCEL_UNAVAILABLE";
-    /// The requested value library roots are not configured.
+    /// No library roots are configured for this media type.
     pub const ROOTS_NOT_CONFIGURED: &str = "LIBRARY_ROOTS_NOT_CONFIGURED";
     /// Library path is not a directory.
     pub const PATH_NOT_DIRECTORY: &str = "LIBRARY_PATH_NOT_DIRECTORY";
@@ -184,11 +184,11 @@ pub mod library {
     pub const RENAME_STALE_PLAN: &str = "LIBRARY_RENAME_STALE_PLAN";
     /// Destination folder already contains other title folders; it is an organizing folder, not a title folder.
     pub const FOLDER_NOT_TITLE_BOUNDARY: &str = "LIBRARY_FOLDER_NOT_TITLE_BOUNDARY";
-    /// Refusing to delete the selected value because it is outside the configured media roots.
+    /// Refusing to delete or restore this path because it is outside the configured media roots.
     pub const PATH_OUTSIDE_LIBRARY_ROOT: &str = "LIBRARY_PATH_OUTSIDE_LIBRARY_ROOT";
-    /// The requested value must not contain . or .. components.
+    /// The path or naming template contains an invalid path component; use only relative, non-empty components other than . and ..
     pub const PATH_COMPONENT_INVALID: &str = "LIBRARY_PATH_COMPONENT_INVALID";
-    /// The requested value template must include {{the selected value}}.
+    /// The naming template must include an identity token.
     pub const TEMPLATE_IDENTITY_TOKEN_REQUIRED: &str = "LIBRARY_TEMPLATE_IDENTITY_TOKEN_REQUIRED";
     /// Invalid episode folder optional group.
     pub const EPISODE_FOLDER_OPTIONAL_GROUP_INVALID: &str =
@@ -197,9 +197,9 @@ pub mod library {
     pub const UNCLOSED_EPISODE_FOLDER_TOKEN: &str = "LIBRARY_UNCLOSED_EPISODE_FOLDER_TOKEN";
     /// Invalid episode folder pattern.
     pub const EPISODE_FOLDER_PATTERN_INVALID: &str = "LIBRARY_EPISODE_FOLDER_PATTERN_INVALID";
-    /// The requested value template contains an unmatched '}}'.
+    /// The naming template contains an unmatched brace.
     pub const TEMPLATE_BRACES_UNBALANCED: &str = "LIBRARY_TEMPLATE_BRACES_UNBALANCED";
-    /// Unsupported the selected value template token: {{the selected value}}.
+    /// The naming template uses an unsupported token.
     pub const TEMPLATE_TOKEN_UNSUPPORTED: &str = "LIBRARY_TEMPLATE_TOKEN_UNSUPPORTED";
     /// Rename template is required.
     pub const TEMPLATE_REQUIRED: &str = "LIBRARY_TEMPLATE_REQUIRED";
@@ -211,7 +211,7 @@ pub mod library {
     pub const PENDING_IMPORT_PATH_NOT_FILE: &str = "LIBRARY_PENDING_IMPORT_PATH_NOT_FILE";
     /// Folder ownership conflicts cannot be bound or adopted.
     pub const FOLDER_OWNERSHIP_CONFLICT: &str = "LIBRARY_FOLDER_OWNERSHIP_CONFLICT";
-    /// Pending import the selected value is already being resolved.
+    /// This pending import is already being resolved.
     pub const PENDING_IMPORT_ALREADY_BEING_RESOLVED: &str =
         "LIBRARY_PENDING_IMPORT_ALREADY_BEING_RESOLVED";
     /// Pending import path is a folder, not a file, so it cannot be bound to episodes; its stale title link was cleared, so reload pending imports and attach the folder to a title again.
@@ -250,7 +250,7 @@ pub mod library {
     /// Pending import does not have a known title.
     pub const PENDING_IMPORT_DOES_NOT_KNOWN_TITLE: &str =
         "LIBRARY_PENDING_IMPORT_DOES_NOT_KNOWN_TITLE";
-    /// Collection the selected value does not belong to title the selected value.
+    /// The collection does not belong to this title.
     pub const COLLECTION_DOES_NOT_BELONG_TITLE: &str = "LIBRARY_COLLECTION_DOES_NOT_BELONG_TITLE";
     /// At least one episode must be selected.
     pub const EPISODE_SELECTION_REQUIRED: &str = "LIBRARY_EPISODE_SELECTION_REQUIRED";
@@ -263,29 +263,29 @@ pub mod library {
     /// Recycle entry id is not a valid opaque id.
     pub const RECYCLE_ENTRY_ID_NOT_VALID_OPAQUE_ID: &str =
         "LIBRARY_RECYCLE_ENTRY_ID_NOT_VALID_OPAQUE_ID";
-    /// Refusing to restore recycled file the selected value because it is a symlink.
+    /// Refusing to delete or restore this file because it is a symlink.
     pub const SYMLINK_REFUSED: &str = "LIBRARY_SYMLINK_REFUSED";
-    /// Refusing to restore recycled file the selected value because it is not a regular file.
+    /// Refusing to delete or restore this file because it is not a regular file.
     pub const REGULAR_FILE_REQUIRED: &str = "LIBRARY_REGULAR_FILE_REQUIRED";
-    /// Refusing to recycle the selected value because the recycle bin path is unsafe.
+    /// Refusing to recycle this file because the recycle bin path is unsafe.
     pub const RECYCLE_BIN_PATH_UNSAFE: &str = "LIBRARY_RECYCLE_BIN_PATH_UNSAFE";
-    /// Refusing to delete the selected value because no configured media roots are available.
+    /// Refusing to delete or restore this file because no configured media roots are available.
     pub const MEDIA_ROOT_REQUIRED: &str = "LIBRARY_MEDIA_ROOT_REQUIRED";
-    /// Refusing to restore recycled file the selected value because destination is occupied.
+    /// Refusing to restore this recycled file because its destination is occupied.
     pub const DESTINATION_OCCUPIED: &str = "LIBRARY_DESTINATION_OCCUPIED";
     /// At least one episode id is required.
     pub const EPISODE_ID_REQUIRED: &str = "LIBRARY_EPISODE_ID_REQUIRED";
     /// Scoped policy deletion cannot remove directories.
     pub const SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES: &str =
         "LIBRARY_SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES";
-    /// Maintenance deletion targets changed; re-evaluation required.
-    pub const MAINTENANCE_DELETION_TARGETS_CHANGED: &str =
-        "LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED";
-    /// Maintenance deletion file changed; re-evaluation required.
-    pub const MAINTENANCE_DELETION_FILE_CHANGED: &str = "LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED";
-    /// Maintenance deletion fingerprint changed.
-    pub const MAINTENANCE_DELETION_FINGERPRINT_CHANGED: &str =
-        "LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED";
+    /// Lifecycle deletion targets changed; re-evaluation required.
+    pub const LIFECYCLE_DELETION_TARGETS_CHANGED: &str =
+        "LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED";
+    /// Lifecycle deletion file changed; re-evaluation required.
+    pub const LIFECYCLE_DELETION_FILE_CHANGED: &str = "LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED";
+    /// Lifecycle deletion fingerprint changed.
+    pub const LIFECYCLE_DELETION_FINGERPRINT_CHANGED: &str =
+        "LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED";
     /// External subtitle was not found.
     pub const EXTERNAL_SUBTITLE_NOT_FOUND: &str = "LIBRARY_EXTERNAL_SUBTITLE_NOT_FOUND";
     /// Only provider-backed downloaded subtitles can be blocklisted.
@@ -339,21 +339,21 @@ pub mod library {
     /// Duplicate title id in rename request.
     pub const TITLE_ID_RENAME_REQUEST_DUPLICATED: &str =
         "LIBRARY_TITLE_ID_RENAME_REQUEST_DUPLICATED";
-    /// A rename is already running for the selected value.
+    /// A rename is already running for this title.
     pub const RENAME_ALREADY_RUNNING: &str = "LIBRARY_RENAME_ALREADY_RUNNING";
-    /// Refusing to delete the selected value the selected value because it has no parent directory.
+    /// Refusing to delete this path because it has no parent directory.
     pub const DELETE_TARGET_PARENT_REQUIRED: &str = "LIBRARY_DELETE_TARGET_PARENT_REQUIRED";
-    /// Refusing to delete the selected value the selected value because it is outside the configured root folders.
+    /// Refusing to delete this path because it is outside the configured root folders.
     pub const DELETE_TARGET_OUTSIDE_ROOTS: &str = "LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS";
-    /// Configured the selected value root folder the selected value is invalid.
+    /// A configured root folder is invalid.
     pub const CONFIGURED_ROOT_FOLDER_INVALID: &str = "LIBRARY_CONFIGURED_ROOT_FOLDER_INVALID";
-    /// No configured the selected value root folders are available for safe deletion.
+    /// No configured root folders are available for safe deletion.
     pub const NO_ROOT_FOLDERS_UNAVAILABLE: &str = "LIBRARY_NO_ROOT_FOLDERS_UNAVAILABLE";
     /// Path must be absolute.
     pub const PATH_INVALID: &str = "LIBRARY_PATH_INVALID";
     /// Path cannot escape its root.
     pub const PATH_CANNOT_ESCAPE_ROOT: &str = "LIBRARY_PATH_CANNOT_ESCAPE_ROOT";
-    /// Refusing to delete directory path the selected value from a single-file delete flow.
+    /// Refusing to delete a directory from a single-file delete.
     pub const DELETE_TARGET_NOT_FILE: &str = "LIBRARY_DELETE_TARGET_NOT_FILE";
     /// The proposed rename path lies outside its library root.
     pub const RENAME_PATH_OUTSIDE_ROOT: &str = "LIBRARY_RENAME_PATH_OUTSIDE_ROOT";
@@ -433,9 +433,9 @@ pub mod library {
         DESTINATION_OCCUPIED,
         EPISODE_ID_REQUIRED,
         SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES,
-        MAINTENANCE_DELETION_TARGETS_CHANGED,
-        MAINTENANCE_DELETION_FILE_CHANGED,
-        MAINTENANCE_DELETION_FINGERPRINT_CHANGED,
+        LIFECYCLE_DELETION_TARGETS_CHANGED,
+        LIFECYCLE_DELETION_FILE_CHANGED,
+        LIFECYCLE_DELETION_FINGERPRINT_CHANGED,
         EXTERNAL_SUBTITLE_NOT_FOUND,
         ONLY_PROVIDER_BACKED_DOWNLOADED_SUBTITLES_BLOCKLISTED,
         MEDIA_FILE_NOT_FOUND,
@@ -521,26 +521,44 @@ pub mod library {
 pub mod external_import {
     /// The import session no longer exists. Connect again.
     pub const SESSION_GONE: &str = "EXTERNAL_IMPORT_SESSION_GONE";
-    /// Could not determine the selected value version from the selected item.
+    /// Could not determine the version of the external application.
     pub const COULD_NOT_DETERMINE_VERSION: &str = "EXTERNAL_IMPORT_COULD_NOT_DETERMINE_VERSION";
-    /// Unsupported the selected value version the selected item; expected major the selected value or newer.
+    /// This version of the external application is not supported; a newer major version is required.
     pub const VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED: &str =
         "EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED";
-    /// The requested value did not report an API version.
+    /// The external application did not report an API version.
     pub const DID_NOT_REPORT_API_VERSION: &str = "EXTERNAL_IMPORT_DID_NOT_REPORT_API_VERSION";
-    /// Unsupported the selected value API version the selected item; expected one of the selected value.
+    /// The external application's API version is not supported.
     pub const API_VERSION_EXPECTED_ONE_UNSUPPORTED: &str =
         "EXTERNAL_IMPORT_API_VERSION_EXPECTED_ONE_UNSUPPORTED";
-    /// The requested value must not include a query string or fragment.
+    /// The source URL must not include a query string or fragment.
     pub const SOURCE_URL_QUERY_OR_FRAGMENT: &str = "EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT";
-    /// The requested value has an invalid host.
+    /// The source URL has an invalid host.
     pub const INVALID_HOST: &str = "EXTERNAL_IMPORT_INVALID_HOST";
     /// The source URL belongs to a different application.
     pub const SOURCE_APPLICATION_MISMATCH: &str = "EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH";
     /// The source URL is invalid.
     pub const SOURCE_URL_INVALID: &str = "EXTERNAL_IMPORT_SOURCE_URL_INVALID";
+    /// The source could not be reached: refused, timed out, or the name did not resolve.
+    pub const SOURCE_UNREACHABLE: &str = "EXTERNAL_IMPORT_SOURCE_UNREACHABLE";
+    /// The source rejected the supplied API key.
+    pub const SOURCE_UNAUTHORIZED: &str = "EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED";
+    /// The source kept answering that requests were rate limited.
+    pub const SOURCE_RATE_LIMITED: &str = "EXTERNAL_IMPORT_SOURCE_RATE_LIMITED";
+    /// The source has no such endpoint, usually because its version predates it.
+    pub const SOURCE_ENDPOINT_MISSING: &str = "EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING";
+    /// The source answered with an error status, a body that is not JSON, or JSON of the wrong shape.
+    pub const SOURCE_UNEXPECTED_RESPONSE: &str = "EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE";
+    /// The source's response exceeded the size Scryer reads from it.
+    pub const SOURCE_RESPONSE_TOO_LARGE: &str = "EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        SOURCE_UNREACHABLE,
+        SOURCE_UNAUTHORIZED,
+        SOURCE_RATE_LIMITED,
+        SOURCE_ENDPOINT_MISSING,
+        SOURCE_UNEXPECTED_RESPONSE,
+        SOURCE_RESPONSE_TOO_LARGE,
         SESSION_GONE,
         COULD_NOT_DETERMINE_VERSION,
         VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED,
@@ -566,24 +584,24 @@ pub mod catalog {
     /// Provide exactly one of title id or query.
     pub const PROVIDE_EXACTLY_ONE_TITLE_ID_QUERY: &str =
         "CATALOG_PROVIDE_EXACTLY_ONE_TITLE_ID_QUERY";
-    /// Unknown indexer the selected value.
+    /// One of the selected indexers is unknown.
     pub const INDEXER_UNKNOWN: &str = "CATALOG_INDEXER_UNKNOWN";
     /// Too many concurrent interactive searches.
     pub const TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES: &str =
         "CATALOG_TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES";
     /// Release has no usable download source.
     pub const RELEASE_NO_USABLE_DOWNLOAD_SOURCE: &str = "CATALOG_RELEASE_NO_USABLE_DOWNLOAD_SOURCE";
-    /// Download client the selected value does not exist.
+    /// The selected download client does not exist.
     pub const DOWNLOAD_CLIENT_DOES_NOT_EXIST: &str = "CATALOG_DOWNLOAD_CLIENT_DOES_NOT_EXIST";
-    /// Download client the selected value is disabled.
+    /// The selected download client is disabled.
     pub const DOWNLOAD_CLIENT_DISABLED: &str = "CATALOG_DOWNLOAD_CLIENT_DISABLED";
     /// Select at least one release to download.
     pub const RELEASE_DOWNLOAD_REQUIRED: &str = "CATALOG_RELEASE_DOWNLOAD_REQUIRED";
-    /// At most the selected value releases can be downloaded at once.
+    /// At most 50 releases can be downloaded at once.
     pub const MOST_RELEASES_DOWNLOADED_ONCE: &str = "CATALOG_MOST_RELEASES_DOWNLOADED_ONCE";
-    /// The requested value has no usable download source.
+    /// This release has no usable download source.
     pub const NO_USABLE_DOWNLOAD_SOURCE: &str = "CATALOG_NO_USABLE_DOWNLOAD_SOURCE";
-    /// The requested value is a magnet link and has no file to download.
+    /// This release is a magnet link and has no file to download.
     pub const MAGNET_LINK_NO_FILE_DOWNLOAD: &str = "CATALOG_MAGNET_LINK_NO_FILE_DOWNLOAD";
     /// Selected release files exceed the 64 MiB download bundle limit.
     pub const SELECTED_RELEASE_FILES_EXCEED_64_MIB_DOWNLOAD_BUNDLE_LIMIT: &str =
@@ -607,7 +625,7 @@ pub mod catalog {
     /// Series movie searches cannot include season or episode.
     pub const SERIES_MOVIE_SEARCHES_CANNOT_INCLUDE_SEASON_EPISODE: &str =
         "CATALOG_SERIES_MOVIE_SEARCHES_CANNOT_INCLUDE_SEASON_EPISODE";
-    /// The requested value titles have no series metadata.
+    /// Titles of this type have no series metadata.
     pub const TITLES_NO_SERIES_METADATA: &str = "CATALOG_TITLES_NO_SERIES_METADATA";
     /// Media file was not found.
     pub const MEDIA_FILE_NOT_FOUND: &str = "CATALOG_MEDIA_FILE_NOT_FOUND";
@@ -678,11 +696,11 @@ pub mod catalog {
     /// Movie metadata response missing title was not found.
     pub const MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND: &str =
         "CATALOG_MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND";
-    /// The requested value id the selected value is already assigned to title the selected value.
+    /// This external id is already assigned to another title.
     pub const ID_ALREADY_ASSIGNED_TITLE: &str = "CATALOG_ID_ALREADY_ASSIGNED_TITLE";
     /// Unsupported title facet.
     pub const TITLE_FACET_UNSUPPORTED: &str = "CATALOG_TITLE_FACET_UNSUPPORTED";
-    /// A media file deletion is already running for the selected value.
+    /// A deletion is already running for this media file.
     pub const MEDIA_FILE_DELETION_ALREADY_RUNNING: &str =
         "CATALOG_MEDIA_FILE_DELETION_ALREADY_RUNNING";
     /// Delete preview confirmation is required before deleting files on disk.
@@ -695,10 +713,10 @@ pub mod catalog {
         "CATALOG_ROOTFOLDERID_MUST_REFERENCE_ROOT_TITLE_LIBRARY";
     /// Title library must have at least one root folder.
     pub const ROOT_REQUIRED: &str = "CATALOG_ROOT_REQUIRED";
-    /// Pending rename refers to missing title tag the selected value.
+    /// A pending rename refers to a title tag that no longer exists.
     pub const PENDING_RENAME_REFERS_MISSING_TITLE_TAG: &str =
         "CATALOG_PENDING_RENAME_REFERS_MISSING_TITLE_TAG";
-    /// Title tag the selected value changed while its rename was pending.
+    /// A title tag changed while its rename was pending.
     pub const TITLE_TAG_CHANGED_WHILE_RENAME_PENDING: &str =
         "CATALOG_TITLE_TAG_CHANGED_WHILE_RENAME_PENDING";
     /// At least one tag to add or remove must be provided.
@@ -707,15 +725,15 @@ pub mod catalog {
     pub const TITLE_REQUIRED: &str = "CATALOG_TITLE_REQUIRED";
     /// At least one series movie must be provided.
     pub const SERIES_MOVIE_REQUIRED: &str = "CATALOG_SERIES_MOVIE_REQUIRED";
-    /// The selected item is not a defined tag; an administrator has to add it in Settings before it can be applied.
+    /// This is not a defined tag; an administrator has to add it in Settings before it can be applied.
     pub const NOT_DEFINED_TAG: &str = "CATALOG_NOT_DEFINED_TAG";
-    /// The selected item is listed both to add and to remove; choose one.
+    /// A tag is listed both to add and to remove; choose one.
     pub const LISTED_BOTH_ADD_REMOVE: &str = "CATALOG_LISTED_BOTH_ADD_REMOVE";
-    /// A title can carry at most the selected value tags; this change would leave it with the selected value.
+    /// A title can carry at most 50 tags; this change would leave it with more.
     pub const TITLE_CARRY_MOST_TAGS: &str = "CATALOG_TITLE_CARRY_MOST_TAGS";
     /// Collection was not found.
     pub const COLLECTION_NOT_FOUND: &str = "CATALOG_COLLECTION_NOT_FOUND";
-    /// Configured quality profile the selected item from the selected value is missing from the catalog.
+    /// A configured quality profile is missing from the catalog.
     pub const CONFIGURED_QUALITY_PROFILE_MISSING_CATALOG: &str =
         "CATALOG_CONFIGURED_QUALITY_PROFILE_MISSING_CATALOG";
     /// No quality profile is configured; choose a global, category, library, or title profile.
@@ -743,7 +761,7 @@ pub mod catalog {
     pub const EPISODE_FIELD_REQUIRED: &str = "CATALOG_EPISODE_FIELD_REQUIRED";
     /// Title name is required.
     pub const TITLE_NAME_REQUIRED: &str = "CATALOG_TITLE_NAME_REQUIRED";
-    /// The requested value: SMG has no series for title id the selected value.
+    /// SMG has no series for this title.
     pub const SMG_NO_SERIES_NOT_FOUND: &str = "CATALOG_SMG_NO_SERIES_NOT_FOUND";
     /// Movie entity was not found.
     pub const MOVIE_ENTITY_NOT_FOUND: &str = "CATALOG_MOVIE_ENTITY_NOT_FOUND";
@@ -847,11 +865,11 @@ pub mod security {
     pub const EXTERNAL_ACCOUNT_LINKED_ELSEWHERE: &str = "EXTERNAL_ACCOUNT_LINKED_ELSEWHERE";
     /// This account is linked to another provider identity.
     pub const EXTERNAL_ACCOUNT_IDENTITY_MISMATCH: &str = "EXTERNAL_ACCOUNT_IDENTITY_MISMATCH";
-    /// The requested value connection is not configured for external auth.
+    /// This sign-in connection is not configured for external sign-in.
     pub const CONNECTION_NOT_CONFIGURED: &str = "SECURITY_CONNECTION_NOT_CONFIGURED";
-    /// The requested value connection is disabled.
+    /// This sign-in connection is disabled.
     pub const CONNECTION_DISABLED: &str = "SECURITY_CONNECTION_DISABLED";
-    /// The requested value is not enabled for the selected value.
+    /// This sign-in provider is not enabled for this use.
     pub const NOT_ENABLED: &str = "SECURITY_NOT_ENABLED";
     /// Plex server discovery is required before using Plex for auth.
     pub const PLEX_SERVER_DISCOVERY_REQUIRED_BEFORE_USING_PLEX_AUTH: &str =
@@ -946,7 +964,7 @@ pub mod security {
     pub const PASSWORD_REQUIRED: &str = "SECURITY_PASSWORD_REQUIRED";
     /// Release candidate expired; search again.
     pub const RELEASE_CANDIDATE_EXPIRED: &str = "SECURITY_RELEASE_CANDIDATE_EXPIRED";
-    /// Password must be at least the selected value characters.
+    /// Password must be at least the configured minimum length.
     pub const PASSWORD_OUT_OF_RANGE: &str = "SECURITY_PASSWORD_OUT_OF_RANGE";
     /// Invalid v2 password hash.
     pub const V2_PASSWORD_HASH_INVALID: &str = "SECURITY_V2_PASSWORD_HASH_INVALID";
@@ -962,10 +980,10 @@ pub mod security {
     /// Authentication session was invalidated.
     pub const AUTHENTICATION_SESSION_INVALIDATED: &str =
         "SECURITY_AUTHENTICATION_SESSION_INVALIDATED";
-    /// Cannot resolve backup download signing key for actor the selected value.
+    /// Cannot resolve the backup download signing key for this user.
     pub const CANNOT_RESOLVE_BACKUP_DOWNLOAD_SIGNING_KEY_ACTOR: &str =
         "SECURITY_CANNOT_RESOLVE_BACKUP_DOWNLOAD_SIGNING_KEY_ACTOR";
-    /// Cannot resolve release candidate signing key for actor the selected value.
+    /// Cannot resolve the release candidate signing key for this user.
     pub const CANNOT_RESOLVE_RELEASE_CANDIDATE_SIGNING_KEY_ACTOR: &str =
         "SECURITY_CANNOT_RESOLVE_RELEASE_CANDIDATE_SIGNING_KEY_ACTOR";
     /// Release candidate token missing episode scope id.
@@ -1022,7 +1040,7 @@ pub mod security {
     /// Release candidate token title does not match request.
     pub const RELEASE_CANDIDATE_TOKEN_TITLE_DOES_NOT_MATCH_REQUEST: &str =
         "SECURITY_RELEASE_CANDIDATE_TOKEN_TITLE_DOES_NOT_MATCH_REQUEST";
-    /// Release reports the selected value seeders, below the minimum of the selected value for this indexer.
+    /// The release reports fewer seeders than the minimum for this indexer.
     pub const RELEASE_REPORTS_SEEDERS_BELOW_MINIMUM_INDEXER: &str =
         "SECURITY_RELEASE_REPORTS_SEEDERS_BELOW_MINIMUM_INDEXER";
     /// Malformed token.
@@ -1094,7 +1112,7 @@ pub mod security {
         "SECURITY_ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID";
     /// Failed to decrypt backup bundle: wrong password or corrupted data.
     pub const FAILED_DECRYPT_BACKUP_BUNDLE: &str = "SECURITY_FAILED_DECRYPT_BACKUP_BUNDLE";
-    /// Backup bundle table set does not match the current restore catalog: missing [the selected value], unexpected [the selected value]. the selected value.
+    /// The backup's tables do not match what this version of Scryer can restore.
     pub const BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG: &str =
         "SECURITY_BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG";
     /// Backup export requires a non-empty password.
@@ -1103,6 +1121,13 @@ pub mod security {
     /// This backup bundle is encrypted and requires a password.
     pub const BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD: &str =
         "SECURITY_BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD";
+    /// A backup payload has more entries than a backup bundle holds.
+    pub const BACKUP_BUNDLE_TOO_MANY_ENTRIES: &str = "SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES";
+    /// A backup payload holds an entry that is not a regular file or directory.
+    pub const BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED: &str =
+        "SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED";
+    /// Unpacking a backup would leave too little free space for restore scratch.
+    pub const BACKUP_BUNDLE_SCRATCH_SPACE_LOW: &str = "SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW";
     /// Login verification challenge is unavailable.
     pub const LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE: &str =
         "SECURITY_LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE";
@@ -1222,7 +1247,7 @@ pub mod security {
     /// Anonymous is reserved for authless audit attribution.
     pub const ANONYMOUS_RESERVED_AUTHLESS_AUDIT_ATTRIBUTION: &str =
         "SECURITY_ANONYMOUS_RESERVED_AUTHLESS_AUDIT_ATTRIBUTION";
-    /// The requested value is reserved for instance recovery.
+    /// The username recovery-admin is reserved for instance recovery.
     pub const RESERVED_INSTANCE_RECOVERY: &str = "SECURITY_RESERVED_INSTANCE_RECOVERY";
     /// Admin username is required.
     pub const ADMIN_USERNAME_REQUIRED: &str = "SECURITY_ADMIN_USERNAME_REQUIRED";
@@ -1262,7 +1287,7 @@ pub mod security {
     /// Cannot create admin while SCRYER_DISABLE_DEFAULT_ADMIN is true.
     pub const CANNOT_CREATE_ADMIN_WHILE_SCRYER_DISABLE_DEFAULT_ADMIN_TRUE: &str =
         "SECURITY_CANNOT_CREATE_ADMIN_WHILE_SCRYER_DISABLE_DEFAULT_ADMIN_TRUE";
-    /// User the selected value already exists.
+    /// This user already exists.
     pub const USER_ALREADY_EXISTS: &str = "SECURITY_USER_ALREADY_EXISTS";
     /// Externally managed users cannot set a Scryer password.
     pub const EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD: &str =
@@ -1307,7 +1332,7 @@ pub mod security {
     /// Encrypted backup header is truncated.
     pub const ENCRYPTED_BACKUP_HEADER_TRUNCATED: &str =
         "SECURITY_ENCRYPTED_BACKUP_HEADER_TRUNCATED";
-    /// Unsupported encrypted backup version the selected value.
+    /// This encrypted backup version is not supported.
     pub const ENCRYPTED_BACKUP_VERSION_UNSUPPORTED: &str =
         "SECURITY_ENCRYPTED_BACKUP_VERSION_UNSUPPORTED";
     /// Encrypted backup metadata header is truncated.
@@ -1333,10 +1358,10 @@ pub mod security {
     pub const BACKUP_SECRETS_PAYLOAD_MISSING: &str = "SECURITY_BACKUP_SECRETS_PAYLOAD_MISSING";
     /// Backup secrets payload is invalid.
     pub const BACKUP_SECRETS_PAYLOAD_INVALID: &str = "SECURITY_BACKUP_SECRETS_PAYLOAD_INVALID";
-    /// Prepared backup directory contains unsupported entry the selected value.
+    /// The prepared backup directory contains an unsupported entry.
     pub const PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY: &str =
         "SECURITY_PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY";
-    /// Unsupported backup format version the selected value.
+    /// This backup format version is not supported.
     pub const BACKUP_FORMAT_VERSION_UNSUPPORTED: &str =
         "SECURITY_BACKUP_FORMAT_VERSION_UNSUPPORTED";
     /// Backup part path must be a regular file.
@@ -1346,9 +1371,9 @@ pub mod security {
         "SECURITY_BACKUP_PART_PATH_ESCAPES_BUNDLE_ROOT";
     /// Backup part path is unreadable.
     pub const BACKUP_PART_PATH_UNREADABLE: &str = "SECURITY_BACKUP_PART_PATH_UNREADABLE";
-    /// Backup checksum mismatch for the selected value.
+    /// A backup checksum does not match.
     pub const BACKUP_CHECKSUM_MISMATCH: &str = "SECURITY_BACKUP_CHECKSUM_MISMATCH";
-    /// Backup checksum manifest is incomplete: missing [the selected value], unexpected [the selected value].
+    /// The backup checksum manifest is incomplete.
     pub const BACKUP_CHECKSUM_MANIFEST_INCOMPLETE: &str =
         "SECURITY_BACKUP_CHECKSUM_MANIFEST_INCOMPLETE";
     /// The backup could not be created.
@@ -1463,6 +1488,9 @@ pub mod security {
         BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG,
         BACKUP_EXPORT_REQUIRES_NON_EMPTY_PASSWORD,
         BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD,
+        BACKUP_BUNDLE_TOO_MANY_ENTRIES,
+        BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED,
+        BACKUP_BUNDLE_SCRATCH_SPACE_LOW,
         LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE,
         LOGIN_VERIFICATION_CHALLENGE_EXPIRED,
         REQUESTED_LOGIN_VERIFICATION_FACTOR_UNAVAILABLE,
@@ -1582,18 +1610,18 @@ pub mod rules {
         "RULE_TAG_FILTER_ONLY_APPLIES_MANAGED_RULE_SETS";
     /// Rule validation error.
     pub const VALIDATION_ERROR: &str = "RULE_VALIDATION_ERROR";
-    /// Only one enabled rule may use exclusive group the selected value.
+    /// Only one enabled rule may use an exclusive group.
     pub const ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP: &str =
         "RULE_ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP";
     /// Failed to build rules engine.
     pub const FAILED_BUILD_RULES_ENGINE: &str = "RULE_FAILED_BUILD_RULES_ENGINE";
     /// Media file  of title was not found.
     pub const MEDIA_FILE_NOT_FOUND: &str = "RULE_MEDIA_FILE_NOT_FOUND";
-    /// Media file the selected value does not cover episode the selected value.
+    /// The media file does not cover this episode.
     pub const MEDIA_FILE_DOES_NOT_COVER_EPISODE: &str = "RULE_MEDIA_FILE_DOES_NOT_COVER_EPISODE";
     /// Episode was not found.
     pub const EPISODE_NOT_FOUND: &str = "RULE_EPISODE_NOT_FOUND";
-    /// Episode the selected value does not belong to title the selected value.
+    /// The episode does not belong to this title.
     pub const EPISODE_DOES_NOT_BELONG_TITLE: &str = "RULE_EPISODE_DOES_NOT_BELONG_TITLE";
     /// An episode cannot be selected when testing a movie rule.
     pub const EPISODE_CANNOT_SELECTED_WHEN_TESTING_MOVIE_RULE: &str =
@@ -1638,7 +1666,7 @@ pub mod rules {
         "RULE_STORED_MEDIA_FILE_SCORED_OWN_SIZE_LISTING_FACTS";
     /// Size bytes cannot be negative.
     pub const SIZE_BYTES_CANNOT_NEGATIVE: &str = "RULE_SIZE_BYTES_CANNOT_NEGATIVE";
-    /// Published at must be an RFC 2822 or RFC 3339 timestamp, got the selected value.
+    /// Published at must be an RFC 2822 or RFC 3339 timestamp.
     pub const PUBLISHED_INVALID: &str = "RULE_PUBLISHED_INVALID";
     /// Votes cannot be negative.
     pub const VOTES_CANNOT_NEGATIVE: &str = "RULE_VOTES_CANNOT_NEGATIVE";
@@ -1650,7 +1678,7 @@ pub mod rules {
         "RULE_BUNDLED_RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE";
     /// Enabled templates must be unique members of the selected pack.
     pub const ENABLED_TEMPLATES_INVALID: &str = "RULE_ENABLED_TEMPLATES_INVALID";
-    /// Rule pack the selected value is already installed.
+    /// This rule pack is already installed.
     pub const PACK_ALREADY_INSTALLED: &str = "RULE_PACK_ALREADY_INSTALLED";
     /// Rule pack installation conflicted with another change.
     pub const PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE: &str =
@@ -1668,7 +1696,7 @@ pub mod rules {
     /// Rule pack settings reference an unknown or removed template.
     pub const PACK_SETTINGS_REFERENCE_UNKNOWN_REMOVED_TEMPLATE: &str =
         "RULE_PACK_SETTINGS_REFERENCE_UNKNOWN_REMOVED_TEMPLATE";
-    /// Tracked rule the selected value is missing.
+    /// A tracked rule is missing.
     pub const TRACKED_RULE_REQUIRED: &str = "RULE_TRACKED_RULE_REQUIRED";
     /// Rule set is not tracked by a rule pack.
     pub const SET_NOT_TRACKED_RULE_PACK: &str = "RULE_SET_NOT_TRACKED_RULE_PACK";
@@ -1680,12 +1708,12 @@ pub mod rules {
     /// Automatic rule pack updates require a stable patch on the installed major/minor.
     pub const AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR: &str =
         "RULE_AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR";
-    /// The requested value version is not valid semantic version.
+    /// The version is not a valid semantic version.
     pub const VERSION_INVALID: &str = "RULE_VERSION_INVALID";
-    /// Cannot adopt duplicate legacy locale rules for the selected value.
+    /// Cannot adopt duplicate legacy locale rules for this template.
     pub const CANNOT_ADOPT_DUPLICATE_LEGACY_LOCALE_RULES: &str =
         "RULE_CANNOT_ADOPT_DUPLICATE_LEGACY_LOCALE_RULES";
-    /// Invalid rule pack facet the selected value.
+    /// The rule pack facet is invalid.
     pub const PACK_FACET_INVALID: &str = "RULE_PACK_FACET_INVALID";
     /// Tracked rule pack changed; reload and retry.
     pub const TRACKED_RULE_PACK_CHANGED: &str = "RULE_TRACKED_RULE_PACK_CHANGED";
@@ -1699,8 +1727,18 @@ pub mod rules {
         "RULE_BUNDLED_TRASH_PACK_CONTAINS_NO_TEMPLATES";
     /// The rule source is invalid.
     pub const SOURCE_INVALID: &str = "RULE_SOURCE_INVALID";
+    /// A builder document is not an object naming this rule's family and a
+    /// document version.
+    pub const BUILDER_MODEL_INVALID: &str = "RULE_BUILDER_MODEL_INVALID";
+    /// A builder document is larger than a rule may store.
+    pub const BUILDER_MODEL_TOO_LARGE: &str = "RULE_BUILDER_MODEL_TOO_LARGE";
+    /// The rule builder has no schema for the asked family.
+    pub const BUILDER_FAMILY_UNKNOWN: &str = "RULE_BUILDER_FAMILY_UNKNOWN";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        BUILDER_MODEL_INVALID,
+        BUILDER_MODEL_TOO_LARGE,
+        BUILDER_FAMILY_UNKNOWN,
         PACK_UP_TO_DATE,
         INPUT_RETIRED,
         TARGETS_PERSON,
@@ -1815,7 +1853,7 @@ pub mod oauth {
     pub const REFRESH_TOKEN_SESSION_UNAVAILABLE: &str = "OAUTH_REFRESH_TOKEN_SESSION_UNAVAILABLE";
     /// OAuth client display name is required.
     pub const CLIENT_DISPLAY_NAME_REQUIRED: &str = "OAUTH_CLIENT_DISPLAY_NAME_REQUIRED";
-    /// OAuth client display name must not exceed the selected value characters.
+    /// OAuth client display name must not exceed 120 characters.
     pub const CLIENT_DISPLAY_NAME_TOO_LONG: &str = "OAUTH_CLIENT_DISPLAY_NAME_TOO_LONG";
     /// At least one OAuth redirect URI is required.
     pub const REDIRECT_URI_REQUIRED: &str = "OAUTH_REDIRECT_URI_REQUIRED";
@@ -1870,162 +1908,167 @@ pub mod oauth {
     ];
 }
 
-pub mod maintenance {
+pub mod lifecycle {
     /// The candidate count changed. Review the current count before arming.
-    pub const ARM_COUNT_MISMATCH: &str = "MAINTENANCE_ARM_COUNT_MISMATCH";
-    /// Maintenance exclusion was not found.
-    pub const EXCLUSION_NOT_FOUND: &str = "MAINTENANCE_EXCLUSION_NOT_FOUND";
-    /// Maintenance rule the selected value failed to compile.
-    pub const RULE_FAILED_COMPILE: &str = "MAINTENANCE_RULE_FAILED_COMPILE";
-    /// Ambiguous maintenance file coverage.
-    pub const AMBIGUOUS_MAINTENANCE_FILE_COVERAGE: &str =
-        "MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE";
+    pub const ARM_COUNT_MISMATCH: &str = "LIFECYCLE_ARM_COUNT_MISMATCH";
+    /// Lifecycle exclusion was not found.
+    pub const EXCLUSION_NOT_FOUND: &str = "LIFECYCLE_EXCLUSION_NOT_FOUND";
+    /// The lifecycle rule failed to compile.
+    pub const RULE_COMPILE_FAILED: &str = "LIFECYCLE_RULE_COMPILE_FAILED";
+    /// Ambiguous lifecycle file coverage.
+    pub const FILE_COVERAGE_AMBIGUOUS: &str = "LIFECYCLE_FILE_COVERAGE_AMBIGUOUS";
     /// Child deletion requires an episode or season.
-    pub const CHILD_DELETION_REQUIRES_EPISODE_SEASON: &str =
-        "MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON";
-    /// Maintenance unmonitoring candidate identity does not match its title.
-    pub const UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE: &str =
-        "MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE";
-    /// Maintenance file targets changed; another evaluation is required.
-    pub const FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED: &str =
-        "MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED";
-    /// Maintenance file ownership changed.
-    pub const FILE_OWNERSHIP_CHANGED: &str = "MAINTENANCE_FILE_OWNERSHIP_CHANGED";
-    /// This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.
-    pub const RULE_SHIPS_SCRYER: &str = "MAINTENANCE_RULE_SHIPS_SCRYER";
+    pub const CHILD_DELETION_SUBJECT_REQUIRED: &str = "LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED";
+    /// Lifecycle unmonitoring candidate identity does not match its title.
+    pub const CANDIDATE_TITLE_MISMATCH: &str = "LIFECYCLE_CANDIDATE_TITLE_MISMATCH";
+    /// Lifecycle file targets changed; another evaluation is required.
+    pub const FILE_TARGETS_CHANGED: &str = "LIFECYCLE_FILE_TARGETS_CHANGED";
+    /// Lifecycle file ownership changed.
+    pub const FILE_OWNERSHIP_CHANGED: &str = "LIFECYCLE_FILE_OWNERSHIP_CHANGED";
+    /// This rule ships with Scryer and cannot be edited. It can be viewed, and its state changed.
+    pub const SYSTEM_RULE_READ_ONLY: &str = "LIFECYCLE_SYSTEM_RULE_READ_ONLY";
     /// This rule ships with Scryer and cannot be renamed.
-    pub const RULE_SHIPS_SCRYER_CANNOT_RENAMED: &str =
-        "MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED";
+    pub const SYSTEM_RULE_RENAME_REFUSED: &str = "LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED";
     /// This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.
-    pub const RULE_SHIPS_SCRYER_CANNOT_DELETED: &str =
-        "MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED";
-    /// The selected item has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.
-    pub const ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID: &str =
-        "MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID";
-    /// The selected item is currently tracking the selected value title(s), and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.
-    pub const CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE: &str =
-        "MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE";
+    pub const SYSTEM_RULE_DELETE_REFUSED: &str = "LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED";
+    /// This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.
+    pub const RULE_DELETE_HAS_ACTION_HISTORY: &str = "LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY";
+    /// This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.
+    pub const RULE_DELETE_HAS_ACTIVE_CANDIDATES: &str =
+        "LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES";
     /// Rule validation failed.
-    pub const RULE_VALIDATION_FAILED: &str = "MAINTENANCE_RULE_VALIDATION_FAILED";
+    pub const RULE_VALIDATION_FAILED: &str = "LIFECYCLE_RULE_VALIDATION_FAILED";
     /// Preview requires between one and fifty subjects.
-    pub const PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS: &str =
-        "MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS";
+    pub const PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE: &str =
+        "LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE";
     /// Rule evaluation failed.
-    pub const RULE_EVALUATION_FAILED: &str = "MAINTENANCE_RULE_EVALUATION_FAILED";
+    pub const RULE_EVALUATION_FAILED: &str = "LIFECYCLE_RULE_EVALUATION_FAILED";
     /// Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.
-    pub const PREVIEW_SUBJECT_OUTSIDE_SCOPE: &str = "MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE";
+    pub const PREVIEW_SUBJECT_OUTSIDE_LIBRARIES: &str =
+        "LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES";
     /// This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.
     pub const PERSON_TARGETING_PERMISSION_REQUIRED: &str =
-        "MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED";
-    /// A matcher that reads storage facts must select a configured library root.
-    pub const MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT: &str =
-        "MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT";
-    /// Storage root the selected item is not configured.
-    pub const STORAGE_ROOT_NOT_CONFIGURED: &str = "MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED";
-    /// Maintenance rule set was not found.
-    pub const RULE_SET_NOT_FOUND: &str = "MAINTENANCE_RULE_SET_NOT_FOUND";
-    /// Preview accepts at most the selected value titles, the selected value were requested.
-    pub const PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED: &str =
-        "MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED";
+        "LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED";
+    /// Lifecycle rule set was not found.
+    pub const RULE_SET_NOT_FOUND: &str = "LIFECYCLE_RULE_SET_NOT_FOUND";
+    /// Preview accepts at most 50 titles.
+    pub const PREVIEW_TITLE_LIMIT_EXCEEDED: &str = "LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED";
     /// Grace period must be zero or more days.
-    pub const GRACE_PERIOD_INVALID: &str = "MAINTENANCE_GRACE_PERIOD_INVALID";
-    /// Grace period must be at most the selected value days (ten years).
-    pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE";
-    /// Maintenance action is not storable.
-    pub const ACTION_NOT_STORABLE: &str = "MAINTENANCE_ACTION_NOT_STORABLE";
-    /// This maintenance action is not supported for titles.
-    pub const ACTION_UNSUPPORTED: &str = "MAINTENANCE_ACTION_UNSUPPORTED";
-    /// Maintenance action is not valid for a title-scoped rule.
-    pub const ACTION_INVALID: &str = "MAINTENANCE_ACTION_INVALID";
-    /// The requested value must not be empty.
-    pub const FIELD_REQUIRED: &str = "MAINTENANCE_FIELD_REQUIRED";
+    pub const GRACE_PERIOD_INVALID: &str = "LIFECYCLE_GRACE_PERIOD_INVALID";
+    /// Grace period must be at most 3650 days (ten years).
+    pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE";
+    /// The rule's current revision stores its action the way builds before
+    /// rules declared their own actions did. It is never evaluated or run
+    /// until a revision that declares its actions replaces it.
+    pub const RULE_ACTIONS_UNREADABLE: &str = "LIFECYCLE_RULE_ACTIONS_UNREADABLE";
+    /// The rule is armed to run an action that deletes but has no most titles
+    /// per run. It still evaluates and previews; its actions do not run until
+    /// a maximum is set or the rule is disarmed.
+    pub const RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN: &str =
+        "LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN";
+    /// Another save gave the rule a new revision first; this save wrote
+    /// nothing and can be retried against the current revision.
+    pub const RULE_REVISION_CONFLICT: &str = "LIFECYCLE_RULE_REVISION_CONFLICT";
+    /// A previewed subject got neither a decision nor an error from the rule.
+    pub const PREVIEW_NO_DECISION: &str = "LIFECYCLE_PREVIEW_NO_DECISION";
+    /// A required field is empty.
+    pub const FIELD_REQUIRED: &str = "LIFECYCLE_FIELD_REQUIRED";
     /// Movie titles do not have an episode inventory.
-    pub const MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY: &str =
-        "MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY";
-    /// Invalid maintenance subject kind.
-    pub const SUBJECT_KIND_INVALID: &str = "MAINTENANCE_SUBJECT_KIND_INVALID";
-    /// Maintenance subject ID is required.
-    pub const SUBJECT_ID_REQUIRED: &str = "MAINTENANCE_SUBJECT_ID_REQUIRED";
-    /// Maintenance subject no longer belongs to this title was not found.
-    pub const SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND: &str =
-        "MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND";
+    pub const MOVIE_HAS_NO_EPISODES: &str = "LIFECYCLE_MOVIE_HAS_NO_EPISODES";
+    /// Invalid lifecycle subject kind.
+    pub const SUBJECT_KIND_INVALID: &str = "LIFECYCLE_SUBJECT_KIND_INVALID";
+    /// Lifecycle subject ID is required.
+    pub const SUBJECT_ID_REQUIRED: &str = "LIFECYCLE_SUBJECT_ID_REQUIRED";
+    /// Lifecycle subject no longer belongs to this title was not found.
+    pub const SUBJECT_NOT_FOUND: &str = "LIFECYCLE_SUBJECT_NOT_FOUND";
     /// This rule's action never changes anything, so it can only run as a dry run.
-    pub const RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN: &str =
-        "MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN";
+    pub const RULE_HAS_NO_EFFECT: &str = "LIFECYCLE_RULE_HAS_NO_EFFECT";
     /// The rule configuration must be reviewed again before arming deletion; reopen the confirmation.
-    pub const RULE_CONFIGURATION_INVALID: &str = "MAINTENANCE_RULE_CONFIGURATION_INVALID";
+    pub const ARM_CONFIRMATION_STALE: &str = "LIFECYCLE_ARM_CONFIRMATION_STALE";
     /// The rule changed while confirming; review it again before arming deletion.
-    pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING";
-    /// Sequence actions must use the sequence executor.
-    pub const SEQUENCE_ACTIONS_INVALID: &str = "MAINTENANCE_SEQUENCE_ACTIONS_INVALID";
-    /// Tag action has no tags configured.
-    pub const TAG_ACTION_NO_TAGS_CONFIGURED: &str = "MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED";
-    /// Quality-profile action has no target profile.
-    pub const QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE: &str =
-        "MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE";
-    /// Target quality profile the selected item does not exist.
-    pub const TARGET_QUALITY_PROFILE_DOES_NOT_EXIST: &str =
-        "MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST";
-    /// Maintenance sequence step parameters are invalid.
-    pub const SEQUENCE_STEP_PARAMETERS_INVALID: &str =
-        "MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID";
+    pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING";
+    /// Lifecycle sequence step parameters are invalid.
+    pub const SEQUENCE_STEP_PARAMETERS_INVALID: &str = "LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID";
     /// DeleteFiles requires an earlier Unmonitor step.
-    pub const DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP: &str =
-        "MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP";
+    pub const DELETE_FILES_UNMONITOR_STEP_MISSING: &str =
+        "LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING";
     /// DeleteFiles has an incompatible Unmonitor prerequisite.
-    pub const DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE: &str =
-        "MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE";
-    /// The maintenance rule source is invalid.
-    pub const RULE_SOURCE_INVALID: &str = "MAINTENANCE_RULE_SOURCE_INVALID";
-    /// The maintenance action configuration is invalid.
-    pub const ACTION_CONFIGURATION_INVALID: &str = "MAINTENANCE_ACTION_CONFIGURATION_INVALID";
+    pub const DELETE_FILES_UNMONITOR_STEP_MISMATCH: &str =
+        "LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH";
+    /// The lifecycle rule source is invalid.
+    pub const RULE_SOURCE_INVALID: &str = "LIFECYCLE_RULE_SOURCE_INVALID";
+    /// The rule source defines no action head, so it could never do anything.
+    pub const ACTION_HEAD_REQUIRED: &str = "LIFECYCLE_ACTION_HEAD_REQUIRED";
+    /// A `set_quality_profile` literal names no existing quality profile.
+    pub const QUALITY_PROFILE_NOT_FOUND: &str = "LIFECYCLE_QUALITY_PROFILE_NOT_FOUND";
+    /// A `move_to_library` literal names no library.
+    pub const MOVE_LIBRARY_NOT_FOUND: &str = "LIFECYCLE_MOVE_LIBRARY_NOT_FOUND";
+    /// A `move_to_library` literal names a library of another media kind
+    /// than the rule's libraries.
+    pub const MOVE_LIBRARY_FACET_MISMATCH: &str = "LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH";
+    /// A `move_to_root` literal names no configured library root.
+    pub const MOVE_ROOT_NOT_FOUND: &str = "LIFECYCLE_MOVE_ROOT_NOT_FOUND";
+    /// A rule that can delete was saved or armed without the most titles it
+    /// may act on in one run. The `destructiveActions` extension names the
+    /// delete actions that require it.
+    pub const RULE_MAX_TITLES_PER_RUN_REQUIRED: &str = "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
+    /// The most titles a rule acts on in one run is below one.
+    pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID";
+    /// A request to act now named no rule. Rules act only through their own
+    /// fires, so acting now needs the rule to act for.
+    pub const ACTION_RUN_RULE_REQUIRED: &str = "LIFECYCLE_ACTION_RUN_RULE_REQUIRED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
         EXCLUSION_NOT_FOUND,
-        RULE_FAILED_COMPILE,
-        AMBIGUOUS_MAINTENANCE_FILE_COVERAGE,
-        CHILD_DELETION_REQUIRES_EPISODE_SEASON,
-        UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE,
-        FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED,
+        RULE_COMPILE_FAILED,
+        FILE_COVERAGE_AMBIGUOUS,
+        CHILD_DELETION_SUBJECT_REQUIRED,
+        CANDIDATE_TITLE_MISMATCH,
+        FILE_TARGETS_CHANGED,
         FILE_OWNERSHIP_CHANGED,
-        RULE_SHIPS_SCRYER,
-        RULE_SHIPS_SCRYER_CANNOT_RENAMED,
-        RULE_SHIPS_SCRYER_CANNOT_DELETED,
-        ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID,
-        CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE,
+        SYSTEM_RULE_READ_ONLY,
+        SYSTEM_RULE_RENAME_REFUSED,
+        SYSTEM_RULE_DELETE_REFUSED,
+        RULE_DELETE_HAS_ACTION_HISTORY,
+        RULE_DELETE_HAS_ACTIVE_CANDIDATES,
         RULE_VALIDATION_FAILED,
-        PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS,
+        PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE,
         RULE_EVALUATION_FAILED,
-        PREVIEW_SUBJECT_OUTSIDE_SCOPE,
+        PREVIEW_SUBJECT_OUTSIDE_LIBRARIES,
         PERSON_TARGETING_PERMISSION_REQUIRED,
-        MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT,
-        STORAGE_ROOT_NOT_CONFIGURED,
         RULE_SET_NOT_FOUND,
-        PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED,
+        PREVIEW_TITLE_LIMIT_EXCEEDED,
         GRACE_PERIOD_INVALID,
         GRACE_PERIOD_OUT_OF_RANGE,
-        ACTION_NOT_STORABLE,
-        ACTION_UNSUPPORTED,
-        ACTION_INVALID,
+        RULE_ACTIONS_UNREADABLE,
+        RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN,
+        RULE_REVISION_CONFLICT,
+        PREVIEW_NO_DECISION,
         FIELD_REQUIRED,
-        MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY,
+        MOVIE_HAS_NO_EPISODES,
         SUBJECT_KIND_INVALID,
         SUBJECT_ID_REQUIRED,
-        SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND,
-        RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN,
-        RULE_CONFIGURATION_INVALID,
+        SUBJECT_NOT_FOUND,
+        RULE_HAS_NO_EFFECT,
+        ARM_CONFIRMATION_STALE,
         RULE_CHANGED_WHILE_CONFIRMING,
-        SEQUENCE_ACTIONS_INVALID,
-        TAG_ACTION_NO_TAGS_CONFIGURED,
-        QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE,
-        TARGET_QUALITY_PROFILE_DOES_NOT_EXIST,
         SEQUENCE_STEP_PARAMETERS_INVALID,
-        DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP,
-        DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
+        DELETE_FILES_UNMONITOR_STEP_MISSING,
+        DELETE_FILES_UNMONITOR_STEP_MISMATCH,
         RULE_SOURCE_INVALID,
-        ACTION_CONFIGURATION_INVALID,
+        ACTION_HEAD_REQUIRED,
+        QUALITY_PROFILE_NOT_FOUND,
+        MOVE_LIBRARY_NOT_FOUND,
+        MOVE_LIBRARY_FACET_MISMATCH,
+        MOVE_ROOT_NOT_FOUND,
+        RULE_MAX_TITLES_PER_RUN_REQUIRED,
+        RULE_MAX_TITLES_PER_RUN_INVALID,
+        ACTION_RUN_RULE_REQUIRED,
     ];
+
+    /// The deleting action heads that make a rule's per-run maximum required.
+    pub const RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT: &str = "destructiveActions";
 }
 
 pub mod acquisition {
@@ -2092,12 +2135,12 @@ pub mod acquisition {
         "ACQUISITION_AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM";
     /// Another search is running. Wait for it to finish or cancel it before starting this search.
     pub const ANOTHER_SEARCH_RUNNING: &str = "ACQUISITION_ANOTHER_SEARCH_RUNNING";
-    /// Maintenance Search dispatch requires a preallocated job run id.
-    pub const MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID: &str =
-        "ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID";
-    /// Maintenance Search dispatch requires an accepted receipt intent.
-    pub const MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT: &str =
-        "ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT";
+    /// Lifecycle Search dispatch requires a preallocated job run id.
+    pub const LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID: &str =
+        "ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID";
+    /// Lifecycle Search dispatch requires an accepted receipt intent.
+    pub const LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT: &str =
+        "ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT";
     /// Recovery search job was not found.
     pub const RECOVERY_SEARCH_JOB_NOT_FOUND: &str = "ACQUISITION_RECOVERY_SEARCH_JOB_NOT_FOUND";
     /// Unsupported saved search version.
@@ -2162,8 +2205,8 @@ pub mod acquisition {
         SEASON_INVALID,
         AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM,
         ANOTHER_SEARCH_RUNNING,
-        MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID,
-        MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT,
+        LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID,
+        LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT,
         RECOVERY_SEARCH_JOB_NOT_FOUND,
         SEARCH_VERSION_UNSUPPORTED,
         WANTED_KIND_INVALID,
@@ -2224,21 +2267,21 @@ pub mod location {
     pub const LIBRARY_ROOT_NOT_FOUND: &str = "LOCATION_LIBRARY_ROOT_NOT_FOUND";
     /// Location operation was not found.
     pub const OPERATION_NOT_FOUND: &str = "LOCATION_OPERATION_NOT_FOUND";
-    /// Verification of the selected value failedthe selected value.
+    /// Verification of the transferred file failed.
     pub const VERIFICATION_FAILED: &str = "LOCATION_VERIFICATION_FAILED";
-    /// The transferred file the selected value needs to be verified again before its catalog entry can be updated.
+    /// The transferred file needs to be verified again before its catalog entry can be updated.
     pub const TRANSFERRED_FILE_NEEDS_VERIFIED_AGAIN_BEFORE_CATALOG_ENTRY_UPDATED: &str =
         "LOCATION_TRANSFERRED_FILE_NEEDS_VERIFIED_AGAIN_BEFORE_CATALOG_ENTRY_UPDATED";
-    /// The transferred file the selected value has not finished verification. Its catalog entry was left unchanged.
+    /// The transferred file has not finished verification. Its catalog entry was left unchanged.
     pub const TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION: &str =
         "LOCATION_TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION";
-    /// The destination staging path the selected value is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.
+    /// The destination staging path is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.
     pub const DESTINATION_OCCUPIED: &str = "LOCATION_DESTINATION_OCCUPIED";
     /// Path was not found.
     pub const PATH_NOT_FOUND: &str = "LOCATION_PATH_NOT_FOUND";
     /// This selection has nothing to move.
     pub const SELECTION_NOTHING_MOVE: &str = "LOCATION_SELECTION_NOTHING_MOVE";
-    /// Location operation the selected value is still running; cancel it instead of abandoning it.
+    /// This location operation is still running; cancel it or wait for it to stop first.
     pub const OPERATION_STILL_RUNNING: &str = "LOCATION_OPERATION_STILL_RUNNING";
     /// Location operation source libraries are unavailable.
     pub const OPERATION_SOURCE_LIBRARIES_UNAVAILABLE: &str =
@@ -2249,46 +2292,54 @@ pub mod location {
     pub const DESTINATION_REQUIRED: &str = "LOCATION_DESTINATION_REQUIRED";
     /// A root move spans one library; choose a destination library for a selection that spans several.
     pub const ROOT_MOVE_SPANS_ONE_LIBRARY: &str = "LOCATION_ROOT_MOVE_SPANS_ONE_LIBRARY";
-    /// The catalog cannot map a file outside the recorded folder for the selected value. Correct its folder mapping first.
+    /// The catalog cannot map a file outside the title's recorded folder. Correct its folder mapping first.
     pub const CATALOG_CANNOT_MAP_FILE_OUTSIDE_RECORDED_FOLDER: &str =
         "LOCATION_CATALOG_CANNOT_MAP_FILE_OUTSIDE_RECORDED_FOLDER";
-    /// The catalog path for the selected value is ambiguous. Correct its folder mapping before moving it.
+    /// The catalog path for this title is ambiguous. Correct its folder mapping before moving it.
     pub const CATALOG_PATH_AMBIGUOUS: &str = "LOCATION_CATALOG_PATH_AMBIGUOUS";
-    /// More than one catalog record would point at the selected value. Resolve that catalog conflict before confirming the manual move.
+    /// More than one catalog record would point at the same path. Resolve that catalog conflict before confirming the manual move.
     pub const MORE_ONE_CATALOG_RECORD_WOULD_POINT: &str =
         "LOCATION_MORE_ONE_CATALOG_RECORD_WOULD_POINT";
     /// Destination title was not found.
     pub const DESTINATION_TITLE_NOT_FOUND: &str = "LOCATION_DESTINATION_TITLE_NOT_FOUND";
     /// Folder path is required.
     pub const FOLDER_PATH_REQUIRED: &str = "LOCATION_FOLDER_PATH_REQUIRED";
-    /// Folder the selected value must not contain . or .. components.
+    /// The folder must not contain . or .. components.
     pub const PATH_COMPONENT_INVALID: &str = "LOCATION_PATH_COMPONENT_INVALID";
-    /// Folder the selected value is not inside a root of library the selected value.
+    /// The folder is not inside a root of this library.
     pub const FOLDER_NOT_INSIDE_ROOT_LIBRARY: &str = "LOCATION_FOLDER_NOT_INSIDE_ROOT_LIBRARY";
-    /// Folder the selected value is a library root, not a title folder.
+    /// The folder is a library root, not a title folder.
     pub const FOLDER_NOT_TITLE_BOUNDARY: &str = "LOCATION_FOLDER_NOT_TITLE_BOUNDARY";
     /// Selected folder resolves outside its library root.
     pub const PATH_OUTSIDE_LIBRARY_ROOT: &str = "LOCATION_PATH_OUTSIDE_LIBRARY_ROOT";
     /// Selected folder overlaps another title's folder; no ownership was changed.
     pub const SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER: &str =
         "LOCATION_SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER";
-    /// Folder the selected value is not owned by another title; resolution the selected value does not apply.
+    /// The folder is not owned by another title, so this resolution does not apply.
     pub const FOLDER_NOT_OWNED_ANOTHER_TITLE: &str = "LOCATION_FOLDER_NOT_OWNED_ANOTHER_TITLE";
-    /// Folder the selected value is already owned by title the selected value; choose swap or take over.
+    /// The folder is already owned by another title; choose swap or take over.
     pub const FOLDER_ALREADY_OWNED_TITLE: &str = "LOCATION_FOLDER_ALREADY_OWNED_TITLE";
-    /// Title the selected value owns no folder to swap; take over the folder instead.
+    /// This title owns no folder to swap; take over the folder instead.
     pub const TITLE_OWNS_NO_FOLDER_SWAP: &str = "LOCATION_TITLE_OWNS_NO_FOLDER_SWAP";
-    /// The recorded folder for the selected value is a library root, not a folder to swap; take over the folder instead.
+    /// The title's recorded folder is a library root, not a folder to swap; take over the folder instead.
     pub const RECORDED_FOLDER_LIBRARY_ROOT_NOT_FOLDER_SWAP: &str =
         "LOCATION_RECORDED_FOLDER_LIBRARY_ROOT_NOT_FOLDER_SWAP";
-    /// Merge of title the selected value into the selected value is blocked.
+    /// Merging these titles is blocked.
     pub const MERGE_TITLE_INTO_BLOCKED: &str = "LOCATION_MERGE_TITLE_INTO_BLOCKED";
     /// Source and destination are the same path.
     pub const SOURCE_DESTINATION_SAME_PATH: &str = "LOCATION_SOURCE_DESTINATION_SAME_PATH";
     /// Source changed during file placement.
     pub const SOURCE_CHANGED_DURING_FILE_PLACEMENT: &str =
         "LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT";
-    /// The confirmed plan has no instructions for title the selected value.
+    /// A hard link made at the destination could not be proven to be the source and could not be removed. It is left at the path named by [`LEFT_BEHIND_PATH_FACT`]; the source was kept.
+    pub const UNPROVEN_LINK_NOT_REMOVED: &str = "LOCATION_UNPROVEN_LINK_NOT_REMOVED";
+    /// A cleanup set the move's source aside to tell it from its copy, and it could not be put back at its own name. It is kept at the path named by [`LEFT_BEHIND_PATH_FACT`]; nothing was removed.
+    pub const SET_ASIDE_SOURCE_NOT_PUT_BACK: &str = "LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK";
+    /// The destination has no room for the file. The source was kept.
+    pub const DESTINATION_NO_SPACE: &str = "LOCATION_DESTINATION_NO_SPACE";
+    /// Scryer is not allowed to write the file there. The source was kept.
+    pub const DESTINATION_PERMISSION_DENIED: &str = "LOCATION_DESTINATION_PERMISSION_DENIED";
+    /// The confirmed plan has no instructions for this title.
     pub const CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE: &str =
         "LOCATION_CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE";
     /// A file changed before source cleanup. The source was preserved; retry to compare it again.
@@ -2313,7 +2364,7 @@ pub mod location {
         "LOCATION_DESTINATION_CHANGED_DURING_COMPARISON";
     /// The source changed during transfer. It was preserved; try again when the file is no longer changing.
     pub const SOURCE_CHANGED_DURING_TRANSFER: &str = "LOCATION_SOURCE_CHANGED_DURING_TRANSFER";
-    /// Could not compare the selected value. Check that it is readable and try again; the source was preserved.
+    /// Could not compare the files. Check that they are readable and try again; the source was preserved.
     pub const COULD_NOT_COMPARE: &str = "LOCATION_COULD_NOT_COMPARE";
     /// An existing path is not a regular file. Resolve the conflicting path and try again; the source was preserved.
     pub const EXISTING_PATH_NOT_REGULAR_FILE: &str = "LOCATION_EXISTING_PATH_NOT_REGULAR_FILE";
@@ -2327,6 +2378,9 @@ pub mod location {
     pub const FULL_HASH_BACKFILL_CANCELLED: &str = "LOCATION_FULL_HASH_BACKFILL_CANCELLED";
     /// File changed while hashing.
     pub const FILE_CHANGED_WHILE_HASHING: &str = "LOCATION_FILE_CHANGED_WHILE_HASHING";
+    /// The file on disk is not the size the catalog recorded, so the full-hash
+    /// backfill refused it without reading it.
+    pub const BACKFILL_SIZE_MISMATCH: &str = "LOCATION_BACKFILL_SIZE_MISMATCH";
     /// A location operation currently owns these items.
     pub const OWNERSHIP_BUSY: &str = "LOCATION_OWNERSHIP_BUSY";
     /// Library roots changed; recovery needs a new plan.
@@ -2441,6 +2495,14 @@ pub mod location {
         "LOCATION_RECOVERY_SOURCE_FULL_HASH_REQUIRED";
     /// Missing full hash.
     pub const RECOVERY_FULL_HASH_REQUIRED: &str = "LOCATION_RECOVERY_FULL_HASH_REQUIRED";
+    /// A missing source in a library with the full-hash job off has no file
+    /// of its name and catalog length in the destination.
+    pub const RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND: &str =
+        "LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND";
+    /// A missing source in a library with the full-hash job off has more than
+    /// one file of its name and catalog length in the destination.
+    pub const RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS: &str =
+        "LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS";
     /// Recovery destination missing was not found.
     pub const RECOVERY_DESTINATION_NOT_FOUND: &str = "LOCATION_RECOVERY_DESTINATION_NOT_FOUND";
     /// Generated destination is not a directory.
@@ -2536,6 +2598,10 @@ pub mod location {
         MERGE_TITLE_INTO_BLOCKED,
         SOURCE_DESTINATION_SAME_PATH,
         SOURCE_CHANGED_DURING_FILE_PLACEMENT,
+        UNPROVEN_LINK_NOT_REMOVED,
+        SET_ASIDE_SOURCE_NOT_PUT_BACK,
+        DESTINATION_NO_SPACE,
+        DESTINATION_PERMISSION_DENIED,
         CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE,
         FILE_CHANGED_BEFORE_SOURCE_CLEANUP,
         DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE,
@@ -2551,6 +2617,7 @@ pub mod location {
         FULL_HASH_BACKFILL_ALREADY_RUNNING,
         FULL_HASH_BACKFILL_CANCELLED,
         FILE_CHANGED_WHILE_HASHING,
+        BACKFILL_SIZE_MISMATCH,
         OWNERSHIP_BUSY,
         RECOVERY_ROOTS_CHANGED,
         RECOVERY_TITLE_NOT_FOUND,
@@ -2595,6 +2662,8 @@ pub mod location {
         RECOVERY_SOURCE_CHANGED,
         RECOVERY_SOURCE_FULL_HASH_REQUIRED,
         RECOVERY_FULL_HASH_REQUIRED,
+        RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND,
+        RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS,
         RECOVERY_DESTINATION_NOT_FOUND,
         RECOVERY_GENERATED_DESTINATION_NOT_DIRECTORY,
         RECOVERY_GENERATED_DESTINATION_UNCLAIMED,
@@ -2618,6 +2687,37 @@ pub mod location {
         RECOVERY_DESTINATION_CONTENT_MISMATCH,
         RECOVERY_TITLE_CHANGED,
     ];
+
+    /// The path a file was left at: an unproven link that could not be
+    /// removed, or a source a cleanup set aside and could not put back.
+    pub const LEFT_BEHIND_PATH_FACT: &str = "leftBehindPath";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[LEFT_BEHIND_PATH_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod plugins {
@@ -2640,18 +2740,18 @@ pub mod plugins {
     /// Component descriptor differs from its persisted metadata.
     pub const COMPONENT_DESCRIPTOR_DIFFERS_PERSISTED_METADATA: &str =
         "PLUGIN_COMPONENT_DESCRIPTOR_DIFFERS_PERSISTED_METADATA";
-    /// The the selected item plugin is blocked on this version of Scryer, so it cannot be tested. the selected value.
+    /// This plugin is blocked on this version of Scryer, so it cannot be tested.
     pub const BLOCKED_VERSION_SCRYER_SO_CANNOT_TESTED: &str =
         "PLUGIN_BLOCKED_VERSION_SCRYER_SO_CANNOT_TESTED";
-    /// Manual plugin repo the selected item must publish exactly one plugin entry.
+    /// A manual plugin repository must publish exactly one plugin entry.
     pub const MANUAL_PLUGIN_REPO_MUST_PUBLISH_EXACTLY_ONE_PLUGIN_ENTRY: &str =
         "PLUGIN_MANUAL_PLUGIN_REPO_MUST_PUBLISH_EXACTLY_ONE_PLUGIN_ENTRY";
-    /// Manual plugin repo the selected item published plugin the selected item from source repo the selected item.
+    /// The manual plugin repository published a plugin from a different source repository.
     pub const MANUAL_PLUGIN_REPO_PUBLISHED_PLUGIN_SOURCE_REPO: &str =
         "PLUGIN_MANUAL_PLUGIN_REPO_PUBLISHED_PLUGIN_SOURCE_REPO";
     /// Manual plugin upload must be a .wasm or .wasm.zst file.
     pub const MANUAL_PLUGIN_UPLOAD_INVALID: &str = "PLUGIN_MANUAL_PLUGIN_UPLOAD_INVALID";
-    /// Manual plugin repo the selected item has no SDK-compatible release.
+    /// The manual plugin repository has no SDK-compatible release.
     pub const MANUAL_PLUGIN_REPO_NO_SDK_COMPATIBLE_RELEASE: &str =
         "PLUGIN_MANUAL_PLUGIN_REPO_NO_SDK_COMPATIBLE_RELEASE";
     /// Manual plugin catalog is not UTF-8.
@@ -2665,80 +2765,80 @@ pub mod plugins {
     /// Manual plugin upload payload is not valid base64.
     pub const MANUAL_PLUGIN_UPLOAD_PAYLOAD_INVALID: &str =
         "PLUGIN_MANUAL_PLUGIN_UPLOAD_PAYLOAD_INVALID";
-    /// Provider type the selected item is reserved for first-party code.
+    /// This provider type is reserved for first-party code.
     pub const PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE: &str =
         "PLUGIN_PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE";
-    /// Plugin the selected item is a bundled plugin; uninstall any downloaded override before uploading a local build.
+    /// This is a bundled plugin; uninstall any downloaded override before uploading a local build.
     pub const BUNDLED_PLUGIN: &str = "PLUGIN_BUNDLED_PLUGIN";
     /// Rule pack catalog changed during download.
     pub const RULE_PACK_CATALOG_CHANGED_DURING_DOWNLOAD: &str =
         "PLUGIN_RULE_PACK_CATALOG_CHANGED_DURING_DOWNLOAD";
-    /// Unsupported plugin_type the selected item for built-in preparation.
+    /// This plugin type is not supported for built-in preparation.
     pub const TYPE_BUILT_PREPARATION_UNSUPPORTED: &str =
         "PLUGIN_TYPE_BUILT_PREPARATION_UNSUPPORTED";
-    /// Unsupported plugin_type the selected item for built-in restore.
+    /// This plugin type is not supported for built-in restore.
     pub const TYPE_BUILT_RESTORE_UNSUPPORTED: &str = "PLUGIN_TYPE_BUILT_RESTORE_UNSUPPORTED";
-    /// The requested value does not include a blake3 digest.
+    /// The plugin artifact does not include a blake3 digest.
     pub const DOES_NOT_INCLUDE_BLAKE3_DIGEST: &str = "PLUGIN_DOES_NOT_INCLUDE_BLAKE3_DIGEST";
-    /// Plugin the selected item is missing persisted wasm digest algorithm.
+    /// The plugin is missing its stored WASM digest algorithm.
     pub const MISSING_PERSISTED_WASM_DIGEST_ALGORITHM: &str =
         "PLUGIN_MISSING_PERSISTED_WASM_DIGEST_ALGORITHM";
-    /// Plugin the selected item is missing persisted wasm digest value.
+    /// The plugin is missing its stored WASM digest value.
     pub const MISSING_PERSISTED_WASM_DIGEST_VALUE: &str =
         "PLUGIN_MISSING_PERSISTED_WASM_DIGEST_VALUE";
-    /// Plugin the selected item is missing persisted descriptor_json.
+    /// The plugin is missing its stored descriptor.
     pub const MISSING_PERSISTED_DESCRIPTOR_JSON: &str = "PLUGIN_MISSING_PERSISTED_DESCRIPTOR_JSON";
-    /// Plugin the selected item has invalid persisted descriptor_json.
+    /// The plugin's stored descriptor is invalid.
     pub const INVALID_PERSISTED_DESCRIPTOR_JSON: &str = "PLUGIN_INVALID_PERSISTED_DESCRIPTOR_JSON";
-    /// Plugin the selected item requests the host-process capability, which is reserved for official plugins.
+    /// The plugin requests the host-process capability, which is reserved for official plugins.
     pub const REQUESTS_HOST_PROCESS_CAPABILITY_WHICH_RESERVED_OFFICIAL_PLUGINS: &str =
         "PLUGIN_REQUESTS_HOST_PROCESS_CAPABILITY_WHICH_RESERVED_OFFICIAL_PLUGINS";
-    /// Downloaded plugin descriptor id the selected item does not match registry id the selected item.
+    /// The downloaded plugin's descriptor id does not match the registry id.
     pub const DESCRIPTOR_ID_MISMATCH: &str = "PLUGIN_DESCRIPTOR_ID_MISMATCH";
-    /// Downloaded plugin the selected item has plugin_type the selected item but registry expects the selected item.
+    /// The downloaded plugin's plugin type does not match what the registry expects.
     pub const DOWNLOADED_PLUGIN_PLUGIN_TYPE_BUT_REGISTRY_EXPECTS: &str =
         "PLUGIN_DOWNLOADED_PLUGIN_PLUGIN_TYPE_BUT_REGISTRY_EXPECTS";
-    /// Downloaded plugin the selected item has provider_type the selected item but registry expects the selected item.
+    /// The downloaded plugin's provider type does not match what the registry expects.
     pub const DOWNLOADED_PLUGIN_PROVIDER_TYPE_BUT_REGISTRY_EXPECTS: &str =
         "PLUGIN_DOWNLOADED_PLUGIN_PROVIDER_TYPE_BUT_REGISTRY_EXPECTS";
-    /// Downloaded plugin the selected item has version the selected item but the selected release is the selected item.
+    /// The downloaded plugin's version does not match the selected release.
     pub const DOWNLOADED_PLUGIN_VERSION_BUT_SELECTED_RELEASE: &str =
         "PLUGIN_DOWNLOADED_PLUGIN_VERSION_BUT_SELECTED_RELEASE";
-    /// Downloaded plugin the selected item has sdk_version the selected item but the selected release is the selected item.
+    /// The downloaded plugin's SDK version does not match the selected release.
     pub const DOWNLOADED_PLUGIN_SDK_VERSION_BUT_SELECTED_RELEASE: &str =
         "PLUGIN_DOWNLOADED_PLUGIN_SDK_VERSION_BUT_SELECTED_RELEASE";
-    /// Plugin the selected item no longer has a host-compatible release for this Scryer version.
+    /// The plugin no longer has a release compatible with this Scryer version.
     pub const NO_LONGER_HOST_COMPATIBLE_RELEASE_SCRYER_VERSION: &str =
         "PLUGIN_NO_LONGER_HOST_COMPATIBLE_RELEASE_SCRYER_VERSION";
-    /// Plugin the selected item is missing persisted WASM payload.
+    /// The plugin is missing its stored WASM payload.
     pub const MISSING_PERSISTED_WASM_PAYLOAD: &str = "PLUGIN_MISSING_PERSISTED_WASM_PAYLOAD";
-    /// Unsupported plugin_type the selected item for runtime removal.
+    /// This plugin type is not supported for runtime removal.
     pub const TYPE_RUNTIME_REMOVAL_UNSUPPORTED: &str = "PLUGIN_TYPE_RUNTIME_REMOVAL_UNSUPPORTED";
     /// Plugin  is not available from the plugin catalog was not found.
     pub const NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND: &str =
         "PLUGIN_NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND";
-    /// Plugin the selected item WASM artifact declared size the selected value exceeds maximum size of the selected value bytes.
+    /// The plugin's WASM artifact is larger than the 128 MiB limit.
     pub const WASM_ARTIFACT_TOO_LARGE: &str = "PLUGIN_WASM_ARTIFACT_TOO_LARGE";
-    /// Plugin the selected item selected artifact the selected item has unsupported encoding.
+    /// The plugin's selected artifact has an unsupported encoding.
     pub const SELECTED_ARTIFACT_UNSUPPORTED_ENCODING: &str =
         "PLUGIN_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING";
-    /// Plugin the selected item selected artifact the selected item is too large to validate bytes.
+    /// The plugin's selected artifact is too large to validate.
     pub const SELECTED_ARTIFACT_TOO_LARGE_VALIDATE_BYTES: &str =
         "PLUGIN_SELECTED_ARTIFACT_TOO_LARGE_VALIDATE_BYTES";
-    /// Plugin the selected item selected artifact the selected item bytes mismatch: expected the selected value, got the selected value.
+    /// The plugin's selected artifact is not the size the catalog lists.
     pub const SELECTED_ARTIFACT_BYTES_MISMATCH: &str = "PLUGIN_SELECTED_ARTIFACT_BYTES_MISMATCH";
-    /// Invalid catalog version the selected item.
+    /// The catalog version is invalid.
     pub const CATALOG_VERSION_INVALID: &str = "PLUGIN_CATALOG_VERSION_INVALID";
-    /// Invalid installed version the selected item.
+    /// The installed version is invalid.
     pub const INSTALLED_VERSION_INVALID: &str = "PLUGIN_INSTALLED_VERSION_INVALID";
-    /// Plugin the selected item is already at version the selected value.
+    /// The plugin is already at the selected release's version.
     pub const ALREADY_VERSION_SELECTED_RELEASE: &str = "PLUGIN_ALREADY_VERSION_SELECTED_RELEASE";
     /// Official nzbgeek plugin is not available for builtin migration.
     pub const OFFICIAL_NZBGEEK_PLUGIN_NOT_AVAILABLE_BUILTIN_MIGRATION_NOT_FOUND: &str =
         "PLUGIN_OFFICIAL_NZBGEEK_PLUGIN_NOT_AVAILABLE_BUILTIN_MIGRATION_NOT_FOUND";
-    /// Manual plugin the selected item is missing source repo.
+    /// The manual plugin is missing its source repository.
     pub const MANUAL_PLUGIN_MISSING_SOURCE_REPO: &str = "PLUGIN_MANUAL_PLUGIN_MISSING_SOURCE_REPO";
-    /// Unsupported plugin_type the selected item for runtime upsert.
+    /// This plugin type is not supported for runtime install or update.
     pub const TYPE_RUNTIME_UPSERT_UNSUPPORTED: &str = "PLUGIN_TYPE_RUNTIME_UPSERT_UNSUPPORTED";
     /// Plugin is no longer installed was not found.
     pub const NO_LONGER_INSTALLED_NOT_FOUND: &str = "PLUGIN_NO_LONGER_INSTALLED_NOT_FOUND";
@@ -2747,14 +2847,14 @@ pub mod plugins {
         "PLUGIN_CHANGED_WHILE_RUNTIME_BEING_PREPARED";
     /// Cannot uninstall built-in plugins; disable them instead.
     pub const CANNOT_UNINSTALL_BUILT_PLUGINS: &str = "PLUGIN_CANNOT_UNINSTALL_BUILT_PLUGINS";
-    /// Cannot revert built-in plugin the selected item because no bundled definition is available.
+    /// Cannot revert this built-in plugin because no bundled definition is available.
     pub const CANNOT_REVERT_BUILT_PLUGIN_NO_BUNDLED_DEFINITION_UNAVAILABLE: &str =
         "PLUGIN_CANNOT_REVERT_BUILT_PLUGIN_NO_BUNDLED_DEFINITION_UNAVAILABLE";
     /// Proxy configuration was not found.
     pub const PROXY_CONFIGURATION_NOT_FOUND: &str = "PLUGIN_PROXY_CONFIGURATION_NOT_FOUND";
     /// Proxy is disabled for this download client.
     pub const PROXY_DISABLED_DOWNLOAD_CLIENT: &str = "PLUGIN_PROXY_DISABLED_DOWNLOAD_CLIENT";
-    /// Test connection is not supported for client type the selected item.
+    /// Test connection is not supported for this client type.
     pub const TEST_CONNECTION_UNSUPPORTED: &str = "PLUGIN_TEST_CONNECTION_UNSUPPORTED";
     /// Invalid client config_json.
     pub const CLIENT_CONFIG_JSON_INVALID: &str = "PLUGIN_CLIENT_CONFIG_JSON_INVALID";
@@ -2776,16 +2876,16 @@ pub mod plugins {
     /// Plugin signature verification is not compiled into this target.
     pub const SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET: &str =
         "PLUGIN_SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET";
-    /// The requested value decompressed size limit the selected value exceeds this platform's maximum buffer size.
+    /// The decompressed size limit exceeds this platform's maximum buffer size.
     pub const DECOMPRESSED_SIZE_LIMIT_EXCEEDS_PLATFORM_S_MAXIMUM_BUFFER_SIZE: &str =
         "PLUGIN_DECOMPRESSED_SIZE_LIMIT_EXCEEDS_PLATFORM_S_MAXIMUM_BUFFER_SIZE";
-    /// The requested value decompressed payload exceeds maximum size of the selected value bytes.
+    /// The decompressed payload exceeds its maximum size.
     pub const DECOMPRESSED_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES: &str =
         "PLUGIN_DECOMPRESSED_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES";
-    /// The requested value payload is too large to validate decompressed size.
+    /// The payload is too large to validate its decompressed size.
     pub const PAYLOAD_TOO_LARGE_VALIDATE_DECOMPRESSED_SIZE: &str =
         "PLUGIN_PAYLOAD_TOO_LARGE_VALIDATE_DECOMPRESSED_SIZE";
-    /// The requested value payload exceeds maximum size of the selected value bytes.
+    /// The payload exceeds its maximum size.
     pub const PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES: &str =
         "PLUGIN_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES";
     /// Plugin zstd decompression is not compiled into this target.
@@ -2797,19 +2897,19 @@ pub mod plugins {
     /// Plugin zstd compression is not compiled into this target.
     pub const ZSTD_COMPRESSION_NOT_COMPILED_INTO_TARGET: &str =
         "PLUGIN_ZSTD_COMPRESSION_NOT_COMPILED_INTO_TARGET";
-    /// Invalid digest string the selected item.
+    /// The digest string is invalid.
     pub const DIGEST_STRING_INVALID: &str = "PLUGIN_DIGEST_STRING_INVALID";
     /// Digest algorithm is missing.
     pub const DIGEST_ALGORITHM_REQUIRED: &str = "PLUGIN_DIGEST_ALGORITHM_REQUIRED";
-    /// The requested value digest mismatch: expected blake3.
+    /// The plugin artifact's blake3 digest does not match.
     pub const DIGEST_MISMATCH: &str = "PLUGIN_DIGEST_MISMATCH";
-    /// The requested value uses unsupported digest algorithm the selected item.
+    /// The digest uses an unsupported algorithm.
     pub const USES_UNSUPPORTED_DIGEST_ALGORITHM: &str = "PLUGIN_USES_UNSUPPORTED_DIGEST_ALGORITHM";
-    /// The requested value is missing a usable blake3 digest.
+    /// The plugin artifact is missing a usable blake3 digest.
     pub const MISSING_USABLE_BLAKE3_DIGEST: &str = "PLUGIN_MISSING_USABLE_BLAKE3_DIGEST";
-    /// The requested value must include at least one digest.
+    /// The plugin artifact must include at least one digest.
     pub const ARTIFACT_DIGEST_REQUIRED: &str = "PLUGIN_ARTIFACT_DIGEST_REQUIRED";
-    /// Unsupported plugin catalog redirect schema the selected item.
+    /// The plugin catalog redirect uses an unsupported schema.
     pub const CATALOG_REDIRECT_SCHEMA_UNSUPPORTED: &str =
         "PLUGIN_CATALOG_REDIRECT_SCHEMA_UNSUPPORTED";
     /// Plugin catalog redirect catalog_version must be greater than zero.
@@ -2817,96 +2917,96 @@ pub mod plugins {
         "PLUGIN_CATALOG_REDIRECT_CATALOG_VERSION_OUT_OF_RANGE";
     /// Plugin catalog redirect must include at least one artifact.
     pub const CATALOG_REDIRECT_OUT_OF_RANGE: &str = "PLUGIN_CATALOG_REDIRECT_OUT_OF_RANGE";
-    /// Unsupported plugin catalog schema the selected item.
+    /// The plugin catalog uses an unsupported schema.
     pub const CATALOG_SCHEMA_UNSUPPORTED: &str = "PLUGIN_CATALOG_SCHEMA_UNSUPPORTED";
     /// Plugin catalog version must be greater than zero.
     pub const CATALOG_VERSION_OUT_OF_RANGE: &str = "PLUGIN_CATALOG_VERSION_OUT_OF_RANGE";
-    /// Duplicate plugin id the selected item in plugin catalog.
+    /// The plugin catalog lists the same plugin id more than once.
     pub const ID_PLUGIN_CATALOG_DUPLICATED: &str = "PLUGIN_ID_PLUGIN_CATALOG_DUPLICATED";
-    /// Plugin the selected item signer repo the selected item does not match source repo the selected item.
+    /// The plugin's signer repository does not match its source repository.
     pub const SIGNER_REPO_DOES_NOT_MATCH_SOURCE_REPO: &str =
         "PLUGIN_SIGNER_REPO_DOES_NOT_MATCH_SOURCE_REPO";
-    /// Community source the selected item support tier must be verified_community.
+    /// A community source's support tier must be verified_community.
     pub const COMMUNITY_SOURCE_SUPPORT_TIER_INVALID: &str =
         "PLUGIN_COMMUNITY_SOURCE_SUPPORT_TIER_INVALID";
-    /// Duplicate community source id the selected item in plugin catalog.
+    /// The plugin catalog lists the same community source id more than once.
     pub const COMMUNITY_SOURCE_ID_PLUGIN_CATALOG_DUPLICATED: &str =
         "PLUGIN_COMMUNITY_SOURCE_ID_PLUGIN_CATALOG_DUPLICATED";
-    /// Duplicate rule pack id the selected item in plugin catalog.
+    /// The plugin catalog lists the same rule pack id more than once.
     pub const RULE_PACK_ID_PLUGIN_CATALOG_DUPLICATED: &str =
         "PLUGIN_RULE_PACK_ID_PLUGIN_CATALOG_DUPLICATED";
-    /// Duplicate rule pack release version the selected item for the selected item.
+    /// A rule pack lists the same release version more than once.
     pub const RULE_PACK_RELEASE_VERSION_DUPLICATED: &str =
         "PLUGIN_RULE_PACK_RELEASE_VERSION_DUPLICATED";
-    /// Rule pack the selected item has invalid min_scryer_version the selected item.
+    /// A rule pack has an invalid min_scryer_version.
     pub const RULE_PACK_INVALID_MIN_SCRYER_VERSION: &str =
         "PLUGIN_RULE_PACK_INVALID_MIN_SCRYER_VERSION";
-    /// Rule pack the selected item release the selected item must include rule_pack_digests.
+    /// A rule pack release must include rule_pack_digests.
     pub const RULE_PACK_RELEASE_INVALID: &str = "PLUGIN_RULE_PACK_RELEASE_INVALID";
-    /// Invalid sdk_constraint the selected item for plugin the selected item.
+    /// A plugin has an invalid sdk_constraint.
     pub const SDK_CONSTRAINT_PLUGIN_INVALID: &str = "PLUGIN_SDK_CONSTRAINT_PLUGIN_INVALID";
-    /// Plugin the selected item release the selected item has invalid min_scryer_version.
+    /// A plugin release has an invalid min_scryer_version.
     pub const RELEASE_INVALID_MIN_SCRYER_VERSION: &str =
         "PLUGIN_RELEASE_INVALID_MIN_SCRYER_VERSION";
-    /// Plugin the selected item release the selected item has invalid max_scryer_version.
+    /// A plugin release has an invalid max_scryer_version.
     pub const RELEASE_INVALID_MAX_SCRYER_VERSION: &str =
         "PLUGIN_RELEASE_INVALID_MAX_SCRYER_VERSION";
-    /// Plugin the selected item release the selected item has min_scryer_version greater than max_scryer_version.
+    /// A plugin release has a min_scryer_version greater than its max_scryer_version.
     pub const RELEASE_MIN_SCRYER_VERSION_GREATER_MAX_SCRYER_VERSION: &str =
         "PLUGIN_RELEASE_MIN_SCRYER_VERSION_GREATER_MAX_SCRYER_VERSION";
-    /// Duplicate release version the selected item for plugin the selected item.
+    /// A plugin lists the same release version more than once.
     pub const RELEASE_VERSION_PLUGIN_DUPLICATED: &str = "PLUGIN_RELEASE_VERSION_PLUGIN_DUPLICATED";
-    /// The selected item release the selected item must include at least one artifact.
+    /// A release must include at least one artifact.
     pub const RELEASE_OUT_OF_RANGE: &str = "PLUGIN_RELEASE_OUT_OF_RANGE";
-    /// Plugin the selected item release the selected item has duplicate artifact variant/encoding rows.
+    /// A plugin release has duplicate artifact variant and encoding rows.
     pub const RELEASE_DUPLICATE_ARTIFACT_VARIANT_ENCODING_ROWS: &str =
         "PLUGIN_RELEASE_DUPLICATE_ARTIFACT_VARIANT_ENCODING_ROWS";
-    /// Plugin the selected item release the selected item artifact the selected item must include wasm_digests.
+    /// A plugin release artifact must include wasm_digests.
     pub const RELEASE_ARTIFACT_INVALID: &str = "PLUGIN_RELEASE_ARTIFACT_INVALID";
-    /// Plugin the selected item release the selected item artifact the selected item bytes must be greater than zero.
+    /// A plugin release artifact's size must be greater than zero.
     pub const RELEASE_ARTIFACT_BYTES_OUT_OF_RANGE: &str =
         "PLUGIN_RELEASE_ARTIFACT_BYTES_OUT_OF_RANGE";
-    /// The requested value URL the selected item must use http or https, got the selected item.
+    /// The URL is invalid; it must use http or https.
     pub const URL_INVALID: &str = "PLUGIN_URL_INVALID";
-    /// The requested value is required.
+    /// A required field is empty.
     pub const FIELD_REQUIRED: &str = "PLUGIN_FIELD_REQUIRED";
-    /// Invalid plugin release version the selected item.
+    /// The plugin release version is invalid.
     pub const RELEASE_VERSION_INVALID: &str = "PLUGIN_RELEASE_VERSION_INVALID";
-    /// The requested value must use a supported <algorithm>:<hex> digest.
+    /// A digest must use a supported <algorithm>:<hex> format.
     pub const MUST_USE_SUPPORTED_ALGORITHM_HEX_DIGEST: &str =
         "PLUGIN_MUST_USE_SUPPORTED_ALGORITHM_HEX_DIGEST";
     /// Digest value is missing.
     pub const DIGEST_VALUE_REQUIRED: &str = "PLUGIN_DIGEST_VALUE_REQUIRED";
-    /// Digest value the selected item must be hexadecimal.
+    /// The digest value must be hexadecimal.
     pub const DIGEST_VALUE_INVALID: &str = "PLUGIN_DIGEST_VALUE_INVALID";
-    /// Rule pack the selected item selected artifact the selected item has unsupported encoding.
+    /// The rule pack's selected artifact has an unsupported encoding.
     pub const RULE_PACK_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING: &str =
         "PLUGIN_RULE_PACK_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING";
-    /// Community catalog source the selected item approved tier must be verified_community.
+    /// A community catalog source's approved tier must be verified_community.
     pub const COMMUNITY_CATALOG_SOURCE_APPROVED_TIER_INVALID: &str =
         "PLUGIN_COMMUNITY_CATALOG_SOURCE_APPROVED_TIER_INVALID";
-    /// Community catalog source the selected item must publish exactly one plugin.
+    /// A community catalog source must publish exactly one plugin.
     pub const COMMUNITY_CATALOG_SOURCE_MUST_PUBLISH_EXACTLY_ONE_PLUGIN: &str =
         "PLUGIN_COMMUNITY_CATALOG_SOURCE_MUST_PUBLISH_EXACTLY_ONE_PLUGIN";
-    /// Community catalog source the selected item must not publish rule packs.
+    /// A community catalog source must not publish rule packs.
     pub const COMMUNITY_RULE_PACK_PUBLISH_FORBIDDEN: &str =
         "PLUGIN_COMMUNITY_RULE_PACK_PUBLISH_FORBIDDEN";
-    /// Community catalog source the selected item must not publish nested community sources.
+    /// A community catalog source must not publish nested community sources.
     pub const COMMUNITY_SOURCE_NESTING_FORBIDDEN: &str =
         "PLUGIN_COMMUNITY_SOURCE_NESTING_FORBIDDEN";
-    /// Community catalog source the selected item published plugin the selected item.
+    /// The community catalog source published a plugin other than the one it was approved for.
     pub const COMMUNITY_CATALOG_SOURCE_PUBLISHED_PLUGIN: &str =
         "PLUGIN_COMMUNITY_CATALOG_SOURCE_PUBLISHED_PLUGIN";
-    /// Community catalog source the selected item support tier does not match approved tier.
+    /// The community catalog source's support tier does not match its approved tier.
     pub const COMMUNITY_CATALOG_SOURCE_SUPPORT_TIER_DOES_NOT_MATCH_APPROVED_TIER: &str =
         "PLUGIN_COMMUNITY_CATALOG_SOURCE_SUPPORT_TIER_DOES_NOT_MATCH_APPROVED_TIER";
-    /// Community catalog source the selected item signer repo the selected item does not match approved repo the selected item.
+    /// The community catalog source's signer repository does not match its approved repository.
     pub const COMMUNITY_CATALOG_SOURCE_SIGNER_REPO_DOES_NOT_MATCH_APPROVED_REPO: &str =
         "PLUGIN_COMMUNITY_CATALOG_SOURCE_SIGNER_REPO_DOES_NOT_MATCH_APPROVED_REPO";
-    /// Community catalog source the selected item source repo the selected item does not match approved repo the selected item.
+    /// The community catalog source's source repository does not match its approved repository.
     pub const COMMUNITY_CATALOG_SOURCE_SOURCE_REPO_DOES_NOT_MATCH_APPROVED_REPO: &str =
         "PLUGIN_COMMUNITY_CATALOG_SOURCE_SOURCE_REPO_DOES_NOT_MATCH_APPROVED_REPO";
-    /// Manual plugin catalog source the selected item is missing github repo.
+    /// The manual plugin catalog source is missing its GitHub repository.
     pub const MANUAL_PLUGIN_CATALOG_SOURCE_MISSING_GITHUB_REPO: &str =
         "PLUGIN_MANUAL_PLUGIN_CATALOG_SOURCE_MISSING_GITHUB_REPO";
     /// Plugin catalog redirect did not contain any artifacts.
@@ -2918,35 +3018,35 @@ pub mod plugins {
     pub const INSTALLED_PACK_VERSION_INVALID: &str = "PLUGIN_INSTALLED_PACK_VERSION_INVALID";
     /// Rule pack was not found.
     pub const RULE_PACK_NOT_FOUND: &str = "PLUGIN_RULE_PACK_NOT_FOUND";
-    /// Rule pack the selected item has no compatible artifact.
+    /// The rule pack has no compatible artifact.
     pub const RULE_PACK_NO_COMPATIBLE_ARTIFACT: &str = "PLUGIN_RULE_PACK_NO_COMPATIBLE_ARTIFACT";
-    /// Rule pack the selected item uses unsupported schema version the selected value.
+    /// The rule pack uses an unsupported schema version.
     pub const RULE_PACK_USES_UNSUPPORTED_SCHEMA_VERSION: &str =
         "PLUGIN_RULE_PACK_USES_UNSUPPORTED_SCHEMA_VERSION";
-    /// Rule pack the selected item does not match the catalog id/version.
+    /// The rule pack does not match the catalog id and version.
     pub const RULE_PACK_DOES_NOT_MATCH_CATALOG_ID_VERSION: &str =
         "PLUGIN_RULE_PACK_DOES_NOT_MATCH_CATALOG_ID_VERSION";
-    /// Rule pack the selected item has an empty the selected value.
+    /// The rule pack has an empty required field.
     pub const RULE_PACK_EMPTY: &str = "PLUGIN_RULE_PACK_EMPTY";
-    /// Rule pack the selected item contains no rules.
+    /// The rule pack contains no rules.
     pub const RULE_PACK_CONTAINS_NO_RULES: &str = "PLUGIN_RULE_PACK_CONTAINS_NO_RULES";
-    /// Rule pack the selected item contains a rule with required fields missing.
+    /// The rule pack contains a rule with required fields missing.
     pub const RULE_PACK_CONTAINS_RULE_REQUIRED_FIELDS_MISSING: &str =
         "PLUGIN_RULE_PACK_CONTAINS_RULE_REQUIRED_FIELDS_MISSING";
-    /// Rule pack the selected item contains duplicate rule id the selected item.
+    /// The rule pack contains a duplicate rule id.
     pub const RULE_PACK_CONTAINS_DUPLICATE_RULE_ID: &str =
         "PLUGIN_RULE_PACK_CONTAINS_DUPLICATE_RULE_ID";
-    /// Plugin artifact redirects are not allowed for the selected value.
+    /// Redirects are not allowed for this plugin artifact.
     pub const ARTIFACT_REDIRECTS_NOT_ALLOWED: &str = "PLUGIN_ARTIFACT_REDIRECTS_NOT_ALLOWED";
-    /// Plugin artifact redirect limit exceeded for the selected value.
+    /// The plugin artifact download was redirected too many times.
     pub const ARTIFACT_REDIRECT_LIMIT_EXCEEDED: &str = "PLUGIN_ARTIFACT_REDIRECT_LIMIT_EXCEEDED";
-    /// Plugin artifact redirect for the selected value did not include a Location header.
+    /// A plugin artifact redirect did not include a Location header.
     pub const ARTIFACT_REDIRECT_DID_NOT_INCLUDE_LOCATION_HEADER: &str =
         "PLUGIN_ARTIFACT_REDIRECT_DID_NOT_INCLUDE_LOCATION_HEADER";
-    /// Plugin artifact redirect for the selected value included an invalid Location header.
+    /// A plugin artifact redirect included an invalid Location header.
     pub const ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_HEADER: &str =
         "PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_HEADER";
-    /// Plugin artifact redirect for the selected value included an invalid Location URL.
+    /// A plugin artifact redirect included an invalid Location URL.
     pub const ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_URL: &str =
         "PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_URL";
     /// The plugin artifact could not be trusted.
@@ -3146,7 +3246,7 @@ pub mod ports {
 pub mod folder_ownership {
     /// Title folder must be an absolute path without parent traversal.
     pub const TITLE_FOLDER_INVALID: &str = "FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID";
-    /// Cannot resolve title folder the selected value.
+    /// Cannot resolve the title folder.
     pub const CANNOT_RESOLVE_TITLE_FOLDER: &str = "FOLDER_OWNERSHIP_CANNOT_RESOLVE_TITLE_FOLDER";
     /// The drive or volume of the title folder is missing.
     pub const TITLE_FOLDER_NO_EXISTING_ANCESTOR: &str =
@@ -3157,21 +3257,21 @@ pub mod folder_ownership {
     /// The extension naming the missing drive or volume on a
     /// [`TITLE_FOLDER_NO_EXISTING_ANCESTOR`] refusal.
     pub const MISSING_DRIVE_FACT: &str = "missingDrive";
-    /// Cannot inspect title folder the selected value.
+    /// Cannot inspect the title folder.
     pub const CANNOT_INSPECT_TITLE_FOLDER: &str = "FOLDER_OWNERSHIP_CANNOT_INSPECT_TITLE_FOLDER";
     /// Cannot claim a title folder outside its library roots.
     pub const PATH_OUTSIDE_LIBRARY_ROOT: &str = "FOLDER_OWNERSHIP_PATH_OUTSIDE_LIBRARY_ROOT";
-    /// The recorded folder for the selected item is a library root, not a title folder; correct the title's folder first.
+    /// The title's recorded folder is a library root, not a title folder; correct the title's folder first.
     pub const FOLDER_NOT_TITLE_BOUNDARY: &str = "FOLDER_OWNERSHIP_FOLDER_NOT_TITLE_BOUNDARY";
-    /// Cannot inspect folder the selected value owned by another title.
+    /// Cannot inspect a folder owned by another title.
     pub const CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE: &str =
         "FOLDER_OWNERSHIP_CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE";
     /// Title folder path is required.
     pub const TITLE_FOLDER_PATH_REQUIRED: &str = "FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED";
-    /// Cannot compare folder the selected value with folder the selected value owned by title the selected value.
+    /// Cannot compare the folder with a folder owned by another title.
     pub const CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE: &str =
         "FOLDER_OWNERSHIP_CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE";
-    /// Folder the selected value overlaps the folder owned by title the selected value.
+    /// The folder overlaps a folder owned by another title.
     pub const FOLDER_OVERLAPS_FOLDER_OWNED_TITLE: &str =
         "FOLDER_OWNERSHIP_FOLDER_OVERLAPS_FOLDER_OWNED_TITLE";
     /// Recycle restore path is outside the title's current owned folder; resolve the folder change before restoring.
@@ -3180,9 +3280,9 @@ pub mod folder_ownership {
     /// Recycle restore destination overlaps another title's owned folder; recycled files were preserved.
     pub const RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER: &str =
         "FOLDER_OWNERSHIP_RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER";
-    /// Folder the selected value is already owned by title the selected value.
+    /// The folder is already owned by another title.
     pub const FOLDER_ALREADY_OWNED_TITLE: &str = "FOLDER_OWNERSHIP_FOLDER_ALREADY_OWNED_TITLE";
-    /// Title the selected value already owns another folder.
+    /// This title already owns another folder.
     pub const TITLE_ALREADY_OWNS_ANOTHER_FOLDER: &str =
         "FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER";
     /// Cannot claim a library root as a title folder.
@@ -3219,16 +3319,16 @@ pub mod indexer_category {
 }
 
 pub mod download_client_path_mappings {
-    /// Remote path mappings line the selected value must use REMOTE => LOCAL format.
+    /// Each remote path mapping line must use the REMOTE => LOCAL format.
     pub const REMOTE_PATH_MAPPINGS_LINE_INVALID: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_INVALID";
-    /// Remote path mappings line the selected value requires a local path.
+    /// A remote path mapping line is missing its local path.
     pub const REMOTE_PATH_MAPPINGS_LINE_REQUIRES_LOCAL_PATH: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_LOCAL_PATH";
-    /// Remote path mappings line the selected value local path must be absolute.
+    /// A remote path mapping's local path must be absolute.
     pub const REMOTE_PATH_MAPPINGS_LINE_LOCAL_PATH_INVALID: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_LOCAL_PATH_INVALID";
-    /// Remote path mappings line the selected value duplicates an existing remote path root.
+    /// A remote path mapping line repeats a remote path that is already mapped.
     pub const REMOTE_PATH_MAPPINGS_LINE_DUPLICATES_EXISTING_REMOTE_PATH_ROOT: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_DUPLICATES_EXISTING_REMOTE_PATH_ROOT";
     /// Invalid download client config JSON.
@@ -3237,13 +3337,13 @@ pub mod download_client_path_mappings {
     /// Remote_path_mappings must be a string.
     pub const REMOTE_PATH_MAPPINGS_INVALID: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_INVALID";
-    /// Remote path mappings line the selected value requires a remote path.
+    /// A remote path mapping line is missing its remote path.
     pub const REMOTE_PATH_MAPPINGS_LINE_REQUIRES_REMOTE_PATH: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_REMOTE_PATH";
-    /// Remote path mappings line the selected value remote path cannot start with whitespace.
+    /// A remote path mapping's remote path cannot start with whitespace.
     pub const REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_START_WHITESPACE: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_START_WHITESPACE";
-    /// Remote path mappings line the selected value remote path cannot end with whitespace.
+    /// A remote path mapping's remote path cannot end with whitespace.
     pub const REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_END_WHITESPACE: &str =
         "DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_END_WHITESPACE";
     /// Every reason owned by this policy area.
@@ -3317,7 +3417,7 @@ pub mod media_requests {
         "MEDIA_REQUEST_REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY";
     /// Quality profile id is required.
     pub const QUALITY_PROFILE_ID_REQUIRED: &str = "MEDIA_REQUEST_QUALITY_PROFILE_ID_REQUIRED";
-    /// Unknown quality profile the selected value.
+    /// The selected quality profile is unknown.
     pub const QUALITY_PROFILE_UNKNOWN: &str = "MEDIA_REQUEST_QUALITY_PROFILE_UNKNOWN";
     /// Movie metadata response missing title was not found.
     pub const MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND: &str =
@@ -3325,7 +3425,7 @@ pub mod media_requests {
     /// Advanced monitoring is only valid for series and anime titles.
     pub const ADVANCED_MONITORING_ONLY_VALID_SERIES_ANIME_TITLES: &str =
         "MEDIA_REQUEST_ADVANCED_MONITORING_ONLY_VALID_SERIES_ANIME_TITLES";
-    /// Unsupported request monitor type the selected value.
+    /// The request monitor type is not supported.
     pub const REQUEST_MONITOR_TYPE_UNSUPPORTED: &str =
         "MEDIA_REQUEST_REQUEST_MONITOR_TYPE_UNSUPPORTED";
     /// Advanced monitoring requires at least one season or series movie.
@@ -3395,7 +3495,7 @@ pub mod api_keys {
         "API_KEY_API_KEYS_RESTRICTED_USERS_WHO_MANAGE_SYSTEM_SETTINGS";
     /// API key label is required.
     pub const LABEL_REQUIRED: &str = "API_KEY_LABEL_REQUIRED";
-    /// API key label must not exceed the selected value characters.
+    /// API key label must not exceed 120 characters.
     pub const LABEL_TOO_LONG: &str = "API_KEY_LABEL_TOO_LONG";
     /// API key label must not contain control characters.
     pub const LABEL_CONTROL_CHARACTER: &str = "API_KEY_LABEL_CONTROL_CHARACTER";
@@ -3419,17 +3519,17 @@ pub mod api_keys {
 }
 
 pub mod fs_safety {
-    /// Configured media root the selected value is unavailable.
+    /// A configured media root is unavailable.
     pub const CONFIGURED_MEDIA_ROOT_UNAVAILABLE: &str =
         "FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNAVAILABLE";
-    /// Configured media root the selected value is a symlink.
+    /// A configured media root is a symlink.
     pub const CONFIGURED_MEDIA_ROOT_SYMLINK: &str = "FS_SAFETY_CONFIGURED_MEDIA_ROOT_SYMLINK";
-    /// Configured media root the selected value is not a directory.
+    /// A configured media root is not a directory.
     pub const CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY: &str =
         "FS_SAFETY_CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY";
-    /// Configured media root the selected value is unreadable.
+    /// A configured media root is unreadable.
     pub const CONFIGURED_MEDIA_ROOT_UNREADABLE: &str = "FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNREADABLE";
-    /// Configured media root the selected value is empty.
+    /// A configured media root is empty.
     pub const CONFIGURED_MEDIA_ROOT_EMPTY: &str = "FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
@@ -3557,16 +3657,22 @@ pub mod settings {
     pub const DASHBOARD_ITEM_SIZE_OUT_OF_RANGE: &str = "SETTINGS_DASHBOARD_ITEM_SIZE_OUT_OF_RANGE";
     /// A dashboard panel extends past the layout's last column.
     pub const DASHBOARD_ITEM_EXCEEDS_COLUMNS: &str = "SETTINGS_DASHBOARD_ITEM_EXCEEDS_COLUMNS";
-    /// Language must be a language code of at most the selected value letters, digits or hyphens.
+    /// A dashboard panel's settings are not a JSON object, or are larger than one panel may store.
+    pub const DASHBOARD_PANEL_SETTINGS_INVALID: &str = "SETTINGS_DASHBOARD_PANEL_SETTINGS_INVALID";
+    /// Language must be a language code of at most 16 letters, digits or hyphens.
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
-    /// The requested value must be a #RRGGBB hex color.
+    /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
+    pub const UI_TOUR_ID_INVALID: &str = "SETTINGS_UI_TOUR_ID_INVALID";
+    /// A tour progress update names no tour, or more tours than one update may record.
+    pub const UI_TOUR_COUNT_OUT_OF_RANGE: &str = "SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE";
+    /// The color must be a #RRGGBB hex color.
     pub const MUST_RRGGBB_HEX_COLOR: &str = "SETTINGS_MUST_RRGGBB_HEX_COLOR";
-    /// Duplicate UI table column setting for the selected value the selected value the selected value column the selected value.
+    /// A table's column settings list the same column more than once.
     pub const UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED: &str =
         "SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED";
     /// Table column order must be greater than or equal to 0.
     pub const TABLE_COLUMN_ORDER_OUT_OF_RANGE: &str = "SETTINGS_TABLE_COLUMN_ORDER_OUT_OF_RANGE";
-    /// Unsupported the selected value table column the selected value.
+    /// A table column is not supported.
     pub const TABLE_COLUMN_UNSUPPORTED: &str = "SETTINGS_TABLE_COLUMN_UNSUPPORTED";
     /// Movies table settings cannot include the episodes column.
     pub const MOVIES_TABLE_SETTINGS_CANNOT_INCLUDE_EPISODES_COLUMN: &str =
@@ -3576,7 +3682,7 @@ pub mod settings {
         "SETTINGS_TITLE_IMAGE_CACHE_REFRESH_ALREADY_RUNNING";
     /// Session duration must be between 1 and 365 days.
     pub const SESSION_DURATION_OUT_OF_RANGE: &str = "SETTINGS_SESSION_DURATION_OUT_OF_RANGE";
-    /// Password minimum length must be at least the selected value.
+    /// Password minimum length must be at least 8.
     pub const PASSWORD_MINIMUM_LENGTH_OUT_OF_RANGE: &str =
         "SETTINGS_PASSWORD_MINIMUM_LENGTH_OUT_OF_RANGE";
     /// Change the default admin password before enabling form login.
@@ -3600,7 +3706,7 @@ pub mod settings {
     pub const ROOT_FOLDER_PATH_REQUIRED: &str = "SETTINGS_ROOT_FOLDER_PATH_REQUIRED";
     /// At least one root folder is required.
     pub const ROOT_REQUIRED: &str = "SETTINGS_ROOT_REQUIRED";
-    /// The requested value must be an absolute path or a command name without path separators.
+    /// The interpreter must be an absolute path or a command name without path separators.
     pub const MUST_ABSOLUTE_PATH_COMMAND_NAME_WITHOUT_PATH_SEPARATORS: &str =
         "SETTINGS_MUST_ABSOLUTE_PATH_COMMAND_NAME_WITHOUT_PATH_SEPARATORS";
     /// You do not have permission to view verification settings.
@@ -3618,9 +3724,9 @@ pub mod settings {
     /// Subtitle sync max offset cannot be negative.
     pub const SUBTITLE_SYNC_MAX_OFFSET_CANNOT_NEGATIVE: &str =
         "SETTINGS_SUBTITLE_SYNC_MAX_OFFSET_CANNOT_NEGATIVE";
-    /// Invalid the selected value setting value the selected item: expected a 3 or 4 digit octal mask.
+    /// This setting value is invalid. A permissions mask takes a 3 or 4 digit octal number.
     pub const SETTING_VALUE_INVALID: &str = "SETTINGS_SETTING_VALUE_INVALID";
-    /// Invalid permissions.chown_group setting value the selected item: numeric gid is outside range.
+    /// The permissions group is invalid: its numeric group id is out of range.
     pub const PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID: &str =
         "SETTINGS_PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID";
     /// Season folder templates are only supported for series and anime.
@@ -3637,7 +3743,7 @@ pub mod settings {
         "SETTINGS_ANIME_SPECIFIC_SETTINGS_REQUIRE_SCOPE_ANIME";
     /// At least one media setting change is required.
     pub const MEDIA_SETTING_CHANGE_REQUIRED: &str = "SETTINGS_MEDIA_SETTING_CHANGE_REQUIRED";
-    /// Automatic backup key must be at least the selected value non-whitespace characters.
+    /// Automatic backup key must be at least 8 non-whitespace characters.
     pub const AUTOMATIC_BACKUP_KEY_OUT_OF_RANGE: &str =
         "SETTINGS_AUTOMATIC_BACKUP_KEY_OUT_OF_RANGE";
     /// Automatic backup key cannot be replaced and cleared in the same request.
@@ -3695,38 +3801,38 @@ pub mod settings {
     /// Re-converge backstop cannot be negative.
     pub const RE_CONVERGE_BACKSTOP_CANNOT_NEGATIVE: &str =
         "SETTINGS_RE_CONVERGE_BACKSTOP_CANNOT_NEGATIVE";
-    /// Quality profile id the selected item is ambiguous because profile ids differ only by ASCII case.
+    /// This quality profile id is ambiguous because profile ids differ only by letter case.
     pub const QUALITY_PROFILE_ID_AMBIGUOUS_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE: &str =
         "SETTINGS_QUALITY_PROFILE_ID_AMBIGUOUS_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE";
     /// Quality profile id is required.
     pub const QUALITY_PROFILE_ID_REQUIRED: &str = "SETTINGS_QUALITY_PROFILE_ID_REQUIRED";
-    /// Quality profile ids the selected item and the selected item differ only by ASCII case.
+    /// Two quality profile ids differ only by letter case.
     pub const QUALITY_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE: &str =
         "SETTINGS_QUALITY_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE";
-    /// Delay profile the selected item names an unknown library the selected item.
+    /// A delay profile names an unknown library.
     pub const DELAY_PROFILE_NAMES_UNKNOWN_LIBRARY: &str =
         "SETTINGS_DELAY_PROFILE_NAMES_UNKNOWN_LIBRARY";
     /// You do not have permission to view quality profiles.
     pub const VIEW_QUALITY_PROFILES_PERMISSION_DENIED: &str =
         "SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED";
-    /// Unknown quality profile the selected item.
+    /// The quality profile is unknown.
     pub const QUALITY_PROFILE_UNKNOWN: &str = "SETTINGS_QUALITY_PROFILE_UNKNOWN";
-    /// Cannot remove quality profile the selected item because it is the global default.
+    /// Cannot remove this quality profile because it is the global default.
     pub const CANNOT_REMOVE_QUALITY_PROFILE_GLOBAL_DEFAULT: &str =
         "SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_GLOBAL_DEFAULT";
-    /// Cannot remove quality profile the selected item because it is configured for the selected value.
+    /// Cannot remove this quality profile because it is the configured profile for a media type.
     pub const CANNOT_REMOVE_QUALITY_PROFILE_NOT_CONFIGURED: &str =
         "SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_NOT_CONFIGURED";
-    /// Cannot remove quality profile the selected item because library the selected item references it.
+    /// Cannot remove this quality profile because a library uses it.
     pub const CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_REFERENCES: &str =
         "SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_REFERENCES";
-    /// Cannot remove quality profile the selected item because library the selected item allows it for requests.
+    /// Cannot remove this quality profile because a library allows it for requests.
     pub const CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_ALLOWS_REQUESTS: &str =
         "SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_ALLOWS_REQUESTS";
-    /// Cannot remove quality profile the selected item because the selected value title(s) reference it.
+    /// Cannot remove this quality profile because titles use it.
     pub const CANNOT_REMOVE_QUALITY_PROFILE_TITLE_S_REFERENCE: &str =
         "SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_TITLE_S_REFERENCE";
-    /// Cannot remove quality profile the selected item because the selected value pending media request(s) reference it.
+    /// Cannot remove this quality profile because pending media requests use it.
     pub const CANNOT_REMOVE_QUALITY_PROFILE_PENDING_MEDIA_REQUEST_S_REFERENCE: &str =
         "SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_PENDING_MEDIA_REQUEST_S_REFERENCE";
     /// Profile_id is required when inherit_global is false.
@@ -3752,7 +3858,7 @@ pub mod settings {
     /// You do not have permission to view recycle bin settings.
     pub const VIEW_RECYCLE_BIN_SETTINGS_PERMISSION_DENIED: &str =
         "SETTINGS_VIEW_RECYCLE_BIN_SETTINGS_PERMISSION_DENIED";
-    /// Recycle bin retention must be between 1 and the selected value days.
+    /// Recycle bin retention must be between 1 and 3650 days.
     pub const RECYCLE_BIN_RETENTION_OUT_OF_RANGE: &str =
         "SETTINGS_RECYCLE_BIN_RETENTION_OUT_OF_RANGE";
     /// Limit is required and must be greater than zero.
@@ -3782,7 +3888,7 @@ pub mod settings {
     /// Movie availability settings require a movie library.
     pub const MOVIE_AVAILABILITY_SETTINGS_REQUIRE_MOVIE_LIBRARY: &str =
         "SETTINGS_MOVIE_AVAILABILITY_SETTINGS_REQUIRE_MOVIE_LIBRARY";
-    /// Unknown request quality profile the selected value.
+    /// A request quality profile is unknown.
     pub const REQUEST_QUALITY_PROFILE_UNKNOWN: &str = "SETTINGS_REQUEST_QUALITY_PROFILE_UNKNOWN";
     /// The recycle bin path is unsafe or overlaps managed media.
     pub const RECYCLE_BIN_PATH_UNSAFE: &str = "SETTINGS_RECYCLE_BIN_PATH_UNSAFE";
@@ -3790,6 +3896,14 @@ pub mod settings {
     pub const DELAY_PROFILE_CATALOG_INVALID: &str = "SETTINGS_DELAY_PROFILE_CATALOG_INVALID";
     /// The trusted proxy policy is invalid.
     pub const TRUSTED_PROXY_POLICY_INVALID: &str = "SETTINGS_TRUSTED_PROXY_POLICY_INVALID";
+    /// An allowed-host entry is not a host name or IP literal, or the list is
+    /// longer than the limit.
+    pub const LOCAL_TRUST_HOST_INVALID: &str = "SETTINGS_LOCAL_TRUST_HOST_INVALID";
+    /// The allowed-host list would refuse the host the saving request used.
+    pub const LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT: &str = "SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT";
+    /// Restricting local trust to listed proxies needs a non-empty trusted
+    /// proxy list.
+    pub const LOCAL_TRUST_PROXY_LIST_EMPTY: &str = "SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY";
     /// A required, preferred or optional audio language list names a language
     /// Scryer does not know.
     pub const AUDIO_LANGUAGE_UNKNOWN: &str = "SETTINGS_AUDIO_LANGUAGE_UNKNOWN";
@@ -3801,6 +3915,9 @@ pub mod settings {
     pub const ALL: &[&str] = &[
         DELAY_PROFILE_CATALOG_INVALID,
         TRUSTED_PROXY_POLICY_INVALID,
+        LOCAL_TRUST_HOST_INVALID,
+        LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT,
+        LOCAL_TRUST_PROXY_LIST_EMPTY,
         AUDIO_LANGUAGE_UNKNOWN,
         CATALOG_VIEW_COLUMNS_INVALID,
         DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE,
@@ -3810,7 +3927,10 @@ pub mod settings {
         DASHBOARD_ITEM_POSITION_OUT_OF_RANGE,
         DASHBOARD_ITEM_SIZE_OUT_OF_RANGE,
         DASHBOARD_ITEM_EXCEEDS_COLUMNS,
+        DASHBOARD_PANEL_SETTINGS_INVALID,
         LANGUAGE_OUT_OF_RANGE,
+        UI_TOUR_ID_INVALID,
+        UI_TOUR_COUNT_OUT_OF_RANGE,
         MUST_RRGGBB_HEX_COLOR,
         UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED,
         TABLE_COLUMN_ORDER_OUT_OF_RANGE,
@@ -3907,7 +4027,7 @@ pub mod request_rules {
     /// Sample library was not found.
     pub const SAMPLE_LIBRARY_NOT_FOUND: &str = "REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND";
     /// Rule failed to compile.
-    pub const RULE_FAILED_COMPILE: &str = "REQUEST_RULE_RULE_FAILED_COMPILE";
+    pub const COMPILE_FAILED: &str = "REQUEST_RULE_COMPILE_FAILED";
     /// Rule evaluation failed.
     pub const RULE_EVALUATION_FAILED: &str = "REQUEST_RULE_RULE_EVALUATION_FAILED";
     /// This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.
@@ -3915,27 +4035,25 @@ pub mod request_rules {
         "REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED";
     /// Request rule set was not found.
     pub const SET_NOT_FOUND: &str = "REQUEST_RULE_SET_NOT_FOUND";
-    /// The requested value must not be empty.
+    /// A required field is empty.
     pub const FIELD_REQUIRED: &str = "REQUEST_RULE_FIELD_REQUIRED";
-    /// A request may carry at most the selected value tags, the selected value were supplied.
-    pub const REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED: &str =
-        "REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED";
+    /// A request may carry at most 16 tags.
+    pub const TAG_LIMIT_EXCEEDED: &str = "REQUEST_RULE_TAG_LIMIT_EXCEEDED";
     /// Tag must not be empty.
     pub const TAG_REQUIRED: &str = "REQUEST_RULE_TAG_REQUIRED";
-    /// Tag is the selected value characters, at most the selected value are allowed.
-    pub const TAG_CHARACTERS_MOST_ALLOWED: &str = "REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED";
-    /// Tag the selected item uses the reserved the selected item prefix.
+    /// A tag may be at most 64 characters long.
+    pub const TAG_TOO_LONG: &str = "REQUEST_RULE_TAG_TOO_LONG";
+    /// A tag may not start with the reserved prefix 'scryer:'.
     pub const TAG_USES_RESERVED_PREFIX: &str = "REQUEST_RULE_TAG_USES_RESERVED_PREFIX";
-    /// Tag the selected item contains unsupported character the selected item; use letters, digits, '.', '_', '-', or spaces.
+    /// A tag contains an unsupported character; use letters, digits, '.', '_', '-', or spaces.
     pub const TAG_CONTAINS_UNSUPPORTED_CHARACTER: &str =
         "REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER";
-    /// A lease must be at most the selected value days (ten years), or forever.
+    /// A lease must be from 1 to 3650 days (ten years), or forever.
     pub const LEASE_OUT_OF_RANGE: &str = "REQUEST_RULE_LEASE_OUT_OF_RANGE";
     /// Library was not found.
     pub const LIBRARY_NOT_FOUND: &str = "REQUEST_RULE_LIBRARY_NOT_FOUND";
     /// Library facet does not match requested media facet.
-    pub const LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET: &str =
-        "REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET";
+    pub const LIBRARY_FACET_MISMATCH: &str = "REQUEST_RULE_LIBRARY_FACET_MISMATCH";
     /// Media requests must include SMG external identifiers.
     pub const MEDIA_REQUESTS_INVALID: &str = "REQUEST_RULE_MEDIA_REQUESTS_INVALID";
     /// Media request id is required.
@@ -3943,34 +4061,32 @@ pub mod request_rules {
     /// Media request was not found.
     pub const MEDIA_REQUEST_NOT_FOUND: &str = "REQUEST_RULE_MEDIA_REQUEST_NOT_FOUND";
     /// You may not read this request's decision.
-    pub const MAY_NOT_READ_REQUEST_S_DECISION: &str =
-        "REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION";
+    pub const DECISION_READ_FORBIDDEN: &str = "REQUEST_RULE_DECISION_READ_FORBIDDEN";
     /// Failed to build the request rules engine.
-    pub const FAILED_BUILD_REQUEST_RULES_ENGINE: &str =
-        "REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE";
+    pub const ENGINE_BUILD_FAILED: &str = "REQUEST_RULE_ENGINE_BUILD_FAILED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         RULE_VALIDATION_FAILED,
         SAMPLE_REQUESTER_NOT_FOUND,
         SAMPLE_LIBRARY_NOT_FOUND,
-        RULE_FAILED_COMPILE,
+        COMPILE_FAILED,
         RULE_EVALUATION_FAILED,
         PERSON_TARGETING_PERMISSION_REQUIRED,
         SET_NOT_FOUND,
         FIELD_REQUIRED,
-        REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED,
+        TAG_LIMIT_EXCEEDED,
         TAG_REQUIRED,
-        TAG_CHARACTERS_MOST_ALLOWED,
+        TAG_TOO_LONG,
         TAG_USES_RESERVED_PREFIX,
         TAG_CONTAINS_UNSUPPORTED_CHARACTER,
         LEASE_OUT_OF_RANGE,
         LIBRARY_NOT_FOUND,
-        LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET,
+        LIBRARY_FACET_MISMATCH,
         MEDIA_REQUESTS_INVALID,
         MEDIA_REQUEST_ID_REQUIRED,
         MEDIA_REQUEST_NOT_FOUND,
-        MAY_NOT_READ_REQUEST_S_DECISION,
-        FAILED_BUILD_REQUEST_RULES_ENGINE,
+        DECISION_READ_FORBIDDEN,
+        ENGINE_BUILD_FAILED,
     ];
 }
 
@@ -4281,6 +4397,41 @@ pub mod indexer_caps {
     }
 }
 
+pub mod indexer_monthly_quota {
+    /// The configured local monthly request limit has been reached.
+    pub const REQUEST_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED";
+    /// The configured local monthly grab limit has been reached.
+    pub const GRAB_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED";
+    /// Durable monthly usage could not be checked or recorded.
+    pub const ACCOUNTING_UNAVAILABLE: &str = "INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE";
+    /// A configured monthly request or grab limit is outside the supported range.
+    pub const CONFIGURATION_INVALID: &str = "INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID";
+    /// Every reason owned by local indexer monthly quota admission.
+    pub const ALL: &[&str] = &[
+        REQUEST_LIMIT_REACHED,
+        GRAB_LIMIT_REACHED,
+        ACCOUNTING_UNAVAILABLE,
+        CONFIGURATION_INVALID,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("INDEXER_MONTHLY_QUOTA_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
 /// Why a title search removed an indexer's releases before scoring them.
 pub mod release_search {
     /// No enabled download client accepts Usenet releases (NZB files or links).
@@ -4342,10 +4493,10 @@ pub mod integration {
     /// Indexer settings changed during validation; reload and test again.
     pub const INDEXER_SETTINGS_CHANGED_DURING_VALIDATION: &str =
         "INTEGRATION_INDEXER_SETTINGS_CHANGED_DURING_VALIDATION";
-    /// No indexer management client available for provider type the selected item.
+    /// No indexer management client is available for this provider type.
     pub const NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE: &str =
         "INTEGRATION_NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE";
-    /// No indexer provider available for provider type the selected item.
+    /// No indexer provider is available for this provider type.
     pub const NO_INDEXER_PROVIDER_AVAILABLE_PROVIDER_TYPE: &str =
         "INTEGRATION_NO_INDEXER_PROVIDER_AVAILABLE_PROVIDER_TYPE";
     /// Indexer connection test did not return a valid Newznab caps document.
@@ -4361,7 +4512,7 @@ pub mod integration {
     /// Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling.
     pub const PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS: &str =
         "INTEGRATION_PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS";
-    /// Provider type the selected item does not support managed child sync.
+    /// This provider type does not support managed child sync.
     pub const PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC: &str =
         "INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC";
     /// Indexer connection test failed.
@@ -4391,7 +4542,7 @@ pub mod integration {
     pub const SEEDING_PROFILE_FIELD_REQUIRED: &str = "INTEGRATION_SEEDING_PROFILE_FIELD_REQUIRED";
     /// Seeding profile was not found.
     pub const SEEDING_PROFILE_NOT_FOUND: &str = "INTEGRATION_SEEDING_PROFILE_NOT_FOUND";
-    /// Seeding profile is still assigned to the selected value.
+    /// The seeding profile is still assigned to an indexer or download client.
     pub const SEEDING_PROFILE_STILL_ASSIGNED: &str = "INTEGRATION_SEEDING_PROFILE_STILL_ASSIGNED";
     /// Indexer id is required.
     pub const INDEXER_ID_REQUIRED: &str = "INTEGRATION_INDEXER_ID_REQUIRED";
@@ -4400,10 +4551,10 @@ pub mod integration {
     /// Prowlarr management parents cannot be assigned a seeding profile.
     pub const PROWLARR_MANAGEMENT_PARENTS_CANNOT_ASSIGNED_SEEDING_PROFILE: &str =
         "INTEGRATION_PROWLARR_MANAGEMENT_PARENTS_CANNOT_ASSIGNED_SEEDING_PROFILE";
-    /// Indexer provider the selected item does not declare a supported protocol family.
+    /// The indexer provider does not declare a supported protocol family.
     pub const INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY: &str =
         "INTEGRATION_INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY";
-    /// Indexer the selected item does not support torrents, so seeding profile the selected item cannot be assigned.
+    /// This indexer does not support torrents, so a seeding profile cannot be assigned to it.
     pub const INDEXER_DOES_NOT_SUPPORT_TORRENTS_SO_SEEDING_PROFILE_CANNOT_ASSIGNED: &str =
         "INTEGRATION_INDEXER_DOES_NOT_SUPPORT_TORRENTS_SO_SEEDING_PROFILE_CANNOT_ASSIGNED";
     /// Minimum seeders floor cannot be negative.
@@ -4413,7 +4564,7 @@ pub mod integration {
     pub const LIBRARY_ACCESS_DENIED: &str = "INTEGRATION_LIBRARY_ACCESS_DENIED";
     /// Client type is required.
     pub const CLIENT_TYPE_REQUIRED: &str = "INTEGRATION_CLIENT_TYPE_REQUIRED";
-    /// Unsupported download client type the selected item.
+    /// This download client type is not supported.
     pub const DOWNLOAD_CLIENT_TYPE_UNSUPPORTED: &str =
         "INTEGRATION_DOWNLOAD_CLIENT_TYPE_UNSUPPORTED";
     /// You do not have permission to perform this action.
@@ -4462,10 +4613,10 @@ pub mod integration {
     pub const PROXY_FIELD_REQUIRED: &str = "INTEGRATION_PROXY_FIELD_REQUIRED";
     /// Proxy config was not found.
     pub const PROXY_CONFIG_NOT_FOUND: &str = "INTEGRATION_PROXY_CONFIG_NOT_FOUND";
-    /// Proxy config is assigned to the selected value enabled indexer(s).
+    /// The proxy is assigned to enabled indexers.
     pub const PROXY_CONFIG_ASSIGNED_ENABLED_INDEXER_S: &str =
         "INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_INDEXER_S";
-    /// Proxy config is assigned to the selected value enabled download client(s).
+    /// The proxy is assigned to enabled download clients.
     pub const PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S: &str =
         "INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S";
     /// Proxy config is assigned to one or more indexers.
@@ -4474,6 +4625,25 @@ pub mod integration {
     /// Proxy config is assigned to one or more download clients.
     pub const PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS: &str =
         "INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS";
+    /// A solver's reach-through names another challenge solver; only a
+    /// transport proxy or tunnel can carry a solver's traffic.
+    pub const PROXY_REACH_THROUGH_IS_SOLVER: &str = "INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER";
+    /// A solver's reach-through names the solver itself.
+    pub const PROXY_REACH_THROUGH_SELF: &str = "INTEGRATION_PROXY_REACH_THROUGH_SELF";
+    /// A solver's reach-through names a proxy config that does not exist.
+    pub const PROXY_REACH_THROUGH_NOT_FOUND: &str = "INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND";
+    /// A solver's reach-through names a disabled proxy config.
+    pub const PROXY_REACH_THROUGH_DISABLED: &str = "INTEGRATION_PROXY_REACH_THROUGH_DISABLED";
+    /// A reach-through was set on a proxy config that is not a challenge solver.
+    pub const PROXY_REACH_THROUGH_REQUIRES_SOLVER: &str =
+        "INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER";
+    /// The proxy config is how one or more challenge solvers are reached, so
+    /// it cannot be deleted, or disabled while any of them is enabled.
+    pub const PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS: &str =
+        "INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS";
+    /// Fact on `PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS`: how many solvers
+    /// stand in the way.
+    pub const PROXY_REACHED_THROUGH_SOLVER_COUNT_FACT: &str = "solverCount";
     /// Only SSH tunnel proxies pin a host key.
     pub const ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY: &str =
         "INTEGRATION_ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY";
@@ -4513,7 +4683,7 @@ pub mod integration {
     pub const SOCKS4_PROXY_BASE_URL_INVALID: &str = "INTEGRATION_SOCKS4_PROXY_BASE_URL_INVALID";
     /// SOCKS5 proxy base URL must use socks5 or socks5h.
     pub const SOCKS5_PROXY_BASE_URL_INVALID: &str = "INTEGRATION_SOCKS5_PROXY_BASE_URL_INVALID";
-    /// The requested value proxies do not use a challenge-solver protocol.
+    /// Proxies of this type do not use a challenge-solver protocol.
     pub const PROXIES_DO_NOT_USE_CHALLENGE_SOLVER_PROTOCOL: &str =
         "INTEGRATION_PROXIES_DO_NOT_USE_CHALLENGE_SOLVER_PROTOCOL";
     /// Challenge-solver proxies do not accept a username or password.
@@ -4546,7 +4716,7 @@ pub mod integration {
     /// WireGuard tunnels authenticate with keys, not a username or password.
     pub const WIREGUARD_TUNNELS_AUTHENTICATE_KEYS_NOT_USERNAME_PASSWORD: &str =
         "INTEGRATION_WIREGUARD_TUNNELS_AUTHENTICATE_KEYS_NOT_USERNAME_PASSWORD";
-    /// WireGuard tunnels require a private key; the selected value.
+    /// WireGuard tunnels require a private key; WireGuard keys are 32 bytes of base64, exactly as `wg genkey` prints them (44 characters ending in `=`).
     pub const WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY: &str =
         "INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY";
     /// WireGuard tunnels require the peer's public key from the `[Peer]` section.
@@ -4554,9 +4724,9 @@ pub mod integration {
         "INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PEER_S_PUBLIC_KEY_PEER_SECTION";
     /// WireGuard tunnels require at least one interface address; copy the `Address` line from the WireGuard configuration (for example `10.6.0.2/32`).
     pub const WIREGUARD_ADDRESS_REQUIRED: &str = "INTEGRATION_WIREGUARD_ADDRESS_REQUIRED";
-    /// `the selected value` is not a DNS server address; the `DNS` line takes IP addresses.
+    /// A DNS entry is not a DNS server address; the `DNS` line takes IP addresses.
     pub const NOT_DNS_SERVER_ADDRESS: &str = "INTEGRATION_NOT_DNS_SERVER_ADDRESS";
-    /// The tunnel MTU must be between the selected value and the selected value; the selected value is outside that range.
+    /// The tunnel MTU is outside the allowed range.
     pub const TUNNEL_MTU_OUT_OF_RANGE: &str = "INTEGRATION_TUNNEL_MTU_OUT_OF_RANGE";
     /// Socks5h:// and socks4a:// resolve names at the proxy; use socks5:// or socks4:// to resolve them locally.
     pub const SOCKS5H_SOCKS4A_RESOLVE_NAMES_PROXY: &str =
@@ -4564,10 +4734,12 @@ pub mod integration {
     /// Remote DNS applies only to SOCKS proxies.
     pub const REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES: &str =
         "INTEGRATION_REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES";
-    /// Proxy timeout must be between 1 and the selected value seconds.
+    /// Proxy timeout must be between 1 and 120 seconds.
     pub const PROXY_TIMEOUT_OUT_OF_RANGE: &str = "INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE";
-    /// Download already resolved as the selected value; nothing to ignore.
+    /// The download is already resolved; nothing to ignore.
     pub const DOWNLOAD_ALREADY_RESOLVED: &str = "INTEGRATION_DOWNLOAD_ALREADY_RESOLVED";
+    /// Manual failure cleanup requires verified grab history for this download.
+    pub const DOWNLOAD_NOT_GRABBED: &str = "INTEGRATION_DOWNLOAD_NOT_GRABBED";
     /// Only blocked imports can be dismissed, and only dismissed imports can be resumed.
     pub const IMPORT_TRACKING_STATE_NOT_ELIGIBLE: &str =
         "INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE";
@@ -4579,9 +4751,12 @@ pub mod integration {
         "INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED";
     /// Tracked download was not found.
     pub const TRACKED_DOWNLOAD_NOT_FOUND: &str = "INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND";
-    /// Tracked download the selected value is busy processing.
+    /// This tracked download is busy processing.
     pub const TRACKED_DOWNLOAD_BUSY_PROCESSING: &str =
         "INTEGRATION_TRACKED_DOWNLOAD_BUSY_PROCESSING";
+    /// The tracked download is not in a state that can be ignored: only a
+    /// download whose import is blocked or failed can be.
+    pub const TRACKED_DOWNLOAD_NOT_IGNORABLE: &str = "INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE";
     /// Max queries per minute must be at least 1, or empty for no budget.
     pub const MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE: &str =
         "INTEGRATION_MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE";
@@ -4595,9 +4770,9 @@ pub mod integration {
         "INTEGRATION_INDEXER_PROVIDER_DECLARES_MULTIPLE_CONNECTION_URL_CONFIG_FIELDS";
     /// Indexer connection URL is required.
     pub const INDEXER_CONNECTION_URL_REQUIRED: &str = "INTEGRATION_INDEXER_CONNECTION_URL_REQUIRED";
-    /// The requested value is required.
+    /// A required field is empty.
     pub const FIELD_REQUIRED: &str = "INTEGRATION_FIELD_REQUIRED";
-    /// Unsupported indexer provider type the selected item.
+    /// This indexer provider type is not supported.
     pub const INDEXER_PROVIDER_TYPE_UNSUPPORTED: &str =
         "INTEGRATION_INDEXER_PROVIDER_TYPE_UNSUPPORTED";
     /// Indexer name cannot be empty.
@@ -4614,7 +4789,7 @@ pub mod integration {
     /// Managed indexers cannot use a proxy; the managing application owns challenge solving.
     pub const MANAGED_INDEXERS_CANNOT_USE_PROXY: &str =
         "INTEGRATION_MANAGED_INDEXERS_CANNOT_USE_PROXY";
-    /// Mapped download client the selected item no longer exists.
+    /// A mapped download client no longer exists.
     pub const MAPPED_DOWNLOAD_CLIENT_NO_LONGER_EXISTS: &str =
         "INTEGRATION_MAPPED_DOWNLOAD_CLIENT_NO_LONGER_EXISTS";
     /// Managed child indexers are controlled by their parent sync.
@@ -4632,24 +4807,24 @@ pub mod integration {
     /// Prowlarr management parents cannot be mapped to a download client.
     pub const PROWLARR_MANAGEMENT_PARENTS_CANNOT_MAPPED_DOWNLOAD_CLIENT: &str =
         "INTEGRATION_PROWLARR_MANAGEMENT_PARENTS_CANNOT_MAPPED_DOWNLOAD_CLIENT";
-    /// Download client the selected item does not support all protocol families required by indexer the selected item.
+    /// The download client does not support every protocol family the indexer requires.
     pub const DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_ALL_PROTOCOL_FAMILIES_REQUIRED_INDEXER: &str =
         "INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_ALL_PROTOCOL_FAMILIES_REQUIRED_INDEXER";
-    /// Managed child routing scope the selected item is not supported.
+    /// A managed child routing scope is not supported.
     pub const MANAGED_CHILD_ROUTING_SCOPE_UNSUPPORTED: &str =
         "INTEGRATION_MANAGED_CHILD_ROUTING_SCOPE_UNSUPPORTED";
-    /// Managed child routing contains duplicate scope the selected item.
+    /// Managed child routing lists the same scope more than once.
     pub const MANAGED_CHILD_ROUTING_CONTAINS_DUPLICATE_SCOPE: &str =
         "INTEGRATION_MANAGED_CHILD_ROUTING_CONTAINS_DUPLICATE_SCOPE";
     /// Managed child plan entries require child_key.
     pub const MANAGED_CHILD_PLAN_ENTRIES_REQUIRE_CHILD_KEY: &str =
         "INTEGRATION_MANAGED_CHILD_PLAN_ENTRIES_REQUIRE_CHILD_KEY";
-    /// Managed child plan contains duplicate child_key the selected item.
+    /// The managed child plan lists the same child key more than once.
     pub const MANAGED_CHILD_PLAN_CONTAINS_DUPLICATE_CHILD_KEY: &str =
         "INTEGRATION_MANAGED_CHILD_PLAN_CONTAINS_DUPLICATE_CHILD_KEY";
-    /// Managed child the selected item requires a name.
+    /// A managed child requires a name.
     pub const MANAGED_CHILD_REQUIRES_NAME: &str = "INTEGRATION_MANAGED_CHILD_REQUIRES_NAME";
-    /// Managed child the selected item requires provider_type.
+    /// A managed child requires a provider type.
     pub const MANAGED_CHILD_REQUIRES_PROVIDER_TYPE: &str =
         "INTEGRATION_MANAGED_CHILD_REQUIRES_PROVIDER_TYPE";
     /// This download is already being processed.
@@ -4734,6 +4909,12 @@ pub mod integration {
         PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S,
         PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS,
         PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS,
+        PROXY_REACH_THROUGH_IS_SOLVER,
+        PROXY_REACH_THROUGH_SELF,
+        PROXY_REACH_THROUGH_NOT_FOUND,
+        PROXY_REACH_THROUGH_DISABLED,
+        PROXY_REACH_THROUGH_REQUIRES_SOLVER,
+        PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS,
         ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY,
         WIREGUARD_TUNNELS_NO_HOST_KEY_RESET,
         ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE,
@@ -4772,8 +4953,10 @@ pub mod integration {
         REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES,
         PROXY_TIMEOUT_OUT_OF_RANGE,
         DOWNLOAD_ALREADY_RESOLVED,
+        DOWNLOAD_NOT_GRABBED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
+        TRACKED_DOWNLOAD_NOT_IGNORABLE,
         IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
         IMPORT_TRACKING_DOWNLOAD_CHANGED,
         IMPORT_TRACKING_ALREADY_RESOLVED,
@@ -4817,29 +5000,29 @@ pub mod integration {
 }
 
 pub mod discovery {
-    /// Pending discovery removal the selected value is missing subject key.
+    /// A pending discovery removal is missing its subject key.
     pub const PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY: &str =
         "DISCOVERY_PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY";
-    /// Pending discovery rematch the selected value is missing previous subject key.
+    /// A pending discovery rematch is missing its previous subject key.
     pub const PENDING_DISCOVERY_REMATCH_MISSING_PREVIOUS_SUBJECT_KEY: &str =
         "DISCOVERY_PENDING_DISCOVERY_REMATCH_MISSING_PREVIOUS_SUBJECT_KEY";
-    /// Pending discovery change the selected value is missing subject key.
+    /// A pending discovery change is missing its subject key.
     pub const PENDING_DISCOVERY_CHANGE_MISSING_SUBJECT_KEY: &str =
         "DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_SUBJECT_KEY";
-    /// Pending discovery change the selected value is missing raw subject JSON.
+    /// A pending discovery change is missing its raw subject JSON.
     pub const PENDING_DISCOVERY_CHANGE_MISSING_RAW_SUBJECT_JSON: &str =
         "DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_RAW_SUBJECT_JSON";
-    /// Pending discovery change the selected value has invalid raw subject JSON.
+    /// A pending discovery change has invalid raw subject JSON.
     pub const PENDING_DISCOVERY_CHANGE_INVALID_RAW_SUBJECT_JSON: &str =
         "DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_RAW_SUBJECT_JSON";
-    /// Pending discovery change the selected value has invalid previous subject JSON.
+    /// A pending discovery change has invalid previous subject JSON.
     pub const PENDING_DISCOVERY_CHANGE_INVALID_PREVIOUS_SUBJECT_JSON: &str =
         "DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_PREVIOUS_SUBJECT_JSON";
-    /// Unsupported discovery context change type the selected value.
+    /// A discovery context change type is not supported.
     pub const CONTEXT_CHANGE_TYPE_UNSUPPORTED: &str = "DISCOVERY_CONTEXT_CHANGE_TYPE_UNSUPPORTED";
     /// Discovery home hero was not found.
     pub const HOME_HERO_NOT_FOUND: &str = "DISCOVERY_HOME_HERO_NOT_FOUND";
-    /// Discovery incremental reload resolves to the selected value changed subjects, above SMG limit the selected value.
+    /// The discovery incremental reload resolves to more than 250 changed subjects, above the SMG limit.
     pub const INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT: &str =
         "DISCOVERY_INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT";
     /// A neighbours anchor is not a discovery target key the server knows.
@@ -4921,15 +5104,15 @@ pub mod application_upgrade {
     /// Running executable has no parent directory.
     pub const RUNNING_EXECUTABLE_NO_PARENT_DIRECTORY: &str =
         "APPLICATION_UPGRADE_RUNNING_EXECUTABLE_NO_PARENT_DIRECTORY";
-    /// Refusing to overwrite existing application backup the selected item.
+    /// Refusing to overwrite an existing application backup.
     pub const BACKUP_ALREADY_EXISTS: &str = "APPLICATION_UPGRADE_BACKUP_ALREADY_EXISTS";
-    /// Unsupported application upgrade journal schema the selected item.
+    /// The application upgrade journal uses an unsupported schema.
     pub const JOURNAL_SCHEMA_UNSUPPORTED: &str = "APPLICATION_UPGRADE_JOURNAL_SCHEMA_UNSUPPORTED";
-    /// Unsupported application upgrade journal phase the selected item.
+    /// The application upgrade journal records an unsupported phase.
     pub const JOURNAL_PHASE_UNSUPPORTED: &str = "APPLICATION_UPGRADE_JOURNAL_PHASE_UNSUPPORTED";
     /// Application upgrade run was not found.
     pub const RUN_NOT_FOUND: &str = "APPLICATION_UPGRADE_RUN_NOT_FOUND";
-    /// Insufficient free space for application upgrade: need the selected value bytes, have the selected value bytes.
+    /// There is not enough free space for the application upgrade.
     pub const INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE: &str =
         "APPLICATION_UPGRADE_INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE";
     /// Every reason owned by this policy area.
@@ -5031,7 +5214,7 @@ pub mod subtitles {
     /// Archive plugin output escaped output root.
     pub const ARCHIVE_PLUGIN_OUTPUT_ESCAPED_OUTPUT_ROOT: &str =
         "SUBTITLES_ARCHIVE_PLUGIN_OUTPUT_ESCAPED_OUTPUT_ROOT";
-    /// Subtitle artifact expands beyond the the selected value byte limit.
+    /// The subtitle artifact expands beyond the 128 MiB limit.
     pub const SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT: &str =
         "SUBTITLES_SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT";
     /// Every reason owned by this policy area.
@@ -5070,19 +5253,19 @@ pub mod subtitles {
 }
 
 pub mod jobs {
-    /// Script the selected item is not a scheduled script.
+    /// This script is not a scheduled script.
     pub const SCRIPT_NOT_SCHEDULED_SCRIPT: &str = "JOB_SCRIPT_NOT_SCHEDULED_SCRIPT";
-    /// Scheduled script the selected item is disabled.
+    /// This scheduled script is disabled.
     pub const SCHEDULED_SCRIPT_DISABLED: &str = "JOB_SCHEDULED_SCRIPT_DISABLED";
     /// Script was not found.
     pub const SCRIPT_NOT_FOUND: &str = "JOB_SCRIPT_NOT_FOUND";
-    /// The selected item is already running.
+    /// This job is already running.
     pub const ALREADY_RUNNING: &str = "JOB_ALREADY_RUNNING";
     /// This scheduled script is already running.
     pub const SCHEDULED_SCRIPT_ALREADY_RUNNING: &str = "JOB_SCHEDULED_SCRIPT_ALREADY_RUNNING";
     /// Custom job run does not name a script.
     pub const CUSTOM_JOB_RUN_DOES_NOT_NAME_SCRIPT: &str = "JOB_CUSTOM_JOB_RUN_DOES_NOT_NAME_SCRIPT";
-    /// Scheduled script the selected value no longer exists.
+    /// This scheduled script no longer exists.
     pub const SCHEDULED_SCRIPT_NO_LONGER_EXISTS: &str = "JOB_SCHEDULED_SCRIPT_NO_LONGER_EXISTS";
     /// You do not have permission to perform this action.
     pub const ACTION_PERMISSION_DENIED: &str = "JOB_ACTION_PERMISSION_DENIED";
@@ -5093,9 +5276,9 @@ pub mod jobs {
     pub const FULL_HASH_BACKFILL_SHUTTING_DOWN: &str = "JOB_FULL_HASH_BACKFILL_SHUTTING_DOWN";
     /// Artwork encoding is shutting down.
     pub const ARTWORK_ENCODING_SHUTTING_DOWN: &str = "JOB_ARTWORK_ENCODING_SHUTTING_DOWN";
-    /// The requested value can only run on its configured schedule.
+    /// This job can only run on its configured schedule.
     pub const ONLY_RUN_CONFIGURED_SCHEDULE: &str = "JOB_ONLY_RUN_CONFIGURED_SCHEDULE";
-    /// The requested value has no libraries.
+    /// This job has no libraries to run on.
     pub const NO_LIBRARIES: &str = "JOB_NO_LIBRARIES";
     /// Background library refresh is temporarily disabled.
     pub const BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED: &str =
@@ -5117,6 +5300,8 @@ pub mod jobs {
     pub const RECYCLE_PURGE_JOBS_INVALID: &str = "JOB_RECYCLE_PURGE_JOBS_INVALID";
     /// Acquisition search jobs must be started from the acquisition search mutation.
     pub const ACQUISITION_SEARCH_JOBS_INVALID: &str = "JOB_ACQUISITION_SEARCH_JOBS_INVALID";
+    /// Release grab jobs must be started from the grab mutation.
+    pub const RELEASE_GRAB_JOBS_INVALID: &str = "JOB_RELEASE_GRAB_JOBS_INVALID";
     /// Application upgrade jobs must be started from the application upgrade mutation.
     pub const APPLICATION_UPGRADE_JOBS_INVALID: &str = "JOB_APPLICATION_UPGRADE_JOBS_INVALID";
     /// Location operations must be started from the location operation mutation.
@@ -5129,20 +5314,20 @@ pub mod jobs {
         "JOB_DISCOVERY_INCREMENTAL_REQUIRES_PREVIOUS_FINGERPRINT";
     /// Select at least one recycle-bin item.
     pub const RECYCLE_BIN_ITEM_REQUIRED: &str = "JOB_RECYCLE_BIN_ITEM_REQUIRED";
-    /// Recycle-bin batches are limited to the selected value items.
+    /// Recycle bin batches are limited to 250 items.
     pub const RECYCLE_BIN_BATCHES_LIMITED_ITEMS: &str = "JOB_RECYCLE_BIN_BATCHES_LIMITED_ITEMS";
     /// Recycle-bin batches cannot include the same item more than once.
     pub const RECYCLE_BIN_BATCHES_CANNOT_INCLUDE_SAME_ITEM_MORE_ONCE: &str =
         "JOB_RECYCLE_BIN_BATCHES_CANNOT_INCLUDE_SAME_ITEM_MORE_ONCE";
-    /// Refusing to replace restore destination the selected value because it is a symlink.
+    /// Refusing to replace the restore destination because it is a symlink.
     pub const SYMLINK_REFUSED: &str = "JOB_SYMLINK_REFUSED";
-    /// Refusing to replace restore destination the selected value because it is not a regular file.
+    /// Refusing to replace the restore destination because it is not a regular file.
     pub const REGULAR_FILE_REQUIRED: &str = "JOB_REGULAR_FILE_REQUIRED";
-    /// Refusing to replace the selected value because the recycle bin is unavailable.
+    /// Refusing to replace the file because the recycle bin is unavailable.
     pub const REPLACE_RECYCLE_BIN_UNAVAILABLE: &str = "JOB_REPLACE_RECYCLE_BIN_UNAVAILABLE";
     /// You do not have permission to view the recycle bin.
     pub const VIEW_RECYCLE_BIN_PERMISSION_DENIED: &str = "JOB_VIEW_RECYCLE_BIN_PERMISSION_DENIED";
-    /// A recycle restore is already running for the selected value.
+    /// A restore is already running for this recycle bin entry.
     pub const RECYCLE_RESTORE_ALREADY_RUNNING: &str = "JOB_RECYCLE_RESTORE_ALREADY_RUNNING";
     /// Selected recycle entries cannot share the same restore destination.
     pub const SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION: &str =
@@ -5154,11 +5339,11 @@ pub mod jobs {
         "JOB_RECYCLE_RESTORE_ALREADY_RUNNING_ONE_SELECTED_DESTINATIONS";
     /// Recycle entry was not found.
     pub const RECYCLE_ENTRY_NOT_FOUND: &str = "JOB_RECYCLE_ENTRY_NOT_FOUND";
-    /// A recycle operation is already running for the selected value.
+    /// An operation is already running for this recycle bin entry.
     pub const RECYCLE_OPERATION_ALREADY_RUNNING: &str = "JOB_RECYCLE_OPERATION_ALREADY_RUNNING";
     /// You do not have access to this library.
     pub const LIBRARY_ACCESS_DENIED: &str = "JOB_LIBRARY_ACCESS_DENIED";
-    /// Refusing to restore recycle entry the selected value because original path is outside the resolved library roots.
+    /// Refusing to restore this recycle bin entry because its original path is outside the library roots.
     pub const PATH_OUTSIDE_LIBRARY_ROOT: &str = "JOB_PATH_OUTSIDE_LIBRARY_ROOT";
     /// Restore destination changed after confirmation; preview and retry this item.
     pub const RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION: &str =
@@ -5192,6 +5377,7 @@ pub mod jobs {
         RECYCLE_RESTORE_JOBS_INVALID,
         RECYCLE_PURGE_JOBS_INVALID,
         ACQUISITION_SEARCH_JOBS_INVALID,
+        RELEASE_GRAB_JOBS_INVALID,
         APPLICATION_UPGRADE_JOBS_INVALID,
         LOCATION_OPERATIONS_INVALID,
         DISCOVERY_INCREMENTAL_REQUIRES_ACTIVE_GENERATION,
@@ -5233,20 +5419,131 @@ pub mod events {
     ];
 }
 
+/// Conditions of the one extraction a tracked download's archives get.
+pub mod archive_extraction {
+    /// Another import pass of the same download is extracting its archives,
+    /// or its extraction folder is being cleared, now; this pass waits and
+    /// is retried.
+    pub const IN_PROGRESS: &str = "ARCHIVE_EXTRACTION_IN_PROGRESS";
+    /// An extraction was found unfinished from an earlier run of Scryer; it
+    /// counts as a failed attempt and its partial output is removed.
+    pub const INTERRUPTED: &str = "ARCHIVE_EXTRACTION_INTERRUPTED";
+    /// The download's workspace path is taken by a folder Scryer cannot prove
+    /// it created for this extraction, so nothing is extracted there.
+    pub const WORKSPACE_OCCUPIED: &str = "ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED";
+    /// The archive extraction failed; the archives are untouched.
+    pub const FAILED: &str = "ARCHIVE_EXTRACTION_FAILED";
+    /// The archives need a password none of the candidates supplied.
+    pub const PASSWORD_REQUIRED: &str = "ARCHIVE_EXTRACTION_PASSWORD_REQUIRED";
+    /// The extractor ran past its execution budget.
+    pub const TIMED_OUT: &str = "ARCHIVE_EXTRACTION_TIMED_OUT";
+    /// An earlier attempt failed and the next one is not due yet; this pass
+    /// extracts nothing and is retried.
+    pub const WAITING: &str = "ARCHIVE_EXTRACTION_WAITING";
+    /// Every allowed attempt failed; no further attempt is made until an
+    /// operator retries the import.
+    pub const BLOCKED: &str = "ARCHIVE_EXTRACTION_BLOCKED";
+    pub const ALL: &[&str] = &[
+        IN_PROGRESS,
+        INTERRUPTED,
+        WORKSPACE_OCCUPIED,
+        FAILED,
+        PASSWORD_REQUIRED,
+        TIMED_OUT,
+        WAITING,
+        BLOCKED,
+    ];
+
+    #[cfg(test)]
+    #[test]
+    fn reasons_are_distinct_and_area_prefixed() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in ALL {
+            assert!(reason.starts_with("ARCHIVE_EXTRACTION_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+            assert!(seen.insert(reason));
+        }
+    }
+}
+
+/// The kinds of download failure Scryer classifies itself, rather than
+/// relaying the download client's report.
+pub mod download_failure {
+    /// The download holds nothing but executables. The release itself is bad,
+    /// so it is blocked on every indexer rather than only the one that
+    /// served it.
+    pub const UNWANTED_EXECUTABLES: &str = "DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES";
+    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES];
+}
+
+/// Why Scryer itself wrote a blocklist entry. Stored as the entry's reason.
+pub mod blocklist {
+    /// The grab finished, but import refused its file as no better than the
+    /// one the title already has, so grabbing it again would only repeat the
+    /// download. The entry names no indexer.
+    pub const IMPORT_NOT_AN_UPGRADE: &str = "BLOCKLIST_IMPORT_NOT_AN_UPGRADE";
+    pub const ALL: &[&str] = &[IMPORT_NOT_AN_UPGRADE];
+}
+
+/// Why automatic grab admission refused a candidate, where the refusal has a
+/// code of its own.
+pub mod admission {
+    /// The candidate beats the release already downloading for its scope, but
+    /// an automatic grab is never submitted beside a download the client is
+    /// still working, so it is refused before it is parked or sent.
+    pub const QUEUED_ITEM_BLOCKS_UPGRADE: &str = "ADMISSION_QUEUED_ITEM_BLOCKS_UPGRADE";
+    pub const ALL: &[&str] = &[QUEUED_ITEM_BLOCKS_UPGRADE];
+}
+
+/// What the archive workspace health check reports. Each result carries its
+/// counts as facts beside the sentence.
+pub mod archive_workspace_health {
+    /// Downloads' extraction workspaces hold scratch on disk; facts
+    /// `workspaces` and `bytes`.
+    pub const SCRATCH_IN_USE: &str = "ARCHIVE_WORKSPACE_SCRATCH_IN_USE";
+    /// Downloads whose extraction failed on every attempt and waits for an
+    /// operator retry; fact `blocked`.
+    pub const EXTRACTIONS_BLOCKED: &str = "ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED";
+    /// Entries in a library root's extraction folder that Scryer cannot
+    /// prove it made, found by the last sweep and left in place; fact
+    /// `unmarked`.
+    pub const UNMARKED_ENTRIES: &str = "ARCHIVE_WORKSPACE_UNMARKED_ENTRIES";
+    pub const ALL: &[&str] = &[SCRATCH_IN_USE, EXTRACTIONS_BLOCKED, UNMARKED_ENTRIES];
+
+    #[cfg(test)]
+    #[test]
+    fn reasons_are_distinct_and_area_prefixed() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in ALL {
+            assert!(reason.starts_with("ARCHIVE_WORKSPACE_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+            assert!(seen.insert(reason));
+        }
+    }
+}
+
 pub mod import {
-    /// Cannot safely upgrade the selected value because no configured media root could be resolved.
+    /// Cannot safely upgrade this file because no configured media root could be resolved.
     pub const MEDIA_ROOT_REQUIRED: &str = "IMPORT_MEDIA_ROOT_REQUIRED";
-    /// Refusing same-path upgrade guard because old file the selected value is outside media root the selected value.
+    /// Refusing to upgrade because the old file is outside the current media roots; keep the old root configured until existing files are moved, replaced, or deleted.
     pub const PATH_OUTSIDE_LIBRARY_ROOT: &str = "IMPORT_PATH_OUTSIDE_LIBRARY_ROOT";
-    /// Refusing to upgrade the selected value because no recycle bin config could be resolved for old file root the selected value.
+    /// Refusing to upgrade because no recycle bin settings could be resolved for the old file's root.
     pub const RECYCLE_BIN_CONFIG_REQUIRED: &str = "IMPORT_RECYCLE_BIN_CONFIG_REQUIRED";
-    /// Refusing to dispose old upgrade file the selected value because it is a symlink.
+    /// Refusing to replace the old file during the upgrade because it is a symlink.
     pub const SYMLINK_REFUSED: &str = "IMPORT_SYMLINK_REFUSED";
-    /// Refusing to dispose old upgrade file the selected value because it is not a regular file.
+    /// Refusing to replace the old file during the upgrade because it is not a regular file.
     pub const REGULAR_FILE_REQUIRED: &str = "IMPORT_REGULAR_FILE_REQUIRED";
     /// Refusing to upgrade because the recycle bin path is unsafe.
     pub const UPGRADE_RECYCLE_BIN_PATH_UNSAFE: &str = "IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE";
-    /// Refusing to restore old upgrade backup the selected value because destination is occupied.
+    /// The destination holds something this import did not place: a file that appeared before the copy, or one in the way of restoring the old file's backup. Nothing there was replaced.
     pub const DESTINATION_OCCUPIED: &str = "IMPORT_DESTINATION_OCCUPIED";
     /// A script's trigger cannot be changed after it is created.
     pub const SCRIPT_S_TRIGGER_CANNOT_CHANGED_AFTER_CREATED: &str =
@@ -5264,22 +5561,22 @@ pub mod import {
     /// External import setup secret draft cannot be empty; clear the draft instead.
     pub const EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_CANNOT_EMPTY: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_CANNOT_EMPTY";
-    /// External import setup secret draft supports at most the selected value instance API keys.
+    /// The external import setup supports at most 25 instance API keys.
     pub const EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST_INSTANCE_API_KEYS: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST_INSTANCE_API_KEYS";
-    /// External import setup secret draft supports at most the selected value the selected value.
+    /// The external import setup supports at most 500 overrides of each kind.
     pub const EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST";
     /// Duplicate external import setup instanceId.
     pub const EXTERNAL_IMPORT_SETUP_INSTANCEID_DUPLICATED: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_INSTANCEID_DUPLICATED";
-    /// Duplicate external import setup dedupKey in the selected value.
+    /// The external import setup lists the same entry more than once.
     pub const EXTERNAL_IMPORT_SETUP_DEDUPKEY_DUPLICATED: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_DEDUPKEY_DUPLICATED";
-    /// External import setup secret draft the selected value cannot be empty.
+    /// An external import setup secret cannot be empty.
     pub const EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_REQUIRED: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_REQUIRED";
-    /// External import setup secret draft the selected value must be at most the selected value bytes.
+    /// An external import setup secret is too long.
     pub const EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_OUT_OF_RANGE: &str =
         "IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_OUT_OF_RANGE";
     /// The completed download has not been observed yet; release again once it has.
@@ -5312,7 +5609,7 @@ pub mod import {
     pub const DISC_IMPORT_TARGETS_INVALID: &str = "IMPORT_DISC_IMPORT_TARGETS_INVALID";
     /// Import was not found.
     pub const RESOURCE_NOT_FOUND: &str = "IMPORT_RESOURCE_NOT_FOUND";
-    /// Import the selected value has status the selected item, only failed or skipped imports can be retried.
+    /// Only failed or skipped imports can be retried.
     pub const STATUS_ONLY_FAILED_SKIPPED_IMPORTS_RETRIED: &str =
         "IMPORT_STATUS_ONLY_FAILED_SKIPPED_IMPORTS_RETRIED";
     /// You do not have access to this library.
@@ -5335,14 +5632,14 @@ pub mod import {
     pub const DOWNLOAD_NO_STABLE_IDENTITY_YET: &str = "IMPORT_DOWNLOAD_NO_STABLE_IDENTITY_YET";
     /// This download is still being imported; release its sources once that finishes.
     pub const DOWNLOAD_STILL_BEING_IMPORTED: &str = "IMPORT_DOWNLOAD_STILL_BEING_IMPORTED";
-    /// Import the selected value is not holding its sources.
+    /// This import is not holding its sources.
     pub const NOT_HOLDING_SOURCES: &str = "IMPORT_NOT_HOLDING_SOURCES";
-    /// Archive matched title the selected item but extracted workspace the selected value could not be moved to the selected value without copying.
+    /// The archive matched a title, but its extracted files could not be moved to the title's destination without copying.
     pub const ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING: &str =
         "IMPORT_ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING";
-    /// Archive matched title the selected item but could not be re-extracted under the matched title destination.
+    /// The archive matched a title but could not be extracted again under the title's destination.
     pub const ARCHIVE_REEXTRACTION_FAILED: &str = "IMPORT_ARCHIVE_REEXTRACTION_FAILED";
-    /// Manual title the selected value is outside the durable Scryer submission title the selected value.
+    /// The manually chosen title is not the title this download was submitted for.
     pub const MANUAL_TITLE_OUTSIDE_DURABLE_SCRYER_SUBMISSION_TITLE: &str =
         "IMPORT_MANUAL_TITLE_OUTSIDE_DURABLE_SCRYER_SUBMISSION_TITLE";
     /// Scene subtitle file count limit exceeded; workspace preserved.
@@ -5462,27 +5759,27 @@ pub mod import {
     /// Media file changed before import metadata was published.
     pub const MEDIA_FILE_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED: &str =
         "IMPORT_MEDIA_FILE_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED";
-    /// Archive extraction requires a resolved import destination before staging output for the selected value.
+    /// Archive extraction requires a resolved import destination before staging output.
     pub const ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT: &str =
         "IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT";
-    /// Archive holds archives nested more than the selected value levels deep.
+    /// The archive holds archives nested more than 2 levels deep.
     pub const ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP: &str =
         "IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP";
-    /// Archive holds more than the selected value nested archives.
+    /// The archive holds more than 16 nested archives.
     pub const ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES: &str =
         "IMPORT_ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES";
-    /// Archive output directory the selected value is not inside the staging workspace.
+    /// The archive output directory is not inside the staging workspace.
     pub const ARCHIVE_OUTPUT_DIRECTORY_NOT_INSIDE_STAGING_WORKSPACE: &str =
         "IMPORT_ARCHIVE_OUTPUT_DIRECTORY_NOT_INSIDE_STAGING_WORKSPACE";
-    /// Archive staging output directory the selected value is not empty.
+    /// The archive staging output directory is not empty.
     pub const ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY: &str =
         "IMPORT_ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY";
-    /// Archive source the selected value lies inside its own extraction output.
+    /// The archive source lies inside its own extraction output.
     pub const ARCHIVE_SOURCE_LIES_INSIDE_OWN_EXTRACTION_OUTPUT: &str =
         "IMPORT_ARCHIVE_SOURCE_LIES_INSIDE_OWN_EXTRACTION_OUTPUT";
     /// Archive source must not be a symlink.
     pub const ARCHIVE_SOURCE_SYMLINK_FORBIDDEN: &str = "IMPORT_ARCHIVE_SOURCE_SYMLINK_FORBIDDEN";
-    /// Download holds more than the selected value archive sets.
+    /// The download holds more than 256 archive sets.
     pub const DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS: &str = "IMPORT_DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS";
     /// Archive source metadata exceeds entry limit.
     pub const ARCHIVE_SOURCE_METADATA_EXCEEDS_ENTRY_LIMIT: &str =
@@ -5493,13 +5790,13 @@ pub mod import {
     /// Archive source metadata escapes its source directory.
     pub const ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY: &str =
         "IMPORT_ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY";
-    /// Archive plugin does not support the selected value extraction.
+    /// The archive plugin does not support extracting this archive format.
     pub const ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_EXTRACTION: &str =
         "IMPORT_ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_EXTRACTION";
     /// Archive plugin manifest output is not a regular file.
     pub const ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE: &str =
         "IMPORT_ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE";
-    /// Archive plugin manifest size mismatch for the selected value.
+    /// The archive plugin's manifest lists a different size for an extracted file.
     pub const ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH: &str =
         "IMPORT_ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH";
     /// Archive plugin output contains too many entries.
@@ -5519,7 +5816,7 @@ pub mod import {
         "IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_FILES";
     /// Archive plugin output is too large.
     pub const ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE: &str = "IMPORT_ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE";
-    /// Archive plugin output exceeds the selected value bytes.
+    /// The archive plugin's output exceeds the 2 TiB limit.
     pub const ARCHIVE_PLUGIN_OUTPUT_EXCEEDS_BYTES: &str =
         "IMPORT_ARCHIVE_PLUGIN_OUTPUT_EXCEEDS_BYTES";
     /// Unsafe archive entry path.
@@ -5574,13 +5871,13 @@ pub mod import {
     /// Manual import episode target is unavailable.
     pub const MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE: &str =
         "IMPORT_MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE";
-    /// Manual import episode target the selected value does not belong to title the selected value.
+    /// A manual import episode target does not belong to this title.
     pub const MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE: &str =
         "IMPORT_MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE";
     /// Manual import series movie target is unavailable.
     pub const MANUAL_IMPORT_SERIES_MOVIE_TARGET_UNAVAILABLE: &str =
         "IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_UNAVAILABLE";
-    /// Manual import series movie target the selected value does not belong to title the selected value.
+    /// A manual import series movie target does not belong to this title.
     pub const MANUAL_IMPORT_SERIES_MOVIE_TARGET_DOES_NOT_BELONG_TITLE: &str =
         "IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_DOES_NOT_BELONG_TITLE";
     /// Manual import source root is required.
@@ -5598,16 +5895,16 @@ pub mod import {
     /// Cleanup locator is reused or identity is ambiguous.
     pub const CLEANUP_LOCATOR_REUSED_IDENTITY_AMBIGUOUS: &str =
         "IMPORT_CLEANUP_LOCATOR_REUSED_IDENTITY_AMBIGUOUS";
-    /// Download client completed download the selected value is unavailable for payload cleanup.
+    /// The download client's completed download is unavailable for payload cleanup.
     pub const DOWNLOAD_CLIENT_COMPLETED_DOWNLOAD_NOT_FOUND: &str =
         "IMPORT_DOWNLOAD_CLIENT_COMPLETED_DOWNLOAD_NOT_FOUND";
-    /// Download payload directory the selected value has too many entries to inventory safely.
+    /// The download payload directory has too many entries to inventory safely.
     pub const DOWNLOAD_PAYLOAD_DIRECTORY_TOO_MANY_ENTRIES_INVENTORY_SAFELY: &str =
         "IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_TOO_MANY_ENTRIES_INVENTORY_SAFELY";
-    /// Download payload directory the selected value is no longer a real directory.
+    /// The download payload directory is no longer a real directory.
     pub const DOWNLOAD_PAYLOAD_DIRECTORY_NO_LONGER_REAL_DIRECTORY: &str =
         "IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_NO_LONGER_REAL_DIRECTORY";
-    /// Download payload inventory entry the selected value is not a safe relative path.
+    /// A download payload inventory entry is not a safe relative path.
     pub const DOWNLOAD_PAYLOAD_INVENTORY_ENTRY_NOT_SAFE_RELATIVE_PATH: &str =
         "IMPORT_DOWNLOAD_PAYLOAD_INVENTORY_ENTRY_NOT_SAFE_RELATIVE_PATH";
     /// NZBGet cleanup identity changed.
@@ -5637,11 +5934,11 @@ pub mod import {
         "IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_INVALID";
     /// Download client payload path must not be a filesystem root or contain traversal.
     pub const PAYLOAD_PATH_UNSAFE: &str = "IMPORT_PAYLOAD_PATH_UNSAFE";
-    /// Refusing to delete download client output root the selected value.
+    /// Refusing to delete the download client's output root.
     pub const CLEANUP_TARGET_IS_OUTPUT_ROOT: &str = "IMPORT_CLEANUP_TARGET_IS_OUTPUT_ROOT";
     /// Payload overlaps a recycle root.
     pub const PAYLOAD_OVERLAPS_RECYCLE_ROOT: &str = "IMPORT_PAYLOAD_OVERLAPS_RECYCLE_ROOT";
-    /// Refusing to delete download client payload the selected value because it overlaps a configured library root.
+    /// Refusing to delete the download client payload because it overlaps a configured library root.
     pub const CLEANUP_TARGET_OVERLAPS_LIBRARY_ROOT: &str =
         "IMPORT_CLEANUP_TARGET_OVERLAPS_LIBRARY_ROOT";
     /// File payload cleanup requires durable job ownership.
@@ -5654,16 +5951,16 @@ pub mod import {
     /// Payload directory ownership is unverified; refusing shared-directory deletion.
     pub const PAYLOAD_DIRECTORY_OWNERSHIP_UNVERIFIED: &str =
         "IMPORT_PAYLOAD_DIRECTORY_OWNERSHIP_UNVERIFIED";
-    /// Download client payload path the selected value is not a file, directory, or symlink.
+    /// The download client payload path is not a file, directory, or symlink.
     pub const DOWNLOAD_CLIENT_PAYLOAD_PATH_NOT_FILE_DIRECTORY_SYMLINK: &str =
         "IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_NOT_FILE_DIRECTORY_SYMLINK";
-    /// Download client payload cleanup checkpoint the selected value is not a directory.
+    /// The download client payload cleanup checkpoint is not a directory.
     pub const DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY: &str =
         "IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY";
-    /// Download client payload path the selected value is outside output root the selected value.
+    /// The download client payload path is outside the client's output root.
     pub const DOWNLOAD_CLIENT_PAYLOAD_PATH_OUTSIDE_OUTPUT_ROOT: &str =
         "IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_OUTSIDE_OUTPUT_ROOT";
-    /// Download client payload path the selected value traverses symlink the selected value.
+    /// The download client payload path passes through a symlink.
     pub const DOWNLOAD_CLIENT_PAYLOAD_PATH_TRAVERSES_SYMLINK: &str =
         "IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_TRAVERSES_SYMLINK";
     /// You do not have access to any libraries.
@@ -5690,8 +5987,29 @@ pub mod import {
     pub const EPISODE_LOOKUP_FAILED: &str = "IMPORT_EPISODE_LOOKUP_FAILED";
     /// The source download failed.
     pub const SOURCE_JOB_FAILED: &str = "IMPORT_SOURCE_JOB_FAILED";
+    /// The existing destination is the source's own entry, so removing the source would remove the only copy. Nothing was removed. An import of a download ends on that file, and the client may remove its entry but not its data; the import is held only when that could not be recorded.
+    pub const DESTINATION_IS_SOURCE: &str = "IMPORT_DESTINATION_IS_SOURCE";
+    /// Could not tell whether the existing destination, or the library file a re-run found already imported, is the source's own entry: a read failed, the source could not be set aside or its set-aside name was taken, or it could not be put back. Nothing was removed. An import that holds no sources fails and is retried; it stops for reconciliation where it holds its sources, or where a set-aside source could not be put back at its name, which [`KEPT_PATH_FACT`] then names.
+    pub const DESTINATION_ALIAS_UNKNOWN: &str = "IMPORT_DESTINATION_ALIAS_UNKNOWN";
+    /// A copy that failed was kept at its destination, named by [`KEPT_PATH_FACT`], because the source no longer holds the file.
+    pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";
+    /// The library file an import would replace could not be compared with the source, so it was left in place and the import is retried.
+    pub const INCUMBENT_IDENTITY_UNDECIDED: &str = "IMPORT_INCUMBENT_IDENTITY_UNDECIDED";
+    /// Automatic import of a download ran several passes in a row that ended the same way and imported nothing new, so it stopped retrying. Retrying the import starts the count again.
+    pub const RETRY_LIMIT_REACHED: &str = "IMPORT_RETRY_LIMIT_REACHED";
+    /// The library file a re-run would replace was placed by this same download, so it was kept and counted as already present.
+    pub const INCUMBENT_PLACED_BY_THIS_DOWNLOAD: &str = "IMPORT_INCUMBENT_PLACED_BY_THIS_DOWNLOAD";
+    /// An extra video beside the download's episode names no episode; it was left in the download and not imported.
+    pub const UNPARSEABLE_EPISODE_MEMBER: &str = "IMPORT_UNPARSEABLE_EPISODE_MEMBER";
+    /// Preparing to replace the library file failed, so the new file was not placed and the existing file was kept.
+    pub const UPGRADE_PREPARATION_FAILED: &str = "IMPORT_UPGRADE_PREPARATION_FAILED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        INCUMBENT_IDENTITY_UNDECIDED,
+        RETRY_LIMIT_REACHED,
+        INCUMBENT_PLACED_BY_THIS_DOWNLOAD,
+        UNPARSEABLE_EPISODE_MEMBER,
+        UPGRADE_PREPARATION_FAILED,
         MEDIA_ROOT_REQUIRED,
         PATH_OUTSIDE_LIBRARY_ROOT,
         RECYCLE_BIN_CONFIG_REQUIRED,
@@ -5863,7 +6181,40 @@ pub mod import {
         EPISODE_NOT_FOUND,
         EPISODE_LOOKUP_FAILED,
         SOURCE_JOB_FAILED,
+        DESTINATION_IS_SOURCE,
+        DESTINATION_ALIAS_UNKNOWN,
+        COPY_KEPT_SOURCE_GONE,
     ];
+
+    /// The path where a failed copy was kept.
+    pub const KEPT_PATH_FACT: &str = "keptPath";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[KEPT_PATH_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod notifications {
@@ -5883,7 +6234,7 @@ pub mod notifications {
         "NOTIFICATION_CHANNELS_CANNOT_REFERENCE_MEDIA_SERVER_CONNECTIONS";
     /// Notification channel was not found.
     pub const CHANNEL_NOT_FOUND: &str = "NOTIFICATION_CHANNEL_NOT_FOUND";
-    /// Notification provider the selected item does not support test notifications.
+    /// This notification provider does not support test notifications.
     pub const PROVIDER_DOES_NOT_SUPPORT_TEST_NOTIFICATIONS: &str =
         "NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_TEST_NOTIFICATIONS";
     /// No notification plugin for channel type was not found.
@@ -5901,26 +6252,26 @@ pub mod notifications {
     /// Media server connection is disabled.
     pub const MEDIA_SERVER_CONNECTION_DISABLED: &str =
         "NOTIFICATION_MEDIA_SERVER_CONNECTION_DISABLED";
-    /// Notification provider the selected item is not available.
+    /// This notification provider is not available.
     pub const PROVIDER_UNAVAILABLE: &str = "NOTIFICATION_PROVIDER_UNAVAILABLE";
-    /// Notification provider the selected item does not support event the selected item.
+    /// This notification provider does not support one of the selected events.
     pub const PROVIDER_DOES_NOT_SUPPORT_EVENT: &str =
         "NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_EVENT";
-    /// Invalid media server provider the selected item.
+    /// The media server provider is invalid.
     pub const MEDIA_SERVER_PROVIDER_INVALID: &str = "NOTIFICATION_MEDIA_SERVER_PROVIDER_INVALID";
     /// Notification channel media server connection provider does not match channel type.
     pub const CHANNEL_MEDIA_SERVER_CONNECTION_PROVIDER_DOES_NOT_MATCH_CHANNEL_TYPE: &str =
         "NOTIFICATION_CHANNEL_MEDIA_SERVER_CONNECTION_PROVIDER_DOES_NOT_MATCH_CHANNEL_TYPE";
-    /// Invalid Plex media server base URL the selected item.
+    /// The Plex media server base URL is invalid.
     pub const PLEX_MEDIA_SERVER_BASE_URL_INVALID: &str =
         "NOTIFICATION_PLEX_MEDIA_SERVER_BASE_URL_INVALID";
     /// Notification configuration must be a JSON object.
     pub const CONFIGURATION_INVALID: &str = "NOTIFICATION_CONFIGURATION_INVALID";
-    /// Notification provider the selected item requires the selected item.
+    /// This notification provider is missing a required setting.
     pub const PROVIDER_REQUIRES: &str = "NOTIFICATION_PROVIDER_REQUIRES";
     /// Invalid notification target kind.
     pub const TARGET_KIND_INVALID: &str = "NOTIFICATION_TARGET_KIND_INVALID";
-    /// Notification target id is required for target kind the selected item.
+    /// A notification target id is required for this target kind.
     pub const TARGET_ID_REQUIRED_TARGET_KIND: &str = "NOTIFICATION_TARGET_ID_REQUIRED_TARGET_KIND";
     /// Notification target kind is required when target id is provided.
     pub const TARGET_KIND_REQUIRED_WHEN_TARGET_ID_PROVIDED: &str =
@@ -5978,7 +6329,7 @@ pub mod services {
     /// Download client  references proxy configuration , which was not found.
     pub const DOWNLOAD_CLIENT_REFERENCES_PROXY_CONFIGURATION_WHICH_NOT_FOUND: &str =
         "SERVICES_DOWNLOAD_CLIENT_REFERENCES_PROXY_CONFIGURATION_WHICH_NOT_FOUND";
-    /// Download client the selected value is assigned proxy the selected value, which is disabled.
+    /// The download client is assigned a proxy that is disabled.
     pub const DOWNLOAD_CLIENT_ASSIGNED_PROXY_WHICH_DISABLED: &str =
         "SERVICES_DOWNLOAD_CLIENT_ASSIGNED_PROXY_WHICH_DISABLED";
     /// Every reason owned by this policy area.
@@ -6033,9 +6384,9 @@ pub mod media {
     /// Map each complete disc title to one episode; combined episodes require separate authored playback titles.
     pub const MAP_EACH_COMPLETE_DISC_TITLE_ONE_EPISODE: &str =
         "MEDIA_MAP_EACH_COMPLETE_DISC_TITLE_ONE_EPISODE";
-    /// Mapped disc title the selected value no longer exists; review the mapping.
+    /// A mapped disc title no longer exists; review the mapping.
     pub const MAPPED_DISC_TITLE_NO_LONGER_EXISTS: &str = "MEDIA_MAPPED_DISC_TITLE_NO_LONGER_EXISTS";
-    /// Mapped disc title the selected value has incomplete or unsupported analysis.
+    /// A mapped disc title has incomplete or unsupported analysis.
     pub const MAPPED_DISC_TITLE_INCOMPLETE_UNSUPPORTED_ANALYSIS: &str =
         "MEDIA_MAPPED_DISC_TITLE_INCOMPLETE_UNSUPPORTED_ANALYSIS";
     /// Each episode and distinct playback title can occur in only one mapping.
@@ -6044,10 +6395,10 @@ pub mod media {
     /// Mapped episode does not belong to this title.
     pub const MAPPED_EPISODE_DOES_NOT_BELONG_TITLE: &str =
         "MEDIA_MAPPED_EPISODE_DOES_NOT_BELONG_TITLE";
-    /// Mapped disc title the selected value has no established runtime.
+    /// A mapped disc title has no established runtime.
     pub const MAPPED_DISC_TITLE_NO_ESTABLISHED_RUNTIME: &str =
         "MEDIA_MAPPED_DISC_TITLE_NO_ESTABLISHED_RUNTIME";
-    /// Disc title the selected value runtime is implausible for episode the selected value.
+    /// A disc title's runtime is implausible for the episode it is mapped to.
     pub const DISC_TITLE_RUNTIME_SECONDS_IMPLAUSIBLE_EPISODE: &str =
         "MEDIA_DISC_TITLE_RUNTIME_SECONDS_IMPLAUSIBLE_EPISODE";
     /// Image has no recognized disc titles.
@@ -6078,10 +6429,10 @@ pub mod media {
     /// Media source or selection changed during inspection; refresh and retry.
     pub const SOURCE_SELECTION_CHANGED_DURING_INSPECTION: &str =
         "MEDIA_SOURCE_SELECTION_CHANGED_DURING_INSPECTION";
-    /// Unknown search language the selected value; choose a language offered by the search language picker.
+    /// A search language is unknown; choose a language offered by the search language picker.
     pub const SEARCH_LANGUAGE_CHOOSE_LANGUAGE_OFFERED_SEARCH_LANGUAGE_PICKER_UNKNOWN: &str =
         "MEDIA_SEARCH_LANGUAGE_CHOOSE_LANGUAGE_OFFERED_SEARCH_LANGUAGE_PICKER_UNKNOWN";
-    /// At most the selected value search languages are allowed.
+    /// At most 16 search languages are allowed.
     pub const MOST_SEARCH_LANGUAGES_ALLOWED: &str = "MEDIA_MOST_SEARCH_LANGUAGES_ALLOWED";
     /// Native diagnostics are not compiled into this target.
     pub const NATIVE_DIAGNOSTICS_NOT_COMPILED_INTO_TARGET: &str =
@@ -6169,6 +6520,14 @@ pub mod scripts {
     pub const ALL: &[&str] = &[SCHEDULE_INVALID];
 }
 
+pub mod download_origin {
+    /// The read that says whether Scryer submitted a download failed, so the
+    /// download keeps the origin it was last known to have.
+    pub const LOOKUP_FAILED: &str = "DOWNLOAD_ORIGIN_LOOKUP_FAILED";
+    /// Every reason owned by this area.
+    pub const ALL: &[&str] = &[LOOKUP_FAILED];
+}
+
 pub mod arr_custom_formats {
     /// The pasted custom-format JSON is larger than the import accepts.
     pub const JSON_TOO_LARGE: &str = "ARR_CUSTOM_FORMAT_JSON_TOO_LARGE";
@@ -6219,6 +6578,60 @@ pub mod arr_custom_formats {
     }
 }
 
+pub mod maintainerr_import {
+    /// A Maintainerr export is larger than the import accepts.
+    pub const JSON_TOO_LARGE: &str = "MAINTAINERR_IMPORT_JSON_TOO_LARGE";
+    /// The Maintainerr rule groups are not valid JSON in the expected shape.
+    pub const GROUPS_JSON_INVALID: &str = "MAINTAINERR_IMPORT_GROUPS_JSON_INVALID";
+    /// The Maintainerr rule constants are not valid JSON in the expected shape.
+    pub const CONSTANTS_JSON_INVALID: &str = "MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID";
+    /// The export holds more rule groups than one import accepts.
+    pub const GROUPS_TOO_MANY: &str = "MAINTAINERR_IMPORT_GROUPS_TOO_MANY";
+    /// A Sonarr or Radarr quality profile list is not valid JSON in the
+    /// expected shape.
+    pub const PROFILES_JSON_INVALID: &str = "MAINTAINERR_IMPORT_PROFILES_JSON_INVALID";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        JSON_TOO_LARGE,
+        GROUPS_JSON_INVALID,
+        CONSTANTS_JSON_INVALID,
+        GROUPS_TOO_MANY,
+        PROFILES_JSON_INVALID,
+    ];
+
+    /// The largest accepted export document, in UTF-8 bytes.
+    pub const MAX_BYTES_FACT: &str = "maxBytes";
+    /// The most rule groups one import accepts.
+    pub const MAX_GROUPS_FACT: &str = "maxGroups";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[MAX_BYTES_FACT, MAX_GROUPS_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6234,7 +6647,7 @@ mod tests {
             ("SECURITY_", security::ALL),
             ("RULE_", rules::ALL),
             ("OAUTH_", oauth::ALL),
-            ("MAINTENANCE_", maintenance::ALL),
+            ("LIFECYCLE_", lifecycle::ALL),
             ("ACQUISITION_", acquisition::ALL),
             ("STANDBY_", standby::ALL),
             ("LOCATION_", location::ALL),
@@ -6261,10 +6674,17 @@ mod tests {
             ("JOB_", jobs::ALL),
             ("EVENTS_", events::ALL),
             ("IMPORT_", import::ALL),
+            ("ARCHIVE_EXTRACTION_", archive_extraction::ALL),
+            ("DOWNLOAD_FAILURE_", download_failure::ALL),
+            ("BLOCKLIST_", blocklist::ALL),
+            ("ADMISSION_", admission::ALL),
+            ("ARCHIVE_WORKSPACE_", archive_workspace_health::ALL),
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),
             ("ARR_CUSTOM_FORMAT_", arr_custom_formats::ALL),
+            ("MAINTAINERR_IMPORT_", maintainerr_import::ALL),
+            ("DOWNLOAD_ORIGIN_", download_origin::ALL),
         ];
         let mut distinct = std::collections::BTreeSet::new();
         for (prefix, codes) in areas {

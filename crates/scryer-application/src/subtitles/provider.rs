@@ -138,12 +138,12 @@ pub trait SubtitleProvider: Send + Sync {
 ///
 /// The host owns this because plugins do not get direct access to the media file.
 pub fn compute_subtitle_file_hash(path: &std::path::Path) -> AppResult<String> {
-    use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
 
     const CHUNK_SIZE: usize = 65_536;
 
-    let mut file = File::open(path)
+    let mut file = crate::disk::Disk::process()
+        .open_blocking(path, crate::disk::Open::read())
         .map_err(|e| AppError::Repository(format!("cannot open file for hashing: {e}")))?;
     let file_size = file
         .metadata()

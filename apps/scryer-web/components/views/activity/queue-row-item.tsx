@@ -2,7 +2,9 @@ import { canRetryDownloadPassword } from "@/lib/hooks/use-download-password-retr
 import { canReleaseHeldSources } from "@/lib/hooks/use-release-held-sources";
 import {
   ArrowDownToLine,
-  CircleAlert,
+  ShieldBan,
+  EyeOff,
+  Eye,
   CircleOff,
   Link2,
   PackageOpen,
@@ -304,7 +306,11 @@ export const QueueRowItem = memo(function QueueRowItem({
               if (!isActionLoading && !isRowBlocked) onSetImportDismissed();
             }}
           >
-            <CircleOff className="h-4 w-4" />
+            {row.canResumeImportTracking ? (
+              <Eye className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <EyeOff className="h-4 w-4" aria-hidden="true" />
+            )}
             <span>
               {t(
                 row.canResumeImportTracking
@@ -371,7 +377,7 @@ export const QueueRowItem = memo(function QueueRowItem({
               onMarkFailedSearchAgain();
             }}
           >
-            <CircleAlert className="h-4 w-4" />
+            <ShieldBan className="h-4 w-4" aria-hidden="true" />
             <span>{t("queue.markFailedSearchAgain")}</span>
           </Button>
         )}

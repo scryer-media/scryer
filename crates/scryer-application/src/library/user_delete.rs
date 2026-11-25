@@ -1,4 +1,5 @@
 use super::*;
+use crate::disk::{Disk, EntryKind, PathReading};
 use crate::stored_paths::path_to_stored_string;
 use crate::stored_paths::stored_path_to_path_buf;
 // Media here means a standalone library file, as library scans catalog it: a
@@ -9,7 +10,6 @@ use scryer_domain::{
     is_subtitle_file,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,14 +22,14 @@ const BULK_DELETE_PREVIEW_CONCURRENCY: usize = 4;
 /// What authorized a file deletion past the large-delete guard (RFC 137 §9.6).
 ///
 /// A human confirms a large delete by typing the confirmation value; a
-/// maintenance policy instead presents a typed authorization naming the arming
+/// lifecycle policy instead presents a typed authorization naming the arming
 /// record. Neither path may weaken the fingerprint check, which both share.
 pub(crate) enum DeleteConfirmationAuthority<'a> {
     Human { typed_confirmation: Option<&'a str> },
     Policy(&'a PolicyDeleteAuthorization),
 }
 
-/// Provenance of a maintenance-policy deletion: the rule, candidate, and
+/// Provenance of a lifecycle-policy deletion: the rule, candidate, and
 /// matcher revision whose arming authorized it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyDeleteAuthorization {
@@ -44,42 +44,14 @@ pub(crate) struct PolicyMediaFileDeletePlan {
     paths: Vec<PolicyDeletePathProof>,
 }
 
-impl PolicyMediaFileDeletePlan {
-    /// The policy executor owns these paths. Storage-pressure callers use this
-    /// narrow view to prove that every owned sidecar remains on their selected
-    /// root before authorizing the shared delete path.
-    pub(crate) fn path_strings(&self) -> Option<Vec<String>> {
-        self.paths
-            .iter()
-            .map(|entry| entry.path.to_str().map(str::to_string))
-            .collect()
-    }
-
-    /// A crash can occur after the shared policy deleter unlinks every path
-    /// and before the media-file catalog cleanup or checkpoint write. This is
-    /// only used to finish that exact journal entry; any unreadable path stays
-    /// unknown rather than being mistaken for a completed deletion.
-    pub(crate) async fn paths_are_all_absent(&self) -> AppResult<Option<bool>> {
-        if self.paths.is_empty() {
-            return Ok(None);
-        }
-        for entry in &self.paths {
-            match tokio::fs::symlink_metadata(&entry.path).await {
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Ok(_) => return Ok(Some(false)),
-                Err(_) => return Ok(None),
-            }
-        }
-        Ok(Some(true))
-    }
-}
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct PolicyDeletePathProof {
     path: PathBuf,
     proof: String,
 }
 
+// disk-guard: the deletion proof holds the raw device and inode numbers.
+#[allow(clippy::disallowed_methods)]
 async fn policy_path_proof(path: &Path) -> AppResult<String> {
     let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
         AppError::Repository(format!(
@@ -203,7 +175,7 @@ enum MediaFileDeleteOrigin {
     /// A person previewed and confirmed this file, alone or as part of an
     /// episode selection.
     User,
-    /// A maintenance policy chose the file with nobody confirming it.
+    /// A lifecycle policy chose the file with nobody confirming it.
     Automatic,
 }
 
@@ -722,7 +694,7 @@ impl AppUseCase {
         apply_delete_manifest(&manifest).await
     }
 
-    /// Maintenance-policy variant of [`Self::execute_delete_title_files`]
+    /// Lifecycle-policy variant of [`Self::execute_delete_title_files`]
     /// (RFC 137 section 9.6): the deletion carries a typed authorization naming
     /// the rule, candidate, and revision that authorized it, in place of the
     /// typed confirmation a human would give. Everything else — the fresh
@@ -739,12 +711,12 @@ impl AppUseCase {
             .resolve_title_delete_context(title_id, MissingTitleFolder::Refuse)
             .await?;
         // The owned multi-disc exception is for explicit user deletion only.
-        // Preserve the existing maintenance-policy boundary.
+        // Preserve the existing lifecycle-policy boundary.
         if let UserDeleteContext::Title(title) = &context
             && let Some(folder) = title.folder_path.as_deref()
         {
             let path = stored_path_to_path_buf(folder);
-            if path.is_dir() {
+            if Disk::process().follow(&path).await.is(EntryKind::Directory) {
                 let patterns =
                     crate::library_discovery::episode_folder_patterns(self, &title.facet).await?;
                 crate::library_discovery::ensure_existing_title_boundary(&path, &patterns)
@@ -812,23 +784,23 @@ impl AppUseCase {
                 .find(|expected| expected.path == entry.path)
             else {
                 return Err(AppError::validation_refused(
-                    crate::error_reasons::library::MAINTENANCE_DELETION_TARGETS_CHANGED,
-                    "maintenance deletion targets changed; re-evaluation required",
+                    crate::error_reasons::library::LIFECYCLE_DELETION_TARGETS_CHANGED,
+                    "lifecycle deletion targets changed; re-evaluation required",
                 ));
             };
             if entry.delete_kind == DeletePathKind::Directory
                 || policy_path_proof(&entry.path).await? != expected.proof
             {
                 return Err(AppError::validation_refused(
-                    crate::error_reasons::library::MAINTENANCE_DELETION_FILE_CHANGED,
-                    "maintenance deletion file changed; re-evaluation required",
+                    crate::error_reasons::library::LIFECYCLE_DELETION_FILE_CHANGED,
+                    "lifecycle deletion file changed; re-evaluation required",
                 ));
             }
         }
         if manifest.entries.len() == plan.paths.len() && manifest.fingerprint != plan.fingerprint {
             return Err(AppError::validation_refused(
-                crate::error_reasons::library::MAINTENANCE_DELETION_FINGERPRINT_CHANGED,
-                "maintenance deletion fingerprint changed",
+                crate::error_reasons::library::LIFECYCLE_DELETION_FINGERPRINT_CHANGED,
+                "lifecycle deletion fingerprint changed",
             ));
         }
         // Rebuild and validate again through the shared confirmation owner.
@@ -1151,7 +1123,7 @@ impl AppUseCase {
         if let Some(title) = title {
             if let Some(folder) = title.folder_path.as_deref() {
                 let path = stored_path_to_path_buf(folder);
-                if path.is_dir() {
+                if Disk::process().follow(&path).await.is(EntryKind::Directory) {
                     let patterns =
                         crate::library_discovery::episode_folder_patterns(self, &title.facet)
                             .await?;
@@ -1263,7 +1235,7 @@ impl AppUseCase {
                         candidate_id = authorization.candidate_id.as_str(),
                         revision_number = authorization.revision_number,
                         media_count = manifest.media_count,
-                        "maintenance policy authorized a large deletion"
+                        "lifecycle policy authorized a large deletion"
                     );
                 }
             }
@@ -1642,7 +1614,7 @@ pub(crate) const TITLE_FOLDER_UNKNOWN: &str = "title_folder_unknown";
 /// What a title delete does when the title has no recorded folder.
 #[derive(Clone, Copy)]
 enum MissingTitleFolder {
-    /// Refuse, as a maintenance-policy delete always does.
+    /// Refuse, as a lifecycle-policy delete always does.
     Refuse,
     /// Use the folder the title's recorded files imply, without recording it.
     Derive,
@@ -1845,29 +1817,29 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
         }
     }
 
-    match std::fs::symlink_metadata(&normalized_folder) {
-        Ok(metadata) => {
-            let file_type = metadata.file_type();
-            if file_type.is_symlink() {
-                return Err(AppError::validation_refused(
-                    crate::title_delete::FOLDER_IS_SYMLINK,
-                    format!(
-                        "refusing to delete title folder {} because it is a symlink",
-                        normalized_folder.display()
-                    ),
-                ));
-            }
-            if !metadata.is_dir() {
-                return Err(AppError::validation_refused(
-                    crate::title_delete::FOLDER_NOT_DIRECTORY,
-                    format!(
-                        "refusing to delete title folder {} because it is not a directory",
-                        normalized_folder.display()
-                    ),
-                ));
-            }
+    let disk = Disk::process();
+    let reading = disk.uncached_blocking(&normalized_folder);
+    match reading.kind() {
+        Some(EntryKind::Directory) => {}
+        Some(EntryKind::Symlink) => {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_IS_SYMLINK,
+                format!(
+                    "refusing to delete title folder {} because it is a symlink",
+                    normalized_folder.display()
+                ),
+            ));
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => {
+        Some(_) => {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_NOT_DIRECTORY,
+                format!(
+                    "refusing to delete title folder {} because it is not a directory",
+                    normalized_folder.display()
+                ),
+            ));
+        }
+        None if reading.exists() == Some(false) => {
             return Ok(finalize_manifest(
                 "title",
                 &title_id,
@@ -1875,9 +1847,9 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
                 Vec::new(),
             ));
         }
-        Err(error) => {
+        None => {
             return Err(AppError::Repository(format!(
-                "failed to inspect title folder {}: {error}",
+                "failed to inspect title folder {}: it could not be read",
                 normalized_folder.display()
             )));
         }
@@ -1907,9 +1879,10 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     }
     let has_recorded_media = recorded_paths.iter().any(|path| {
         let path = stored_path_to_path_buf(path);
-        path.is_file()
+        disk.follow_blocking(&path).is(EntryKind::File)
             && path.starts_with(&normalized_folder)
-            && std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved_folder))
+            && (disk.canonicalize_blocking(&path))
+                .is_ok_and(|path| path.starts_with(&resolved_folder))
     });
     if !has_recorded_media {
         return Err(AppError::validation_refused(
@@ -2168,44 +2141,30 @@ fn walk_directory_entries(
     file_entries: &mut Vec<DeleteManifestEntry>,
     directory_entries: &mut Vec<DeleteManifestEntry>,
 ) -> AppResult<()> {
-    let mut child_paths = Vec::new();
-    let read_dir = std::fs::read_dir(directory).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to read directory {}: {error}",
-            directory.display()
-        ))
-    })?;
-
-    for entry in read_dir {
-        let entry = entry.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read directory entry in {}: {error}",
-                directory.display()
-            ))
-        })?;
-        child_paths.push(entry.path());
-    }
+    let disk = Disk::process();
+    // Names only: each child is probed once below.
+    let mut child_paths: Vec<PathBuf> = (disk.entries_blocking(directory, |_| true))
+        .map_err(|error| AppError::Repository(error.to_string()))?
+        .into_iter()
+        .map(crate::disk::Visited::into_path)
+        .collect();
     child_paths.sort();
 
     for path in child_paths {
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect filesystem entry {}: {error}",
-                path.display()
-            ))
-        })?;
-        let file_type = metadata.file_type();
-        if file_type.is_symlink() {
-            file_entries.push(DeleteManifestEntry {
-                path,
-                delete_kind: DeletePathKind::Symlink,
-                preview_category: Some(DeletePreviewCategory::Other),
-            });
-            continue;
-        }
-        if metadata.is_dir() {
-            walk_directory_entries(&path, file_entries, directory_entries)?;
-            continue;
+        match known_kind(&path, disk.uncached_blocking(&path))? {
+            EntryKind::Symlink => {
+                file_entries.push(DeleteManifestEntry {
+                    path,
+                    delete_kind: DeletePathKind::Symlink,
+                    preview_category: Some(DeletePreviewCategory::Other),
+                });
+                continue;
+            }
+            EntryKind::Directory => {
+                walk_directory_entries(&path, file_entries, directory_entries)?;
+                continue;
+            }
+            EntryKind::File | EntryKind::Other => {}
         }
 
         file_entries.push(DeleteManifestEntry {
@@ -2227,18 +2186,12 @@ fn walk_directory_entries(
 fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<DeleteManifestEntry>> {
     let mut entries = Vec::new();
     for path in paths {
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "failed to inspect filesystem entry {}: {error}",
-                    path.display()
-                )));
-            }
-        };
-        let file_type = metadata.file_type();
-        if metadata.is_dir() {
+        let reading = Disk::process().uncached_blocking(&path);
+        if reading.exists() == Some(false) {
+            continue;
+        }
+        let kind = known_kind(&path, reading)?;
+        if kind == EntryKind::Directory {
             return Err(AppError::validation_refused(
                 crate::error_reasons::library::DELETE_TARGET_NOT_FILE,
                 format!(
@@ -2249,12 +2202,12 @@ fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<Dele
         }
         entries.push(DeleteManifestEntry {
             path: path.clone(),
-            delete_kind: if file_type.is_symlink() {
+            delete_kind: if kind == EntryKind::Symlink {
                 DeletePathKind::Symlink
             } else {
                 DeletePathKind::File
             },
-            preview_category: Some(if file_type.is_symlink() {
+            preview_category: Some(if kind == EntryKind::Symlink {
                 DeletePreviewCategory::Other
             } else {
                 classify_path_for_preview(&path)
@@ -2262,6 +2215,17 @@ fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<Dele
         });
     }
     Ok(entries)
+}
+
+/// The kind `reading` shows at `path`; an error when it shows none.
+fn known_kind(path: &Path, reading: PathReading) -> AppResult<EntryKind> {
+    reading.kind().ok_or_else(|| {
+        AppError::Repository(format!(
+            "failed to inspect filesystem entry {}: {}",
+            path.display(),
+            reading.absence()
+        ))
+    })
 }
 
 fn classify_path_for_preview(path: &Path) -> DeletePreviewCategory {

@@ -5,6 +5,7 @@
 //! private rw scratch dir (`TMPDIR`). Stdio is host-owned and captured for
 //! diagnostics — never inherited. No network, no env beyond `TMPDIR`.
 
+use scryer_application::disk::{Disk, ScratchDir};
 use scryer_application::{AppError, AppResult};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder};
@@ -205,7 +206,7 @@ pub(crate) struct PreparedComponentSandbox {
     pub(crate) stdout: MemoryOutputPipe,
     pub(crate) stderr: MemoryOutputPipe,
     /// Kept alive for the invocation; dropped (and removed) afterwards.
-    pub(crate) _scratch: tempfile::TempDir,
+    pub(crate) _scratch: ScratchDir,
 }
 
 /// Build the WASI Preview 2 sandbox for one component invocation.
@@ -216,12 +217,12 @@ pub(crate) struct PreparedComponentSandbox {
 pub(crate) fn build_component_sandbox(
     preopens: &[PreopenSpec],
 ) -> AppResult<PreparedComponentSandbox> {
-    let scratch = tempfile::Builder::new()
-        .prefix(".scryer-archive-scratch-")
-        .tempdir()
+    let scratch = Disk::process()
+        .scratch_dir_blocking(".scry-sc-")
         .map_err(|error| {
             AppError::Repository(format!(
-                "failed to create archive plugin scratch dir: {error}"
+                "failed to create archive plugin scratch dir: {}",
+                error.words()
             ))
         })?;
 

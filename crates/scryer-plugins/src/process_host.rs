@@ -390,7 +390,11 @@ fn same_command_path(left: &str, right: &str) -> bool {
         return true;
     }
 
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+    let disk = scryer_application::disk::Disk::process();
+    match (
+        disk.canonicalize_blocking(Path::new(left)),
+        disk.canonicalize_blocking(Path::new(right)),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => Path::new(left) == Path::new(right),
     }

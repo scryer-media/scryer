@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { LifecycleUpcomingPanel } from "./lifecycle-upcoming-panel";
 import { RecycleBinPanel } from "./recycle-bin-panel";
 
 import {
@@ -16,7 +17,7 @@ import {
 import { combinePanelStates } from "@/lib/utils/dashboard-refresh";
 import type {
   DashboardBreakpoint,
-  DashboardPanelId,
+  DashboardPanelKind,
   DashboardTier,
 } from "@/lib/utils/dashboard-layout";
 
@@ -24,6 +25,10 @@ type DashboardPanelRenderArgs = {
   data: DashboardPanelData;
   tier: DashboardTier;
   breakpoint: DashboardBreakpoint;
+  /** The placement's id; an instanced kind keys its own state by it. */
+  panelId: string;
+  /** The placement's saved settings, as the server returned them. */
+  settings: unknown;
 };
 
 /**
@@ -33,9 +38,15 @@ type DashboardPanelRenderArgs = {
  * the load state the panel's data depends on.
  */
 export const DASHBOARD_PANEL_RENDERERS: Readonly<
-  Record<DashboardPanelId, (args: DashboardPanelRenderArgs) => React.ReactNode>
+  Record<
+    DashboardPanelKind,
+    (args: DashboardPanelRenderArgs) => React.ReactNode
+  >
 > = {
   "recycle-bin": ({ tier }) => <RecycleBinPanel tier={tier} />,
+  "lifecycle-upcoming": ({ tier, panelId, settings }) => (
+    <LifecycleUpcomingPanel panelId={panelId} settings={settings} tier={tier} />
+  ),
   stats: ({ data, tier, breakpoint }) => (
     <DashboardPanelLoad state={data.panels.overview}>
       <StatsPanel

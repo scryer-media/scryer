@@ -1,6 +1,7 @@
 pub(crate) use crate::*;
 
 pub mod arr_custom_format;
+pub mod builder_model;
 pub(crate) mod builtin_trash;
 pub(crate) mod metrics;
 pub mod preview;

@@ -66,14 +66,6 @@ function mount(responses: unknown[], refreshFails = false) {
       jsxs: (type: string, props: object) => ({ type, props }),
       Fragment: "fragment",
     },
-    urql: {
-      useClient: () => ({
-        mutation: (_query: unknown, variables: Variables) => {
-          calls.push(variables);
-          return { toPromise: async () => responses.shift() };
-        },
-      }),
-    },
     "lucide-react": { Download: "icon" },
     "@/components/ui/button": { Button: "button" },
     "@/components/ui/dialog": {
@@ -89,7 +81,16 @@ function mount(responses: unknown[], refreshFails = false) {
     "@/lib/context/global-status-context": {
       useGlobalStatus: () => (message: string) => statuses.push(message),
     },
-    "@/lib/graphql/mutations": { queueStandbyReleaseMutation: "queue" },
+    // The grab runs as a background job; the hook resolves with its outcome
+    // or rejects with the error it raised.
+    "@/lib/hooks/use-grab": {
+      useGrab: () => async (request: { standby: Variables }) => {
+        calls.push(request.standby);
+        const response = responses.shift();
+        if (response instanceof Error) throw response;
+        return { standby: response };
+      },
+    },
     "@/lib/graphql/error-message": {
       userFacingGraphQlErrorMessage: () => "failure",
     },
@@ -160,9 +161,7 @@ test(
   "standby direct queue refreshes only after acceptance",
   { timeout: 5000 },
   async () => {
-    const h = mount([
-      { data: { queueStandbyRelease: { grabbed: true, conflicts: [] } } },
-    ]);
+    const h = mount([{ grabbed: true, conflicts: [] }]);
     await h.click("wanted.downloadStandby");
     assert.deepEqual(h.calls, [
       { id: "saved", choice: "CHECK", confirmed: [] },
@@ -175,10 +174,7 @@ test(
   "accepted queue is not reported as submission failure when refresh fails",
   { timeout: 5000 },
   async () => {
-    const h = mount(
-      [{ data: { queueStandbyRelease: { grabbed: true, conflicts: [] } } }],
-      true,
-    );
+    const h = mount([{ grabbed: true, conflicts: [] }], true);
     await h.click("wanted.downloadStandby");
     assert.equal(h.calls.length, 1);
     assert.equal(h.statuses.at(-1), "wanted.standbyQueuedRefreshFailed");
@@ -198,14 +194,10 @@ for (const [label, choice] of [
     async () => {
       const h = mount([
         {
-          data: {
-            queueStandbyRelease: {
-              grabbed: false,
-              conflicts: [conflict("one"), conflict("two")],
-            },
-          },
+          grabbed: false,
+          conflicts: [conflict("one"), conflict("two")],
         },
-        { data: { queueStandbyRelease: { grabbed: true, conflicts: [] } } },
+        { grabbed: true, conflicts: [] },
       ]);
       await h.click("wanted.downloadStandby");
       assert.equal(h.refreshed(), 0);
@@ -234,18 +226,10 @@ test(
   { timeout: 5000 },
   async () => {
     const h = mount([
+      { grabbed: false, conflicts: [conflict("one")] },
       {
-        data: {
-          queueStandbyRelease: { grabbed: false, conflicts: [conflict("one")] },
-        },
-      },
-      {
-        data: {
-          queueStandbyRelease: {
-            grabbed: false,
-            conflicts: [conflict("one"), conflict("new")],
-          },
-        },
+        grabbed: false,
+        conflicts: [conflict("one"), conflict("new")],
       },
     ]);
     await h.click("wanted.downloadStandby");
@@ -272,12 +256,8 @@ test(
   { timeout: 5000 },
   async () => {
     const h = mount([
-      {
-        data: {
-          queueStandbyRelease: { grabbed: false, conflicts: [conflict("one")] },
-        },
-      },
-      { error: new Error("synthetic cancellation failure") },
+      { grabbed: false, conflicts: [conflict("one")] },
+      new Error("synthetic cancellation failure"),
     ]);
     await h.click("wanted.downloadStandby");
     await h.click("wanted.standbyCancelAndQueue");
@@ -298,22 +278,14 @@ test(
   async () => {
     const h = mount([
       {
-        data: {
-          queueStandbyRelease: {
-            grabbed: false,
-            conflicts: [conflict("one"), conflict("two")],
-          },
-        },
+        grabbed: false,
+        conflicts: [conflict("one"), conflict("two")],
       },
       {
-        data: {
-          queueStandbyRelease: {
-            grabbed: true,
-            conflicts: [],
-            cancelled: [conflict("one")],
-            cancelFailed: [conflict("two")],
-          },
-        },
+        grabbed: true,
+        conflicts: [],
+        cancelled: [conflict("one")],
+        cancelFailed: [conflict("two")],
       },
     ]);
     await h.click("wanted.downloadStandby");
@@ -331,17 +303,9 @@ test(
   { timeout: 5000 },
   async () => {
     const h = mount([
-      {
-        data: {
-          queueStandbyRelease: { grabbed: false, conflicts: [conflict("one")] },
-        },
-      },
-      { error: new Error("synthetic cancellation failure") },
-      {
-        data: {
-          queueStandbyRelease: { grabbed: false, conflicts: [conflict("one")] },
-        },
-      },
+      { grabbed: false, conflicts: [conflict("one")] },
+      new Error("synthetic cancellation failure"),
+      { grabbed: false, conflicts: [conflict("one")] },
     ]);
     await h.click("wanted.downloadStandby");
     await h.click("wanted.standbyCancelAndQueue");

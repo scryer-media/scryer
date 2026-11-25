@@ -17,5 +17,7 @@ query IndexerStatus {
     disabledUntil
     rateLimitedUntil
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
   }
 }

@@ -274,6 +274,8 @@ const ru: LocaleDictionary = {
   "label.for": "для",
   "label.enabled": "Включено",
   "label.disabled": "Отключено",
+  "label.createEnabled": "Создать включённым",
+  "label.createDisabled": "Создать отключённым",
   "unit.seconds": "секунды",
   "label.enable": "Включить",
   "label.disable": "Отключить",
@@ -414,6 +416,25 @@ const ru: LocaleDictionary = {
   "settings.securityLoginSettings": "Настройки входа",
   "settings.securityEnableFormLoginHelp":
     "Если параметр включён, Scryer требует аутентифицированный сеанс пользователя. Если параметр отключён, запросы выполняются от имени администратора по умолчанию.",
+  "settings.securityMcpEnabled": "Разрешить MCP-сервер",
+  "settings.securityMcpEnabledHelp":
+    "Позволяет агентам для программирования использовать навыки Scryer через MCP по адресу /mcp с ключом API. Если выключено, каждый запрос MCP отклоняется; ключи API продолжают работать с GraphQL API.",
+  "settings.securityMcpEnvOverride":
+    "Задана переменная SCRYER_MCP_ENABLED, и она определяет, отвечает ли MCP-сервер. Сохранённый выбор применится после удаления переменной.",
+  "settings.securityLocalTrust": "Доверие к локальной сети",
+  "settings.securityLocalTrustHelp":
+    "Открытый режим администратора и пропуск входа для локальных IP-адресов доверяют запросу по адресу, с которого он пришёл. Эти параметры сужают это доверие.",
+  "settings.securityLocalTrustProxyWarning":
+    "Небезопасно за обратным прокси, который не передаёт адреса клиентов. Тогда каждый запрос приходит с локального адреса прокси и обходит вход.",
+  "settings.securityAuthlessProxyWarning":
+    "Без входа Scryer пускает любого, кто обращается с локального адреса. За обратным прокси, который не передаёт адреса клиентов, каждый посетитель приходит с локального адреса прокси и получает полный доступ.",
+  "settings.securityRestrictLocalTrustToProxies":
+    "Доверять переданным адресам только от доверенных прокси",
+  "settings.securityRestrictLocalTrustToProxiesHelp":
+    "Если включено, доверенный прокси из списка считается локальным, только когда передаёт локальный адрес клиента, а заголовкам переадресации от других отправителей не доверяют. Локальные клиенты, подключающиеся напрямую, по-прежнему считаются локальными. Нужен хотя бы один доверенный прокси.",
+  "settings.securityLocalTrustAllowedHosts": "Разрешённые имена хостов",
+  "settings.securityLocalTrustAllowedHostsHelp":
+    "Запросы, которым доверяют по адресу, должны указывать IP-адрес, localhost, хост публичного URL или одно из этих имён. Это блокирует DNS rebinding. По одному имени на строку; оставьте пустым, чтобы отключить проверку.",
   "settings.securityPasswordMinLength": "Минимальная длина пароля",
   "settings.securitySessionDuration": "Вход действителен",
   "settings.securitySessionDurationHelp":
@@ -892,6 +913,12 @@ const ru: LocaleDictionary = {
   "jobs.status.completed": "Завершено",
   "jobs.status.warning": "Предупреждение",
   "jobs.status.failed": "Ошибка",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_SCRATCH_IN_USE":
+    "Рабочие папки загрузок: {{workspaces}}, распакованные архивы занимают {{bytes}} байт",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED":
+    "Загрузок, архивы которых не удалось распаковать ни с одной попытки: {{blocked}}; повторите их импорт",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_UNMARKED_ENTRIES":
+    "Объектов в папках .scry-ex корней библиотек, созданных не Scryer и оставленных на месте: {{unmarked}}",
   "jobs.category.library": "Библиотека",
   "jobs.category.acquisition": "Получение",
   "jobs.category.maintenance": "Обслуживание",
@@ -988,6 +1015,14 @@ const ru: LocaleDictionary = {
     "Минимальная разница оценки в одном уровне качества",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Релиз того же уровня качества должен превзойти оценку текущего файла как минимум на указанное значение.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Минимум недостающих серий для пакета",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Пакет сезона ищется, только если в сезоне не хватает как минимум столько серий. По умолчанию 2. При значении 1 автоматический поиск одной недостающей серии может взять и пакет, из-за чего могут скачиваться уже имеющиеся серии.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Минимум недостающих серий для многосезонного пакета (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Многосезонный пакет рассматривается, только если не хватает более указанного процента серий сериала. По умолчанию 30. При 0 подходит любая недостающая серия; при 100 многосезонные пакеты не берутся.",
   "settings.acquisitionConvergence": "Сходимость и распределение нагрузки",
   "settings.acquisitionPollIntervalSeconds": "Интервал опроса (секунды)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -1380,7 +1415,7 @@ const ru: LocaleDictionary = {
   "settings.featuresHeader": "Функции",
   "settings.experimentalFeaturesLabel": "Включить экспериментальные функции",
   "settings.experimentalFeaturesHelp":
-    "Показывает функции, которые ещё дорабатываются для всех на этом экземпляре: перемещение тайтлов между библиотеками и корневыми каталогами, а также правила обслуживания.",
+    "Показывает функции, которые ещё дорабатываются для всех на этом экземпляре: перемещение тайтлов между библиотеками и корневыми каталогами, а также правила жизненного цикла.",
   "settings.personalizedDiscoveryLabel": "Персонализированные рекомендации",
   "settings.personalizedDiscoveryHelp":
     "Отправляет сводку вашей библиотеки в шлюз метаданных, чтобы рекомендации могли предлагать тайтлы на основе того, что у вас есть. Отключите, чтобы ограничить рекомендации только публичными лентами.",
@@ -2229,6 +2264,8 @@ const ru: LocaleDictionary = {
     "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "У загрузки нет подтверждённой истории добавления Scryer. Релиз не заблокирован, данные не удалены, повторный поиск не запрошен.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
@@ -2339,7 +2376,7 @@ const ru: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Скачать диагностический пакет",
   "system.diagnosticsBundle.preparing": "Подготовка диагностики…",
   "system.diagnosticsBundle.helper":
-    "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
+    "Журналы, метрики и сводка настроек в одном файле для разработчика. Пакет очищается по мере возможности, и его можно безопасно отправить в тикете Discord, но публиковать его в issues на GitHub или в публичных каналах Discord не рекомендуется.",
   "system.diagnosticsBundle.failed":
     "Не удалось скачать диагностический пакет.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
@@ -2540,6 +2577,14 @@ const ru: LocaleDictionary = {
   "settings.ruleLibraryDescription":
     "Готовые правила, которые можно добавить одним нажатием. Выберите шаблон, чтобы автоматически заполнить редактор.",
   "settings.ruleLibraryAll": "Все",
+  "settings.scoringNavRules": "Правила",
+  "settings.scoringNavCommunity": "Сообщество",
+  "settings.communityRulePacks": "Доступные пакеты правил",
+  "settings.communityRulePacksAllInstalled":
+    "Все пакеты правил сообщества уже установлены.",
+  "settings.rulePackAuthor": "Автор",
+  "settings.rulePackInstall": "Установить",
+  "settings.rulePackInstalling": "Установка…",
   "settings.ruleLibraryCommunityEmpty":
     "Пакеты правил сообщества отсутствуют. Обновите реестр плагинов, чтобы проверить наличие новых пакетов.",
   "settings.rulesFacetSection":
@@ -2551,7 +2596,7 @@ const ru: LocaleDictionary = {
   "settings.refSubtitle":
     "Нажмите, чтобы развернуть полный справочник всех полей, доступных в правилах Rego.",
   "settings.refIntro":
-    "Каждое правило получает объект input, содержащий пять документов верхнего уровня. Код Rego обращается к ним через input.release, input.profile, input.context, input.builtin_score и input.file. Объект input.file имеет значение null во время оценки перед загрузкой и заполняется только после загрузки во время проверки импорта.",
+    "Каждое правило получает объект input, содержащий пять документов верхнего уровня. Код Rego обращается к ним через input.release, input.profile, input.context, input.builtin_score и input.file. input.file имеет значение null, когда оценивается результат индексатора, и заполняется всякий раз, когда был проанализирован сам файл: при проверке импорта после загрузки и при повторной оценке файла, уже находящегося в библиотеке.",
   "settings.refColField": "Поле",
   "settings.refColType": "Тип",
   "settings.refColDescription": "Описание",
@@ -2561,12 +2606,12 @@ const ru: LocaleDictionary = {
   "settings.refReleaseRawTitle":
     "Исходное необработанное название релиза, полученное от индексатора",
   "settings.refReleaseQuality":
-    "Определённый уровень качества (например, 2160P, 1080P, 720P)",
+    "Определённый уровень качества, в нижнем регистре (например, 2160p, 1080p, 720p)",
   "settings.refReleaseSource":
-    "Источник медиаконтента (например, WEB-DL, BLURAY, HDTV)",
+    "Источник медиаконтента, разобранный из имени (например, WEB-DL, WEBRip, BluRay, HDTV). scryer.normalize_source возвращает форму в верхнем регистре (WEBDL, WEBRIP, BLURAY)",
   "settings.refReleaseVideoCodec": "Видеокодек (например, H.265, H.264, AV1)",
   "settings.refReleaseAudio":
-    "Основной аудиокодек (например, DDP, AAC, TrueHD)",
+    "Основной аудиокодек (например, DDP, AAC, TRUEHD, DTSMA)",
   "settings.refReleaseAudioCodecs":
     "Все обнаруженные аудиокодеки в виде массива",
   "settings.refReleaseGuideFacts":
@@ -2574,12 +2619,12 @@ const ru: LocaleDictionary = {
   "settings.refReleaseAudioChannels":
     "Конфигурация аудиоканалов (например, 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
-    "Коды языков аудио ISO 639-3 (например, eng, jpn). Включают языки из листинга индексатора, зафиксированные при захвате релиза; файлы, найденные сканированием, принятые или импортированные до того, как начали сохраняться снимки листинга, дают только то, что видно по имени и самому файлу",
+    "Коды языков аудио ISO 639-3 (например, eng, jpn). Включают языки из листинга индексатора, зафиксированные при захвате релиза, и языки, которые выводит Scryer: метка dual-audio или MULTi добавляет язык оригинала тайтла (и eng, если язык не указан), а релиз без метки добавляет язык оригинала, когда профиль требует языки аудио. Файлы, найденные сканированием, принятые или импортированные до того, как начали сохраняться снимки листинга, дают только то, что видно по имени и самому файлу",
   "settings.refReleaseIndexerLanguages":
     "Коды языков аудио ISO 639-3, которые сообщил сам листинг индексатора, зафиксированные при захвате релиза. Никогда не выводятся из имени или тайтла; пусто, если индексатор ничего не сообщил",
   "settings.refReleaseLangsSub": "Коды языков субтитров ISO 639-3",
   "settings.refReleaseIsDualAudio":
-    "Истинно, если обнаружено несколько звуковых дорожек",
+    "Истинно, если имя релиза содержит метку dual-audio",
   "settings.refReleaseIsAtmos": "Истинно, если присутствует звук Dolby Atmos",
   "settings.refReleaseIsDV": "Истинно, если обнаружены метаданные Dolby Vision",
   "settings.refReleaseDetectedHdr":
@@ -2686,25 +2731,26 @@ const ru: LocaleDictionary = {
   "settings.refCtxTags":
     "Пользовательские теги материала в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
   "settings.refCtxHasExisting":
-    "Истинно, если для этого материала уже существует файл",
+    "Истинно, если этот слот уже занят файлом. Задаётся только при проверке импорта после загрузки; при оценке результата индексатора всегда false",
   "settings.refCtxExistingScore":
-    "Встроенная оценка существующего файла (если он существует)",
+    "Полная оценка файла, уже находящегося в слоте, с учётом правил. Задаётся только при проверке импорта после загрузки; в остальных случаях null",
   "settings.refCtxSearchMode":
-    "Режим оценки. Текущие значения: auto и post_download",
-  "settings.refCtxRuntimeMin": "Продолжительность контента в минутах",
+    "Где используется оценка: canonical (поиск, захват и оценка библиотеки) или post_download (проверка импорта загруженного файла)",
+  "settings.refCtxRuntimeMin":
+    "Продолжительность оцениваемого контента в минутах; для релиза из нескольких серий или целого сезона суммируется по сериям",
   "settings.refCtxIsAnime":
     "Истинно, если материал относится к категории аниме",
   "settings.refCtxIsFiller": "Истинно, если эпизод помечен как филлер",
   "settings.refSectionBuiltinScore":
     "— Результаты встроенного механизма оценки",
   "settings.refBuiltinTotal":
-    "Общая оценка, рассчитанная встроенным механизмом",
+    "Общая оценка, рассчитанная встроенным механизмом. Если есть базовые правила (baseline), последующие правила видят здесь вместо этого промежуточный итог базовых правил, а само базовое правило видит 0",
   "settings.refBuiltinBlocked":
     "Истинно, если встроенные правила заблокировали этот релиз",
   "settings.refBuiltinCodes":
-    "Список применённых кодов оценки (например, quality_tier_0)",
+    "Список применённых кодов оценки (например, quality_resolution_1080p). Если есть базовые правила (baseline), их коды тоже включены",
   "settings.refSectionFile":
-    "— Метаданные фактически проанализированного файла (до загрузки значение равно null)",
+    "— Метаданные проанализированного файла (null, когда оценивается результат индексатора)",
   "settings.refFileVideoCodec":
     "Подтверждённый видеокодек, полученный в результате анализа файла",
   "settings.refFileVideoWidth": "Подтверждённая ширина видео в пикселях",
@@ -2753,6 +2799,8 @@ const ru: LocaleDictionary = {
   "settings.refAudioStreamChannels":
     "Количество каналов отдельного аудиопотока",
   "settings.refAudioStreamLanguage": "Код языка отдельного аудиопотока",
+  "settings.refAudioStreamName":
+    "Название отдельной звуковой дорожки, если доступно",
   "settings.refAudioStreamBitrateKbps":
     "Битрейт отдельного аудиопотока в кбит/с",
   "settings.refSectionSubtitleStreams": "— Вложенные записи потоков субтитров",
@@ -2766,7 +2814,7 @@ const ru: LocaleDictionary = {
     "Истинно, если поток субтитров помечен как используемый по умолчанию",
   "settings.refSectionBuiltins": "Пользовательские функции Scryer",
   "settings.refBuiltinsIntro":
-    "Эти вспомогательные функции доступны в ваших правилах Rego в дополнение ко всем стандартным встроенным функциям OPA.",
+    "Эти вспомогательные функции доступны в ваших правилах Rego в дополнение к основным встроенным функциям Rego, regex и time. Другие группы встроенных функций OPA, например encoding, glob, semver, net и http, недоступны.",
   "settings.refFnBlockScore":
     "Возвращает штраф -10000, который можно компенсировать другими баллами",
   "settings.refFnSizeGib":
@@ -2783,7 +2831,7 @@ const ru: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "Нет доступа к сети или файловой системе — правила не могут выполнять HTTP-запросы, читать файлы или выполнять другие операции ввода-вывода. Стандартные встроенные функции OPA, такие как http.send, недоступны.",
   "settings.refSandboxPkgIsolation":
-    "Изоляция пакетов — каждое правило автоматически помещается в собственное пространство имён. Правила не могут читать или изменять данные других правил.",
+    "Изоляция пакетов — каждое правило автоматически помещается в собственное пространство имён и не может изменять другое правило. Правило, не являющееся базовым (baseline), может читать вывод другого правила через data.scryer.rules.user.<id>.",
   "settings.refSandboxReadOnly":
     "Входные данные доступны только для чтения — правила могут только читать документ input. Они не могут изменять состояние приложения или сохранять данные между выполнениями.",
   "settings.refSandboxOutputRestricted":
@@ -2793,7 +2841,7 @@ const ru: LocaleDictionary = {
   "settings.refSandboxValidation":
     "Проверка перед сохранением — правила компилируются и тестируются на синтетических входных данных перед сохранением. Некорректные правила отклоняются.",
   "settings.refSandboxErrorIsolation":
-    "Изоляция ошибок — если одно правило завершается с ошибкой во время выполнения, все остальные правила продолжают оцениваться в обычном режиме. Ошибки записываются в журнал, но не прерывают процесс оценки.",
+    "Изоляция ошибок — если одно правило завершается с ошибкой во время выполнения, все остальные правила продолжают оцениваться в обычном режиме. При оценке ошибка записывается в журнал, а правило даёт 0. При проверке импорта после загрузки ошибка в вашем правиле откладывает импорт для проверки.",
   "settings.refSectionOutput": "Формат вывода правила",
   "settings.refOutputIntro":
     "Правила должны определять правило score_entry, которое возвращает карту со строковыми ключами (кодами оценки) и целочисленными значениями (изменениями баллов). Положительные значения повышают оценку релиза, отрицательные — снижают её, а scryer.block_score() добавляет штраф -10000, который можно компенсировать. Решение принимается после суммирования всех баллов; обязательные требования профиля остаются в силе. Правила, основанные на файлах, до загрузки автоматически ничего не делают, поскольку input.file имеет значение null до этапа оценки после загрузки.",
@@ -3360,6 +3408,19 @@ const ru: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Запись для всех",
   "settings.chmodPresetCustom": "Пользовательские настройки",
   "settings.sidecarFilesTitle": "Дополнительные файлы",
+  "settings.libraryFullHashBackfillTitle": "Фоновое хеширование",
+  "settings.libraryFullHashBackfillLabel": "Хешировать файлы ночью",
+  "settings.libraryFullHashBackfillDescription":
+    "Ночью один раз читает каждый файл этой библиотеки, чтобы записать полный хеш его содержимого. Отключите для библиотек на дисках, которые вы держите остановленными; тогда хеш файла читается, только когда он нужен для перемещения, импорта или проверки.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Отключить ночное хеширование?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Отключение снижает способность Scryer гарантировать, что некоторые перемещения файлов на 100 % безопасны.",
+  "settings.libraryFullHashBackfillDisableConfirm": "Отключить",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Ночное хеширование для этой библиотеки включено.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Ночное хеширование для этой библиотеки отключено.",
   "settings.identityStorageTitle": "Идентификация и хранилище",
   "settings.mediaProfilesTitle": "Профили медиа",
   "settings.mediaProfilesHelp":
@@ -3580,6 +3641,11 @@ const ru: LocaleDictionary = {
   "status.autoSearchAllRejected":
     "Релиз для {{name}} не найден: автоматический поиск отклонил все {{count}} кандидатов. {{reasons}}",
   "status.queueFailed": "Операция с очередью завершилась ошибкой.",
+  "status.grabFailed": "Не удалось отправить релиз на загрузку.",
+  "status.grabResultUnavailable":
+    "Отправка релиза на загрузку завершена, но её результат больше недоступен. Проверьте очередь загрузок.",
+  "status.grabOutcomeUnknown":
+    "Не удалось дождаться окончания отправки релиза на загрузку. Проверьте очередь загрузок.",
   "status.apiError": "Ошибка запроса.",
   "status.permissionDenied": "У вас нет прав для выполнения этого действия.",
   "status.generic": "{{message}}",
@@ -3816,6 +3882,7 @@ const ru: LocaleDictionary = {
   "wanted.decision.upgradeRejected": "Обновление отклонено",
   "wanted.decision.pendingDelay": "Отложено",
   "wanted.decision.alreadyActive": "Уже активно",
+  "wanted.decision.queuedItemBlocksUpgrade": "Ожидает текущую загрузку",
   "wanted.decision.acceptInitial": "Первичное принятие",
   "wanted.decision.acceptUpgrade": "Обновление принято",
   "wanted.decision.rejectInsufficientDelta": "Недостаточная разница",
@@ -4613,431 +4680,796 @@ const ru: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "Не поддерживается",
   "appUpgrade.success": "Обновлено до {{version}}",
   "appUpgrade.failed": "Не удалось обновить приложение.",
-  "settings.maintenanceRules": "Правила обслуживания",
+  "settings.lifecycleRules": "Правила жизненного цикла",
   "nav.rules": "Правила",
   "settings.rulesScoring": "Правила оценки",
-  "settings.maintenanceNavRules": "Правила",
-  "settings.maintenanceNavHistory": "История",
-  "settings.maintenanceRuleAction": "Действие",
-  "settings.maintenanceRuleActionHelp":
-    "Что сделало бы это правило, когда действия обслуживания будут включены.",
-  "settings.maintenanceRuleActionPlaceholder": "Выберите действие",
-  "settings.maintenanceRuleNoActions": "Действия уровня тайтла недоступны.",
-  "settings.maintenanceRuleGraceDays": "Дни отсрочки",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleNavRules": "Правила",
+  "settings.lifecycleNavTry": "Проверить правило",
+  "settings.lifecycleNavHistory": "История",
+  "settings.lifecycleRuleAction": "Действия",
+  "settings.lifecycleRuleGraceDays": "Дни отсрочки",
+  "settings.lifecycleRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
-  "settings.maintenanceRuleTargetProfile": "Целевой профиль качества",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Профиль, на который это действие перевело бы совпавшие тайтлы.",
-  "settings.maintenanceRuleTargetProfileIdHelp":
-    "Идентификатор профиля качества.",
-  "settings.maintenanceRuleLibraries": "Область библиотек",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleScheduleHelp":
+    "Каждое правило выполняется по собственному расписанию. При запуске правило проверяется, а затем выполняются действия над кандидатами, у которых закончился период отсрочки. Изменение расписания не меняет состояние правила. Для ежедневного, еженедельного и cron-расписания используется местное время сервера.",
+  "settings.lifecycleRuleScheduleManualHelp":
+    "Это правило никогда не запускается само. Запустите его в разделе «Запуски и история».",
+  "settings.lifecycleRuleLibraries": "Область библиотек",
+  "settings.lifecycleRuleLibrariesHelp":
     "Не отмечайте ни одной библиотеки, чтобы правило действовало на всю коллекцию.",
-  "settings.maintenanceRuleLibrariesAll": "Все библиотеки",
-  "settings.maintenanceRuleCreate": "Создать правило обслуживания",
-  "settings.maintenanceRuleUpdate": "Обновить правило обслуживания",
-  "settings.maintenanceRuleCopy": "Скопировать как новое правило",
-  "settings.maintenanceRuleCreateNew": "Создать новое правило обслуживания",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "Все библиотеки",
+  "settings.lifecycleRuleCreate": "Создать правило жизненного цикла",
+  "settings.lifecycleRuleUpdate": "Обновить правило жизненного цикла",
+  "settings.lifecycleRuleCopy": "Скопировать как новое правило",
+  "settings.lifecycleRuleCreateNew": "Создать новое правило жизненного цикла",
+  "settings.lifecycleRuleValidationRequired":
     "Имя, исходный код правила и действие обязательны.",
-  "settings.maintenanceRuleConfirmDiscardTitle":
+  "settings.lifecycleRuleConfirmDiscardTitle":
     "Отменить несохранённые изменения?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "В редакторе правил обслуживания есть несохранённые изменения, которые будут потеряны.",
-  "settings.maintenanceRuleDeleting": "Удалить правило обслуживания {{name}}?",
-  "settings.noMaintenanceRulesFound": "Правил обслуживания пока нет.",
-  "settings.maintenanceRuleRevision": "Ревизия",
-  "settings.maintenanceRuleRisk": "Риск",
-  "settings.maintenanceRiskNone": "Без риска",
-  "settings.maintenanceRiskLow": "Низкий риск",
-  "settings.maintenanceRiskMedium": "Средний риск",
-  "settings.maintenanceRiskHigh": "Высокий риск",
-  "settings.maintenanceActionDoNothing": "Ничего не делать",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "В редакторе правил жизненного цикла есть несохранённые изменения, которые будут потеряны.",
+  "settings.lifecycleRuleDeleting":
+    "Удалить правило жизненного цикла {{name}}?",
+  "settings.noLifecycleRulesFound": "Правил жизненного цикла пока нет.",
+  "settings.lifecycleActionDoNothing": "Ничего не делать",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Снять отслеживание области, сохранить файлы",
-  "settings.maintenanceActionDeleteTitleAndFiles": "Удалить тайтл и его файлы",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles": "Удалить тайтл и его файлы",
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "Снять отслеживание тайтла, удалить все файлы",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "Снять отслеживание сериала, удалить существующие файлы",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "Снять отслеживание области, удалить её файлы",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "Снять отслеживание сезона, удалить его файлы, затем удалить сериал, если он пуст",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "Снять отслеживание сезона, затем снять отслеживание сериала, если он пуст",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "Изменить профиль качества и выполнить поиск, если он изменился",
-  "settings.maintenancePreviewTitle": "Предпросмотр",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "Предпросмотр",
+  "settings.lifecyclePreviewSubtitle":
     "Запустите правило на реальных тайтлах. Предпросмотр только читает: он сообщает, что совпало бы, и ничего не меняет.",
-  "settings.maintenancePreviewSource": "Правило",
-  "settings.maintenancePreviewSourceStored": "Сохранённое правило",
-  "settings.maintenancePreviewSourceDraft": "Черновик редактора",
-  "settings.maintenancePreviewLibrary": "Библиотека",
-  "settings.maintenancePreviewLibraryPlaceholder": "Выберите библиотеку",
-  "settings.maintenancePreviewLimit": "Тайтлы",
-  "settings.maintenancePreviewLimitHelp": "До {{max}} тайтлов за прогон.",
-  "settings.maintenancePreviewRun": "Запустить предпросмотр",
-  "settings.maintenancePreviewRunning": "Выполняется предпросмотр...",
-  "settings.maintenancePreviewEmpty":
-    "Выберите библиотеку и запустите предпросмотр.",
-  "settings.maintenancePreviewNoTitles": "Ни один тайтл не был оценён.",
-  "settings.maintenancePreviewColOutcome": "Результат",
-  "settings.maintenancePreviewColReasons": "Коды причин",
-  "settings.maintenancePreviewOutcomeMatch": "СОВПАЛО",
-  "settings.maintenancePreviewOutcomeNoMatch": "НЕ СОВПАЛО",
-  "settings.maintenancePreviewOutcomeUnknown": "НЕИЗВЕСТНО",
-  "settings.maintenancePreviewOutcomeError": "ОШИБКА",
-  "settings.maintenancePreviewMeta": "Оценено {{time}} · правило {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "Правило",
-  "settings.maintenancePreviewRuleSelectPlaceholder":
+  "settings.lifecyclePreviewLibrary": "Библиотека",
+  "settings.lifecyclePreviewLibraryPlaceholder": "Выберите библиотеку",
+  "settings.lifecyclePreviewLimit": "Тайтлы",
+  "settings.lifecyclePreviewLimitHelp": "До {{max}} тайтлов за прогон.",
+  "settings.lifecyclePreviewRun": "Запустить предпросмотр",
+  "settings.lifecyclePreviewRunning": "Выполняется предпросмотр...",
+  "settings.lifecyclePreviewNoTitles": "Ни один тайтл не был оценён.",
+  "settings.lifecyclePreviewColOutcome": "Результат",
+  "settings.lifecyclePreviewColReasons": "Коды причин",
+  "settings.lifecyclePreviewOutcomeMatch": "СОВПАЛО",
+  "settings.lifecyclePreviewOutcomeNoMatch": "НЕ СОВПАЛО",
+  "settings.lifecyclePreviewOutcomeUnknown": "НЕИЗВЕСТНО",
+  "settings.lifecyclePreviewOutcomeError": "ОШИБКА",
+  "settings.lifecyclePreviewMeta": "Оценено {{time}} · правило {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "Правило",
+  "settings.lifecyclePreviewRuleSelectPlaceholder":
     "Выберите сохранённое правило",
-  "settings.maintenanceRuleUpdated": "Правило обслуживания обновлено.",
-  "settings.maintenanceRuleCreated":
-    "Правило обслуживания создано и сохранено отключённым.",
-  "settings.maintenanceRuleDeleted": "Правило обслуживания {{name}} удалено.",
-  "settings.maintenanceArmingNone": "Без эффектов",
-  "settings.maintenanceArmingReversible": "Обратимое",
-  "settings.maintenanceArmingDestructive": "Разрушительное",
-  "settings.maintenanceArmDestructiveLoading":
+  "settings.lifecycleRuleUpdated": "Правило жизненного цикла обновлено.",
+  "settings.lifecycleRuleCreated":
+    "Правило жизненного цикла создано и сохранено отключённым.",
+  "settings.lifecycleRuleDeleted": "Правило жизненного цикла {{name}} удалено.",
+  "settings.lifecycleArmDestructiveLoading":
     "Подсчёт кандидатов, которые уже удерживает это правило…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "Действие может затронуть {{count}} кандидатов.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "Сейчас у этого правила нет кандидатов, которых могло бы затронуть действие.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "Пока вы читали, число изменилось: теперь правило удерживает {{count}}. Проверьте число и подтвердите ещё раз.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "Я понимаю, что это правило может удалить файлы {{count}} тайтлов.",
-  "settings.maintenanceCandidatesFilterRule": "Правило",
-  "settings.maintenanceCandidatesFilterState": "Состояние",
-  "settings.maintenanceCandidatesFilterLibrary": "Библиотека",
-  "settings.maintenanceCandidatesAllRules": "Все правила",
-  "settings.maintenanceCandidatesAllStates": "Все состояния",
-  "settings.maintenanceCandidatesAllLibraries": "Все библиотеки",
-  "settings.maintenanceCandidatesColRule": "Правило",
-  "settings.maintenanceCandidatesColState": "Состояние",
-  "settings.maintenanceCandidatesColFirstMatched": "Первое совпадение",
-  "settings.maintenanceCandidatesColDue": "Срок",
-  "settings.maintenanceCandidatesHeldSince": "Удерживается с {{time}}",
-  "settings.maintenanceCandidatesEmpty":
+  "settings.lifecycleCandidatesFilterRule": "Правило",
+  "settings.lifecycleCandidatesFilterState": "Состояние",
+  "settings.lifecycleCandidatesFilterLibrary": "Библиотека",
+  "settings.lifecycleCandidatesAllRules": "Все правила",
+  "settings.lifecycleCandidatesAllStates": "Все состояния",
+  "settings.lifecycleCandidatesAllLibraries": "Все библиотеки",
+  "settings.lifecycleCandidatesColRule": "Правило",
+  "settings.lifecycleCandidatesColState": "Состояние",
+  "settings.lifecycleCandidatesColFirstMatched": "Первое совпадение",
+  "settings.lifecycleCandidatesColDue": "Срок",
+  "settings.lifecycleCandidatesHeldSince": "Удерживается с {{time}}",
+  "settings.lifecycleCandidatesEmpty":
     "Ни один кандидат не подходит под эти фильтры.",
-  "settings.maintenanceCandidateExclude": "Исключить этот тайтл",
-  "settings.maintenanceCandidateStateObserving": "Наблюдение",
-  "settings.maintenanceCandidateStatePendingAction": "Ожидает действия",
-  "settings.maintenanceCandidateStateDue": "Срок наступил",
-  "settings.maintenanceCandidateStateExecuting": "Выполняется",
-  "settings.maintenanceCandidateStateSucceeded": "Успешно",
-  "settings.maintenanceCandidateStateFailed": "Не удалось",
-  "settings.maintenanceCandidateStateCanceled": "Отменено",
-  "settings.maintenanceCandidateStateExcluded": "Исключено",
-  "settings.maintenanceCandidateStateBlocked": "Заблокировано",
-  "settings.maintenanceCountdownDueNow": "Срок наступил",
-  "settings.maintenanceCountdownInMinutes": "через {{count}} мин",
-  "settings.maintenanceCountdownInHours": "через {{count}} ч",
-  "settings.maintenanceCountdownInDays": "через {{count}} дн.",
-  "settings.maintenanceCountdownOverdueMinutes": "просрочено на {{count}} мин",
-  "settings.maintenanceCountdownOverdueHours": "просрочено на {{count}} ч",
-  "settings.maintenanceCountdownOverdueDays": "просрочено на {{count}} дн.",
-  "settings.maintenanceRunsTitle": "Запуски и история",
-  "settings.maintenanceRunsSubtitle":
-    "Недавние проходы оценки и попытки действий, сначала новые.",
-  "settings.maintenanceRunScope": "Охват",
-  "settings.maintenanceRunScopeAll": "Все правила",
-  "settings.maintenanceRunEvaluationNow": "Оценить сейчас",
-  "settings.maintenanceRunEvaluationRunning": "Идёт оценка…",
-  "settings.maintenanceRunActionsNow": "Выполнить действия сейчас",
-  "settings.maintenanceRunActionsRunning": "Выполняются действия…",
-  "settings.maintenanceRunStarted": "Запуск начат.",
-  "settings.maintenanceRunNotStarted": "Ничего не запущено: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "Запуски оценки",
-  "settings.maintenanceEvaluationRunsEmpty":
-    "Запусков оценки пока не записано.",
-  "settings.maintenanceActionRunsTitle": "Запуски действий",
-  "settings.maintenanceActionRunsEmpty": "Запусков действий пока не записано.",
-  "settings.maintenanceRunColStarted": "Начат",
-  "settings.maintenanceRunColStatus": "Статус",
-  "settings.maintenanceRunColCounts": "Счётчики",
-  "settings.maintenanceRunColDuration": "Длительность",
-  "settings.maintenanceRunColError": "Ошибка",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleCandidateExclude": "Исключить этот тайтл",
+  "settings.lifecycleCandidateStateObserving": "Наблюдение",
+  "settings.lifecycleCandidateStatePendingAction": "Ожидает действия",
+  "settings.lifecycleCandidateStateDue": "Срок наступил",
+  "settings.lifecycleCandidateStateExecuting": "Выполняется",
+  "settings.lifecycleCandidateStateSucceeded": "Успешно",
+  "settings.lifecycleCandidateStateFailed": "Не удалось",
+  "settings.lifecycleCandidateStateCanceled": "Отменено",
+  "settings.lifecycleCandidateStateExcluded": "Исключено",
+  "settings.lifecycleCandidateStateBlocked": "Заблокировано",
+  "settings.lifecycleCountdownDueNow": "Срок наступил",
+  "settings.lifecycleCountdownInMinutes": "через {{count}} мин",
+  "settings.lifecycleCountdownInHours": "через {{count}} ч",
+  "settings.lifecycleCountdownInDays": "через {{count}} дн.",
+  "settings.lifecycleCountdownOverdueMinutes": "просрочено на {{count}} мин",
+  "settings.lifecycleCountdownOverdueHours": "просрочено на {{count}} ч",
+  "settings.lifecycleCountdownOverdueDays": "просрочено на {{count}} дн.",
+  "settings.lifecycleRunsTitle": "Запуски и история",
+  "settings.lifecycleRunScope": "Охват",
+  "settings.lifecycleRunScopeAll": "Все правила",
+  "settings.lifecycleRunEvaluationNow": "Оценить сейчас",
+  "settings.lifecycleRunEvaluationRunning": "Идёт оценка…",
+  "settings.lifecycleRunActionsNow": "Выполнить действия сейчас",
+  "settings.lifecycleRunActionsRunning": "Выполняются действия…",
+  "settings.lifecycleRunActionsNeedsRule":
+    "Выберите выше одно правило, чтобы выполнить его действия сейчас.",
+  "settings.lifecycleRunActionsHeldHelp":
+    "Немедленный запуск сначала оценивает правило, как и каждый плановый запуск, и поэтому снова рассматривает отложенные тайтлы. Тайтл, добавленный оценкой, срок которого уже наступил, например у правила без льготного периода, обрабатывается в том же запуске, включая удаление.",
+  "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
+    "Выберите правило для выполнения действий. Правила действуют только за себя, поэтому для запуска сейчас нужно одно правило.",
+  "settings.lifecycleRunStarted": "Запуск начат.",
+  "settings.lifecycleRunNotStarted": "Ничего не запущено: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "Запуски оценки",
+  "settings.lifecycleEvaluationRunsEmpty": "Запусков оценки пока не записано.",
+  "settings.lifecycleActionRunsTitle": "Запуски действий",
+  "settings.lifecycleActionRunsEmpty": "Запусков действий пока не записано.",
+  "settings.lifecycleRunColStarted": "Начат",
+  "settings.lifecycleRunColStatus": "Статус",
+  "settings.lifecycleRunColCounts": "Счётчики",
+  "settings.lifecycleRunColDuration": "Длительность",
+  "settings.lifecycleRunColError": "Ошибка",
+  "settings.lifecycleRunCounts":
     "оценено {{evaluated}} · совпало {{matched}} · без совпадения {{noMatch}} · неизвестно {{unknown}} · ошибок {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}} с",
-  "settings.maintenanceRunRevision": "рев. {{revision}}",
-  "settings.maintenanceRunStatusRunning": "Выполняется",
-  "settings.maintenanceRunStatusSucceeded": "Успешно",
-  "settings.maintenanceRunStatusFailed": "Не удалось",
-  "settings.maintenanceRunStatusHeld": "Удержано",
-  "settings.maintenanceRunStatusAlreadySatisfied": "Уже выполнено",
-  "settings.maintenanceRunStatusSkipped": "Пропущено",
-  "settings.maintenanceActionRunColAttempt": "Попытка",
-  "settings.maintenanceActionRunColHoldReason": "Причина удержания",
-  "settings.maintenanceExclusionsTitle": "Исключения",
-  "settings.maintenanceExclusionsSubtitle":
-    "Тайтлы, которых правило обслуживания не должно касаться. Глобальное исключение действует для всех правил.",
-  "settings.maintenanceExclusionsEmpty": "Исключений нет.",
-  "settings.maintenanceExclusionColScope": "Охват",
-  "settings.maintenanceExclusionColReason": "Причина",
-  "settings.maintenanceExclusionColCreated": "Добавлено",
-  "settings.maintenanceExclusionScopeGlobal": "Все правила",
-  "settings.maintenanceExclusionRemove": "Удалить исключение",
-  "settings.maintenanceExclusionRemoved": "Исключение для {{title}} удалено.",
-  "settings.maintenanceExclusionRemoving": "Удалить исключение для {{title}}?",
-  "settings.maintenanceExcludeTitle": "Исключить из обслуживания",
-  "settings.maintenanceExcludeBody":
+  "settings.lifecycleRunDuration": "{{seconds}} с",
+  "settings.lifecycleRunRevision": "рев. {{revision}}",
+  "settings.lifecycleRunStatusRunning": "Выполняется",
+  "settings.lifecycleRunStatusSucceeded": "Успешно",
+  "settings.lifecycleRunStatusFailed": "Не удалось",
+  "settings.lifecycleRunStatusHeld": "Удержано",
+  "settings.lifecycleRunStatusAlreadySatisfied": "Уже выполнено",
+  "settings.lifecycleRunStatusSkipped": "Пропущено",
+  "settings.lifecycleActionRunColAttempt": "Попытка",
+  "settings.lifecycleActionRunColHoldReason": "Причина удержания",
+  "settings.lifecycleExclusionsTitle": "Исключения",
+  "settings.lifecycleExclusionsSubtitle":
+    "Тайтлы, которых правило жизненного цикла не должно касаться. Глобальное исключение действует для всех правил.",
+  "settings.lifecycleExclusionsEmpty": "Исключений нет.",
+  "settings.lifecycleExclusionColScope": "Охват",
+  "settings.lifecycleExclusionColReason": "Причина",
+  "settings.lifecycleExclusionColCreated": "Добавлено",
+  "settings.lifecycleExclusionScopeGlobal": "Все правила",
+  "settings.lifecycleExclusionRemove": "Удалить исключение",
+  "settings.lifecycleExclusionRemoved": "Исключение для {{title}} удалено.",
+  "settings.lifecycleExclusionRemoving": "Удалить исключение для {{title}}?",
+  "settings.lifecycleExcludeTitle": "Исключить из правил жизненного цикла",
+  "settings.lifecycleExcludeBody":
     "{{title}} будет исключён начиная со следующей оценки, а его кандидат перейдёт в состояние «Исключено».",
-  "settings.maintenanceExcludeScope": "Охват",
-  "settings.maintenanceExcludeScopeGlobal": "Все правила",
-  "settings.maintenanceExcludeReason": "Причина",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "Охват",
+  "settings.lifecycleExcludeScopeGlobal": "Все правила",
+  "settings.lifecycleExcludeReason": "Причина",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "Почему этот тайтл исключается (необязательно)",
-  "settings.maintenanceExcludeConfirm": "Исключить",
-  "settings.maintenanceExcluded": "{{title}} исключён из обслуживания.",
-  "settings.refMaintTitle": "Справочник входных данных обслуживания",
-  "settings.refMaintSubtitle":
-    "Нажмите, чтобы развернуть полный список фактов, доступных правилу обслуживания.",
-  "settings.refMaintIntro":
-    "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
-  "settings.refMaintOutputTitle": "Результат правила",
-  "settings.refMaintOutputIntro":
-    "Правило определяет не более трёх имён. Всё остальное в пакете игнорируется, а решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
-  "settings.refMaintOutputMatch":
-    "match — логическое значение. Если оно не определено, субъект не совпал.",
-  "settings.refMaintOutputUnknown":
+  "settings.lifecycleExcludeConfirm": "Исключить",
+  "settings.lifecycleExcluded":
+    "{{title}} исключён из правил жизненного цикла.",
+  "settings.refLifecycleTitle": "Справочник входных данных жизненного цикла",
+  "settings.refLifecycleIntro":
+    "Каждое правило жизненного цикла получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
+  "settings.refLifecycleOutputTitle": "Результат правила",
+  "settings.refLifecycleOutputIntro":
+    "Правило указывает, что делать, определяя действия и необязательные unknown и reasons. Объект подходит, когда для него выполняется хотя бы одно действие. Решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
+  "settings.refLifecycleOutputUnknown":
     "unknown — логическое значение. Устанавливайте его, когда само правило не может принять решение; unknown всегда имеет приоритет над совпадением. Факты, которые Scryer не смог наблюдать, уже обрабатываются автоматически.",
-  "settings.refMaintOutputReasons":
-    "reasons — набор коротких машинных кодов, объясняющих решение. Они сохраняются у кандидата и показываются в предпросмотре.",
-  "settings.refMaintOutputNoPackage":
+  "settings.refLifecycleOutputReasons":
+    "reasons — список или набор не более чем из 32 коротких машинных кодов длиной до 120 символов каждый, объясняющих решение. Они сохраняются у кандидата и показываются в предпросмотре.",
+  "settings.refLifecycleOutputNoPackage":
     "Не пишите строки package или import. Scryer добавляет их при сохранении правила и удаляет обратно для редактора.",
-  "settings.refMaintSectionInput": "— Конверт оценки",
-  "settings.refMaintInputSchemaVersion":
-    "Версия документа входных данных обслуживания, под которую написано правило",
-  "settings.refMaintInputEvaluationTime":
+  "settings.refLifecycleSectionInput": "— Конверт оценки",
+  "settings.refLifecycleInputSchemaVersion":
+    "Версия документа входных данных жизненного цикла, под которую написано правило",
+  "settings.refLifecycleInputEvaluationTime":
     "Момент времени в формате RFC3339, фиксируемый один раз за прогон, чтобы все субъекты сравнивались с одними и теми же часами. Используйте его для вычислений с датами: time.now_ns() существует, но тогда один и тот же субъект при повторе решался бы иначе.",
-  "settings.refMaintSectionSubject": "— Оцениваемый тайтл, сезон или эпизод",
-  "settings.refMaintSubjectKind": "Уровень оценки: тайтл, сезон или эпизод",
-  "settings.refMaintSubjectTitleId":
+  "settings.refLifecycleSectionSubject":
+    "— Оцениваемый тайтл, сезон или эпизод",
+  "settings.refLifecycleSubjectKind": "Уровень оценки: тайтл, сезон или эпизод",
+  "settings.refLifecycleSubjectTitleId":
     "Идентификатор Scryer для тайтла, к которому относится субъект",
-  "settings.refMaintSubjectSeasonNumber":
+  "settings.refLifecycleSubjectSeasonNumber":
     "Номер сезона; присутствует только для субъектов-сезонов",
-  "settings.refMaintSubjectEpisodeId":
+  "settings.refLifecycleSubjectEpisodeId":
     "Идентификатор эпизода; присутствует только для субъектов-эпизодов",
-  "settings.refMaintSubjectFacet": "Медиа-фасет тайтла (фильм, сериал, аниме)",
-  "settings.refMaintSubjectName": "Отображаемое название тайтла",
-  "settings.refMaintSubjectYear": "Год выпуска тайтла, если он известен",
-  "settings.refMaintSectionLibrary":
+  "settings.refLifecycleSubjectFacet":
+    "Медиа-фасет тайтла (фильм, сериал, аниме)",
+  "settings.refLifecycleSubjectName": "Отображаемое название тайтла",
+  "settings.refLifecycleSubjectYear": "Год выпуска тайтла, если он известен",
+  "settings.refLifecycleSectionLibrary":
     "— Библиотека, в которой находится субъект",
-  "settings.refMaintLibraryId": "Идентификатор библиотеки, содержащей субъект",
-  "settings.refMaintLibraryName": "Отображаемое имя этой библиотеки",
-  "settings.refMaintSectionFacts":
+  "settings.refLifecycleLibraryId":
+    "Идентификатор библиотеки, содержащей субъект",
+  "settings.refLifecycleLibraryName": "Отображаемое имя этой библиотеки",
+  "settings.refLifecycleSectionSeason": "Сезон (только действия для сезона)",
+  "settings.refLifecycleSeasonId": "Id рассматриваемого сезона.",
+  "settings.refLifecycleSeasonFacts":
+    "Собственные факты сезона, которые читают действия для сезона, например delete_season_files.",
+  "settings.refLifecycleSeasonObservations":
+    "Конверты наблюдений для фактов сезона.",
+  "settings.refLifecycleSectionEpisode": "Эпизод (только действия для эпизода)",
+  "settings.refLifecycleEpisodeId": "Id рассматриваемого эпизода.",
+  "settings.refLifecycleEpisodeNumber":
+    "Номер эпизода в сезоне, если известен.",
+  "settings.refLifecycleEpisodeFacts":
+    "Собственные факты эпизода, которые читают действия для эпизода, например delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations":
+    "Конверты наблюдений для фактов эпизода.",
+  "settings.refLifecycleFactsStorageRoots":
+    "По одной записи на каждую настроенную корневую папку, где лежат файлы субъекта, со свободным местом этой папки. Неизвестно, если хотя бы одну из этих папок не удалось прочитать.",
+  "settings.refLifecycleSectionStorageRoots": "Корневая папка хранилища",
+  "settings.refLifecycleStorageRootId": "Id настроенной корневой папки.",
+  "settings.refLifecycleStorageRootPath": "Путь настроенной корневой папки.",
+  "settings.refLifecycleStorageRootAvailableBytes":
+    "Свободные байты на томе корневой папки.",
+  "settings.refLifecycleStorageRootTotalBytes":
+    "Всего байтов на томе корневой папки.",
+  "settings.refLifecycleStorageRootAvailablePercent":
+    "Свободное место на томе корневой папки в процентах от общего объёма.",
+  "settings.refLifecycleFactsStorageRootsValue":
+    "Корневые папки, где лежат файлы субъекта, если известны.",
+  "settings.refLifecycleSectionFacts":
     "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
-  "settings.refMaintFactsMonitored": "Отслеживается ли субъект",
-  "settings.refMaintFactsTags":
+  "settings.refLifecycleFactsMonitored": "Отслеживается ли субъект",
+  "settings.refLifecycleFactsTags":
     "Пользовательские теги субъекта в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
-  "settings.refMaintFactsQualityProfileId":
+  "settings.refLifecycleFactsQualityProfileId":
     "Профиль качества, назначенный субъекту",
-  "settings.refMaintFactsAddedAt": "Когда субъект был добавлен в библиотеку",
-  "settings.refMaintFactsAddedByUserId":
+  "settings.refLifecycleFactsAddedAt":
+    "Когда субъект был добавлен в библиотеку",
+  "settings.refLifecycleFactsAddedByUserId":
     "Какой пользователь добавил субъект; отсутствует, если его создало сканирование или обнаружение",
-  "settings.refMaintFactsAddedByUsername":
+  "settings.refLifecycleFactsAddedByUsername":
     "Имя пользователя, добавившего субъект",
-  "settings.refMaintFactsRequested": "Был ли субъект создан по медиа-запросу",
-  "settings.refMaintFactsRequestedByUserIds":
+  "settings.refLifecycleFactsRequested":
+    "Был ли субъект создан по медиа-запросу",
+  "settings.refLifecycleFactsRequestedByUserIds":
     "Пользователи, запросившие субъект: автор запроса и все дополнительные запросившие",
-  "settings.refMaintFactsRequestedByUsernames":
+  "settings.refLifecycleFactsRequestedByUsernames":
     "Имена этих запросивших пользователей",
-  "settings.refMaintFactsFirstImportedAt":
+  "settings.refLifecycleFactsRequestedAt": "Когда тайтл был впервые запрошен",
+  "settings.refLifecycleFactsFirstImportedAt":
     "Когда для субъекта был впервые импортирован файл",
-  "settings.refMaintFactsLastUpgradedAt":
-    "Когда субъект в последний раз получал улучшение",
-  "settings.refMaintFactsHasFile":
+  "settings.refLifecycleFactsLastUpgradedAt":
+    "Когда субъект в последний раз получал улучшение. Пока не собирается, поэтому всегда неизвестно.",
+  "settings.refLifecycleFactsHasFile":
     "Есть ли у субъекта хотя бы один файл на диске",
-  "settings.refMaintFactsFileCount":
+  "settings.refLifecycleFactsFileCount":
     "Сколько файлов субъекта находится на диске",
-  "settings.refMaintFactsTotalFileSizeBytes":
+  "settings.refLifecycleFactsTotalFileSizeBytes":
     "Суммарный размер файлов субъекта на диске",
-  "settings.refMaintFactsFiles":
+  "settings.refLifecycleFactsFiles":
     "Файлы субъекта с подробностями по каждому файлу",
-  "settings.refMaintFactsEpisodeCount": "Сколько эпизодов охватывает субъект",
-  "settings.refMaintFactsEpisodeFileCount":
+  "settings.refLifecycleFactsEpisodeCount":
+    "Сколько эпизодов охватывает субъект",
+  "settings.refLifecycleFactsEpisodeFileCount":
     "Сколько из этих эпизодов имеют файл",
-  "settings.refMaintFactsMonitoredEpisodeCount":
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
     "Сколько из этих эпизодов отслеживается",
-  "settings.refMaintFactsActiveDownloads":
-    "Есть ли у субъекта активная загрузка",
-  "settings.refMaintFactsWatchedByUserIds":
-    "Пользователи, которые смотрели субъект на подключённом медиасервере",
-  "settings.refMaintFactsLastWatchedAt":
+  "settings.refLifecycleFactsActiveDownloads":
+    "Есть ли у субъекта активная загрузка. Пока не собирается, поэтому всегда неизвестно.",
+  "settings.refLifecycleFactsWatchedByUserIds":
+    "Пользователи, которые смотрели субъект. Для сезона или всего сериала — только пользователи, посмотревшие каждую вышедшую в нём серию, включая серии с отсутствующими файлами. Будущие серии исключаются; неустановленные даты выхода или неполные сигналы дают unknown. Сезон или сериал без вышедших серий никогда не считается завершённым.",
+  "settings.refLifecycleFactsLastWatchedAt":
     "Когда субъект в последний раз кто-либо смотрел",
-  "settings.refMaintFactsWatchedByAnyRequester":
+  "settings.refLifecycleFactsWatchedByUsernames":
+    "Имена пользователей, которые смотрели субъект",
+  "settings.refLifecycleFactsWatchedByUsers":
+    "Каждый пользователь, который смотрел субъект, с его последним просмотром и числом просмотров",
+  "settings.refLifecycleFactsWatchedByAnyRequester":
     "Смотрел ли субъект хотя бы один из запросивших его пользователей",
-  "settings.refMaintFactsWatchedByAllRequesters":
+  "settings.refLifecycleFactsWatchedByAllRequesters":
     "Смотрели ли субъект все запросившие его пользователи",
-  "settings.refMaintFactsRequestLeaseState":
+  "settings.refLifecycleFactsRequestLeaseState":
     "Сводное состояние сроков хранения по запросам: none, dormant, active или expired",
-  "settings.refMaintFactsRequestLeaseExpiresAt":
+  "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "Когда истекает последний действующий срок хранения субъекта",
-  "settings.refMaintFactsActiveRetentionClaims":
+  "settings.refLifecycleFactsActiveRetentionClaims":
     "Сколько сроков хранения по запросам всё ещё удерживают субъект",
-  "settings.refMaintObsStatus":
+  "settings.refLifecycleObsStatus":
     "known, absent или unknown. absent означает, что источник ответил и значения нет; unknown означает, что Scryer не смог выяснить. Проверяйте это перед чтением value — неизвестный факт никогда не приводится к false, 0 или пустой строке.",
-  "settings.refMaintSectionObservations":
+  "settings.refLifecycleSectionObservations":
     "— Те же факты в виде полных конвертов, для правил, которым нужно отличать absent от unknown или читать причину. Чтение факта здесь отключает для него автоматическое удержание: ответственность за трёхзначный ответ берёте на себя вы.",
-  "settings.refMaintSectionObsFiles":
+  "settings.refLifecycleSectionObsFiles":
     "— По одной записи на файл в input.observations.files.value",
-  "settings.refMaintObsObservedAt":
+  "settings.refLifecycleObsObservedAt":
     "Когда значение было получено, если источник записал время",
-  "settings.refMaintObsReason":
+  "settings.refLifecycleObsReason":
     "Устойчивый машинный код, объясняющий, почему факт неизвестен или почему у отсутствующего факта нет значения",
-  "settings.refMaintFactsMonitoredValue": "True, когда субъект отслеживается",
-  "settings.refMaintFactsTagsValue":
+  "settings.refLifecycleFactsMonitoredValue":
+    "True, когда субъект отслеживается",
+  "settings.refLifecycleFactsTagsValue":
     "Имена пользовательских тегов в нижнем регистре из реестра тегов администратора; никогда не служебные записи с префиксом scryer:",
-  "settings.refMaintFactsQualityProfileIdValue":
+  "settings.refLifecycleFactsQualityProfileIdValue":
     "Идентификатор назначенного профиля качества",
-  "settings.refMaintFactsAddedAtValue":
+  "settings.refLifecycleFactsAddedAtValue":
     "Метка времени RFC3339 добавления субъекта",
-  "settings.refMaintFactsAddedByUserIdValue":
+  "settings.refLifecycleFactsAddedByUserIdValue":
     "Идентификатор пользователя, добавившего субъект; причина title_added_by_system, если этого не сделал никто",
-  "settings.refMaintFactsAddedByUsernameValue":
+  "settings.refLifecycleFactsAddedByUsernameValue":
     "Имя этого пользователя; unknown с причиной user_not_found, если учётной записи больше нет",
-  "settings.refMaintFactsRequestedValue":
+  "settings.refLifecycleFactsRequestedValue":
     "True, когда субъект создан хотя бы одним медиа-запросом; в противном случае — подтверждённое false",
-  "settings.refMaintFactsRequestedByUserIdsValue":
+  "settings.refLifecycleFactsRequestedByUserIdsValue":
     "Идентификаторы запросивших без повторов; пустой список, если субъект не запрашивали",
-  "settings.refMaintFactsRequestedByUsernamesValue":
+  "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Имена запросивших; unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
-  "settings.refMaintFactsFirstImportedAtValue":
+  "settings.refLifecycleFactsRequestedAtValue":
+    "Время RFC 3339 самого раннего запроса, создавшего тайтл; absent с причиной title_not_requested, если тайтл не создан запросом",
+  "settings.refLifecycleFactsFirstImportedAtValue":
     "Метка времени RFC3339 первого импорта",
-  "settings.refMaintFactsLastUpgradedAtValue":
-    "Метка времени RFC3339 последнего улучшения",
-  "settings.refMaintFactsHasFileValue":
+  "settings.refLifecycleFactsLastUpgradedAtValue":
+    "Всегда unknown с причиной not_yet_collected: Scryer пока не записывает улучшения, поэтому правило, которое читает это значение, откладывается",
+  "settings.refLifecycleFactsHasFileValue":
     "True, когда на диске есть хотя бы один файл",
-  "settings.refMaintFactsFileCountValue": "Количество файлов на диске",
-  "settings.refMaintFactsTotalFileSizeBytesValue":
+  "settings.refLifecycleFactsFileCountValue": "Количество файлов на диске",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
     "Суммарный размер этих файлов в байтах",
-  "settings.refMaintFactsFilesValue":
+  "settings.refLifecycleFactsFilesValue":
     "По одной записи на файл; см. input.observations.files.value[] ниже",
-  "settings.refMaintFactsEpisodeCountValue":
+  "settings.refLifecycleFactsEpisodeCountValue":
     "Количество эпизодов в области действия",
-  "settings.refMaintFactsEpisodeFileCountValue":
+  "settings.refLifecycleFactsEpisodeFileCountValue":
     "Количество этих эпизодов, у которых есть файл",
-  "settings.refMaintFactsMonitoredEpisodeCountValue":
+  "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "Количество этих эпизодов, которые отслеживаются",
-  "settings.refMaintFactsActiveDownloadsValue":
-    "True, когда для субъекта выполняется загрузка",
-  "settings.refMaintFactsWatchedByUserIdsValue":
-    "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Факты о просмотрах неизвестны для сериалов (show_watch_rollup_unavailable), когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
-  "settings.refMaintFactsLastWatchedAtValue":
+  "settings.refLifecycleFactsActiveDownloadsValue":
+    "Всегда unknown с причиной not_yet_collected: состояние загрузок пока не считывается, поэтому правило, которое читает это значение, откладывается",
+  "settings.refLifecycleFactsWatchedByUserIdsValue":
+    "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Для сезона или сериала человек учитывается только после просмотра каждой вышедшей в нём серии, включая отсутствующие файлы. Будущие серии исключаются; отсутствующая история серий или неустановленные даты выхода дают unknown. Факты о просмотрах неизвестны, когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
+  "settings.refLifecycleFactsWatchedByUsernamesValue":
+    "Имена пользователей из watched_by_user_ids в том же порядке; unknown, когда неизвестны эти идентификаторы, и unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
+  "settings.refLifecycleFactsWatchedByUsersValue":
+    "Одна запись на каждого пользователя из watched_by_user_ids в том же порядке, сведённая по всем наблюдаемым медиасерверам; unknown, когда неизвестно watched_by_usernames",
+  "settings.refLifecycleFactsLastWatchedAtValue":
     "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел, и unknown с причиной play_time_missing, если у просмотра нет записанного времени",
-  "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "True, когда субъект смотрел хотя бы один запросивший; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
-  "settings.refMaintFactsWatchedByAllRequestersValue":
-    "True, когда субъект смотрели все запросившие; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
-  "settings.refMaintFactsRequestLeaseStateValue":
+  "settings.refLifecycleFactsWatchedByAnyRequesterValue":
+    "True, когда субъект смотрел хотя бы один запросивший; известное false для сезона или сериала без вышедших серий; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
+  "settings.refLifecycleFactsWatchedByAllRequestersValue":
+    "True, когда субъект смотрели все запросившие; известное false для сезона или сериала без вышедших серий; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
+  "settings.refLifecycleFactsRequestLeaseStateValue":
     "none, когда для субъекта никогда не записывалось хранение по запросу; dormant, когда хранение ждёт первого импорта; active, пока хранение действует; expired, когда все сроки истекли. Снятое или заменённое хранение считается отозванным, а не истёкшим, поэтому оно не делает состояние expired. Истечение измеряется относительно времени оценки, поэтому хранение читается как expired в тот же момент, когда закрывается его окно.",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+  "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
     "Отметка времени RFC3339 самого позднего истечения среди действующих сроков; absent с причиной no_live_lease, когда субъект ничем не удерживается",
-  "settings.refMaintFactsActiveRetentionClaimsValue":
+  "settings.refLifecycleFactsActiveRetentionClaimsValue":
     "Количество сроков хранения, всё ещё удерживающих субъект, включая ожидающие импорта",
-  "settings.refMaintSectionFiles":
+  "settings.refLifecycleSectionFiles":
     "— По одной записи на файл в input.facts.files",
-  "settings.refMaintFileSizeBytes": "Размер файла в байтах",
-  "settings.refMaintFileQuality":
+  "settings.refLifecycleFileSizeBytes": "Размер файла в байтах",
+  "settings.refLifecycleFileQuality":
     "Определённое качество файла (например, 2160P, 1080P)",
-  "settings.refMaintFileVideoCodec":
+  "settings.refLifecycleFileVideoCodec":
     "Видеокодек файла (например, H.265, H.264)",
-  "settings.refMaintFileVideoWidth": "Ширина видео в пикселях",
-  "settings.refMaintFileVideoHeight": "Высота видео в пикселях",
-  "settings.refMaintFileAudioLanguages": "Языки аудиодорожек в файле",
-  "settings.refMaintFileSubtitleLanguages": "Языки субтитров в файле",
-  "settings.refMaintFileAddedAt": "Метка времени RFC3339 добавления файла",
-  "settings.refMaintFactsSeriesMovies":
+  "settings.refLifecycleFileVideoWidth": "Ширина видео в пикселях",
+  "settings.refLifecycleFileVideoHeight": "Высота видео в пикселях",
+  "settings.refLifecycleFactsRuntimeMinutes":
+    "Продолжительность в минутах по данным поставщика метаданных",
+  "settings.refLifecycleFactsOriginalLanguage": "Язык оригинала",
+  "settings.refLifecycleFactsSeriesStatus":
+    "Статус сериала по данным поставщика метаданных, например продолжается или завершён",
+  "settings.refLifecycleFactsFirstAired": "Дата премьеры сериала (YYYY-MM-DD)",
+  "settings.refLifecycleFactsNetwork": "Телеканал, показывающий сериал",
+  "settings.refLifecycleFactsStudio": "Студия, снявшая тайтл",
+  "settings.refLifecycleFactsCountry": "Страна производства",
+  "settings.refLifecycleFactsPopularity":
+    "Оценка популярности от поставщика метаданных",
+  "settings.refLifecycleFactsReleaseDate": "Дата выхода фильма (YYYY-MM-DD)",
+  "settings.refLifecycleFactsDaysSinceAdded":
+    "Полных дней с момента добавления субъекта",
+  "settings.refLifecycleFactsMaxVideoHeight":
+    "Наибольшая высота видеопотока среди файлов субъекта, в пикселях",
+  "settings.refLifecycleFactsSeasonCount":
+    "Количество сезонов сериала без спецвыпусков",
+  "settings.refLifecycleFactsAiredEpisodeCount":
+    "Количество вышедших обычных эпизодов сериала",
+  "settings.refLifecycleFactsUnairedEpisodeCount":
+    "Количество ещё не вышедших обычных эпизодов сериала",
+  "settings.refLifecycleFactsMissingEpisodeCount":
+    "Количество вышедших отслеживаемых эпизодов сериала без файла",
+  "settings.refLifecycleFactsAiredEpisodeFilePercent":
+    "Доля вышедших эпизодов с файлом, в процентах от вышедших эпизодов",
+  "settings.refLifecycleFactsLatestSeasonNumber":
+    "Номер последнего сезона сериала",
+  "settings.refLifecycleFactsLatestAiredEpisodeDate":
+    "Дата выхода последнего вышедшего эпизода сериала (YYYY-MM-DD)",
+  "settings.refLifecycleFactsNextEpisodeAirDate":
+    "Дата выхода следующего запланированного эпизода сериала (YYYY-MM-DD)",
+  "settings.refLifecycleFactsGenres":
+    "Названия жанров из сохранённых метаданных тайтла",
+  "settings.refLifecycleFactsRating": "Сохранённый сводный рейтинг тайтла",
+  "settings.refLifecycleFactsRatings":
+    "Все внешние рейтинги, на которых основан сводный рейтинг",
+  "settings.refLifecycleFactsPlayCountTotal":
+    "Сумма воспроизведений субъекта всеми учётными записями на всех включённых медиасерверах; никого не называет",
+  "settings.refLifecycleFactsWatchlistedByUserIds":
+    "Пользователи, в чьих списках к просмотру есть тайтл",
+  "settings.refLifecycleFactsWatchlistedByUsernames":
+    "Имена пользователей, в чьих списках к просмотру есть тайтл",
+  "settings.refLifecycleFactsWatchlistedByAnyone":
+    "Есть ли тайтл в списке к просмотру какого-либо пользователя",
+  "settings.refLifecycleFactsWatchlistedByAnyRequester":
+    "Есть ли тайтл в списке к просмотру одного из его запросивших",
+  "settings.refLifecycleFactsWatchlistAddedAt":
+    "Когда Scryer впервые увидел тайтл в каком-либо списке к просмотру",
+  "settings.refLifecycleFactsWatchlistOrigins":
+    "Поставщики, в чьих списках к просмотру тайтл есть сейчас",
+  "settings.refLifecycleFactsFavoritedByUserIds":
+    "Пользователи, отметившие субъект как избранное в Jellyfin или Emby",
+  "settings.refLifecycleFactsFavoritedByUsernames":
+    "Имена пользователей, отметивших субъект как избранное в Jellyfin или Emby",
+  "settings.refLifecycleFactsFavoritedByAnyone":
+    "Отметил ли какой-либо пользователь субъект как избранное в Jellyfin или Emby",
+  "settings.refLifecycleFactsFavoritedByAnyRequester":
+    "Отметил ли один из запросивших тайтл субъект как избранное в Jellyfin или Emby",
+  "settings.refLifecycleFileAudioCodec":
+    "Аудиокодек основной звуковой дорожки файла",
+  "settings.refLifecycleFileAudioChannels": "Количество аудиоканалов",
+  "settings.refLifecycleFileAudioBitrateKbps": "Битрейт аудио в кбит/с",
+  "settings.refLifecycleFileVideoBitrateKbps": "Битрейт видео в кбит/с",
+  "settings.refLifecycleFileVideoBitDepth": "Глубина цвета видео в битах",
+  "settings.refLifecycleFileVideoHdrFormat":
+    "Формат HDR видео, например HDR10 или Dolby Vision",
+  "settings.refLifecycleSectionRatings":
+    "— Одна запись на каждый внешний рейтинг в input.facts.ratings",
+  "settings.refLifecycleSectionObsRatings":
+    "— Одна запись на каждый внешний рейтинг в input.observations.ratings.value",
+  "settings.refLifecycleSectionWatchedByUsers":
+    "— Одна запись на каждого зрителя в input.facts.watched_by_users",
+  "settings.refLifecycleSectionObsWatchedByUsers":
+    "— Одна запись на каждого зрителя в input.observations.watched_by_users.value",
+  "settings.refLifecycleWatcherUserId": "Идентификатор пользователя Scryer",
+  "settings.refLifecycleWatcherUsername": "Имя пользователя Scryer",
+  "settings.refLifecycleWatcherLastPlayedAt":
+    "Когда пользователь в последний раз смотрел субъект; null, если у одного из его просмотров нет времени",
+  "settings.refLifecycleWatcherPlayCount":
+    "Сколько раз пользователь смотрел субъект, суммарно по всем медиасерверам",
+  "settings.refLifecycleRatingSource": "Источник рейтинга",
+  "settings.refLifecycleRatingValue":
+    "Рейтинг по собственной шкале источника, если источник её даёт",
+  "settings.refLifecycleRatingNormalized":
+    "Рейтинг по общей шкале Scryer, сопоставимый между источниками",
+  "settings.refLifecycleRatingVotes":
+    "Количество голосов за рейтингом, если источник его даёт",
+  "settings.refLifecycleFactsRuntimeMinutesValue":
+    "Продолжительность в минутах; отсутствует, если поставщик метаданных не дал значения",
+  "settings.refLifecycleFactsOriginalLanguageValue":
+    "Язык оригинала; отсутствует, если поставщик метаданных не дал значения",
+  "settings.refLifecycleFactsSeriesStatusValue":
+    "Статус сериала в том виде, в каком его дал поставщик; отсутствует для фильма или если поставщик не дал значения",
+  "settings.refLifecycleFactsFirstAiredValue":
+    "Дата премьеры (YYYY-MM-DD) — дата, а не метка времени; отсутствует для фильма или если поставщик не дал значения",
+  "settings.refLifecycleFactsNetworkValue":
+    "Название телеканала; отсутствует, если поставщик не дал значения",
+  "settings.refLifecycleFactsStudioValue":
+    "Название студии; отсутствует, если поставщик не дал значения",
+  "settings.refLifecycleFactsCountryValue":
+    "Страна производства; отсутствует, если поставщик не дал значения",
+  "settings.refLifecycleFactsPopularityValue":
+    "Оценка популярности; отсутствует, если поставщик не дал значения",
+  "settings.refLifecycleFactsReleaseDateValue":
+    "Дата выхода (YYYY-MM-DD): самая ранняя известная Scryer дата выхода фильма любого типа и в любой стране. absent для сериала или если в полученных датах выхода нет ни одной; unknown с причиной not_yet_collected, пока у фильма нет даты и его даты выхода не получены",
+  "settings.refLifecycleFactsDaysSinceAddedValue":
+    "Полных дней с момента добавления субъекта по часам оценки",
+  "settings.refLifecycleFactsMaxVideoHeightValue":
+    "Высота в пикселях самого высокого видеопотока среди файлов; отсутствует, если ни один файл её не сообщает. Неизвестно с причиной not_yet_collected, пока каждый файл тайтла не прошёл сканирование до конца, включая файлы, сканирование которых не удалось или требует проверки",
+  "settings.refLifecycleFactsSeasonCountValue":
+    "Сезоны во всём списке эпизодов шоу без спецвыпусков, независимо от объекта; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsAiredEpisodeCountValue":
+    "Обычные эпизоды с датой выхода не позже дня оценки; эпизод без даты выхода считается не вышедшим. Отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsUnairedEpisodeCountValue":
+    "Обычные эпизоды без даты выхода или с датой после дня оценки; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsMissingEpisodeCountValue":
+    "Обычные эпизоды, которые вышли, отслеживаются и не имеют файла; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsAiredEpisodeFilePercentValue":
+    "Доля вышедших эпизодов с файлом в процентах; отсутствует с причиной no_aired_episode, если ничего не вышло, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsLatestSeasonNumberValue":
+    "Наибольший номер обычного сезона; отсутствует для фильмов или шоу без сезонов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsLatestAiredEpisodeDateValue":
+    "Дата выхода (YYYY-MM-DD) последнего вышедшего обычного эпизода; отсутствует с причиной no_aired_episode, если ничего не вышло, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsNextEpisodeAirDateValue":
+    "Ближайшая дата выхода (YYYY-MM-DD) после дня оценки; отсутствует с причиной no_scheduled_episode, если ничего не запланировано, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refLifecycleFactsGenresValue":
+    "Названия жанров; неизвестно с причиной metadata_unreadable, если сохранённые метаданные не удалось прочитать",
+  "settings.refLifecycleFactsRatingValue":
+    "Сводный рейтинг; отсутствует, если ни один источник не оценил тайтл, неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
+  "settings.refLifecycleFactsRatingsValue":
+    "Одна запись на каждый внешний рейтинг; неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
+  "settings.refLifecycleFactsAgeRating":
+    "Минимальный возраст по сохранённым возрастным рейтингам тайтла",
+  "settings.refLifecycleFactsCertifications":
+    "Все сертификаты из сохранённых возрастных рейтингов тайтла; см. input.facts.certifications[] ниже",
+  "settings.refLifecycleFactsCertificationLabel":
+    "Метка сертификата США (например, G, PG, PG-13, R)",
+  "settings.refLifecycleFactsCertificationRank":
+    "Эта метка в виде числа, от младшей к старшей, чтобы правила сравнивали, а не перечисляли метки",
+  "settings.refLifecycleFactsAwardCount":
+    "Сколько наград получил тайтл, по сохранённым метаданным",
+  "settings.refLifecycleFactsAwards":
+    "Все награды, полученные тайтлом; см. input.facts.awards[] ниже",
+  "settings.refLifecycleFactsAgeRatingValue":
+    "Минимальный возраст по сохранённым возрастным рейтингам, в первую очередь по рейтингу США; отсутствует с причиной no_age_rating, если ни один его не указывает, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsCertificationsValue":
+    "По одной записи на сертификат; отсутствует с причиной no_certifications, если их нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsCertificationLabelValue":
+    "Метка сертификата США; отсутствует с причиной no_us_certification, если её нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsCertificationRankValue":
+    "Эта метка в виде числа, от младшей к старшей; отсутствует с причиной no_us_certification, если метки США нет, и unrankable_certification, если Scryer её не ранжирует, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsAwardCountValue":
+    "Число полученных наград; известный ноль, если наград нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsAwardsValue":
+    "По одной записи на каждую полученную награду; известный пустой список, если наград нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleSectionCertifications":
+    "— По одной записи на сертификат в input.facts.certifications",
+  "settings.refLifecycleSectionObsCertifications":
+    "— По одной записи на сертификат в input.observations.certifications.value",
+  "settings.refLifecycleSectionAwards":
+    "— По одной записи на каждую награду в input.facts.awards",
+  "settings.refLifecycleSectionObsAwards":
+    "— По одной записи на каждую награду в input.observations.awards.value",
+  "settings.refLifecycleCertCountry": "Страна, выдавшая сертификат",
+  "settings.refLifecycleCertValue": "Сам сертификат (например, PG-13)",
+  "settings.refLifecycleCertSource": "Откуда взят сертификат",
+  "settings.refLifecycleAwardName": "Название награды",
+  "settings.refLifecycleAwardId":
+    "Идентификатор награды в Wikidata (например, Q102427)",
+  "settings.refLifecycleAwardYear": "Год получения награды, если известен",
+  "settings.refLifecycleAwardRecipient":
+    "Кто получил награду: сам тайтл или человек, получивший её за этот тайтл",
+  "settings.refLifecycleAwardRecipientId":
+    "Идентификатор получателя в Wikidata",
+  "settings.refLifecycleAwardGivenTo":
+    "work, если награду получил тайтл, person, если её получил человек за этот тайтл",
+  "settings.refLifecycleFactsPlayCountTotalValue":
+    "Сумма воспроизведений всеми учётными записями на всех включённых медиасерверах, связанными с пользователем Scryer или нет. Неизвестно с причиной audience_not_read, пока все учётные записи не прочитаны недавно, и с обычными причинами, когда факты просмотра неизвестны.",
+  "settings.refLifecycleFactsWatchlistedByUserIdsValue":
+    "ID пользователей, в чьих списках к просмотру есть тайтл. Список к просмотру — это собственный включённый и авторизованный watchlist пользователя в Plex, Trakt, TMDb или MDBList, список plan-to-watch в Simkl или MyAnimeList или список planning в AniList. Неизвестно с причиной watchlist_not_synced, пока какой-либо список ни разу не синхронизировался, завершился ошибкой в последний раз, выключен, настроен не синхронизироваться или потерял свою учётную запись, и с причиной watchlist_stale, пока какой-либо давно не синхронизировался.",
+  "settings.refLifecycleFactsWatchlistedByUsernamesValue":
+    "Имена пользователей, в чьих списках к просмотру есть тайтл; неизвестно с причиной user_not_found, если кого-то из них больше нет, и с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refLifecycleFactsWatchlistedByAnyoneValue":
+    "True, если тайтл есть в списке к просмотру какого-либо пользователя; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refLifecycleFactsWatchlistedByAnyRequesterValue":
+    "True, если тайтл есть в списке к просмотру запросившего; отсутствует с причиной title_not_requested, если его никто не запрашивал, неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refLifecycleFactsWatchlistAddedAtValue":
+    "Метка времени RFC3339, когда Scryer впервые увидел тайтл в каком-либо списке к просмотру; отсутствует с причиной not_on_a_watchlist, если его нет ни в одном списке, неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refLifecycleFactsWatchlistOriginsValue":
+    "Поставщики, в чьих списках к просмотру тайтл есть сейчас; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refLifecycleFactsFavoritedByUserIdsValue":
+    "ID пользователей, отметивших объект как избранное на включённом сервере Jellyfin или Emby. Тайтл учитывает каждое своё избранное; избранное сериала или сезона учитывается для каждого сезона и эпизода сериала; избранное эпизода — для этого эпизода, его сезона и сериала. Scryer не умеет читать избранное Plex: неизвестно с причиной favorites_unsupported, если все включённые серверы — Plex, и с причиной favorite_member_unobservable, пока связанного пользователя видно только через Plex. Неизвестно с причиной favorites_member_not_read, пока избранное связанного пользователя давно не читалось полностью, и с причиной favorites_unreadable, если сохранённое избранное не удалось прочитать. После обновления факты избранного остаются неизвестными, пока первый обход не прочитает избранное.",
+  "settings.refLifecycleFactsFavoritedByUsernamesValue":
+    "Имена пользователей, отметивших объект как избранное, с подсчётом как для favorited_by_user_ids; неизвестно с причиной user_not_found, если кого-то из них больше нет, и по тем же причинам, что и favorited_by_user_ids.",
+  "settings.refLifecycleFactsFavoritedByAnyoneValue":
+    "Истина, когда объект покрывает избранное, прочитанное из Jellyfin или Emby, с подсчётом как для favorited_by_user_ids, независимо от того, связана ли учётная запись с пользователем Scryer. Ложь, когда избранное каждой учётной записи на каждом включённом сервере Jellyfin и Emby недавно прочитано полностью и ничто не покрывает объект. Неизвестно с причиной audience_favorites_not_read, пока у какой-либо учётной записи на таком сервере нет недавнего полного чтения, с причиной audience_favorites_unsupported, пока включён сервер Plex, ведь у учётных записей Plex может быть избранное, которое Scryer не читает, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
+  "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
+    "Истина, когда объект отметил как избранное кто-то из запросивших, с подсчётом как для favorited_by_user_ids; отсутствует с причиной title_not_requested, если тайтл никто не запрашивал, неизвестно с причиной requester_not_linked, если у запросившего нет связанной учётной записи медиасервера, с причиной favorites_member_not_read, если избранное запросившего давно не читалось полностью, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
+  "settings.refLifecycleFileAudioLanguages": "Языки аудиодорожек в файле",
+  "settings.refLifecycleFileSubtitleLanguages": "Языки субтитров в файле",
+  "settings.refLifecycleFileAddedAt": "Метка времени RFC3339 добавления файла",
+  "settings.refLifecycleFactsSeriesMovies":
     "Фильмы, привязанные к таймлайну сериала, каждый со своими тегами. Только для сериалов: у фильма этот ключ отсутствует, а у сериала без привязанных фильмов он известен и пуст. add_tags и remove_tags никогда не пишут сюда — они действуют на сам тайтл.",
-  "settings.refMaintFactsSeriesMoviesValue":
+  "settings.refLifecycleFactsSeriesMoviesValue":
     "По одной записи на привязанный фильм; см. input.observations.series_movies.value[] ниже",
-  "settings.refMaintSectionSeriesMovies":
+  "settings.refLifecycleSectionSeriesMovies":
     "— По одной записи на привязанный фильм в input.facts.series_movies",
-  "settings.refMaintSectionObsSeriesMovies":
+  "settings.refLifecycleSectionObsSeriesMovies":
     "— По одной записи на привязанный фильм в input.observations.series_movies.value",
-  "settings.refMaintSeriesMovieLinkId": "Идентификатор связи сериала и фильма",
-  "settings.refMaintSeriesMovieName": "Название привязанного фильма",
-  "settings.refMaintSeriesMovieYear":
+  "settings.refLifecycleSeriesMovieLinkId":
+    "Идентификатор связи сериала и фильма",
+  "settings.refLifecycleSeriesMovieName": "Название привязанного фильма",
+  "settings.refLifecycleSeriesMovieYear":
     "Год выпуска привязанного фильма, если известен",
-  "settings.refMaintSeriesMovieMonitored":
+  "settings.refLifecycleSeriesMovieMonitored":
     "Включено ли получение для этого привязанного фильма",
-  "settings.refMaintSeriesMovieHasFile":
+  "settings.refLifecycleSeriesMovieHasFile":
     "Есть ли у этого привязанного фильма файл на диске",
-  "settings.refMaintSeriesMovieTags":
+  "settings.refLifecycleSeriesMovieTags":
     "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
-  "settings.refMaintTagActionsTitle": "Действия с тегами",
-  "settings.refMaintTagActionsNote":
+  "settings.ruleBuilderModeLabel": "Редактор",
+  "settings.ruleBuilderModeSimple": "Простой",
+  "settings.ruleBuilderUnavailable":
+    "Код этого правила был изменён вручную или создан не простым конструктором, поэтому его можно редактировать только как Rego.",
+  "settings.ruleBuilderEditAsRego": "Редактировать как Rego",
+  "settings.ruleBuilderEditAsRegoTitle": "Редактировать это правило как Rego?",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "После изменения кода правило останется расширенным и больше не откроется в простом режиме, даже после сохранения.",
+  "settings.ruleBuilderIncomplete":
+    "Некоторые параметры не заполнены. Исправьте отмеченные в конструкторе пункты и сохраните.",
+  "settings.ruleBuilderConditions": "Условия",
+  "settings.ruleBuilderJoinAll": "Выполняются все условия",
+  "settings.ruleBuilderJoinAny": "Выполняется любое условие",
+  "settings.ruleBuilderAddCondition": "Добавить условие",
+  "settings.ruleBuilderActionSubject": "Применяется к",
+  "settings.ruleBuilderAction": "Действие",
+  "settings.ruleBuilderActionPlaceholder": "Выберите действие",
+  "settings.ruleBuilderActionConditions": "Только если",
+  "settings.ruleBuilderActionConditionsHelp":
+    "Это действие выполняется, только если выполнены и эти условия, помимо условий правила. На другие действия это не влияет.",
+  "settings.ruleBuilderAddActionCondition":
+    "Добавить условие только для этого действия",
+  "settings.ruleBuilderAddAction": "Добавить действие",
+  "settings.ruleBuilderProblemActionRequired": "Выберите действие.",
+  "settings.ruleBuilderFact": "Факт",
+  "settings.ruleBuilderFactPlaceholder": "Выберите факт",
+  "settings.ruleBuilderOperator": "Сравнение",
+  "settings.ruleBuilderValue": "Значение",
+  "settings.ruleBuilderDays": "Дней",
+  "settings.lifecycleBuilderActionsHelp":
+    "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
+  "settings.ruleBuilderOutputConflict": "Нельзя сочетать с: {{outputs}}.",
+  "settings.ruleBuilderQualityProfilePlaceholder": "Выберите профиль качества",
+  "settings.ruleBuilderUserPlaceholder": "Выберите пользователя",
+  "settings.ruleBuilderListPlaceholder": "Выберите список",
+  "settings.lifecycleBuilderLibraryPlaceholder": "Выберите библиотеку",
+  "settings.lifecycleBuilderRootPlaceholder": "Выберите корневую папку",
+  "settings.ruleBuilderTagsPlaceholder": "Выберите теги",
+  "settings.ruleBuilderNoTags": "Теги ещё не созданы.",
+  "settings.ruleBuilderOpIsTrue": "истинно",
+  "settings.ruleBuilderOpIsFalse": "ложно",
+  "settings.ruleBuilderOpEquals": "равно",
+  "settings.ruleBuilderOpNotEquals": "не равно",
+  "settings.ruleBuilderOpGreaterThan": "больше",
+  "settings.ruleBuilderOpGreaterOrEqual": "не меньше",
+  "settings.ruleBuilderOpLessThan": "меньше",
+  "settings.ruleBuilderOpLessOrEqual": "не больше",
+  "settings.ruleBuilderOpContains": "содержит",
+  "settings.ruleBuilderOpNotContains": "не содержит",
+  "settings.ruleBuilderOpIsEmpty": "пусто",
+  "settings.ruleBuilderOpIsNotEmpty": "не пусто",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "более N дней назад",
+  "settings.ruleBuilderOpLessThanDaysAgo": "менее N дней назад",
+  "settings.ruleBuilderOpHasValue": "задано",
+  "settings.ruleBuilderOpHasNoValue": "не задано",
+  "settings.ruleBuilderProblemNoConditions": "Добавьте хотя бы одно условие.",
+  "settings.ruleBuilderOpIsOneOf": "одно из",
+  "settings.ruleBuilderOpIsNotOneOf": "ни одно из",
+  "settings.ruleBuilderOpContainsAny": "содержит любое из",
+  "settings.ruleBuilderOpContainsNone": "не содержит ни одного из",
+  "settings.ruleBuilderValues": "Значения",
+  "settings.ruleBuilderValuesPerLine": "По одному значению в строке",
+  "settings.ruleBuilderProblemNoOutputs": "Выберите хотя бы один результат.",
+  "settings.ruleBuilderProblemFactRequired": "Выберите факт.",
+  "settings.ruleBuilderProblemFactUnknown":
+    "Этот факт недоступен для этого правила.",
+  "settings.ruleBuilderProblemOperatorInvalid":
+    "Выберите сравнение для этого факта.",
+  "settings.ruleBuilderProblemValueRequired": "Введите значение.",
+  "settings.ruleBuilderProblemValueNotNumber": "Введите число.",
+  "settings.ruleBuilderProblemValueNotDays":
+    "Введите целое число дней, не больше 100000.",
+  "settings.ruleBuilderProblemValueUnrepresentable":
+    "Это значение содержит символы, которые нельзя записать в правило.",
+  "settings.ruleBuilderProblemValueDuplicate":
+    "Каждый элемент можно указать только один раз.",
+  "settings.ruleBuilderProblemOutputNotInScope":
+    "Этот вариант недоступен для этого правила.",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "Этот вариант нельзя сочетать с другим выбранным вариантом.",
+  "settings.ruleBuilderProblemOutputRequired":
+    "Выберите один из вариантов: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotWhole": "Введите целое число.",
+  "settings.ruleBuilderProblemValueOutOfRange":
+    "Это число вне допустимого диапазона.",
+  "settings.ruleBuilderProblemValueNotOffered":
+    "Выберите одно из предложенных значений.",
+  "settings.ruleBuilderProblemValueInvalid":
+    "Это значение содержит недопустимые здесь символы.",
+  "settings.ruleBuilderProblemValueTooLong": "Это значение слишком длинное.",
+  "settings.ruleBuilderProblemValueTooMany":
+    "В этом списке слишком много элементов.",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "Правило содержит вариант, неизвестный этой версии.",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "Для этого варианта также нужно: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Больше не предлагается: {{values}}. Правило сохранит значение, пока вы не выберете другое.",
+  "settings.ruleBuilderSchemaLoading":
+    "Загружается простой редактор. Редактор Rego тем временем работает.",
+  "settings.ruleBuilderSchemaFailed":
+    "Не удалось загрузить простой редактор. Измените правило в Rego или откройте страницу заново.",
+  "settings.scoringBuilderOutputs": "Оценка",
+  "settings.scoringBuilderOutputsHelp":
+    "Выберите одно: добавить баллы к оценке релиза или заблокировать релиз. Код называет запись оценки в трассировке решений.",
+  "settings.scoringBuilderAdjustScore": "Изменить оценку",
+  "settings.scoringBuilderBlock": "Заблокировать релиз",
+  "settings.scoringBuilderCode": "Код",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "Баллы",
+  "settings.requestBuilderOutputs": "Решение и изменения",
+  "settings.requestBuilderOutputsHelp":
+    "Выберите не более одного голоса: одобрить, отклонить или оставить на рассмотрение. Правило также может изменить то, что запишет одобрение, добавить теги или отправить уведомление — с голосом или без него. Коды причин можно добавить к любому из этих вариантов.",
+  "settings.requestBuilderMonitorPlaceholder": "Выберите отслеживание",
+  "settings.requestBuilderLanguagesPlaceholder": "Выберите языки",
+  "settings.requestDeclaredActionsTitle": "Что может это правило",
+  "settings.requestDeclaredActionsNone": "Ничего не объявлено",
+  "settings.requestRuleWarningsTitle": "Предупреждения",
+  "settings.requestRuleWarningLocation": "Строка {{line}}, столбец {{column}}:",
+  "settings.requestBuilderOriginManual": "Запрошено вручную",
+  "settings.requestBuilderOriginPublicList": "Из публичного списка",
+  "settings.requestBuilderOriginPersonalList": "Из личного списка",
+  "settings.lifecycleDeclaredActionsNone": "Нет действий",
+  "settings.lifecycleDecidedActionsNone": "Нет действий",
+  "settings.lifecycleRuleWarningsTitle": "Предупреждения",
+  "settings.lifecycleRuleWarningLocation":
+    "Строка {{line}}, столбец {{column}}:",
+  "settings.refLifecycleOutputFlagHeads":
+    "Действия без значения логические: определите их через if, и действие применяется, когда тело выполняется. Для тайтла: unmonitor, monitor, search, fetch_subtitles, delete_files и delete_title. Для одного сезона сериала: monitor_season, unmonitor_season, delete_season_files и fetch_season_subtitles. Для одной серии: monitor_episode, unmonitor_episode, delete_episode_files и fetch_episode_subtitles.",
+  "settings.refLifecycleOutputValueHeads":
+    "Действия со значением присваивают литерал через :=. set_quality_profile, move_to_library, move_to_root, notify, notify_season и notify_episode принимают строку; add_tags и remove_tags принимают список строк. Цепочка else может выбирать между литералами; вычисляемое значение отклоняется.",
+  "settings.refLifecycleOutputHelpers":
+    "Любое другое имя правила — ваш собственный помощник. Он влияет на результат, только если его использует действие, unknown или reasons.",
+  "settings.refLifecycleActionsTitle": "Действия",
+  "settings.refLifecycleActionsOrder":
+    "Scryer применяет действия объекта в таком порядке, независимо от порядка в исходном коде: {{order}}.",
+  "settings.refLifecycleActionsDaysSince":
+    "days_since(timestamp) возвращает число полных дней между меткой времени RFC3339 и временем вычисления, поэтому days_since(input.facts.added_at) > 180 означает «добавлено более 180 дней назад».",
+  "settings.refLifecycleActionsNotify":
+    "notify отправляет сообщение один раз — после того как остальные действия правила действительно что-то изменили, или сразу, если notify — единственное действие правила. Если все действия уже были выполнены, ничего не отправляется. Предпросмотр и пробные запуски его не отправляют.",
+  "settings.refLifecycleActionsConflicts":
+    "Противоречащие действия удерживаются с указанием причины вместо применения любого из них. Это касается одного объекта, например monitor вместе с unmonitor или одного и того же тега, который и добавляется, и удаляется, а также тайтла против его сезонов или эпизодов и сезона против его эпизодов, например когда сериал ставится на мониторинг, а файлы одного из его сезонов удаляются.",
+  "settings.refLifecycleTagActionsTitle": "Действия с тегами",
+  "settings.refLifecycleTagActionsNote":
     "add_tags и remove_tags записывают пользовательские теги на совпавший тайтл. Каждая метка должна существовать в реестре тегов, который администратор ведёт в настройках, и хранится в нижнем регистре: правило, называющее удалённый тег, удерживается с причиной tag_not_defined вместо записи.",
-  "settings.refMaintTagOscillationNote":
+  "settings.refLifecycleTagOscillationNote":
     "Два правила, записывающие противоположные изменения одной метки на одном тайтле, удерживают обоих кандидатов с причиной tag_patch_conflict, а не отдают победу тому, кто отработал последним. Правило, которое добавляет метку, и другое, которое снимает её на следующем прогоне, так не ловится: это ошибка автора, из-за которой тег переключается бесконечно, поэтому ограничьте их так, чтобы они не совпадали одновременно.",
-  "settings.maintenanceTemplateGallery": "Готовые шаблоны",
-  "settings.maintenanceTemplateGalleryDescription":
-    "Загрузите готовый матчер в редактор. Ничего не сохраняется, пока вы не проверите правило и не нажмёте «Создать».",
-  "settings.maintenanceTemplateApply": "Использовать шаблон",
-  "settings.maintenanceTemplateFacetMovie": "Фильмы",
-  "settings.maintenanceTemplateFacetShow": "Сериалы",
-  "settings.maintenanceTemplateGraceBadge": "Отсрочка {{count}} дн.",
-  "settings.maintenanceTemplateNoGraceBadge": "Без отсрочки",
-  "settings.maintenanceTemplateDestructiveBadge": "Удаляет файлы",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Выберите целевой профиль",
-  "settings.maintenanceTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
-  "settings.maintenanceTemplateDeadWantedDescription":
+  "settings.lifecycleTemplateGallery": "Готовые шаблоны",
+  "settings.lifecycleTemplateApply": "Использовать шаблон",
+  "settings.lifecycleTemplateFacetMovie": "Фильмы",
+  "settings.lifecycleTemplateFacetShow": "Сериалы",
+  "settings.lifecycleTemplateGraceBadge": "Отсрочка {{count}} дн.",
+  "settings.lifecycleTemplateNoGraceBadge": "Без отсрочки",
+  "settings.lifecycleTemplateNeedsProfileBadge": "Укажите целевой профиль",
+  "settings.lifecycleTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
+  "settings.lifecycleTemplateDeadWantedDescription":
     "Отслеживаемые тайтлы, для которых так и не появился ни один файл. Факты — это обычные значения, поэтому тайтл, у которого Scryer не видит состояние отслеживания или наличия файла, удерживается, а не совпадает. После отсрочки в 30 дней область снимается с отслеживания, а всё, что уже есть на диске, остаётся нетронутым.",
-  "settings.maintenanceTemplateLibraryAgingTitle": "Устаревание библиотеки",
-  "settings.maintenanceTemplateLibraryAgingDescription":
+  "settings.lifecycleTemplateLibraryAgingTitle": "Устаревание библиотеки",
+  "settings.lifecycleTemplateLibraryAgingDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Всё, у чего есть файл, устаревает, если на нём нет тега «keep». Сначала идёт отсрочка в 180 дней, и прежде чем что-либо будет удалено, должны совпасть общие ограничители экземпляра и собственное вооружение правила.",
-  "settings.maintenanceTemplateAddedLongAgoTitle":
+  "settings.lifecycleTemplateAddedLongAgoTitle":
     "Добавлено более 180 дней назад",
-  "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Настоящая арифметика дат: матчер вычитает added_at тайтла из времени вычисления и совпадает после 180 дней. Область снимается с отслеживания, файлы остаются. Тайтл без значения added_at удерживается, а не совпадает.",
-  "settings.maintenanceTemplateOversizedTitle": "Слишком большие релизы",
-  "settings.maintenanceTemplateOversizedDescription":
-    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на выбранный вами профиль качества и запускает поиск заново, только если профиль действительно изменился — выберите целевой профиль в редакторе до сохранения.",
-  "settings.maintenanceTemplateFourKPurgeTitle": "Очистка 4K",
-  "settings.maintenanceTemplateFourKPurgeDescription":
-    "Любой тайтл, у которого есть файл 2160p. После отсрочки в 7 дней он переводится на выбранный вами профиль качества, и поиск запускается заново, если профиль изменился. Выберите целевой профиль в редакторе до сохранения.",
-  "settings.maintenanceTemplateRequestedExpiryTitle":
+  "settings.lifecycleTemplateAddedLongAgoDescription":
+    "Срабатывает для тайтлов, добавленных более 180 дней назад. Отслеживание отключается, файлы остаются. Тайтл без записанной даты добавления не подходит.",
+  "settings.lifecycleTemplateOversizedTitle": "Слишком большие релизы",
+  "settings.lifecycleTemplateOversizedDescription":
+    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на указанный профиль качества и снова запускает поиск. Перед сохранением замените заполнитель «Compact 1080p» одним из своих профилей.",
+  "settings.lifecycleTemplateFourKPurgeTitle": "Очистка 4K",
+  "settings.lifecycleTemplateFourKPurgeDescription":
+    "Любой тайтл с файлом 2160p. После 7-дневной отсрочки он переводится на указанный профиль качества, и поиск запускается снова. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
+  "settings.lifecycleTemplateRequestedExpiryTitle":
     "Истечение срока запрошенного",
-  "settings.maintenanceTemplateRequestedExpiryDescription":
+  "settings.lifecycleTemplateRequestedExpiryDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Тайтлы, пришедшие по запросу, устаревают через 120 дней, если на них нет тега «keep».",
-  "settings.maintenanceTemplateDepartedRequesterTitle": "Ушедший заказчик",
-  "settings.maintenanceTemplateDepartedRequesterDescription":
-    "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, запрошенными одним указанным пользователем — замените в матчере заполнитель «departed-user» на нужное имя пользователя до сохранения, иначе правило не совпадёт ни с чем.",
-  "settings.maintenanceTemplateSystemAddedTitle":
-    "Очистка добавленного системой",
-  "settings.maintenanceTemplateSystemAddedDescription":
+  "settings.lifecycleTemplateDepartedRequesterTitle": "Ушедший заказчик",
+  "settings.lifecycleTemplateDepartedRequesterDescription":
+    "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, запрошенными одним указанным пользователем — замените заполнитель «departed-user» на нужное имя пользователя до сохранения, иначе правило не совпадёт ни с чем.",
+  "settings.lifecycleTemplateSystemAddedTitle": "Очистка добавленного системой",
+  "settings.lifecycleTemplateSystemAddedDescription":
     "Тайтлы, которые обнаружило сканирование, а не добавил человек, и у которых есть файл. Через 60 дней область снимается с отслеживания, а файлы остаются на месте.",
-  "settings.maintenanceTemplateWatchedRequestedTitle":
+  "settings.lifecycleTemplateWatchedRequestedTitle":
     "Посмотрели все, кто запрашивал",
-  "settings.maintenanceTemplateWatchedRequestedDescription":
+  "settings.lifecycleTemplateWatchedRequestedDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с запрошенными фильмами, которые посмотрели все запросившие их пользователи, после отсрочки в 30 дней. Только фильмы: Scryer записывает просмотры по фильмам и эпизодам, но не по сериалам, поэтому сериал удерживается, а не совпадает. Правило также удерживается, если у запросившего нет привязанной учётной записи медиасервера или последняя синхронизация сигналов старше 48 часов — неполная картина просмотров не является основанием для удаления.",
-  "settings.maintenanceTemplateExpiredLeasesTitle":
-    "Истёкшее хранение запросов",
-  "settings.maintenanceTemplateExpiredLeasesDescription":
+  "settings.lifecycleTemplateExpiredLeasesTitle": "Истёкшее хранение запросов",
+  "settings.lifecycleTemplateExpiredLeasesDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, у которых истекли все сроки хранения по запросам, после отсрочки в 7 дней. Хранение, которое ещё не началось — тайтл не импортирован, — остаётся нетронутым, как и тайтл, у которого срока хранения никогда не было.",
-  "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
-  "settings.maintenanceTemplateNoProfileDescription":
-    "Тайтлы, которым не назначен профиль качества. Не выполняет никаких действий: этот шаблон нужен, чтобы собрать список и посмотреть на него, прежде чем решать, что с ним делать.",
-  "settings.maintenanceTemplateNewestEpisodesTitle":
+  "settings.lifecycleTemplateNoProfileTitle": "Без профиля качества",
+  "settings.lifecycleTemplateNoProfileDescription":
+    "Тайтлы без назначенного профиля качества. Добавляет тег needs-review, чтобы человек выбрал профиль; больше ничего не меняется.",
+  "settings.lifecycleTemplateNewestEpisodesTitle":
     "Оставить 3 новейших загруженных эпизода",
-  "settings.maintenanceTemplateNewestEpisodesDescription":
+  "settings.lifecycleTemplateNewestEpisodesDescription":
     "Внимание: этот шаблон для серий отключает мониторинг и удаляет скачанные серии, которые по дате выхода старше трёх самых новых. Спецвыпуски, будущие серии, отсутствующие файлы и серии с неизвестной датой не участвуют в ранжировании и не подпадают под правило. Защищённые серии всё равно занимают места среди трёх самых новых.",
-  "settings.maintenanceTemplateNewestSeasonsTitle":
+  "settings.lifecycleTemplateNewestSeasonsTitle":
     "Оставить 2 новейших загруженных сезона",
-  "settings.maintenanceTemplateNewestSeasonsDescription":
+  "settings.lifecycleTemplateNewestSeasonsDescription":
     "Внимание: этот шаблон для сезонов отключает мониторинг и удаляет файлы сезонов, которые старше двух самых новых. Сезоны ранжируются по самой новой подходящей скачанной серии каждого сезона. Спецвыпуски, будущие серии, отсутствующие файлы и серии с неизвестной датой не участвуют в ранжировании; защищённые сезоны всё равно занимают места в этом списке.",
-  "settings.maintenanceTemplateLeftEveryListTitle": "Выбыло из всех списков",
-  "settings.maintenanceTemplateLeftEveryListDescription":
+  "settings.lifecycleTemplateLeftEveryListTitle": "Выбыло из всех списков",
+  "settings.lifecycleTemplateLeftEveryListDescription":
     "Тайтлы, из которых выбыли все списки, публичные и личные, когда каждое выбытие обработано и последнее произошло более 30 дней назад. Область снимается с отслеживания, а файлы остаются на месте.",
-  "settings.maintenanceTemplateListAddedUnwatchedTitle":
+  "settings.lifecycleTemplateListAddedUnwatchedTitle":
     "Добавлено списком и ни разу не просмотрено",
-  "settings.maintenanceTemplateListAddedUnwatchedDescription":
+  "settings.lifecycleTemplateListAddedUnwatchedDescription":
     "Добавляет тег needs-review к тайтлам, которые список добавил более 90 дней назад и которые никто не смотрел. Удерживается, пока картина просмотров неполная. Ничего не удаляется.",
   "settings.requestRules": "Правила запросов",
   "settings.noRequestRulesFound": "Правил запросов пока нет.",
@@ -5045,8 +5477,6 @@ const ru: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Все библиотеки",
   "settings.requestRuleLibrariesHelp":
     "Оставьте все флажки снятыми, чтобы правило применялось к запросам во всех библиотеках.",
-  "settings.requestRuleRevision": "Ревизия",
-  "settings.requestRuleDecisionCount": "Решений",
   "settings.requestRuleCopy": "Копировать правило",
   "settings.requestRuleCreate": "Создать правило",
   "settings.requestRuleUpdate": "Обновить правило",
@@ -5063,20 +5493,9 @@ const ru: LocaleDictionary = {
     "Отменить несохранённые изменения?",
   "settings.requestRuleConfirmDiscardDescription":
     "Сопоставитель в редакторе не сохранён. Продолжение заменит его.",
-  "settings.requestRuleRequesters": "Назовите людей в этом правиле",
-  "settings.requestRuleRequestersHelp":
-    "Отметьте учётные записи, о которых это правило, и примените их. Сопоставитель в редакторе будет переписан, чтобы вы прочитали его перед сохранением.",
-  "settings.requestRuleRequestersApply": "Вписать эти имена в сопоставитель",
-  "settings.requestRuleRequestersUnavailable":
-    "Для списка учётных записей нужны права, которых у этой страницы нет, поэтому имена придётся вписать в сопоставитель вручную.",
-  "settings.requestRuleRequestersNoTarget":
-    "Этот сопоставитель никого не называет, поэтому выбранные учётные записи некуда вписать. Сначала добавьте набор requesters или сравнение по имени пользователя.",
   "settings.requestPreviewTitle": "Проверить правило на запросе",
   "settings.requestPreviewSubtitle":
     "Выполняет один сопоставитель на запросе, который вы опишете. Ничего не отправляется и не записывается.",
-  "settings.requestPreviewSource": "Сопоставитель",
-  "settings.requestPreviewSourceStored": "Сохранённое правило",
-  "settings.requestPreviewSourceDraft": "Черновик в редакторе",
   "settings.requestPreviewRuleSelect": "Правило",
   "settings.requestPreviewRuleSelectPlaceholder": "Выберите правило",
   "settings.requestPreviewUser": "Запросивший",
@@ -5093,8 +5512,6 @@ const ru: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Используется {{title}}.",
   "settings.requestPreviewRun": "Выполнить проверку",
   "settings.requestPreviewRunning": "Выполняется…",
-  "settings.requestPreviewEmpty":
-    "Опишите запрос и запустите проверку, чтобы увидеть, что скажет это правило.",
   "settings.requestPreviewMetadataPartial": "Метаданные неполные",
   "settings.requestPreviewShowInput": "Показать входные данные сопоставителя",
   "settings.requestPreviewHideInput": "Скрыть входные данные",
@@ -5103,6 +5520,9 @@ const ru: LocaleDictionary = {
   "settings.requestPreviewUndefinedTags":
     "Определите их в «Настройки › Теги», прежде чем их можно будет применить.",
   "settings.requestDecisionsTitle": "Недавние решения",
+  "settings.requestNavRules": "Правила",
+  "settings.requestNavTry": "Проверить запрос",
+  "settings.requestNavDecisions": "Решения",
   "settings.requestDecisionsOutcomeFilter": "Итог",
   "settings.requestDecisionsOutcomeAll": "Любой итог",
   "settings.requestDecisionsColTime": "Оценено",
@@ -5112,10 +5532,9 @@ const ru: LocaleDictionary = {
   "settings.requestDecisionsEmpty": "Решений пока не записано.",
   "settings.requestDecisionsPolicySaid": "Правила сказали {{outcome}}.",
   "settings.requestDecisionNoVotes": "Ни одно правило не проголосовало.",
+  "settings.requestDecisionOtherRules": "Другие проверенные правила: {{count}}",
   "settings.requestDecisionHeld": "удержано",
   "settings.requestTemplateGallery": "Готовые правила",
-  "settings.requestTemplateGalleryDescription":
-    "Разобранные примеры, которые можно загрузить в редактор. Загрузка заполняет форму; вы всё равно читаете правило, называете его, задаёте область и сохраняете.",
   "settings.requestTemplateGalleryTagNote":
     "Шаблону, который выдаёт тег, нужен этот тег в «Настройки › Теги»; неопределённые теги отбрасываются при решении по запросу.",
   "settings.requestTemplateApply": "Загрузить в редактор",
@@ -5146,21 +5565,32 @@ const ru: LocaleDictionary = {
   "settings.requestTemplateDenyPersonalListAbove1080pDescription":
     "Отклоняет запрос из личного списка участника, когда его профиль качества выше 1080p. Публичные списки и ручные запросы не затрагиваются.",
   "settings.refReqTitle": "Справочник входных данных запросов",
-  "settings.refReqSubtitle":
-    "Все значения, которые может прочитать сопоставитель запроса, и что каждое из них означает.",
   "settings.refReqIntro":
     "Правило запроса читает один документ, описывающий запрос, того, кто его сделал, целевую библиотеку и то, что Scryer знает о медиа. Факты — это обычные значения. Факт, который Scryer не смог наблюдать, просто отсутствует, и правило, читающее отсутствующий факт, удерживает запрос для человека, а не гадает — эту защиту вы никогда не пишете сами.",
   "settings.refReqOutputTitle": "Что определяет правило запроса",
   "settings.refReqOutputIntro":
-    "Должно быть определено хотя бы одно из них, иначе правило никогда не сможет проголосовать и Scryer откажется его сохранить.",
+    "Правило должно определять голос, значение, меняющее одобрение, или add_tags; правило без всего этого отклоняется при сохранении. Головы со значением присваивают простой литерал через :=.",
   "settings.refReqOutputApprove":
     "approve — запрос можно удовлетворить без участия человека.",
   "settings.refReqOutputDeny":
-    "deny — запрос отклоняется. Отказ перевешивает любой другой голос.",
+    "deny — запрос отклоняется. Между правилами отказ перевешивает любой другой голос; внутри одного правила manual имеет приоритет над deny.",
   "settings.refReqOutputManual":
-    "manual — запрос уходит к человеку, что бы ни решили остальные.",
+    "manual — запрос уходит к человеку, если другое правило его не отклонит. Правило, завершившееся ошибкой или отложенное, считается как manual.",
   "settings.refReqOutputTags":
-    'tags contains "…" — метки для медиа, применяются только при одобрении.',
+    'add_tags := ["…"] — теги для тайтла, применяются только при одобрении.',
+  "settings.refReqOutputSetQualityProfile":
+    'set_quality_profile := "Имя профиля" — одобрить с этим профилем качества вместо запрошенного.',
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — одобрить с этим сроком хранения. 0 — хранить вечно; иначе от 1 до 3650 дней.",
+  "settings.refReqOutputSetMonitor":
+    'set_monitor := "FUTURE_EPISODES" — одобрить с этим отслеживанием: MONITORED или UNMONITORED для фильмов; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES или NONE для сериалов и аниме.',
+  "settings.refReqOutputSetAudioLanguages":
+    'set_required_audio_languages := ["eng"] и set_preferred_audio_languages := ["jpn", "eng"] — заменяют запрошенные списки языков аудио.',
+  "settings.refReqOutputNotify": 'notify := "…" — отправить это уведомление.',
+  "settings.refReqOutputShapingOutcome":
+    "Автоматически одобренный запрос получает эти значения. Для запроса на рассмотрении они показываются одобряющему как предложения, а у отклонённого остаются только в трассировке. Если два правила задают разные значения одного и того же, запрос уходит на рассмотрение.",
+  "settings.refReqOutputNoSchedule":
+    "У правил запросов нет расписания: они выполняются для каждого запроса и при предварительной проверке запрашивающего.",
   "settings.refReqOutputReasons":
     'reasons contains "…" — устойчивые коды, которые видит запросивший.',
   "settings.refReqOutputNoPackage":
@@ -5171,11 +5601,22 @@ const ru: LocaleDictionary = {
   "search.keepForCustom": "Указать число дней…",
   "search.keepForCustomLabel": "Дней хранения",
   "search.keepForHelp":
-    "Сколько Scryer будет хранить это медиа для вас. Когда срок истечёт, правило обслуживания может его удалить; вечное хранение не истекает.",
+    "Сколько Scryer будет хранить это медиа для вас. Когда срок истечёт, правило жизненного цикла может его удалить; вечное хранение не истекает.",
   "requests.preflightAutoApprove": "Это будет одобрено автоматически",
   "requests.preflightManualReview": "Это требует одобрения",
   "requests.preflightDeny": "Это было бы отклонено: {{reasons}}",
   "requests.preflightTags": "Будут добавлены метки: {{tags}}.",
+  "requests.preflightShaping": "При одобрении будет изменено на: {{changes}}.",
+  "requests.shapingTitle": "Одобрение было бы изменено на",
+  "requests.shapingSetBy": "задано правилом {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: правила задали разные значения, решает человек",
+  "requests.shapingSuggested": "Предложено правилом {{rule}}",
+  "requests.shapingLeaseDays": "Дней: {{count}}",
+  "requests.fallbackShapingConflict":
+    "Правила задали разные значения одного и того же, поэтому решает человек.",
+  "requests.fallbackShapingInvalid":
+    "Правила одобрили бы запрос, но заданное ими значение к нему неприменимо, поэтому решает человек.",
   "requests.preflightReason": "Причина: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer не смог прочитать всё об этом тайтле, поэтому решение примет человек.",
@@ -5201,12 +5642,15 @@ const ru: LocaleDictionary = {
   "requests.voteManual": "рассмотреть",
   "requests.voteAbstain": "воздержался",
   "requests.voteNone": "нет голоса",
+  "requests.voteFailed": "не выполнилось",
   "requests.fallbackRuleManual":
     "Правило попросило человека посмотреть на это.",
   "requests.fallbackHeld":
     "Правило не смогло решить, потому что что-то из читаемого им неизвестно.",
   "requests.fallbackError":
     "Правило не выполнилось, поэтому запрос ушёл к человеку.",
+  "requests.fallbackErrorRules":
+    "Не выполнились правила: {{rules}}. Запрос ушёл к человеку.",
   "requests.fallbackNoRuleMatched":
     "Ни одно правило не подошло к этому запросу.",
   "requests.approvedLease": "Хранить",
@@ -5259,7 +5703,7 @@ const ru: LocaleDictionary = {
   "settings.refReqRequesterUsername":
     "Имя пользователя запросившей учётной записи",
   "settings.refReqRequesterAccountKind":
-    "Как учётная запись входит в систему (например, локально или через связанного поставщика)",
+    "Как была создана учётная запись: local или external_auto_provisioned для учётной записи, созданной при первом входе через поставщика удостоверений",
   "settings.refReqRequesterAppPermissions":
     "Общие права приложения, которыми обладает учётная запись",
   "settings.refReqRequesterLibraryPermissions":
@@ -5267,12 +5711,16 @@ const ru: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Медиасерверы и поставщики учётных данных, привязанные к учётной записи",
   "settings.refReqRequesterCreatedAt":
-    "Когда создана учётная запись; отсутствует, потому что Scryer пока это не записывает",
+    "Когда создана учётная запись; отсутствует у записей, созданных до того, как Scryer начал это записывать",
+  "settings.refReqRequesterLastLoginAt":
+    "Когда учётная запись входила в последний раз; отсутствует, если у Scryer нет записи о входе",
+  "settings.refReqRequesterAccountAgeDays":
+    "Целых дней с создания учётной записи; отсутствует, если неизвестно время создания",
   "settings.refReqSectionLibrary": "— Библиотека, в которую направлен запрос",
   "settings.refReqLibraryId": "Идентификатор библиотеки",
   "settings.refReqLibraryName": "Название библиотеки",
   "settings.refReqLibraryFacet":
-    "Вид медиа в библиотеке (MOVIE, SERIES или ANIME)",
+    "Вид медиа в библиотеке (movie, series или anime)",
   "settings.refReqLibraryIsDefault":
     "Истина, когда это библиотека по умолчанию для своего вида",
   "settings.refReqSectionRequest": "— Что было запрошено",
@@ -5286,13 +5734,15 @@ const ru: LocaleDictionary = {
     "Идентификатор профиля качества, выбранного запросившим",
   "settings.refReqRequestQualityProfileName": "Название этого профиля",
   "settings.refReqRequestMonitorType":
-    "Отслеживание, которое запросил пользователь (например, ALL_EPISODES)",
+    "Отслеживание, которое запросил пользователь, в нижнем регистре, без пробелов, дефисов и подчёркиваний (например, allepisodes)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "Сколько сезонов названо в расширенном выборе отслеживания",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Номера сезонов из расширенного выбора отслеживания, по возрастанию; null, если выбора нет",
   "settings.refReqRequestLeaseForever":
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
-    "Сколько дней запросивший просил хранить медиа; отсутствует, когда он попросил хранить вечно",
+    "Сколько дней запросивший просил хранить медиа; null, когда он попросил хранить вечно",
   "settings.refReqRequestRequiredAudioLanguages":
     "Языки аудио, которые, по словам запросившего, должны быть у тайтла. null оставляет выбор библиотеке; пустой список означает отсутствие требования",
   "settings.refReqRequestPreferredAudioLanguages":
@@ -5351,7 +5801,7 @@ const ru: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIds":
     "Библиотеки, в которых этот тайтл уже есть",
   "settings.refReqFactsPreviousRequestCount":
-    "Сколько раз этот пользователь уже запрашивал этот тайтл",
+    "Сколько раз кто-либо уже запрашивал этот тайтл",
   "settings.refReqFactsPreviouslyDenied":
     "Был ли один из тех прежних запросов отклонён",
   "settings.refReqFactsPreviouslyApproved":
@@ -5370,6 +5820,42 @@ const ru: LocaleDictionary = {
     "Сколько дней прошло с прошлого запроса этого пользователя",
   "settings.refReqFactsLibraryTitleCount":
     "Сколько тайтлов в целевой библиотеке",
+  "settings.refReqFactsSeasonCount": "Сколько сезонов у сериала, для сериалов",
+  "settings.refReqFactsEpisodeCount":
+    "Сколько обычных эпизодов у сериала, для сериалов",
+  "settings.refReqFactsAiredEpisodeCount":
+    "Сколько из этих эпизодов вышло к дню оценки",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "Сколько из этих эпизодов ещё не вышло",
+  "settings.refReqFactsNextEpisodeAirDate": "Когда выходит следующий эпизод",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Дата выхода в кинотеатрах, для фильмов",
+  "settings.refReqFactsDigitalReleaseDate":
+    "Дата цифрового выпуска, для фильмов",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Дата выпуска на носителе, для фильмов",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Вышел ли фильм в цифре или на носителе",
+  "settings.refReqFactsDaysUntilRelease": "Дней до первого выхода фильма",
+  "settings.refReqFactsOtherRequesterCount":
+    "Сколько других участников запрашивали этот тайтл",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Ждёт ли запрос другого участника на этот тайтл",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Есть ли тайтл в собственном списке «смотреть позже» пользователя",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "Как давно тайтл в списке «смотреть позже» пользователя",
+  "settings.refReqFactsListExcluded": "Попадает ли тайтл под исключение списка",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "Сколько тайтлов запросы этого пользователя добавили в целевую библиотеку",
+  "settings.refReqFactsStorageRootId":
+    "Корневая папка, в которую попадёт тайтл",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Свободное место в этом корне, в байтах",
+  "settings.refReqFactsStorageTotalBytes":
+    "Полный размер файловой системы корня, в байтах",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Свободное место в этом корне, в процентах",
   "settings.refReqSectionCertifications":
     "— По одной записи на каждый рейтинг в input.facts.certifications",
   "settings.refReqCertCountry": "Страна, в которой выдан рейтинг",
@@ -5386,7 +5872,7 @@ const ru: LocaleDictionary = {
   "settings.refReqSectionObsCertifications":
     "— По одной записи на каждый рейтинг в input.observations.certifications.value",
   "settings.refReqFactsAgeRatingValue":
-    "Минимальный возраст по рейтингу; absent с причиной no_certification, когда рейтинга в метаданных нет",
+    "Минимальный возраст по рейтингу; absent с причиной no_age_rating, когда метаданные его не указывают",
   "settings.refReqFactsCertificationsValue":
     "По одной записи на рейтинг; см. input.observations.certifications.value[] ниже",
   "settings.refReqFactsCertificationLabelValue":
@@ -5416,13 +5902,31 @@ const ru: LocaleDictionary = {
   "settings.refReqFactsStudioValue": "Название студии",
   "settings.refReqFactsContentStatusValue":
     "Строка статуса контента у поставщика",
-  "settings.refReqFactsReleaseDateValue": "Дата выхода в формате RFC3339",
+  "settings.refReqFactsReleaseDateValue":
+    "Дата выхода в том виде, в каком её сообщает источник, в формате RFC3339 или YYYY-MM-DD",
   "settings.refReqFactsFirstAiredValue":
-    "Дата первого показа в формате RFC3339",
+    "Дата первого показа в том виде, в каком её сообщает источник, в формате RFC3339 или YYYY-MM-DD",
   "settings.refReqFactsReleaseAgeDaysValue":
     "Целых дней с выхода или первого показа",
   "settings.refReqFactsAwardCountValue":
     "Число записанных наград; подтверждённый ноль, когда наград нет",
+  "settings.refReqFactsAwards":
+    "Все награды, полученные тайтлом; см. input.facts.awards[] ниже",
+  "settings.refReqFactsAwardsValue":
+    "По одной записи на каждую полученную награду; известный пустой список, если наград нет. См. input.observations.awards.value[] ниже",
+  "settings.refReqSectionAwards":
+    "— По одной записи на каждую награду в input.facts.awards",
+  "settings.refReqSectionObsAwards":
+    "— По одной записи на каждую награду в input.observations.awards.value",
+  "settings.refReqAwardName": "Название награды",
+  "settings.refReqAwardId":
+    "Идентификатор награды в Wikidata (например, Q102427)",
+  "settings.refReqAwardYear": "Год получения награды, если известен",
+  "settings.refReqAwardRecipient":
+    "Кто получил награду: сам тайтл или человек, получивший её за этот тайтл",
+  "settings.refReqAwardRecipientId": "Идентификатор получателя в Wikidata",
+  "settings.refReqAwardGivenTo":
+    "work, если награду получил тайтл, person, если её получил человек за этот тайтл",
   "settings.refReqFactsQualityProfileTiersValue":
     "Названия уровней выбранного профиля в порядке профиля",
   "settings.refReqFactsQualityProfileMaxResolutionValue":
@@ -5432,7 +5936,7 @@ const ru: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIdsValue":
     "Идентификаторы библиотек, в которых тайтл уже есть; пустой список, когда таких нет",
   "settings.refReqFactsPreviousRequestCountValue":
-    "Число прежних запросов этого пользователя на этот тайтл",
+    "Число прежних запросов любых пользователей на этот тайтл",
   "settings.refReqFactsPreviouslyDeniedValue":
     "Истина, когда один из тех прежних запросов был отклонён",
   "settings.refReqFactsPreviouslyApprovedValue":
@@ -5451,6 +5955,46 @@ const ru: LocaleDictionary = {
     "Целых дней с прошлого запроса пользователя; absent с причиной no_previous_request, когда это его первый запрос",
   "settings.refReqFactsLibraryTitleCountValue":
     "Число тайтлов в целевой библиотеке",
+  "settings.refReqFactsSeasonCountValue":
+    "Число сезонов; для фильма absent с причиной not_a_series, unknown с причиной metadata_unavailable, если в запросе нет структуры сериала",
+  "settings.refReqFactsEpisodeCountValue":
+    "Число обычных эпизодов; absent и unknown так же, как у season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Эпизоды, вышедшие к моменту запроса, плюс запланированные на день оценки или раньше",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count минус aired_episode_count, не меньше нуля",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD первого эпизода после дня оценки; absent с причиной no_scheduled_episode, если ничего не запланировано",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_theatrical_release_date, если даты нет, с причиной not_a_movie для сериала; unknown с причиной not_yet_collected или metadata_unavailable, если даты не собраны",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_digital_release_date, если даты нет; в остальном как theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_physical_release_date, если даты нет; в остальном как theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True, если цифровая или физическая дата не позже дня оценки",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Целых дней до самой ранней известной даты; absent с причиной already_released после выхода или no_release_date, если дата неизвестна",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Число разных других пользователей; unknown с причиной catalog_unavailable, если Scryer не смог прочитать запросы",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True, если запрос другого участника ещё ждёт решения; unknown как у other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True, если тайтл есть в синхронизированном списке, привязанном пользователем; absent с причиной no_watchlist_linked, если списка нет; unknown с причиной watchlist_not_synced, watchlist_stale или list_store_unreadable, если спискам нельзя доверять",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Целых дней с первого появления там; absent с причиной not_on_a_watchlist, если его там нет; в остальном как on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True, если тайтл назван в исключении для всех списков или для списка этого запроса; unknown с причиной list_exclusions_unavailable, если их не удалось прочитать",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Число тайтлов в целевой библиотеке, созданных по запросам пользователя; unknown с причиной requester_titles_unavailable, если их не удалось посчитать",
+  "settings.refReqFactsStorageRootIdValue":
+    "Идентификатор корня по умолчанию или первого корня библиотеки; unknown с причиной storage_root_unavailable, если корней нет",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Свободные байты при последнем замере корня, не старше десяти минут; observed_at указывает время. Unknown, никогда не ноль, с причиной storage_not_sampled, storage_sample_stale или storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Всего байт из того же замера; unknown как у storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Свободные байты, умноженные на 100 и делённые на общий размер, из того же замера; unknown как у storage_available_bytes",
   "move.dialogTitle": "Переместить тайтлы",
   "move.destinationLibrary": "Целевая библиотека",
   "move.destinationRoot": "Целевой корневой каталог",
@@ -5965,8 +6509,8 @@ const ru: LocaleDictionary = {
     "Переименован в {{label}}. Переписано тайтлов: {{titles}}, фильмов сериала: {{seriesMovies}}, профилей задержки: {{delayProfiles}}.",
   "settings.titleTagRenameWarning":
     "Исходники правил никогда не переписываются, поэтому {{count}} ссылок в правилах всё ещё называют старую метку {{label}} и перестанут срабатывать: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "наборы правил обслуживания: {{count}}",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "наборы правил жизненного цикла: {{count}}",
   "settings.titleTagReferenceReleaseRuleSets":
     "наборы правил релизов: {{count}}",
   "settings.titleTagReferenceManagedTagFilters":
@@ -5987,19 +6531,13 @@ const ru: LocaleDictionary = {
   "title.catalogFilters.userTags": "Теги",
   "title.catalogFilters.selectUserTags": "Выберите теги...",
   "settings.titleTagSeriesMovieCount": "Фильмы сериала",
-  "settings.maintenanceActionAddTags": "Добавить теги",
-  "settings.maintenanceActionRemoveTags": "Удалить теги",
-  "settings.maintenanceRuleTags": "Теги",
-  "settings.maintenanceRuleTagsNone": "Теги ещё не выбраны",
-  "settings.maintenanceRuleTagsHelp":
-    "Правило назначает эти теги каждому подходящему тайтлу. Можно выбрать только теги, заданные администратором в разделе «Настройки → Теги».",
-  "settings.maintenanceCandidatesTagPatchAdd": "добавляет {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "удаляет {{tags}}",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "Помечено к удалению",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleActionAddTags": "Добавить теги",
+  "settings.lifecycleActionRemoveTags": "Удалить теги",
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Помечено к удалению",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Внимание: этот шаблон удаляет тайтл и его файлы. Он применяется ко всем тайтлам с тегом «remove» после недели ожидания. Достаточно назначить тег вручную, чтобы запустить отсчёт; снятие тега в течение недели отменяет удаление. Сначала создайте тег «remove» в разделе «Настройки → Теги».",
-  "settings.maintenanceTemplateFlagForReviewTitle": "Пометить для проверки",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "Пометить для проверки",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Назначает тег needs-review тайтлам, импортированным более года назад, чтобы человек решил, что с ними делать. Ничего не удаляется.",
   "mediaFile.allInfo": "Сведения",
   "mediaFile.noAnalysis":
@@ -6301,28 +6839,29 @@ const ru: LocaleDictionary = {
   "settings.notificationEvent.listTitleLeft": "Тайтл выбыл из списка",
   "settings.notificationEvent.listSyncFailed": "Сбой синхронизации списка",
   "settings.notificationEvent.listUnfollowed": "Подписка на список отменена",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Добавил ли объект в библиотеку список, а не человек",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Содержит ли объект ещё хотя бы один включённый список, публичный или личный",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Названия включённых публичных списков, которые ещё содержат объект",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Убрали ли объект все списки, которые когда-либо его содержали",
-  "settings.refMaintFactsListsLeftAt": "Когда последний список убрал объект",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLeftAt":
+    "Когда последний список убрал объект",
+  "settings.refLifecycleFactsListsLastListName":
     "Публичный список, из которого объект выбыл последним",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "Истина, если тайтл создан синхронизацией списка; неизвестно с причиной list_store_unreadable, если хранилище списков не удалось прочитать",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "Истина, пока хотя бы один включённый список содержит объект",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Только названия публичных списков, по алфавиту; личный список участника никогда не называется",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "Истина, когда все списки, содержавшие объект, его убрали; ложь, пока он есть хотя бы в одном списке или если его никогда не было в списках",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "Метка времени RFC3339; отсутствует с причиной not_left_every_list, пока объект есть хотя бы в одном списке",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Название этого публичного списка; отсутствует с причиной no_public_list_left, если объект никогда не выбывал из публичного списка",
   "lists.providerSettings.heading": "Настройки провайдера",
   "lists.providerSettings.copy":
@@ -6430,27 +6969,145 @@ const ru: LocaleDictionary = {
     "Не удалось переместить файл под новое имя. Файл и его эпизоды остались без изменений.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Нумерация эпизодов неоднозначна",
-  "settings.maintenanceExecutionReason.playbackHold":
-    "Отложено: на медиасервере идёт воспроизведение.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackHold":
+    "Отложено: этот тайтл воспроизводится на медиасервере.",
+  "settings.lifecycleExecutionCause.staleMovePlan":
+    "План перемещения изменился до запуска. Он будет составлен заново при следующем проходе.",
+  "settings.lifecycleExecutionCause.blockedItems":
+    "Для некоторых файлов нужно принять решение, прежде чем их можно переместить.",
+  "settings.lifecycleExecutionCause.insufficientSpace":
+    "В месте назначения нет места для этих файлов.",
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Отложено: медиасервер показывает просмотр новее сохранённой истории просмотров.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Отложено: в истории медиасервера есть просмотр учётной записью, которую история просмотров не учитывает.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "Это правило удаляет, но у него нет лимита тайтлов за запуск, поэтому его действия не выполняются. Оно по-прежнему оценивается и доступно для предпросмотра; задайте лимит, чтобы оно могло действовать.",
+  "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
+    "Отложено: после последнего чтения избранного учётная запись на медиасервере добавила в избранное этот элемент либо сериал или сезон проверенных эпизодов.",
+  "settings.lifecycleExecutionReason.ruleNotEligible":
+    "Отложено: до выполнения действия правило отключили, перевели в пробный режим или сняли с боевого режима, либо закрылся его защитный шлюз.",
+  "settings.lifecycleExecutionReason.noMatchAtExecution":
+    "Не выполнено: при повторной проверке перед действием тайтл больше не подходит под правило.",
+  "settings.lifecycleExecutionReason.unknownAtExecution":
+    "Отложено: при повторной проверке перед действием правило не смогло принять решение. Проверка повторится при следующем запуске.",
+  "settings.lifecycleExecutionReason.activeAcquisition":
+    "Отложено: для тайтла идёт захват, загрузка или импорт.",
+  "settings.lifecycleExecutionReason.acquisitionUnknown":
+    "Отложено: Scryer не смог определить, идёт ли для тайтла захват, загрузка или импорт.",
+  "settings.lifecycleExecutionReason.storageDeletionInProgress":
+    "Отложено: очистка хранилища сейчас удаляет файлы. Действие подождёт её завершения.",
+  "settings.lifecycleExecutionReason.actionNotFullySupported":
+    "Отложено: это действие нельзя применить к этому объекту, например действие для всего тайтла к сезону или эпизоду.",
+  "settings.lifecycleExecutionReason.titleMissing":
+    "Тайтла больше нет в библиотеке, поэтому ничего не сделано.",
+  "settings.lifecycleExecutionReason.locationOperationHold":
+    "Отложено: файлы тайтла перемещаются или переименовываются. Действие выполнится после завершения.",
+  "settings.lifecycleExecutionReason.passActionStepBudget":
+    "Отложено одним из прошлых запусков, исчерпавшим свои шаги действий. У запусков больше нет такого лимита; действие выполнится при следующем запуске.",
+  "settings.lifecycleExecutionReason.passHighRiskStepBudget":
+    "Отложено: удаление в этом запуске несколько раз завершилось ошибкой, поэтому оставшиеся удаления ждут следующего запуска.",
+  "settings.lifecycleExecutionReason.actionSucceeded": "Действие выполнено.",
+  "settings.lifecycleExecutionReason.alreadySatisfied":
+    "Менять нечего: тайтл уже был в том состоянии, в которое его привело бы действие.",
+  "settings.lifecycleExecutionReason.retryPending":
+    "Действие завершилось ошибкой, которая может пройти. Оно будет повторено.",
+  "settings.lifecycleExecutionReason.actionFailed":
+    "Действие завершилось ошибкой и повторяться не будет. Ошибка указана в истории действий.",
+  "settings.lifecycleExecutionReason.leaseReclaimed":
+    "Действие прервалось до завершения, например при перезапуске Scryer. Оно освобождено для повторного запуска.",
+  "settings.lifecycleExecutionReason.ambiguousEpisodeFileCoverage":
+    "Отложено: часть файлов нельзя сопоставить с эпизодами этого сезона или эпизода, поэтому удалять их небезопасно.",
+  "settings.lifecycleExecutionReason.qualityProfileUnresolved":
+    "Отложено: профиль качества, который задаёт правило, больше не соответствует ровно одному профилю. Его переименовали или удалили, либо два профиля названы одинаково.",
+  "settings.lifecycleExecutionReason.actionsNotRunnable":
+    "Отложено: действия, выбранные для этого объекта, нельзя выполнить вместе, например добавление и удаление одного и того же тега.",
+  "settings.lifecycleExecutionReason.actionsChangedAtExecution":
+    "Отложено: при повторной проверке перед действием правило выбрало другие действия. Следующая оценка заменит этого кандидата.",
+  "settings.lifecycleExecutionReason.actionNotDeclared":
+    "Отложено: у кандидата есть действие, которое текущий исходный код правила больше не объявляет, поэтому оно никогда не выполнится.",
+  "settings.lifecycleRuleMaxTitlesPerRun": "Тайтлов за запуск",
+  "settings.lifecycleRuleMaxTitlesPerRunHelp":
+    "Наибольшее число тайтлов, с которыми правило работает за один запуск. Правилу, удаляющему файлы или тайтлы, этот лимит обязателен.",
+  "settings.lifecycleRuleMaxTitlesPerRunNone": "Без ограничения",
+  "settings.lifecycleRuleLoadRefused":
+    "Это правило нельзя запустить в сохранённом виде.",
+  "settings.lifecycleSequenceStepMonitor": "Включить отслеживание",
+  "settings.lifecycleSequenceStepFetchSubtitles": "Загрузить субтитры",
+  "settings.lifecycleSequenceStepMoveToLibrary": "Переместить в библиотеку",
+  "settings.lifecycleSequenceStepMoveToRoot": "Переместить в корневую папку",
+  "settings.notificationEvent.lifecycleRuleNotified":
+    "Уведомление правила жизненного цикла",
+  "settings.lifecycleExecutionReason.tagNotDefined":
+    "Отложено: тег, который записывает правило, больше не определён в Настройки › Теги.",
+  "settings.lifecycleExecutionReason.tagPatchConflict":
+    "Отложено: другое правило добавило бы тег, который это правило удаляет, или удалило бы добавляемый им тег.",
+  "settings.lifecycleExecutionReason.monitoringConflict":
+    "Отложено: другое правило недавно сделало обратное с отслеживанием этого тайтла.",
+  "settings.lifecycleExecutionReason.actionsConflict":
+    "Отложено: правило выбрало действия, которые нельзя выполнить вместе, поэтому ничего не применено.",
+  "settings.lifecycleExecutionReason.moveLibraryUnresolved":
+    "Отложено: библиотека, указанная для перемещения, больше не соответствует ровно одной библиотеке.",
+  "settings.lifecycleExecutionReason.moveLibraryFacetMismatch":
+    "Отложено: библиотека, указанная для перемещения, содержит другой вид тайтлов.",
+  "settings.lifecycleExecutionReason.moveRootNotInLibrary":
+    "Отложено: корневая папка, указанная для перемещения, не принадлежит библиотеке тайтла.",
+  "settings.lifecycleExecutionReason.moveRefused":
+    "Отложено: перемещение отклонено или его план устарел. Файлы остаются на месте, перемещение будет повторено.",
+  "error.ruleActionRequired":
+    "Определите хотя бы одно действие, например unmonitor, delete_files или add_tags, чтобы правило могло что-то делать.",
+  "error.ruleActionHeadFunction":
+    "Действие нельзя записать как функцию. Запишите его как правило.",
+  "error.ruleForeignDataReference":
+    "Это правило читает data вне своего пакета. Используйте input.",
+  "error.ruleWithTargetNotAllowed":
+    'Это правило не может заменить {{path}} через "with". Его решение должно опираться на то, что наблюдал Scryer.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} имеет значение для Scryer и не может быть функцией. Запишите его как правило.",
+  "error.ruleQualityProfileUnknown":
+    "Профиля качества с таким именем нет, поэтому правило не может его применить.",
+  "error.ruleQualityProfileAmbiguous":
+    "Это имя носят несколько профилей качества. Переименуйте один, чтобы правило указывало на единственный профиль.",
+  "error.ruleMonitorUnsupported":
+    "Ни одна библиотека, к которой относится правило, не принимает этот тип отслеживания.",
+  "error.ruleAudioLanguageUnknown": "Scryer не знает этот язык аудио.",
+  "error.lifecycleMaxTitlesPerRunRequiredNamed":
+    "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
+  "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
+    "Правило не определяет ни одного действия, поэтому никогда ничего не сделает.",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
+    "Библиотека, указанная для перемещения, содержит другой вид тайтлов, чем библиотеки правила.",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
+    "Библиотека, указанная для перемещения, не существует.",
+  "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
+    "Корневая папка, указанная для перемещения, не является настроенным корнем библиотеки.",
+  "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
+    "Правило не дало этому объекту ни решения, ни ошибки.",
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND":
+    "Профиль качества, который задаёт правило, не существует.",
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "Число тайтлов за запуск должно быть не меньше 1.",
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "Задайте число тайтлов за запуск: это правило может удалять.",
+  "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
+    "Правило уже изменено другим сохранением. Ничего не сохранено; перезагрузите правило и повторите.",
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
+    "Это правило сохранено до того, как правила стали объявлять свои действия, поэтому оно никогда не запускается. Замените его исходный код, чтобы оно снова работало.",
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "Когда кто-либо с учётной записью на подключённом медиасервере в последний раз воспроизводил субъект",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True, если субъект воспроизвела любая учётная запись на включённом медиасервере, независимо от того, связана ли она с пользователем Scryer; для сезонов и сериалов учитывается любой вышедший эпизод. Неизвестно с причиной audience_not_read, пока синхронизация за последние 48 часов не прочитает все учётные записи на всех включённых подключениях, и с обычными причинами, когда факты просмотра неизвестны.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "Метка времени RFC3339 последнего воспроизведения любой учётной записью; отсутствует с причиной never_watched, если никто не воспроизводил, и неизвестна с причиной play_time_missing (episode_play_time_missing для сезонов и сериалов), если у воспроизведения нет записанного времени, или audience_not_read, если прочитаны не все учётные записи",
-  "settings.maintenancePreviewFacts": "Факты, прочитанные правилом",
+  "settings.lifecyclePreviewFacts": "Факты, прочитанные правилом",
   "setup.sourceImportProgress": "Импорт источников",
   "setup.sourceImportInvalidRequest":
     "Выбранный источник недоступен. Обновите обнаружение источников и выберите его снова.",
@@ -6550,6 +7207,14 @@ const ru: LocaleDictionary = {
     "Ключи API не поддерживаются для подключений WebSocket.",
   "error.reason.HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED":
     "Для доступа к WebSocket без аутентификации требуется подтверждение от веб-клиента Scryer.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOST_INVALID":
+    "Недопустимое разрешённое имя хоста. Укажите до 64 имён хостов без схемы, порта и пути.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT":
+    "В списке нет имени хоста, через которое открыта эта страница, поэтому сохранение закроет к ней доступ. Сначала добавьте это имя.",
+  "error.reason.SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY":
+    "Добавьте доверенный прокси, прежде чем доверять переданным адресам только от доверенных прокси.",
+  "error.reason.HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED":
+    "К Scryer обратились по имени хоста, которого нет в списке разрешённых имён хостов.",
   "error.reason.PLUGIN_ARTIFACT_DESTINATION_FORBIDDEN":
     "URL артефакта указывает на частный или иной запрещённый адрес назначения.",
   "error.reason.PLUGIN_ARTIFACT_HOST_UNAVAILABLE":
@@ -6582,6 +7247,8 @@ const ru: LocaleDictionary = {
     "Требуется средство распаковки архивов",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Истекло время ожидания распаковки архива",
+  "importHistory.skipReason.ARCHIVE_EXTRACTION_BLOCKED":
+    "Распаковка архива не удалась ни с одной попытки",
   "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
     "Папка тайтла требует внимания",
   "error.reason.LIST_SOURCE_RATE_LIMITED":
@@ -6782,10 +7449,10 @@ const ru: LocaleDictionary = {
     "Необходимо указать хотя бы одно поле конфигурации индексатора.",
   "error.reason.ACQUISITION_MAGNET_REQUIRES_TORRENT_PROTOCOL":
     "Для magnet требуется протокол torrent.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
-    "Для отправки поискового задания обслуживания требуется принятое намерение регистрации подтверждения.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
-    "Для отправки поискового задания обслуживания требуется заранее выделенный идентификатор запуска задания.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "Для отправки поискового задания жизненного цикла требуется принятое намерение регистрации подтверждения.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "Для отправки поискового задания жизненного цикла требуется заранее выделенный идентификатор запуска задания.",
   "error.reason.ACQUISITION_MATCHED_TITLE_NO_LONGER_EXISTS_NOT_FOUND":
     "Сопоставленный тайтл не найден.",
   "error.reason.ACQUISITION_MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING":
@@ -6930,7 +7597,7 @@ const ru: LocaleDictionary = {
     "Метка ключа API не должна содержать управляющие символы.",
   "error.reason.API_KEY_LABEL_REQUIRED": "Требуется метка ключа API.",
   "error.reason.API_KEY_LABEL_TOO_LONG":
-    "Длина метки ключа API не должна превышать выбранное число символов.",
+    "Длина метки ключа API не должна превышать 120 символов.",
   "error.reason.API_KEY_OWNER_DISABLED": "Владелец ключа API отключён.",
   "error.reason.API_KEY_OWNER_NO_LONGER_EXISTS":
     "Владелец ключа API больше не существует.",
@@ -6938,7 +7605,7 @@ const ru: LocaleDictionary = {
   "error.reason.APPLICATION_UPGRADE_APPLICATION_UPDATE_NOTICE_UNAVAILABLE":
     "Уведомление об обновлении приложения недоступно.",
   "error.reason.APPLICATION_UPGRADE_BACKUP_ALREADY_EXISTS":
-    "Перезапись существующей резервной копии приложения для выбранного элемента запрещена.",
+    "Перезапись существующей резервной копии приложения запрещена.",
   "error.reason.APPLICATION_UPGRADE_EXPECTEDTAG_DOES_NOT_MATCH_CURRENT_APPLICATION_UPDATE_NOTICE":
     "ExpectedTag не соответствует текущему уведомлению об обновлении приложения.",
   "error.reason.APPLICATION_UPGRADE_EXPECTEDTAG_REQUIRED":
@@ -6954,13 +7621,13 @@ const ru: LocaleDictionary = {
   "error.reason.APPLICATION_UPGRADE_INSTALLER_DIGEST_INVALID":
     "Недопустимая контрольная сумма установщика.",
   "error.reason.APPLICATION_UPGRADE_INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE":
-    "Недостаточно свободного места для обновления приложения: требуется выбранное число байтов, доступно выбранное число байтов.",
+    "Недостаточно свободного места для обновления приложения.",
   "error.reason.APPLICATION_UPGRADE_JOB_ALREADY_RUNNING":
     "Задание обновления приложения уже выполняется.",
   "error.reason.APPLICATION_UPGRADE_JOURNAL_PHASE_UNSUPPORTED":
-    "Неподдерживаемая фаза журнала обновления приложения для выбранного элемента.",
+    "В журнале обновления приложения записан неподдерживаемый этап.",
   "error.reason.APPLICATION_UPGRADE_JOURNAL_SCHEMA_UNSUPPORTED":
-    "Неподдерживаемая схема журнала обновления приложения для выбранного элемента.",
+    "Журнал обновления приложения использует неподдерживаемую схему.",
   "error.reason.APPLICATION_UPGRADE_NO_APPLICATION_UPDATE_NOTICE_UNAVAILABLE":
     "Нет доступного уведомления об обновлении приложения.",
   "error.reason.APPLICATION_UPGRADE_RUNNING_EXECUTABLE_NO_PARENT_DIRECTORY":
@@ -6999,15 +7666,15 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_COLLECTION_TYPE_REQUIRED": "Требуется тип коллекции.",
   "error.reason.CATALOG_COLLECTION_TYPE_UNKNOWN": "Неизвестный тип коллекции.",
   "error.reason.CATALOG_CONFIGURED_QUALITY_PROFILE_MISSING_CATALOG":
-    "Настроенный профиль качества для выбранного элемента из выбранного значения отсутствует в каталоге.",
+    "Настроенный профиль качества отсутствует в каталоге.",
   "error.reason.CATALOG_DELETE_PREVIEW_CONFIRMATION_REQUIRED_BEFORE_DELETING_FILES_DISK":
     "Перед удалением файлов с диска необходимо подтвердить предварительный просмотр удаления.",
   "error.reason.CATALOG_DOWNLOAD_ALREADY_QUEUED_TITLE":
     "Загрузка этого тайтла уже добавлена в очередь.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_DISABLED":
-    "Клиент загрузки с выбранным значением отключён.",
+    "Выбранный клиент загрузки отключён.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_DOES_NOT_EXIST":
-    "Клиент загрузки с выбранным значением не существует.",
+    "Выбранный клиент загрузки не существует.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_UNAVAILABLE":
     "Выбранный клиент загрузки не подходит.",
   "error.reason.CATALOG_EPISODE_FIELD_REQUIRED":
@@ -7024,18 +7691,18 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_EXISTING_DOWNLOAD_NO_LONGER_SAFE_REPLACE":
     "Существующую загрузку больше нельзя безопасно заменить.",
   "error.reason.CATALOG_ID_ALREADY_ASSIGNED_TITLE":
-    "Запрошенный идентификатор с выбранным значением уже назначен тайтлу с выбранным значением.",
+    "Этот внешний идентификатор уже назначен другому тайтлу.",
   "error.reason.CATALOG_INDEXER_UNKNOWN":
-    "Неизвестный индексатор с выбранным значением.",
+    "Один из выбранных индексаторов неизвестен.",
   "error.reason.CATALOG_INTERACTIVE_RELEASE_SEARCH_NOT_FOUND":
     "Интерактивный поиск релизов не найден.",
   "error.reason.CATALOG_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
   "error.reason.CATALOG_LISTED_BOTH_ADD_REMOVE":
-    "Выбранный элемент указан и для добавления, и для удаления; выберите одно действие.",
+    "Тег указан и для добавления, и для удаления; выберите одно действие.",
   "error.reason.CATALOG_MAGNET_LINK_NO_FILE_DOWNLOAD":
-    "Запрошенное значение является magnet-ссылкой и не содержит файла для загрузки.",
+    "Этот релиз является magnet-ссылкой и не содержит файла для загрузки.",
   "error.reason.CATALOG_MEDIA_FILE_DELETION_ALREADY_RUNNING":
-    "Для выбранного значения уже выполняется удаление медиафайла.",
+    "Для этого медиафайла уже выполняется удаление.",
   "error.reason.CATALOG_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.CATALOG_METADATA_LANGUAGE_INVALID":
     "Язык метаданных должен быть одним из следующих: eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces или rus.",
@@ -7044,7 +7711,7 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_ONLY_VALID_MOVIE_TITLES":
     "Минимальная доступность применима только к тайтлам фильмов.",
   "error.reason.CATALOG_MOST_RELEASES_DOWNLOADED_ONCE":
-    "Одновременно можно загружать не более выбранного числа релизов.",
+    "Одновременно можно загрузить не более 50 релизов.",
   "error.reason.CATALOG_MOVIE_ENTITY_NOT_FOUND": "Сущность фильма не найдена.",
   "error.reason.CATALOG_MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND":
     "В ответе с метаданными фильма отсутствует искомый тайтл.",
@@ -7053,13 +7720,13 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_MOVIE_TITLE_DOES_NOT_CANONICAL_FOLDER_PATH":
     "У тайтла фильма нет канонического пути к папке.",
   "error.reason.CATALOG_NOT_DEFINED_TAG":
-    "Выбранный элемент не является заданным тегом; прежде чем его можно будет применить, администратор должен добавить его в настройках.",
+    "Это не заданный тег; прежде чем его можно будет применить, администратор должен добавить его в настройках.",
   "error.reason.CATALOG_NO_QUALITY_PROFILE_NOT_CONFIGURED":
     "Профиль качества не настроен; выберите глобальный профиль либо профиль категории, библиотеки или тайтла.",
   "error.reason.CATALOG_NO_USABLE_DOWNLOAD_SOURCE":
-    "У запрошенного значения нет пригодного источника загрузки.",
+    "У этого релиза нет пригодного источника загрузки.",
   "error.reason.CATALOG_PENDING_RENAME_REFERS_MISSING_TITLE_TAG":
-    "Ожидающее переименование ссылается на отсутствующий тег тайтла с выбранным значением.",
+    "Ожидающее переименование ссылается на тег тайтла, которого больше нет.",
   "error.reason.CATALOG_PRIMARY_MOVIE_FILE_ONLY_SET_MOVIE_TITLES_SERIES_MOVIE_FILES_EPISODE_FILES":
     "Основной файл фильма можно задать только для тайтлов фильмов, файлов фильмов сериала или файлов эпизодов.",
   "error.reason.CATALOG_PROVIDE_EXACTLY_ONE_TITLE_ID_QUERY":
@@ -7094,7 +7761,7 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_SMG_ID_OUT_OF_RANGE":
     "Идентификатор Smg должен быть положительным.",
   "error.reason.CATALOG_SMG_NO_SERIES_NOT_FOUND":
-    "Для запрошенного значения в SMG нет сериала с выбранным идентификатором тайтла.",
+    "В SMG нет сериала для этого тайтла.",
   "error.reason.CATALOG_SNAPSHOT_JSON_COLUMN_INVALID":
     "Недопустимый JSON снимка.",
   "error.reason.CATALOG_SNAPSHOT_TITLE_MISSING_AMBIGUOUS":
@@ -7104,9 +7771,9 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_TAG_ADD_REMOVE_REQUIRED":
     "Необходимо указать хотя бы один тег для добавления или удаления.",
   "error.reason.CATALOG_TITLES_NO_SERIES_METADATA":
-    "У запрошенного числа тайтлов нет метаданных сериала.",
+    "У тайтлов этого типа нет метаданных сериала.",
   "error.reason.CATALOG_TITLE_CARRY_MOST_TAGS":
-    "У тайтла может быть не более выбранного числа тегов; после этого изменения у него будет выбранное число тегов.",
+    "У тайтла может быть не более 50 тегов; после этого изменения их стало бы больше.",
   "error.reason.CATALOG_TITLE_FACET_UNSUPPORTED":
     "Неподдерживаемый аспект тайтла.",
   "error.reason.CATALOG_TITLE_FIELD_REQUIRED":
@@ -7117,57 +7784,51 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_TITLE_REQUIRED":
     "Необходимо указать хотя бы один тайтл.",
   "error.reason.CATALOG_TITLE_TAG_CHANGED_WHILE_RENAME_PENDING":
-    "Тег тайтла с выбранным значением изменился, пока ожидалось его переименование.",
+    "Тег тайтла изменился, пока ожидалось его переименование.",
   "error.reason.CATALOG_TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES":
     "Слишком много одновременных интерактивных поисков.",
   "error.reason.CATALOG_TVDB_ID_INVALID":
     "Идентификатор Tvdb должен быть числовым.",
   "error.reason.CONFIGURATION_CANDIDATE_EXPECTED_STATES_REQUIRED":
     "При переходе кандидата необходимо указать ожидаемые состояния.",
-  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
-    "При завершении шага действия обслуживания необходимо передать результат попытки.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
-    "У правила обслуживания уже есть активный кандидат для этого тайтла.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
-    "Для хода последовательности обслуживания допускается не более 100 кандидатов на страницу.",
-  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
-    "Недопустимый лимит завершения обслуживания.",
-  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
-    "Отправка универсального задания обслуживания должна начинаться в состоянии dispatching.",
-  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
-    "В маркере сбоя последовательности обслуживания отсутствует идентификатор неудавшегося шага.",
-  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
-    "Недопустимое освобождение удерживаемой попытки обслуживания.",
-  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
-    "Для принятых подтверждений заданий обслуживания требуется действительный идентификатор запуска задания.",
-  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
-    "Участие в последовательности обслуживания остаётся в конечном состоянии до подтверждённого отсутствия совпадения.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
-    "При переходе подтверждения задания обслуживания необходимо указать ожидаемые состояния.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
-    "Проекция подтверждений последовательности обслуживания допускает не более 700 шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
-    "Для освобождения удерживаемой попытки обслуживания не указана причина.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
-    "При повторном выполнении шага действия обслуживания необходимо увеличить номер попытки.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
-    "У этого правила обслуживания есть активные кандидаты или история действий; вместо удаления отключите его.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
-    "Шаг действия обслуживания не соответствует сохранённому идентификатору своей последовательности.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
-    "При захвате шага действия обслуживания должна запускаться выполняемая попытка с неотрицательным номером.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
-    "Маркер сбоя последовательности обслуживания не сохраняет префикс своих шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
-    "Захват шага действия обслуживания содержит недопустимые идентификационные данные цели.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
-    "В маркере успешного завершения последовательности обслуживания отсутствует полный набор подтверждений шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
-    "Конечный маркер обслуживания не соответствует сохранённым подтверждениям шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
-    "Конечный маркер последовательности обслуживания не согласуется с конечным состоянием кандидата.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
-    "Конечный маркер последовательности обслуживания содержит недопустимые ожидаемые идентификаторы шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_ATTEMPT_RESULT_REQUIRED":
+    "При завершении шага действия жизненного цикла необходимо передать результат попытки.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_ALREADY_ACTIVE":
+    "У правила жизненного цикла уже есть активный кандидат для этого тайтла.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
+    "Для хода последовательности жизненного цикла допускается не более 100 кандидатов на страницу.",
+  "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
+    "Отправка универсального задания жизненного цикла должна начинаться в состоянии dispatching.",
+  "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
+    "В маркере сбоя последовательности жизненного цикла отсутствует идентификатор неудавшегося шага.",
+  "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
+    "Для принятых подтверждений заданий жизненного цикла требуется действительный идентификатор запуска задания.",
+  "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
+    "Участие в последовательности жизненного цикла остаётся в конечном состоянии до подтверждённого отсутствия совпадения.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "При переходе подтверждения задания жизненного цикла необходимо указать ожидаемые состояния.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
+    "Проекция подтверждений последовательности жизненного цикла допускает не более 700 шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "При повторном выполнении шага действия жизненного цикла необходимо увеличить номер попытки.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
+    "У этого правила жизненного цикла есть активные кандидаты или история действий; вместо удаления отключите его.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SEQUENCE_IDENTITY_MISMATCH":
+    "Шаг действия жизненного цикла не соответствует сохранённому идентификатору своей последовательности.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_ATTEMPT_INVALID":
+    "При захвате шага действия жизненного цикла должна запускаться выполняемая попытка с неотрицательным номером.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_PREFIX_MISMATCH":
+    "Маркер сбоя последовательности жизненного цикла не сохраняет префикс своих шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_TARGET_INVALID":
+    "Захват шага действия жизненного цикла содержит недопустимые идентификационные данные цели.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "В маркере успешного завершения последовательности жизненного цикла отсутствует полный набор подтверждений шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_EVIDENCE_MISMATCH":
+    "Конечный маркер жизненного цикла не соответствует сохранённым подтверждениям шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STATE_MISMATCH":
+    "Конечный маркер последовательности жизненного цикла не согласуется с конечным состоянием кандидата.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STEP_IDS_INVALID":
+    "Конечный маркер последовательности жизненного цикла содержит недопустимые ожидаемые идентификаторы шагов.",
   "error.reason.CONFIGURATION_PLUGIN_NOT_INSTALLED":
     "Плагин больше не установлен.",
   "error.reason.CONFIGURATION_PLUGIN_SETTINGS_PLUGIN_REQUIRED":
@@ -7268,23 +7929,23 @@ const ru: LocaleDictionary = {
   "error.reason.DATASTORE_URL_SCHEME_UNSUPPORTED":
     "URL хранилища должен использовать SQLite или PostgreSQL.",
   "error.reason.DISCOVERY_CONTEXT_CHANGE_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип изменения контекста обнаружения с выбранным значением.",
+    "Тип изменения контекста обнаружения не поддерживается.",
   "error.reason.DISCOVERY_HOME_HERO_NOT_FOUND":
     "Главный баннер на главной странице рекомендаций не найден.",
   "error.reason.DISCOVERY_INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT":
-    "При инкрементальном обновлении обнаружения получено выбранное число изменённых объектов, превышающее выбранный лимит SMG.",
+    "Инкрементальное обновление обнаружения затрагивает более 250 изменённых объектов, что превышает лимит SMG.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_PREVIOUS_SUBJECT_JSON":
-    "Ожидающее изменение обнаружения с выбранным значением содержит некорректный JSON предыдущего объекта.",
+    "Ожидающее изменение обнаружения содержит некорректный JSON предыдущего объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_RAW_SUBJECT_JSON":
-    "Ожидающее изменение обнаружения с выбранным значением содержит некорректный JSON исходного объекта.",
+    "Ожидающее изменение обнаружения содержит некорректный JSON исходного объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_RAW_SUBJECT_JSON":
-    "В ожидающем изменении обнаружения с выбранным значением отсутствует JSON исходного объекта.",
+    "В ожидающем изменении обнаружения отсутствует JSON исходного объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_SUBJECT_KEY":
-    "В ожидающем изменении обнаружения с выбранным значением отсутствует ключ объекта.",
+    "В ожидающем изменении обнаружения отсутствует ключ объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_REMATCH_MISSING_PREVIOUS_SUBJECT_KEY":
-    "В ожидающем повторном сопоставлении обнаружения с выбранным значением отсутствует ключ предыдущего объекта.",
+    "В ожидающем повторном сопоставлении обнаружения отсутствует ключ предыдущего объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY":
-    "В ожидающем удалении обнаруженного объекта с выбранным значением отсутствует ключ объекта.",
+    "В ожидающем удалении из обнаружения отсутствует ключ объекта.",
   "error.reason.DOWNLOAD_CLIENT_CONFIG_JSON_INVALID":
     "Недопустимый JSON конфигурации клиента загрузки.",
   "error.reason.DOWNLOAD_PATH_MAPPING_DOWNLOAD_CLIENT_CONFIG_JSON_INVALID":
@@ -7292,19 +7953,19 @@ const ru: LocaleDictionary = {
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_INVALID":
     "Remote_path_mappings должен быть строкой.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_DUPLICATES_EXISTING_REMOTE_PATH_ROOT":
-    "Строка сопоставления удалённых путей с выбранным значением дублирует существующий корень удалённого пути.",
+    "Строка сопоставления удалённых путей повторяет уже сопоставленный удалённый путь.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_INVALID":
-    "Строка сопоставления удалённых путей с выбранным значением должна иметь формат REMOTE => LOCAL.",
+    "Каждая строка сопоставления удалённых путей должна иметь формат REMOTE => LOCAL.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_LOCAL_PATH_INVALID":
-    "В строке сопоставления удалённых путей с выбранным значением локальный путь должен быть абсолютным.",
+    "Локальный путь в сопоставлении удалённых путей должен быть абсолютным.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_END_WHITESPACE":
-    "В строке сопоставления удалённых путей с выбранным значением удалённый путь не может заканчиваться пробельным символом.",
+    "Удалённый путь в сопоставлении не может заканчиваться пробельным символом.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_START_WHITESPACE":
-    "В строке сопоставления удалённых путей с выбранным значением удалённый путь не может начинаться с пробельного символа.",
+    "Удалённый путь в сопоставлении не может начинаться с пробельного символа.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_LOCAL_PATH":
-    "В строке сопоставления удалённых путей с выбранным значением требуется локальный путь.",
+    "В строке сопоставления удалённых путей отсутствует локальный путь.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_REMOTE_PATH":
-    "В строке сопоставления удалённых путей с выбранным значением требуется удалённый путь.",
+    "В строке сопоставления удалённых путей отсутствует удалённый путь.",
   "error.reason.EVENTS_ACTIVE_PLUGIN_INSTALL_PROGRESS_NOT_FOUND":
     "Сведения о ходе активной установки плагина не найдены.",
   "error.reason.EVENTS_EPISODE_NOT_FOUND": "Эпизод не найден.",
@@ -7315,13 +7976,13 @@ const ru: LocaleDictionary = {
   "error.reason.EXTERNAL_ACCOUNT_LINKED_ELSEWHERE":
     "Эта учётная запись уже привязана к другому пользователю.",
   "error.reason.EXTERNAL_IMPORT_API_VERSION_EXPECTED_ONE_UNSUPPORTED":
-    "Неподдерживаемая версия API выбранного поставщика для выбранного элемента; ожидалась одна из выбранных версий.",
+    "Версия API внешнего приложения не поддерживается.",
   "error.reason.EXTERNAL_IMPORT_COULD_NOT_DETERMINE_VERSION":
-    "Не удалось определить выбранную версию из выбранного элемента.",
+    "Не удалось определить версию внешнего приложения.",
   "error.reason.EXTERNAL_IMPORT_DID_NOT_REPORT_API_VERSION":
-    "Запрошенный источник не сообщил версию API.",
+    "Внешнее приложение не сообщило версию API.",
   "error.reason.EXTERNAL_IMPORT_INVALID_HOST":
-    "У запрошенного значения недопустимый хост.",
+    "У URL источника недопустимый хост.",
   "error.reason.EXTERNAL_IMPORT_SESSION_GONE":
     "Сеанс импорта больше не существует. Подключитесь снова.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH":
@@ -7329,25 +7990,87 @@ const ru: LocaleDictionary = {
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_INVALID":
     "Недопустимый URL источника.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
-    "Запрошенное значение не должно содержать строку запроса или фрагмент.",
+    "URL источника не должен содержать строку запроса или фрагмент.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNREACHABLE":
+    "Не удалось подключиться к приложению-источнику. Проверьте URL и что оно запущено.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED":
+    "Приложение-источник отклонило ключ API.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RATE_LIMITED":
+    "Слишком много запросов к приложению-источнику. Повторите попытку чуть позже.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING":
+    "Приложение-источник не предоставляет ожидаемый API. Проверьте URL и его базовый путь.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE":
+    "Приложение-источник вернуло ответ, который Scryer не смог прочитать.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE":
+    "Приложение-источник вернуло больше данных, чем принимает Scryer.",
+  "error.reason.RULE_IMPORT_INVALID_REQUEST":
+    "Этот запрос на импорт правил недопустим.",
+  "error.reason.RULE_IMPORT_REQUEST_CHANGED":
+    "Этот импорт уже запущен с другим источником. Начните новый импорт.",
+  "error.reason.RULE_IMPORT_NOT_OWNED":
+    "Этот импорт правил не существует или принадлежит другому пользователю.",
+  "error.reason.RULE_IMPORT_QUEUE_FULL":
+    "Выполняется слишком много импортов правил. Дождитесь завершения одного из них.",
+  "error.reason.RULE_IMPORT_API_KEY_REQUIRED":
+    "Для этого источника требуется ключ API.",
+  "error.reason.RULE_IMPORT_TRANSLATOR_UNAVAILABLE":
+    "Scryer пока не может преобразовать правила из этого источника.",
+  "error.reason.RULE_IMPORT_FETCH_FAILED":
+    "Не удалось прочитать правила из приложения-источника.",
+  "error.reason.RULE_IMPORT_TOO_MANY_ITEMS":
+    "В источнике больше правил, чем принимает один импорт.",
+  "error.reason.RULE_IMPORT_INTERRUPTED":
+    "Импорт правил был прерван до завершения.",
+  "error.reason.RULE_IMPORT_ALREADY_EXISTS":
+    "Правило с таким именем уже существует, поэтому оно пропущено.",
+  "error.reason.RULE_IMPORT_ITEM_FAILED":
+    "Не удалось импортировать это правило.",
+  "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
+    "Не удалось прочитать некоторые профили качества из источника.",
+  "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
+    "Источник ссылается на больше подключённых приложений, чем читает один импорт.",
+  "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
+    "Этот пользовательский формат использует условия, которые Scryer не может преобразовать, поэтому правило не сохранено.",
+  "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
+    "Не удалось прочитать этот пользовательский формат, поэтому правило не сохранено.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
+    "Профили качества оценивают этот формат по-разному, и Scryer не может сопоставить некоторые из них с одним профилем качества Scryer. Правило даёт 0, пока вы его не проверите.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer не удалось подготовить импорт по собственным настройкам. Правила не сохранены.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
+    "Оценка зависит от профиля качества Scryer с тем же именем.",
+  "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
+    "Все профили качества оценивают этот формат в 0, поэтому правило даёт 0.",
+  "error.reason.RULE_IMPORT_GROUP_UNTRANSLATABLE":
+    "Эту группу правил не удалось перевести, поэтому она сохранена как заготовка, которую нужно доработать вручную.",
+  "error.reason.MAINTAINERR_IMPORT_JSON_TOO_LARGE":
+    "Maintainerr вернул больше данных, чем читает один импорт.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_JSON_INVALID":
+    "Не удалось прочитать группы правил Maintainerr.",
+  "error.reason.MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID":
+    "Не удалось прочитать каталог правил Maintainerr.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_TOO_MANY":
+    "В Maintainerr больше групп правил, чем принимает один импорт.",
+  "error.reason.MAINTAINERR_IMPORT_PROFILES_JSON_INVALID":
+    "Не удалось прочитать профили качества Sonarr или Radarr, которые вернул Maintainerr.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
-    "Неподдерживаемая версия выбранного приложения для выбранного элемента; ожидалась выбранная основная версия или новее.",
+    "Эта версия внешнего приложения не поддерживается; требуется более новая основная версия.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
     "Нельзя назначить корневую папку библиотеки папкой тайтла.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE":
-    "Невозможно сравнить папку с выбранным значением с папкой с выбранным значением, принадлежащей тайтлу с выбранным значением.",
+    "Невозможно сравнить папку с папкой, принадлежащей другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE":
-    "Невозможно проверить папку с выбранным значением, принадлежащую другому тайтлу.",
+    "Невозможно проверить папку, принадлежащую другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_INSPECT_TITLE_FOLDER":
-    "Невозможно проверить папку тайтла с выбранным значением.",
+    "Невозможно проверить папку тайтла.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_RESOLVE_TITLE_FOLDER":
-    "Невозможно определить путь к папке тайтла с выбранным значением.",
+    "Невозможно определить путь к папке тайтла.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_ALREADY_OWNED_TITLE":
-    "Папка с выбранным значением уже принадлежит тайтлу с выбранным значением.",
+    "Папка уже принадлежит другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_NOT_TITLE_BOUNDARY":
-    "Записанная папка выбранного элемента является корнем библиотеки, а не папкой тайтла; сначала исправьте папку тайтла.",
+    "Записанная папка тайтла является корнем библиотеки, а не папкой тайтла; сначала исправьте папку тайтла.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_OVERLAPS_FOLDER_OWNED_TITLE":
-    "Папка с выбранным значением пересекается с папкой, принадлежащей тайтлу с выбранным значением.",
+    "Папка пересекается с папкой, принадлежащей другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_PATH_OUTSIDE_LIBRARY_ROOT":
     "Нельзя назначить тайтлу папку за пределами корней его библиотеки.",
   "error.reason.FOLDER_OWNERSHIP_RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER":
@@ -7355,7 +8078,7 @@ const ru: LocaleDictionary = {
   "error.reason.FOLDER_OWNERSHIP_RECYCLE_RESTORE_PATH_OUTSIDE_TITLE_S_CURRENT_OWNED_FOLDER":
     "Путь восстановления из корзины находится за пределами текущей папки тайтла; разрешите изменение папки перед восстановлением.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
-    "Тайтлу с выбранным значением уже принадлежит другая папка.",
+    "Этому тайтлу уже принадлежит другая папка.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
     "Папка тайтла изменилась во время сохранения. Обновите страницу и попробуйте снова.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
@@ -7364,18 +8087,20 @@ const ru: LocaleDictionary = {
     "Диск или том, на котором находится папка тайтла, отсутствует.",
   "error.missingDriveNamed":
     "Папка тайтла {{titleFolder}} недоступна: диск или том {{missingDrive}} отсутствует.",
+  "error.unprovenLinkLeftBehindNamed":
+    "Ссылку, созданную в месте назначения, не удалось подтвердить как источник и не удалось удалить, поэтому она осталась по пути {{leftBehindPath}}. Источник сохранён; проверьте этот путь перед повторной попыткой.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Требуется путь к папке тайтла.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":
-    "Настроенный корневой путь медиафайлов с выбранным значением пуст.",
+    "Один из настроенных медиакорней пуст.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY":
-    "Настроенный корневой путь медиафайлов с выбранным значением не является каталогом.",
+    "Один из настроенных медиакорней не является каталогом.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_SYMLINK":
-    "Настроенный корневой путь медиафайлов с выбранным значением является символической ссылкой.",
+    "Один из настроенных медиакорней является символической ссылкой.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNAVAILABLE":
-    "Настроенный корневой путь медиафайлов с выбранным значением недоступен.",
+    "Один из настроенных медиакорней недоступен.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNREADABLE":
-    "Настроенный корневой путь медиафайлов с выбранным значением недоступен для чтения.",
+    "Один из настроенных медиакорней недоступен для чтения.",
   "error.reason.HTTP_API_EXPLORER_DISABLED": "Обозреватель API отключён.",
   "error.reason.HTTP_API_EXPLORER_MODE_DUPLICATE":
     "Повторяющийся режим доступа к обозревателю API.",
@@ -7538,22 +8263,36 @@ const ru: LocaleDictionary = {
     "При поиске архивов превышено ограничение числа элементов.",
   "error.reason.IMPORT_ARCHIVE_ENTRY_ESCAPES_EXTRACTION_DIRECTORY":
     "Элемент архива выходит за пределы каталога распаковки.",
+  "error.reason.ARCHIVE_EXTRACTION_IN_PROGRESS":
+    "Архивы загрузки распаковываются; импорт ждёт их.",
+  "error.reason.ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED":
+    "Папка распаковки загрузки содержит то, что Scryer для неё не создавал; она оставлена как есть.",
+  "error.reason.ARCHIVE_EXTRACTION_WAITING":
+    "Предыдущая распаковка архивов загрузки не удалась; следующая попытка ещё не наступила.",
+  "error.reason.ARCHIVE_EXTRACTION_FAILED":
+    "Не удалось распаковать архивы загрузки; импорт повторит попытку позже.",
+  "error.reason.ARCHIVE_EXTRACTION_TIMED_OUT":
+    "Распаковка архивов загрузки заняла слишком много времени; импорт повторит попытку позже.",
+  "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
+    "Архивы загрузки не удалось распаковать ни с одной попытки; повторите импорт, чтобы попробовать снова.",
+  "error.reason.BLOCKLIST_IMPORT_NOT_AN_UPGRADE":
+    "Загружено, но файл оказался не лучше того, что уже есть в библиотеке. Заблокировано на всех индексаторах, чтобы не загружать его снова.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
-    "Перед размещением результатов распаковки выбранного значения в промежуточном хранилище необходимо определить путь назначения импорта.",
+    "Для извлечения архива нужно определить место назначения импорта до подготовки результата.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
-    "Архив содержит вложенные архивы с глубиной более выбранного числа уровней.",
+    "Архив содержит архивы с вложенностью более 2 уровней.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES":
-    "Архив содержит больше выбранного числа вложенных архивов.",
+    "Архив содержит более 16 вложенных архивов.",
   "error.reason.IMPORT_ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING":
-    "Архив сопоставлен с выбранным тайтлом, но распакованную рабочую папку с выбранным значением не удалось переместить в выбранное место без копирования.",
+    "Архив сопоставлен с тайтлом, но извлечённые файлы не удалось переместить в место назначения тайтла без копирования.",
   "error.reason.IMPORT_ARCHIVE_OUTPUT_DIRECTORY_NOT_INSIDE_STAGING_WORKSPACE":
-    "Выходной каталог архива с выбранным значением находится за пределами промежуточной рабочей папки.",
+    "Каталог вывода архива находится вне промежуточной рабочей области.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_EXTRACTION":
-    "Плагин архивов не поддерживает распаковку выбранного формата.",
+    "Плагин архивов не поддерживает извлечение этого формата архива.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE":
     "Выходной файл манифеста плагина архивов не является обычным файлом.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH":
-    "Размер выбранного файла не соответствует манифесту плагина архивов.",
+    "Манифест плагина архивов указывает другой размер для извлечённого файла.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_SYMLINK":
     "Результат работы плагина архивов содержит символическую ссылку.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_DIRECTORIES":
@@ -7563,15 +8302,15 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_FILES":
     "Результат работы плагина архивов содержит слишком много файлов.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_EXCEEDS_BYTES":
-    "Результат работы плагина архивов превышает выбранное число байтов.",
+    "Вывод плагина архивов превышает ограничение в 2 ТиБ.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_NOT_REGULAR_FILE":
     "Результат работы плагина архивов не является обычным файлом.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE":
     "Результат работы плагина архивов слишком велик.",
   "error.reason.IMPORT_ARCHIVE_REEXTRACTION_FAILED":
-    "Архив сопоставлен с выбранным тайтлом, но повторно распаковать его в папку назначения этого тайтла не удалось.",
+    "Архив сопоставлен с тайтлом, но его не удалось повторно извлечь в место назначения тайтла.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_LIES_INSIDE_OWN_EXTRACTION_OUTPUT":
-    "Исходный архив с выбранным значением находится внутри собственного результата распаковки.",
+    "Источник архива находится внутри собственного каталога извлечения.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY":
     "Метаданные источника архива указывают за пределы каталога источника.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_METADATA_EXCEEDS_ENTRY_LIMIT":
@@ -7583,7 +8322,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_SOURCE_SYMLINK_FORBIDDEN":
     "Источник архива не должен быть символической ссылкой.",
   "error.reason.IMPORT_ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY":
-    "Промежуточный выходной каталог архива с выбранным значением не пуст.",
+    "Промежуточный каталог вывода архива не пуст.",
   "error.reason.IMPORT_ARR_SOURCE_WARMUP_RESULT_NOT_FOUND":
     "Результат предварительной подготовки источника arr не найден.",
   "error.reason.IMPORT_CHANGED_WHILE_RETRY_REQUESTED":
@@ -7595,9 +8334,9 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_CLEANUP_STATE_INVALID":
     "Записанное состояние очистки недопустимо.",
   "error.reason.IMPORT_CLEANUP_TARGET_IS_OUTPUT_ROOT":
-    "Удаление корневого выходного каталога клиента загрузки с выбранным значением запрещено.",
+    "Удаление корня вывода клиента загрузки запрещено.",
   "error.reason.IMPORT_CLEANUP_TARGET_OVERLAPS_LIBRARY_ROOT":
-    "Удаление загруженных клиентом данных с выбранным значением запрещено, поскольку они пересекаются с настроенной корневой папкой библиотеки.",
+    "Удаление данных клиента загрузки запрещено: они пересекаются с настроенным корнем библиотеки.",
   "error.reason.IMPORT_CLIENT_DOES_NOT_REPORT_COMPLETED_DOWNLOAD":
     "Клиент не сообщает о завершённой загрузке; повторная попытка импорта не может перезапустить неудавшуюся или активную загрузку.",
   "error.reason.IMPORT_CLIENT_JOB_ID_NOW_BELONGS_DIFFERENT_DOWNLOAD":
@@ -7612,8 +8351,14 @@ const ru: LocaleDictionary = {
     "Завершённая загрузка ещё не обнаружена; повторно освободите её после обнаружения.",
   "error.reason.IMPORT_COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY":
     "У завершённого источника нет достоверных идентификационных данных загрузки; используйте ручной импорт.",
+  "error.reason.IMPORT_COPY_KEPT_SOURCE_GONE":
+    "Копия оставлена в месте назначения: исходный файл больше не содержит этих данных.",
+  "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN":
+    "Не удалось определить, не является ли существующее место назначения самим исходным файлом. Ничего не удалено. Если указан путь сохранения, исходный файл находится там, а не на своём месте.",
+  "error.reason.IMPORT_DESTINATION_IS_SOURCE":
+    "Существующее место назначения — это сам исходный файл, поэтому удаление источника удалило бы единственную копию. Ничего не удалено.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
-    "Восстановление старой резервной копии обновления с выбранным значением запрещено, поскольку место назначения занято.",
+    "В месте назначения уже есть файл, который не был помещён этим импортом. Ничего не заменено.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":
     "Цели импорта диска должны в точности соответствовать явно заданным сопоставлениям эпизодов.",
   "error.reason.IMPORT_DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET":
@@ -7633,38 +8378,38 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_DOWNLOAD_BUSY_IMPORT_CHANGED":
     "Загрузка занята или импорт изменился; обновите данные и повторите попытку.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_COMPLETED_DOWNLOAD_NOT_FOUND":
-    "Завершённая загрузка клиента загрузки с выбранным значением недоступна для очистки данных.",
+    "Завершённая загрузка клиента недоступна для очистки данных.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_CONFIGURATION_NO_LONGER_MATCHES_SOURCE":
     "Настройки клиента загрузки больше не соответствуют этому источнику; используйте ручной импорт.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_NOT_FOUND": "Клиент загрузки не найден.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PATH_MAPPING_UNUSABLE_LOCAL_ROOT":
     "В сопоставлении путей клиента загрузки указан непригодный локальный корневой каталог.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY":
-    "Контрольная точка очистки данных клиента загрузки с выбранным значением не является каталогом.",
+    "Контрольная точка очистки данных клиента загрузки не является каталогом.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_REQUIRES_CONFIGURED_CLIENT_ID":
     "Для очистки данных клиента загрузки требуется настроенный идентификатор клиента.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_INVALID":
     "Путь к данным клиента загрузки должен быть абсолютным.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_NOT_FILE_DIRECTORY_SYMLINK":
-    "Путь к данным клиента загрузки с выбранным значением не является файлом, каталогом или символической ссылкой.",
+    "Путь к данным клиента загрузки не является файлом, каталогом или символической ссылкой.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_OUTSIDE_OUTPUT_ROOT":
-    "Путь к данным клиента загрузки с выбранным значением находится за пределами выходного корневого каталога с выбранным значением.",
+    "Путь к данным клиента загрузки находится вне корня вывода клиента.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_TRAVERSES_SYMLINK":
-    "Путь к данным клиента загрузки с выбранным значением проходит через символическую ссылку с выбранным значением.",
+    "Путь к данным клиента загрузки проходит через символическую ссылку.",
   "error.reason.IMPORT_DOWNLOAD_FAILED":
     "Загрузка завершилась с ошибкой; повторите загрузку перед импортом.",
   "error.reason.IMPORT_DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS":
-    "В загрузке больше наборов архивов, чем допускает выбранное значение.",
+    "Загрузка содержит более 256 наборов архивов.",
   "error.reason.IMPORT_DOWNLOAD_NO_STABLE_IDENTITY_YET":
     "У этой загрузки пока нет устойчивых идентификационных данных; её источники остаются удержанными.",
   "error.reason.IMPORT_DOWNLOAD_NO_TITLE_AUTHORIZE_RELEASE_AGAINST":
     "У импорта этой загрузки нет тайтла, по которому можно разрешить освобождение её источников.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_NO_LONGER_REAL_DIRECTORY":
-    "Каталог данных загрузки с выбранным значением больше не является реальным каталогом.",
+    "Каталог данных загрузки больше не является настоящим каталогом.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_TOO_MANY_ENTRIES_INVENTORY_SAFELY":
-    "В каталоге данных загрузки с выбранным значением слишком много элементов для безопасной инвентаризации.",
+    "В каталоге данных загрузки слишком много элементов для безопасной инвентаризации.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_INVENTORY_ENTRY_NOT_SAFE_RELATIVE_PATH":
-    "Элемент описи данных загрузки с выбранным значением не является безопасным относительным путём.",
+    "Элемент инвентаризации данных загрузки не является безопасным относительным путём.",
   "error.reason.IMPORT_DOWNLOAD_STATE_UNAVAILABLE":
     "Не удалось определить текущее состояние загрузки в клиенте; повторите попытку, когда его история станет доступна.",
   "error.reason.IMPORT_DOWNLOAD_STILL_BEING_IMPORTED":
@@ -7676,19 +8421,19 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_EPISODIC_DISCS_REQUIRE_PLAYBACK_TITLE_MAPPINGS":
     "Для дисков с эпизодами требуется сопоставление воспроизводимых тайтлов; диски с фильмами нельзя сопоставлять с эпизодами.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_DEDUPKEY_DUPLICATED":
-    "В выбранном значении повторяется dedupKey настройки внешнего импорта.",
+    "В настройке внешнего импорта одна и та же запись указана несколько раз.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_INSTANCEID_DUPLICATED":
     "Повторяется instanceId настройки внешнего импорта.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_CANNOT_EMPTY":
     "Черновик секретных данных настройки внешнего импорта не может быть пустым; вместо этого удалите черновик.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_OUT_OF_RANGE":
-    "Размер черновика секретных данных настройки внешнего импорта с выбранным значением не должен превышать выбранное число байтов.",
+    "Секрет в настройке внешнего импорта слишком длинный.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_REQUIRED":
-    "Черновик секретных данных настройки внешнего импорта с выбранным значением не может быть пустым.",
+    "Секрет в настройке внешнего импорта не может быть пустым.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST":
-    "Черновик секретных данных настройки внешнего импорта поддерживает не более выбранного количества элементов выбранного типа.",
+    "Настройка внешнего импорта поддерживает не более 500 переопределений каждого вида.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST_INSTANCE_API_KEYS":
-    "Черновик секретных данных настройки внешнего импорта поддерживает не более выбранного числа API-ключей экземпляров.",
+    "Настройка внешнего импорта поддерживает не более 25 ключей API экземпляров.",
   "error.reason.IMPORT_EXTRACTED_ARCHIVE_WORKSPACE_UNAVAILABLE":
     "Рабочий каталог распакованного архива недоступен.",
   "error.reason.IMPORT_FILE_NOT_FOUND": "Исходный файл не найден.",
@@ -7717,7 +8462,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_CANDIDATE_REQUIRED":
     "Требуется хотя бы один кандидат для ручного импорта.",
   "error.reason.IMPORT_MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE":
-    "Целевой эпизод ручного импорта с выбранным значением не принадлежит тайтлу с выбранным значением.",
+    "Эпизод, выбранный для ручного импорта, не принадлежит этому тайтлу.",
   "error.reason.IMPORT_MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE":
     "Целевой эпизод ручного импорта недоступен.",
   "error.reason.IMPORT_MANUAL_IMPORT_FILE_INVALID":
@@ -7739,7 +8484,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_REQUEST_MISSING_ACTOR":
     "В запросе ручного импорта не указан инициатор.",
   "error.reason.IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_DOES_NOT_BELONG_TITLE":
-    "Целевой фильм сериала для ручного импорта с выбранным значением не принадлежит тайтлу с выбранным значением.",
+    "Фильм сериала, выбранный для ручного импорта, не принадлежит этому тайтлу.",
   "error.reason.IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_UNAVAILABLE":
     "Целевой фильм сериала для ручного импорта недоступен.",
   "error.reason.IMPORT_MANUAL_IMPORT_SOURCE_CONFLICTING_CANONICAL_DOWNLOAD_IDENTITY":
@@ -7755,20 +8500,20 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD":
     "Тайтл ручного импорта не соответствует запросу Scryer, по которому была получена эта загрузка.",
   "error.reason.IMPORT_MANUAL_TITLE_OUTSIDE_DURABLE_SCRYER_SUBMISSION_TITLE":
-    "Выбранный вручную тайтл с выбранным значением не входит в тайтл сохранённого запроса Scryer с выбранным значением.",
+    "Выбранный вручную тайтл не совпадает с тайтлом, для которого была отправлена эта загрузка.",
   "error.reason.IMPORT_MAPPED_DISC_EPISODE_NO_LONGER_BELONGS_IMPORT_TITLE":
     "Сопоставленный эпизод диска больше не принадлежит тайтлу импорта.",
   "error.reason.IMPORT_MEDIA_FILE_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Медиафайл изменился до публикации метаданных импорта.",
   "error.reason.IMPORT_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.IMPORT_MEDIA_ROOT_REQUIRED":
-    "Невозможно безопасно заменить выбранный элемент улучшенной версией: не удалось определить настроенный корневой каталог медиа.",
+    "Невозможно безопасно обновить этот файл: не удалось определить ни одного настроенного медиакорня.",
   "error.reason.IMPORT_MULTIPLE_SCENE_SUBTITLES_MAP_SAME_DESTINATION":
     "Несколько субтитров сцены сопоставлены с одним путём назначения; источники сохранены.",
   "error.reason.IMPORT_NEWER_IMPORT_ATTEMPT_OWNS_DOWNLOAD":
     "Этой загрузкой владеет более новая попытка импорта; обновите её историю.",
   "error.reason.IMPORT_NOT_HOLDING_SOURCES":
-    "Импорт с выбранным значением не удерживает свои источники.",
+    "Этот импорт не удерживает свои источники.",
   "error.reason.IMPORT_NO_COMPLETED_IMPORT_ATTEMPT_UNAVAILABLE":
     "Нет завершённой попытки импорта для повтора; используйте ручной импорт.",
   "error.reason.IMPORT_NZBGET_CLEANUP_IDENTITY_CHANGED":
@@ -7782,7 +8527,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_NZBGET_TERMINAL_CLEANUP_METADATA_NOT_FOUND":
     "Метаданные окончательной очистки NZBGet недоступны: не найдены.",
   "error.reason.IMPORT_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Защитная проверка замены по тому же пути отклонена: старый файл с выбранным значением находится за пределами корневого каталога медиа с выбранным значением.",
+    "Обновление запрещено: старый файл находится вне текущих медиакорней; оставьте старый корень в настройках, пока существующие файлы не будут перемещены, заменены или удалены.",
   "error.reason.IMPORT_PAYLOAD_DIRECTORY_OWNERSHIP_UNVERIFIED":
     "Принадлежность каталога данных не подтверждена; удаление общего каталога запрещено.",
   "error.reason.IMPORT_PAYLOAD_OVERLAPS_RECYCLE_ROOT":
@@ -7796,9 +8541,9 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_RECORD_CONFLICTS_COMPLETED_SOURCE_IDENTITY":
     "Запись импорта конфликтует с идентификационными данными завершённого источника; используйте ручной импорт.",
   "error.reason.IMPORT_RECYCLE_BIN_CONFIG_REQUIRED":
-    "Замена выбранного элемента улучшенной версией запрещена: не удалось определить настройки корзины для корневого каталога старого файла с выбранным значением.",
+    "Обновление запрещено: не удалось определить настройки корзины для корня старого файла.",
   "error.reason.IMPORT_REGULAR_FILE_REQUIRED":
-    "Удаление старого файла с выбранным значением при замене улучшенной версией запрещено: это не обычный файл.",
+    "Замена старого файла при обновлении запрещена: это не обычный файл.",
   "error.reason.IMPORT_RELEASING_THESE_SOURCES_ALSO_RELEASES_IMPORT_TITLE_MAY_NOT_RESOLVE_IMPORTS":
     "Освобождение этих источников также освободит импорт тайтла, для которого у вас может не быть права разрешать проблемы импорта.",
   "error.reason.IMPORT_RESOURCE_NOT_FOUND": "Импорт не найден.",
@@ -7806,6 +8551,8 @@ const ru: LocaleDictionary = {
     "Эта повторная попытка импорта уже выполняется или ожидает сверки состояния.",
   "error.reason.IMPORT_RETRY_IMPORT_RECORD_NOT_FOUND":
     "Запись повторного импорта не найдена.",
+  "error.reason.IMPORT_RETRY_LIMIT_REACHED":
+    "Автоматические повторы импорта остановлены: повторные попытки не дали результата. Повторите импорт после устранения причины.",
   "error.reason.IMPORT_SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Сохранённый выбор содержимого диска изменился до публикации метаданных импорта.",
   "error.reason.IMPORT_SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED":
@@ -7856,12 +8603,14 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_SOURCE_UNAVAILABLE":
     "Источник ручного импорта недоступен.",
   "error.reason.IMPORT_STATUS_ONLY_FAILED_SKIPPED_IMPORTS_RETRIED":
-    "Импорт с выбранным значением имеет выбранный статус; повторить можно только импорты с ошибкой или пропущенные импорты.",
+    "Повторить можно только неудавшиеся или пропущенные импорты.",
   "error.reason.IMPORT_SYMLINK_REFUSED":
-    "Удаление старого файла с выбранным значением при замене улучшенной версией запрещено: это символическая ссылка.",
+    "Замена старого файла при обновлении запрещена: это символическая ссылка.",
   "error.reason.IMPORT_UNAVAILABLE": "Этот импорт больше нельзя отменить.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH":
     "Небезопасный путь элемента архива.",
+  "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED":
+    "Существующий файл сохранён: подготовка его замены не удалась.",
   "error.reason.IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE":
     "Замена улучшенной версией запрещена: путь к корзине небезопасен.",
   "error.reason.INTEGRATION_ACTION_PERMISSION_DENIED":
@@ -7886,13 +8635,13 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_DOWNLOAD_ALREADY_BEING_PROCESSED":
     "Эта загрузка уже обрабатывается.",
   "error.reason.INTEGRATION_DOWNLOAD_ALREADY_RESOLVED":
-    "Загрузка уже обработана с выбранным результатом; игнорировать нечего.",
+    "Загрузка уже разрешена; игнорировать нечего.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONFIG_INVALID":
     "Недопустимые настройки клиента загрузки.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONFIG_NOT_FOUND":
     "Настройки клиента загрузки не найдены.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_ALL_PROTOCOL_FAMILIES_REQUIRED_INDEXER":
-    "Клиент загрузки с выбранным значением не поддерживает все семейства протоколов, необходимые индексатору с выбранным значением.",
+    "Клиент загрузки поддерживает не все семейства протоколов, которые требуются индексатору.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_PASSWORD_RETRIES":
     "Этот клиент загрузки не поддерживает повторные попытки с паролем.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_FIELD_REQUIRED":
@@ -7902,7 +8651,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_NAME_REQUIRED":
     "Требуется имя клиента загрузки.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип клиента загрузки: выбранный элемент.",
+    "Этот тип клиента загрузки не поддерживается.",
   "error.reason.INTEGRATION_DOWNLOAD_NOT_STATE_IMPORTED_HAND_RIGHT_NOW":
     "Текущее состояние этой загрузки не позволяет импортировать её вручную.",
   "error.reason.INTEGRATION_DOWNLOAD_SUBMISSION_NOT_FOUND":
@@ -7911,8 +8660,7 @@ const ru: LocaleDictionary = {
     "Загрузка больше недоступна для ручного импорта.",
   "error.reason.INTEGRATION_ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE":
     "Включите этот прокси перед проверкой исходящего маршрута.",
-  "error.reason.INTEGRATION_FIELD_REQUIRED":
-    "Требуется указать запрошенное значение.",
+  "error.reason.INTEGRATION_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.INTEGRATION_HELD_SOURCES_COULD_NOT_SETTLED":
     "Не удалось завершить обработку удерживаемых источников.",
   "error.reason.INTEGRATION_HTTP_3_CONNECT_ENDPOINT_INVALID":
@@ -7938,7 +8686,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_INDEXER_CONNECTION_URL_REQUIRED":
     "Требуется URL подключения к индексатору.",
   "error.reason.INTEGRATION_INDEXER_DOES_NOT_SUPPORT_TORRENTS_SO_SEEDING_PROFILE_CANNOT_ASSIGNED":
-    "Индексатор с выбранным значением не поддерживает торренты, поэтому ему нельзя назначить профиль сидирования с выбранным значением.",
+    "Этот индексатор не поддерживает торренты, поэтому ему нельзя назначить профиль раздачи.",
   "error.reason.INTEGRATION_INDEXER_FIELD_REQUIRED":
     "Нужно указать хотя бы одно поле индексатора.",
   "error.reason.INTEGRATION_INDEXER_ID_REQUIRED":
@@ -7948,9 +8696,9 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_INDEXER_PROVIDER_DECLARES_MULTIPLE_CONNECTION_URL_CONFIG_FIELDS":
     "Провайдер индексатора объявляет несколько полей настроек connection_url.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY":
-    "Провайдер индексатора с выбранным значением не объявляет поддерживаемое семейство протоколов.",
+    "Поставщик индексатора не объявляет поддерживаемое семейство протоколов.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип провайдера индексатора: выбранный элемент.",
+    "Этот тип поставщика индексатора не поддерживается.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_UNAVAILABLE":
     "Провайдер индексатора недоступен.",
   "error.reason.INTEGRATION_INDEXER_REQUEST_REJECTED":
@@ -7970,17 +8718,17 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_MANAGED_CHILD_INDEXER_REQUIRES_PARENT":
     "Для управляемого дочернего индексатора требуется родительский индексатор.",
   "error.reason.INTEGRATION_MANAGED_CHILD_PLAN_CONTAINS_DUPLICATE_CHILD_KEY":
-    "План управляемых дочерних индексаторов содержит повторяющийся child_key с выбранным значением.",
+    "В плане управляемых дочерних индексаторов один и тот же ключ указан несколько раз.",
   "error.reason.INTEGRATION_MANAGED_CHILD_PLAN_ENTRIES_REQUIRE_CHILD_KEY":
     "Для элементов плана управляемых дочерних индексаторов требуется child_key.",
   "error.reason.INTEGRATION_MANAGED_CHILD_REQUIRES_NAME":
-    "Для управляемого дочернего элемента с выбранным значением требуется имя.",
+    "Управляемому дочернему индексатору требуется имя.",
   "error.reason.INTEGRATION_MANAGED_CHILD_REQUIRES_PROVIDER_TYPE":
-    "Для управляемого дочернего элемента с выбранным значением требуется provider_type.",
+    "Управляемому дочернему индексатору требуется тип поставщика.",
   "error.reason.INTEGRATION_MANAGED_CHILD_ROUTING_CONTAINS_DUPLICATE_SCOPE":
-    "Маршрутизация управляемых дочерних элементов содержит повторяющуюся область с выбранным значением.",
+    "В маршрутизации управляемых дочерних индексаторов одна и та же область указана несколько раз.",
   "error.reason.INTEGRATION_MANAGED_CHILD_ROUTING_SCOPE_UNSUPPORTED":
-    "Область маршрутизации управляемых дочерних элементов с выбранным значением не поддерживается.",
+    "Область маршрутизации управляемого дочернего индексатора не поддерживается.",
   "error.reason.INTEGRATION_MANAGED_INDEXERS_CANNOT_USE_PROXY":
     "Управляемые индексаторы не могут использовать прокси; решением проверок занимается управляющее приложение.",
   "error.reason.INTEGRATION_MANUAL_IMPORT_CANDIDATE_UNAVAILABLE":
@@ -7996,19 +8744,27 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD":
     "Тайтл ручного импорта не соответствует запросу Scryer, по которому была получена эта загрузка.",
   "error.reason.INTEGRATION_MAPPED_DOWNLOAD_CLIENT_NO_LONGER_EXISTS":
-    "Сопоставленный клиент загрузки с выбранным значением больше не существует.",
+    "Сопоставленный клиент загрузки больше не существует.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE":
     "Максимальное число запросов в минуту должно быть не меньше 1; оставьте поле пустым, чтобы не ограничивать число запросов.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Максимальное число запросов в минуту задаётся для каждого управляемого индексатора, а не для индексатора, который их синхронизирует.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит запросов.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит загрузок.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Не удалось надёжно проверить месячный расход индексатора; запрос отклонён.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Месячные лимиты запросов и загрузок должны быть положительными целыми числами или пустыми.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Нижний предел минимального числа сидов не может быть отрицательным.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
-    "`выбранное значение` не является адресом DNS-сервера; строка `DNS` принимает IP-адреса.",
+    "Запись DNS не является адресом DNS-сервера; строка `DNS` принимает IP-адреса.",
   "error.reason.INTEGRATION_NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE":
-    "Для выбранного типа провайдера нет доступного клиента управления индексаторами.",
+    "Для этого типа поставщика нет клиента управления индексаторами.",
   "error.reason.INTEGRATION_NO_INDEXER_PROVIDER_AVAILABLE_PROVIDER_TYPE":
-    "Для выбранного типа провайдера нет доступного провайдера индексаторов.",
+    "Для этого типа поставщика нет поставщика индексаторов.",
   "error.reason.INTEGRATION_ONLY_SSH_TUNNELS_TAKE_PRIVATE_KEY_PASSPHRASE":
     "Парольная фраза закрытого ключа используется только в SSH-туннелях.",
   "error.reason.INTEGRATION_ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY":
@@ -8022,7 +8778,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PRIVATE_KEY_INVALID":
     "Закрытый ключ должен быть блоком PEM, начинающимся с -----BEGIN и заканчивающимся на -----.",
   "error.reason.INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC":
-    "Выбранный тип провайдера не поддерживает синхронизацию управляемых дочерних элементов.",
+    "Этот тип поставщика не поддерживает синхронизацию управляемых дочерних индексаторов.",
   "error.reason.INTEGRATION_PROVIDER_TYPE_REQUIRED":
     "Тип провайдера не может быть пустым.",
   "error.reason.INTEGRATION_PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS":
@@ -8032,7 +8788,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PROWLARR_MANAGEMENT_PARENTS_CANNOT_MAPPED_DOWNLOAD_CLIENT":
     "Родительские элементы управления Prowlarr нельзя сопоставить с клиентом загрузки.",
   "error.reason.INTEGRATION_PROXIES_DO_NOT_USE_CHALLENGE_SOLVER_PROTOCOL":
-    "Прокси запрошенного типа не используют протокол средства решения проверок.",
+    "Прокси этого типа не используют протокол средства решения проверок.",
   "error.reason.INTEGRATION_PROXY_BASE_URL_HOST_REQUIRED":
     "Базовый URL прокси должен содержать хост.",
   "error.reason.INTEGRATION_PROXY_BASE_URL_INVALID":
@@ -8042,9 +8798,9 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PROXY_CONFIGURATION_NOT_FOUND":
     "Настройки прокси не найдены.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S":
-    "Настройки прокси назначены включённым клиентам загрузки в выбранном количестве.",
+    "Прокси назначен включённым клиентам загрузки.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_INDEXER_S":
-    "Настройки прокси назначены включённым индексаторам в выбранном количестве.",
+    "Прокси назначен включённым индексаторам.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS":
     "Настройки прокси назначены одному или нескольким клиентам загрузки.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS":
@@ -8065,7 +8821,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PROXY_PASSWORD_REQUIRES_USERNAME":
     "Для указания пароля прокси требуется имя пользователя.",
   "error.reason.INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE":
-    "Время ожидания прокси должно быть от 1 до выбранного числа секунд.",
+    "Тайм-аут прокси должен быть от 1 до 120 секунд.",
   "error.reason.INTEGRATION_PROXY_URL_CREDENTIALS_FORBIDDEN":
     "Базовый URL прокси не должен содержать учётные данные; используйте поля имени пользователя и пароля.",
   "error.reason.INTEGRATION_REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES":
@@ -8077,7 +8833,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_SEEDING_PROFILE_NOT_FOUND":
     "Профиль сидирования не найден.",
   "error.reason.INTEGRATION_SEEDING_PROFILE_STILL_ASSIGNED":
-    "Профиль сидирования всё ещё назначен выбранному элементу.",
+    "Профиль раздачи всё ещё назначен индексатору или клиенту загрузки.",
   "error.reason.INTEGRATION_SOCKS4_PROXIES_DO_NOT_CARRY_CREDENTIALS":
     "Прокси SOCKS4 не передают учётные данные; для прокси с аутентификацией используйте SOCKS5.",
   "error.reason.INTEGRATION_SOCKS4_PROXY_BASE_URL_INVALID":
@@ -8101,11 +8857,13 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_TEST_URL_INVALID":
     "Тестовый URL должен использовать HTTP или HTTPS и не содержать учётных данных.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_BUSY_PROCESSING":
-    "Отслеживаемая загрузка с выбранным значением занята обработкой.",
+    "Эта отслеживаемая загрузка сейчас обрабатывается.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND":
     "Отслеживаемая загрузка не найдена.",
+  "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE":
+    "Игнорировать можно только загрузку, импорт которой заблокирован или завершился ошибкой.",
   "error.reason.INTEGRATION_TUNNEL_MTU_OUT_OF_RANGE":
-    "MTU туннеля должен находиться между выбранными нижним и верхним значениями; указанное значение выходит за этот диапазон.",
+    "MTU туннеля вне допустимого диапазона.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_INVALID":
     "Недопустимый адрес интерфейса WireGuard.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_REQUIRED":
@@ -8123,14 +8881,16 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PEER_S_PUBLIC_KEY_PEER_SECTION":
     "Для туннелей WireGuard требуется открытый ключ узла из раздела `[Peer]`.",
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY":
-    "Для туннелей WireGuard требуется закрытый ключ; выбранное значение.",
+    "Для туннелей WireGuard требуется закрытый ключ; ключи WireGuard — это 32 байта в base64, в точности как их выводит `wg genkey` (44 символа, оканчивающиеся на `=`).",
+  "error.reason.JOB_RELEASE_GRAB_JOBS_INVALID":
+    "Задания захвата релиза необходимо запускать через мутацию захвата.",
   "error.reason.JOB_TASK_FAILED":
     "Запрошенная фоновая задача завершилась с ошибкой.",
   "error.reason.JOB_ACQUISITION_SEARCH_JOBS_INVALID":
     "Задания поиска для получения релизов необходимо запускать через мутацию поиска для получения релизов.",
   "error.reason.JOB_ACTION_PERMISSION_DENIED":
     "У вас нет разрешения на это действие.",
-  "error.reason.JOB_ALREADY_RUNNING": "Выбранный элемент уже выполняется.",
+  "error.reason.JOB_ALREADY_RUNNING": "Это задание уже выполняется.",
   "error.reason.JOB_APPLICATION_UPGRADE_JOBS_INVALID":
     "Задания обновления приложения необходимо запускать через мутацию обновления приложения.",
   "error.reason.JOB_ARTWORK_ENCODING_SHUTTING_DOWN":
@@ -8157,24 +8917,24 @@ const ru: LocaleDictionary = {
     "Операции с расположением необходимо запускать через мутацию операции с расположением.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
     "Задания удаления медиафайлов необходимо запускать через мутацию удаления медиафайлов.",
-  "error.reason.JOB_NO_LIBRARIES": "У запрошенного элемента нет библиотек.",
+  "error.reason.JOB_NO_LIBRARIES": "У этого задания нет библиотек для запуска.",
   "error.reason.JOB_ONLY_RUN_CONFIGURED_SCHEDULE":
-    "Запрошенный элемент может запускаться только по настроенному расписанию.",
+    "Это задание может запускаться только по настроенному расписанию.",
   "error.reason.JOB_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Восстановление элемента корзины с выбранным значением запрещено: исходный путь находится за пределами определённых корневых каталогов библиотек.",
+    "Восстановление этого элемента корзины запрещено: его исходный путь находится вне корней библиотеки.",
   "error.reason.JOB_RECYCLE_BIN_BATCHES_CANNOT_INCLUDE_SAME_ITEM_MORE_ONCE":
     "Пакет операций с корзиной не может включать один элемент более одного раза.",
   "error.reason.JOB_RECYCLE_BIN_BATCHES_LIMITED_ITEMS":
-    "Число элементов в пакете операций с корзиной ограничено выбранным значением.",
+    "Пакеты операций с корзиной ограничены 250 элементами.",
   "error.reason.JOB_RECYCLE_BIN_ITEM_REQUIRED":
     "Выберите хотя бы один элемент корзины.",
   "error.reason.JOB_RECYCLE_ENTRY_NOT_FOUND": "Элемент корзины не найден.",
   "error.reason.JOB_RECYCLE_OPERATION_ALREADY_RUNNING":
-    "Для выбранного элемента уже выполняется операция с корзиной.",
+    "Для этого элемента корзины уже выполняется операция.",
   "error.reason.JOB_RECYCLE_PURGE_JOBS_INVALID":
     "Задания окончательного удаления из корзины необходимо запускать через мутацию корзины.",
   "error.reason.JOB_RECYCLE_RESTORE_ALREADY_RUNNING":
-    "Для выбранного элемента уже выполняется восстановление из корзины.",
+    "Для этого элемента корзины уже выполняется восстановление.",
   "error.reason.JOB_RECYCLE_RESTORE_ALREADY_RUNNING_ONE_SELECTED_DESTINATIONS":
     "Для одного из выбранных путей назначения уже выполняется восстановление из корзины.",
   "error.reason.JOB_RECYCLE_RESTORE_JOBS_INVALID":
@@ -8182,26 +8942,26 @@ const ru: LocaleDictionary = {
   "error.reason.JOB_RECYCLE_RESTORE_PREVIEW_STALE":
     "Предварительный просмотр восстановления из корзины устарел; заново проверьте выбранный способ разрешения конфликта.",
   "error.reason.JOB_REGULAR_FILE_REQUIRED":
-    "Замена по пути назначения восстановления с выбранным значением запрещена: это не обычный файл.",
+    "Замена места восстановления запрещена: это не обычный файл.",
   "error.reason.JOB_REPLACE_RECYCLE_BIN_UNAVAILABLE":
-    "Замена выбранного элемента запрещена: корзина недоступна.",
+    "Замена файла запрещена: корзина недоступна.",
   "error.reason.JOB_RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION":
     "Путь назначения восстановления изменился после подтверждения; просмотрите этот элемент и повторите попытку.",
   "error.reason.JOB_SCHEDULED_SCRIPT_ALREADY_RUNNING":
     "Этот скрипт по расписанию уже выполняется.",
   "error.reason.JOB_SCHEDULED_SCRIPT_DISABLED":
-    "Скрипт по расписанию с выбранным значением отключён.",
+    "Этот запланированный скрипт отключён.",
   "error.reason.JOB_SCHEDULED_SCRIPT_NO_LONGER_EXISTS":
-    "Скрипт по расписанию с выбранным значением больше не существует.",
+    "Этот запланированный скрипт больше не существует.",
   "error.reason.JOB_SCRIPT_NOT_FOUND": "Скрипт не найден.",
   "error.reason.JOB_SCRIPT_NOT_SCHEDULED_SCRIPT":
-    "Скрипт с выбранным значением не является скриптом с расписанием.",
+    "Этот скрипт не является запланированным скриптом.",
   "error.reason.JOB_SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION":
     "Выбранные элементы корзины не могут иметь один и тот же путь назначения восстановления.",
   "error.reason.JOB_SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES":
     "Выберите файлы, сезоны или тайтлы для обновления оценок.",
   "error.reason.JOB_SYMLINK_REFUSED":
-    "Замена по пути назначения восстановления с выбранным значением запрещена: это символическая ссылка.",
+    "Замена места восстановления запрещена: это символическая ссылка.",
   "error.reason.JOB_TITLE_DELETION_JOBS_INVALID":
     "Задания удаления тайтлов необходимо запускать через мутацию удаления тайтлов.",
   "error.reason.JOB_TITLE_RENAME_JOBS_INVALID":
@@ -8213,9 +8973,9 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_BATCH_SIZE_OUT_OF_RANGE":
     "Размер пакета должен быть положительным.",
   "error.reason.LIBRARY_COLLECTION_DOES_NOT_BELONG_TITLE":
-    "Коллекция с выбранным значением не принадлежит тайтлу с выбранным значением.",
+    "Коллекция не принадлежит этому тайтлу.",
   "error.reason.LIBRARY_CONFIGURED_ROOT_FOLDER_INVALID":
-    "Настроенная корневая папка выбранного типа с выбранным значением недопустима.",
+    "Одна из настроенных корневых папок некорректна.",
   "error.reason.LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED":
     "Библиотеки по умолчанию нельзя удалить.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
@@ -8223,17 +8983,17 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
     "Выберите тип мониторинга по умолчанию, который поддерживает эта библиотека.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
-    "Удаление каталога по пути с выбранным значением через операцию удаления отдельного файла запрещено.",
+    "Удаление каталога при удалении одного файла запрещено.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
-    "Удаление выбранного элемента с выбранным значением запрещено: он находится за пределами настроенных корневых папок.",
+    "Удаление этого пути запрещено: он находится вне настроенных корневых папок.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
-    "Удаление выбранного элемента с выбранным значением запрещено: у него нет родительского каталога.",
+    "Удаление этого пути запрещено: у него нет родительского каталога.",
   "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
     "Эта библиотека уже удаляется.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Папка назначения содержит границу другого тайтла или тайтла с неустановленной принадлежностью.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
-    "Восстановление файла из корзины с выбранным значением запрещено: путь назначения занят.",
+    "Восстановление этого файла из корзины запрещено: место назначения занято.",
   "error.reason.LIBRARY_EPISODE_FOLDER_OPTIONAL_GROUP_INVALID":
     "Недопустимая необязательная группа в шаблоне папки эпизода.",
   "error.reason.LIBRARY_EPISODE_FOLDER_PATTERN_INVALID":
@@ -8254,20 +9014,20 @@ const ru: LocaleDictionary = {
     "Папки с конфликтами принадлежности нельзя привязать или присвоить.",
   "error.reason.LIBRARY_LINKED_FOLDER_REQUIRES_EXPLICIT_OWNERSHIP_RESOLUTION_BEFORE_SCANNING":
     "Перед сканированием связанной папки требуется явно разрешить вопрос её принадлежности.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
-    "Файл для удаления в ходе обслуживания изменился; требуется повторная оценка.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
-    "Отпечаток удаления в ходе обслуживания изменился.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
-    "Объекты удаления в ходе обслуживания изменились; требуется повторная оценка.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED":
+    "Файл для удаления по правилам жизненного цикла изменился; требуется повторная оценка.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED":
+    "Отпечаток удаления по правилам жизненного цикла изменился.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
+    "Объекты удаления по правилам жизненного цикла изменились; требуется повторная оценка.",
   "error.reason.LIBRARY_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.LIBRARY_MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER":
     "Идентификационные данные медиа конфликтуют с предложенной папкой тайтла.",
   "error.reason.LIBRARY_MEDIA_ROOT_REQUIRED":
-    "Удаление выбранного элемента запрещено: настроенные корневые каталоги медиа недоступны.",
+    "Удаление или восстановление этого файла запрещено: нет доступных настроенных медиакорней.",
   "error.reason.LIBRARY_NAME_REQUIRED": "Требуется имя библиотеки.",
   "error.reason.LIBRARY_NO_ROOT_FOLDERS_UNAVAILABLE":
-    "Нет доступных настроенных корневых папок выбранного типа для безопасного удаления.",
+    "Нет настроенных корневых папок, доступных для безопасного удаления.",
   "error.reason.LIBRARY_ONE_MORE_SELECTED_EPISODES_DO_NOT_BELONG_TARGET_TITLE":
     "Один или несколько выбранных эпизодов не принадлежат целевому тайтлу.",
   "error.reason.LIBRARY_ONLY_PROVIDER_BACKED_DOWNLOADED_SUBTITLES_BLOCKLISTED":
@@ -8277,14 +9037,14 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_PATH_CANNOT_ESCAPE_ROOT":
     "Путь не может выходить за пределы своего корня.",
   "error.reason.LIBRARY_PATH_COMPONENT_INVALID":
-    "Запрошенное значение не должно содержать компоненты . или ...",
+    "Путь или шаблон именования содержит недопустимый компонент пути; используйте только относительные непустые компоненты без «.» и «..».",
   "error.reason.LIBRARY_PATH_INVALID": "Путь должен быть абсолютным.",
   "error.reason.LIBRARY_PATH_NOT_DIRECTORY":
     "Путь библиотеки не является каталогом.",
   "error.reason.LIBRARY_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Удаление выбранного элемента запрещено: он находится за пределами настроенных корневых каталогов медиа.",
+    "Удаление или восстановление этого пути запрещено: он находится вне настроенных медиакорней.",
   "error.reason.LIBRARY_PENDING_IMPORT_ALREADY_BEING_RESOLVED":
-    "Ожидающий импорт с выбранным значением уже обрабатывается.",
+    "Этот ожидающий импорт уже разрешается.",
   "error.reason.LIBRARY_PENDING_IMPORT_DIRECTORY_CONTAINS_NO_FILES_ATTACH":
     "В каталоге ожидающего импорта нет файлов для прикрепления.",
   "error.reason.LIBRARY_PENDING_IMPORT_DOES_NOT_KNOWN_TITLE":
@@ -8318,14 +9078,14 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_RECORDED_SUBTITLE_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER":
     "Сохранённый путь к субтитрам находится за пределами папки, принадлежащей их тайтлу.",
   "error.reason.LIBRARY_RECYCLE_BIN_PATH_UNSAFE":
-    "Перемещение выбранного элемента в корзину запрещено: путь к корзине небезопасен.",
+    "Перемещение этого файла в корзину запрещено: путь корзины небезопасен.",
   "error.reason.LIBRARY_RECYCLE_ENTRY_ID_NOT_VALID_OPAQUE_ID":
     "Идентификатор элемента корзины не является допустимым непрозрачным идентификатором.",
   "error.reason.LIBRARY_REGULAR_FILE_REQUIRED":
-    "Восстановление файла из корзины с выбранным значением запрещено: это не обычный файл.",
+    "Удаление или восстановление этого файла запрещено: это не обычный файл.",
   "error.reason.LIBRARY_RENAMER_DISABLED": "Переименование отключено.",
   "error.reason.LIBRARY_RENAME_ALREADY_RUNNING":
-    "Для выбранного элемента уже выполняется переименование.",
+    "Для этого тайтла уже выполняется переименование.",
   "error.reason.LIBRARY_RENAME_FOLDERS_OVERLAP":
     "Папки выбранных тайтлов пересекаются.",
   "error.reason.LIBRARY_RENAME_PATH_OUTSIDE_ROOT":
@@ -8335,11 +9095,11 @@ const ru: LocaleDictionary = {
     "Запрошенная категория не соответствует категории тайтла.",
   "error.reason.LIBRARY_RESOURCE_NOT_FOUND": "Библиотека не найдена.",
   "error.reason.LIBRARY_ROOTS_NOT_CONFIGURED":
-    "Корневые каталоги библиотеки запрошенного типа не настроены.",
+    "Для этого типа медиа не настроены корни библиотеки.",
   "error.reason.LIBRARY_ROOT_ALREADY_ASSIGNED":
-    "Корневой каталог библиотеки с выбранным значением уже используется выбранным элементом.",
+    "Этот корень библиотеки уже используется другой библиотекой.",
   "error.reason.LIBRARY_ROOT_CANNOT_USED":
-    "Корневой каталог библиотеки с выбранным значением нельзя использовать.",
+    "Этот корень библиотеки нельзя использовать.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Корневые каталоги внутри библиотеки должны быть уникальными.",
   "error.reason.LIBRARY_ROOT_ID_DUPLICATED":
@@ -8369,9 +9129,9 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT":
     "Выбранная папка является группирующей или содержит смешанную структуру тайтлов; выберите папку тайтла с его медиафайлами.",
   "error.reason.LIBRARY_SYMLINK_REFUSED":
-    "Восстановление файла из корзины с выбранным значением запрещено: это символическая ссылка.",
+    "Удаление или восстановление этого файла запрещено: это символическая ссылка.",
   "error.reason.LIBRARY_TEMPLATE_BRACES_UNBALANCED":
-    "Шаблон запрошенного типа содержит непарную скобку '}}'.",
+    "Шаблон именования содержит непарную фигурную скобку.",
   "error.reason.LIBRARY_TEMPLATE_IDENTITY_TOKEN_REQUIRED":
     "Шаблон именования должен содержать токен идентификации.",
   "error.reason.LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID":
@@ -8421,19 +9181,23 @@ const ru: LocaleDictionary = {
   "error.reason.LIST_TITLE_NOT_FOUND": "Тайтл не найден.",
   "error.reason.LIST_USER_NOT_FOUND": "Пользователь не найден.",
   "error.reason.LOCATION_CATALOG_CANNOT_MAP_FILE_OUTSIDE_RECORDED_FOLDER":
-    "Каталог не может сопоставить файл за пределами сохранённой папки выбранного элемента. Сначала исправьте сопоставление его папки.",
+    "Каталог не может сопоставить файл вне записанной папки тайтла. Сначала исправьте сопоставление папки.",
   "error.reason.LOCATION_CATALOG_PATH_AMBIGUOUS":
-    "Путь в каталоге для выбранного элемента неоднозначен. Перед перемещением исправьте сопоставление его папки.",
+    "Путь в каталоге для этого тайтла неоднозначен. Исправьте сопоставление папки, прежде чем перемещать его.",
   "error.reason.LOCATION_CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE":
-    "В подтверждённом плане нет инструкций для тайтла с выбранным значением.",
+    "В подтверждённом плане нет инструкций для этого тайтла.",
   "error.reason.LOCATION_COULD_NOT_COMPARE":
-    "Не удалось сравнить выбранный элемент. Убедитесь, что он доступен для чтения, и повторите попытку; источник сохранён.",
+    "Не удалось сравнить файлы. Убедитесь, что они доступны для чтения, и повторите попытку; источник сохранён.",
   "error.reason.LOCATION_DESTINATION_CHANGED_DURING_COMPARISON":
     "Файл назначения изменился во время сравнения. Источник сохранён; повторите попытку, когда файлы перестанут изменяться.",
   "error.reason.LOCATION_DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE":
     "Копия в месте назначения больше не содержит данные, тождественность которых источнику была подтверждена при этом перемещении. Источник сохранён; повторите попытку, чтобы сравнить файлы заново.",
+  "error.reason.LOCATION_DESTINATION_NO_SPACE":
+    "В месте назначения недостаточно свободного места для этого файла. Источник сохранён; освободите место и повторите попытку.",
   "error.reason.LOCATION_DESTINATION_OCCUPIED":
-    "Промежуточный путь назначения с выбранным значением занят файлом, который не был создан этим перемещением. Оба файла сохранены; переместите или удалите мешающий файл и повторите попытку.",
+    "Промежуточный путь назначения занят файлом, который это перемещение не записывало. Оба файла сохранены; переместите или удалите этот файл и повторите попытку.",
+  "error.reason.LOCATION_DESTINATION_PERMISSION_DENIED":
+    "Scryer не может записать этот файл в место назначения. Источник сохранён; проверьте права доступа к папке и повторите попытку.",
   "error.reason.LOCATION_DESTINATION_REQUIRED":
     "Выберите библиотеку или корневой каталог назначения.",
   "error.reason.LOCATION_DESTINATION_TITLE_NOT_FOUND":
@@ -8447,13 +9211,13 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_FILE_CHANGED_WHILE_HASHING":
     "Файл изменился во время вычисления хеша.",
   "error.reason.LOCATION_FOLDER_ALREADY_OWNED_TITLE":
-    "Папка с выбранным значением уже принадлежит тайтлу с выбранным значением; выберите обмен папками или передачу владения.",
+    "Папка уже принадлежит другому тайтлу; выберите обмен или перехват.",
   "error.reason.LOCATION_FOLDER_NOT_INSIDE_ROOT_LIBRARY":
-    "Папка с выбранным значением не находится внутри корневого каталога библиотеки с выбранным значением.",
+    "Папка не находится внутри корня этой библиотеки.",
   "error.reason.LOCATION_FOLDER_NOT_OWNED_ANOTHER_TITLE":
-    "Папка с выбранным значением не принадлежит другому тайтлу; выбранный способ разрешения конфликта неприменим.",
+    "Папка не принадлежит другому тайтлу, поэтому это решение неприменимо.",
   "error.reason.LOCATION_FOLDER_NOT_TITLE_BOUNDARY":
-    "Папка с выбранным значением является корневым каталогом библиотеки, а не папкой тайтла.",
+    "Папка является корнем библиотеки, а не папкой тайтла.",
   "error.reason.LOCATION_FOLDER_PATH_REQUIRED": "Требуется путь к папке.",
   "error.reason.LOCATION_FULL_HASH_BACKFILL_ALREADY_RUNNING":
     "Фоновое заполнение полных хешей уже выполняется.",
@@ -8463,26 +9227,26 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_LIBRARY_ROOT_NOT_FOUND":
     "Корневой каталог библиотеки не найден.",
   "error.reason.LOCATION_MERGE_TITLE_INTO_BLOCKED":
-    "Объединение тайтла с выбранным значением с выбранным целевым тайтлом заблокировано.",
+    "Объединение этих тайтлов заблокировано.",
   "error.reason.LOCATION_MERGE_UNAVAILABLE":
     "Для объединения нет допустимого сопоставления идентификационных данных.",
   "error.reason.LOCATION_MORE_ONE_CATALOG_RECORD_WOULD_POINT":
-    "На выбранный путь будут ссылаться несколько записей каталога. Устраните этот конфликт каталога перед подтверждением ручного перемещения.",
+    "На один и тот же путь указывало бы больше одной записи каталога. Устраните этот конфликт в каталоге, прежде чем подтверждать ручное перемещение.",
   "error.reason.LOCATION_OPERATION_NOT_FOUND":
     "Операция с расположением не найдена.",
   "error.reason.LOCATION_OPERATION_SOURCE_LIBRARIES_UNAVAILABLE":
     "Исходные библиотеки операции с расположением недоступны.",
   "error.reason.LOCATION_OPERATION_STILL_RUNNING":
-    "Операция с расположением с выбранным значением ещё выполняется; отмените её вместо того, чтобы отказываться от неё.",
+    "Эта операция с расположением ещё выполняется; сначала отмените её или дождитесь её остановки.",
   "error.reason.LOCATION_OWNERSHIP_BUSY":
     "Эти элементы сейчас заняты операцией с расположением.",
   "error.reason.LOCATION_PATH_COMPONENT_INVALID":
-    "Папка с выбранным значением не должна содержать компоненты . или ...",
+    "Папка не должна содержать компоненты «.» или «..».",
   "error.reason.LOCATION_PATH_NOT_FOUND": "Путь не найден.",
   "error.reason.LOCATION_PATH_OUTSIDE_LIBRARY_ROOT":
     "После разрешения выбранного пути папка оказывается за пределами корневого каталога своей библиотеки.",
   "error.reason.LOCATION_RECORDED_FOLDER_LIBRARY_ROOT_NOT_FOLDER_SWAP":
-    "Сохранённая папка выбранного элемента является корневым каталогом библиотеки, а не папкой для обмена; вместо этого передайте владение папкой.",
+    "Записанная папка тайтла является корнем библиотеки, а не папкой для обмена; вместо этого перехватите папку.",
   "error.reason.LOCATION_RECOVERY_ALREADY_RUNNING":
     "Восстановление уже выполняется.",
   "error.reason.LOCATION_RECOVERY_COMMIT_RECEIPT_REQUIRED":
@@ -8503,6 +9267,10 @@ const ru: LocaleDictionary = {
     "Несколько файлов назначения соответствуют хешу отсутствующего источника.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_HASH_NOT_FOUND":
     "Не найден файл назначения с хешем полного содержимого, совпадающим с отсутствующим источником.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS":
+    "В папке назначения несколько файлов с именем и размером отсутствующего источника.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND":
+    "В папке назначения нет файла с именем и размером отсутствующего источника.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED":
     "Превышен лимит создаваемой описи места назначения.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_NOT_FOUND":
@@ -8626,6 +9394,10 @@ const ru: LocaleDictionary = {
     "Выбранная папка пересекается с папкой другого тайтла; принадлежность файлов не изменена.",
   "error.reason.LOCATION_SELECTION_NOTHING_MOVE":
     "В выбранных элементах нечего переносить.",
+  "error.reason.LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK":
+    "При очистке источник был отложен в сторону, чтобы отличить его от копии, и его не удалось вернуть под собственное имя. Он сохранён там, куда был отложен; ничего не удалено.",
+  "error.setAsideSourceKeptNamed":
+    "При очистке источник был отложен в сторону, чтобы отличить его от копии, и его не удалось вернуть под собственное имя. Он сохранён по пути {{leftBehindPath}}; ничего не удалено.",
   "error.reason.LOCATION_SOURCE_CHANGED_BEFORE_CLEANUP":
     "Источник изменился перед очисткой и был сохранён.",
   "error.reason.LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT":
@@ -8639,104 +9411,84 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_STALE_PLAN":
     "План изменился. Повторите предварительный просмотр.",
   "error.reason.LOCATION_TITLE_OWNS_NO_FOLDER_SWAP":
-    "У выбранного тайтла нет папки для обмена; вместо этого назначьте ему эту папку.",
+    "У этого тайтла нет папки для обмена; вместо этого перехватите папку.",
   "error.reason.LOCATION_TITLE_SELECTION_REQUIRED":
     "Выберите хотя бы один тайтл для переноса.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NEEDS_VERIFIED_AGAIN_BEFORE_CATALOG_ENTRY_UPDATED":
-    "Перед обновлением записи каталога необходимо повторно проверить перенесённый файл.",
+    "Перенесённый файл нужно проверить ещё раз, прежде чем можно будет обновить его запись в каталоге.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION":
-    "Проверка перенесённого файла ещё не завершена. Его запись в каталоге не изменена.",
+    "Проверка перенесённого файла не завершена. Его запись в каталоге оставлена без изменений.",
+  "error.reason.LOCATION_UNPROVEN_LINK_NOT_REMOVED":
+    "Ссылку, созданную в месте назначения, не удалось подтвердить как источник и не удалось удалить, поэтому она осталась там. Источник сохранён; проверьте этот путь перед повторной попыткой.",
   "error.reason.LOCATION_VERIFICATION_FAILED":
-    "Проверка выбранного элемента не удалась.",
+    "Проверка перенесённого файла не пройдена.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "Файл в месте назначения не прошёл проверку.",
-  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
-    "Недопустимая конфигурация действия обслуживания.",
-  "error.reason.MAINTENANCE_ACTION_INVALID":
-    "Это действие обслуживания недопустимо для правила уровня тайтла.",
-  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE":
-    "Действие обслуживания нельзя сохранить.",
-  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
-    "Это действие обслуживания не поддерживается для тайтлов.",
-  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
-    "Выбранный элемент уже выполнял действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
-  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
-    "Неоднозначно определены файлы, охватываемые обслуживанием.",
-  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
+    "Это правило уже выполняло действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
+    "Неоднозначно определены файлы, охватываемые правилами жизненного цикла.",
+  "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "Количество кандидатов изменилось. Проверьте текущее количество перед разрешением удаления.",
-  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
     "Для удаления дочернего элемента требуется серия или сезон.",
-  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
-    "Выбранный элемент сейчас отслеживает тайтлы, и его удаление бесследно удалит сведения об отслеживании. Вместо этого отключите его или сначала очистите список кандидатов.",
-  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
+    "Это правило сейчас отслеживает тайтлы, и его удаление бесследно их отбросит. Вместо этого отключите его или сначала очистите список кандидатов.",
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
     "У действия DeleteFiles несовместимое предварительное условие Unmonitor.",
-  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
     "Перед действием DeleteFiles требуется шаг Unmonitor.",
-  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
-    "Исключение обслуживания не найдено.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED":
-    "Обязательное значение не должно быть пустым.",
-  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
-    "Принадлежность файла обслуживания изменилась.",
-  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
-    "Набор файлов для обслуживания изменился; требуется повторная оценка.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
+  "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
+    "Исключение жизненного цикла не найдено.",
+  "error.reason.LIFECYCLE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "Принадлежность файла жизненного цикла изменилась.",
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
+    "Набор файлов для жизненного цикла изменился; требуется повторная оценка.",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Период ожидания должен составлять ноль или более дней.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
-    "Период ожидания не должен превышать установленный предел в днях (десять лет).",
-  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "Условие, использующее сведения о хранилище, должно выбирать настроенный корень библиотеки.",
-  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
-    "У фильмов нет списка серий.",
-  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+  "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
+    "Период ожидания не должен превышать 3650 дней (десять лет).",
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES": "У фильмов нет списка серий.",
+  "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения требуется право управления разрешениями. Попросите администратора сохранить правило или перепишите его без этих сведений.",
-  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
-    "Для предварительного просмотра запрошено слишком много тайтлов.",
-  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
+    "Предварительный просмотр принимает не более 50 тайтлов.",
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
     "Для предварительного просмотра требуется от одного до пятидесяти объектов.",
-  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
     "Объект предварительного просмотра отсутствует, находится вне библиотек правила или не относится к выбранным тайтлам и области действия.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Для действия изменения профиля качества не указан целевой профиль.",
-  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+  "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Правило изменилось во время подтверждения; проверьте его ещё раз перед разрешением удаления.",
-  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
     "Перед разрешением удаления необходимо повторно проверить конфигурацию правила; откройте подтверждение заново.",
-  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED":
+  "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить оценку правила.",
-  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
-    "Не удалось скомпилировать правило обслуживания.",
-  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
-    "Набор правил обслуживания не найден.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
-    "Это правило входит в состав Scryer: его условие и действия изменить нельзя. Можно изменить период ожидания, библиотеки и состояние.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED":
+    "Не удалось скомпилировать правило жизненного цикла.",
+  "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
+    "Набор правил жизненного цикла не найден.",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
+    "Это правило входит в состав Scryer и не редактируется. Его можно просмотреть и изменить его состояние.",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "Это правило входит в состав Scryer и не может быть удалено. Вместо этого отключите его.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
     "Это правило входит в состав Scryer и не может быть переименовано.",
-  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID":
-    "Недопустимый исходный код правила обслуживания.",
-  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
+    "Недопустимый исходный код правила жизненного цикла.",
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
     "Действие этого правила ничего не изменяет, поэтому оно доступно только в режиме проверки без применения.",
-  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED":
+  "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Проверка правила не удалась.",
-  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
-    "Действия последовательности должны использовать исполнитель последовательностей.",
-  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
-    "Недопустимые параметры шага последовательности обслуживания.",
-  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Выбранный корень хранилища не настроен.",
-  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
-    "Требуется идентификатор объекта обслуживания.",
-  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
-    "Недопустимый тип объекта обслуживания.",
-  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
-    "Объект обслуживания не найден или больше не относится к этому тайтлу.",
-  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Для действия назначения тегов не заданы теги.",
-  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "Целевой профиль качества не существует.",
-  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "Недопустимые параметры шага последовательности жизненного цикла.",
+  "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
+    "Требуется идентификатор объекта жизненного цикла.",
+  "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
+    "Недопустимый тип объекта жизненного цикла.",
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
+    "Объект жизненного цикла не найден или больше не относится к этому тайтлу.",
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
     "Идентификатор кандидата на отключение мониторинга не соответствует его тайтлу.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
     "Недопустимый результат анализа медиафайла.",
@@ -8778,7 +9530,7 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_DISC_SELECTION_REQUIRES_ISO_IMAGE":
     "Для выбора содержимого диска требуется ISO-образ.",
   "error.reason.MEDIA_DISC_TITLE_RUNTIME_SECONDS_IMPLAUSIBLE_EPISODE":
-    "Длительность выбранной программы диска неправдоподобна для указанной серии.",
+    "Продолжительность тайтла диска неправдоподобна для эпизода, с которым он сопоставлен.",
   "error.reason.MEDIA_EACH_EPISODE_DISTINCT_PLAYBACK_TITLE_OCCUR_ONLY_ONE_MAPPING":
     "Каждая серия и каждая отдельная воспроизводимая программа могут присутствовать только в одном сопоставлении.",
   "error.reason.MEDIA_EPISODE_MAPPINGS_REQUIRE_SERIES_TITLE":
@@ -8797,6 +9549,8 @@ const ru: LocaleDictionary = {
     "Не удалось декодировать изображение.",
   "error.reason.MEDIA_IMAGE_DIMENSIONS_EMPTY":
     "Размеры изображения должны быть ненулевыми.",
+  "error.reason.MEDIA_IMAGE_DIMENSIONS_TOO_LARGE":
+    "В изображении больше пикселей, чем допускается для обложки.",
   "error.reason.MEDIA_IMAGE_FORMAT_DETECTION_FAILED":
     "Не удалось определить формат изображения.",
   "error.reason.MEDIA_IMAGE_FORMAT_UNSUPPORTED":
@@ -8840,17 +9594,17 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_LOCATION_OPERATION_NOT_FOUND":
     "Операция с расположением не найдена.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_INCOMPLETE_UNSUPPORTED_ANALYSIS":
-    "Анализ сопоставленного тайтла диска с выбранным значением неполон или не поддерживается.",
+    "Анализ сопоставленного тайтла диска неполон или не поддерживается.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_NO_ESTABLISHED_RUNTIME":
-    "Для сопоставленного тайтла диска с выбранным значением не определена продолжительность.",
+    "Для сопоставленного тайтла диска не установлена продолжительность.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_NO_LONGER_EXISTS":
-    "Сопоставленный тайтл диска с выбранным значением больше не существует; проверьте сопоставление.",
+    "Сопоставленный тайтл диска больше не существует; проверьте сопоставление.",
   "error.reason.MEDIA_MAPPED_EPISODE_DOES_NOT_BELONG_TITLE":
     "Сопоставленный эпизод не относится к этому тайтлу.",
   "error.reason.MEDIA_MAP_EACH_COMPLETE_DISC_TITLE_ONE_EPISODE":
     "Сопоставьте каждый полный тайтл диска с одним эпизодом; для объединённых эпизодов нужны отдельные тайтлы воспроизведения, созданные при авторинге.",
   "error.reason.MEDIA_MOST_SEARCH_LANGUAGES_ALLOWED":
-    "Допускается не более выбранного количества языков поиска.",
+    "Допускается не более 16 языков поиска.",
   "error.reason.MEDIA_MOVIE_IDENTITY_UNSUPPORTED":
     "У выбранного фильма нет поддерживаемого идентификатора.",
   "error.reason.MEDIA_NATIVE_DIAGNOSTICS_NOT_COMPILED_INTO_TARGET":
@@ -8938,13 +9692,13 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_REQUEST_QUALITY_PROFILE_ID_REQUIRED":
     "Необходимо указать ID профиля качества.",
   "error.reason.MEDIA_REQUEST_QUALITY_PROFILE_UNKNOWN":
-    "Неизвестный профиль качества с выбранным значением.",
+    "Выбранный профиль качества неизвестен.",
   "error.reason.MEDIA_REQUEST_RELEASE_REASON_REQUIRED":
     "Необходимо указать причину освобождения.",
   "error.reason.MEDIA_REQUEST_REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY":
     "Запрошенный профиль качества не разрешён для этой библиотеки.",
   "error.reason.MEDIA_REQUEST_REQUEST_MONITOR_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип отслеживания запроса с выбранным значением.",
+    "Этот тип отслеживания запроса не поддерживается.",
   "error.reason.MEDIA_REQUEST_REQUEST_TITLE_REQUIRED":
     "Необходимо указать тайтл запроса.",
   "error.reason.MEDIA_REQUEST_RESOURCE_NOT_FOUND": "Запрос медиа не найден.",
@@ -8960,7 +9714,7 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_SCAN_BATCH_SIZE_INVALID":
     "Размер пакета должен быть больше 0.",
   "error.reason.MEDIA_SEARCH_LANGUAGE_CHOOSE_LANGUAGE_OFFERED_SEARCH_LANGUAGE_PICKER_UNKNOWN":
-    "Неизвестный язык поиска с выбранным значением; выберите язык из списка языков поиска.",
+    "Язык поиска неизвестен; выберите язык, предложенный в списке языков поиска.",
   "error.reason.MEDIA_SELECTED_ROOT_CHANGED":
     "Выбранный корневой каталог изменился.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
@@ -9120,24 +9874,24 @@ const ru: LocaleDictionary = {
   "error.reason.NOTIFICATION_MEDIA_SERVER_NOTIFICATION_TARGETS_INVALID":
     "Получателями уведомлений медиасерверов необходимо управлять в разделе «Медиасерверы».",
   "error.reason.NOTIFICATION_MEDIA_SERVER_PROVIDER_INVALID":
-    "Недопустимый провайдер медиасервера: выбранный элемент.",
+    "Некорректный поставщик медиасервера.",
   "error.reason.NOTIFICATION_PLEX_MEDIA_SERVER_BASE_URL_INVALID":
-    "Недопустимый базовый URL медиасервера Plex: выбранный элемент.",
+    "Некорректный базовый URL медиасервера Plex.",
   "error.reason.NOTIFICATION_PLUGIN_CHANNEL_TYPE_NOT_FOUND":
     "Плагин уведомлений для этого типа канала не найден.",
   "error.reason.NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_EVENT":
-    "Выбранный провайдер уведомлений не поддерживает выбранное событие.",
+    "Этот поставщик уведомлений не поддерживает одно из выбранных событий.",
   "error.reason.NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_TEST_NOTIFICATIONS":
-    "Выбранный провайдер уведомлений не поддерживает тестовые уведомления.",
+    "Этот поставщик уведомлений не поддерживает тестовые уведомления.",
   "error.reason.NOTIFICATION_PROVIDER_REQUIRES":
-    "Для выбранного провайдера уведомлений необходим выбранный элемент.",
+    "У этого поставщика уведомлений не заполнена обязательная настройка.",
   "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE":
-    "Выбранный провайдер уведомлений недоступен.",
+    "Этот поставщик уведомлений недоступен.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_NOT_FOUND": "Подписка не найдена.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_TARGET_REQUIRED":
     "Необходимо указать получателя подписки на уведомления.",
   "error.reason.NOTIFICATION_TARGET_ID_REQUIRED_TARGET_KIND":
-    "Для выбранного вида получателя уведомлений необходимо указать ID получателя.",
+    "Для этого вида цели уведомления требуется идентификатор цели.",
   "error.reason.NOTIFICATION_TARGET_KIND_INVALID":
     "Недопустимый вид получателя уведомлений.",
   "error.reason.NOTIFICATION_TARGET_KIND_REQUIRED_WHEN_TARGET_ID_PROVIDED":
@@ -9161,7 +9915,7 @@ const ru: LocaleDictionary = {
   "error.reason.OAUTH_CLIENT_DISPLAY_NAME_REQUIRED":
     "Необходимо указать отображаемое имя клиента OAuth.",
   "error.reason.OAUTH_CLIENT_DISPLAY_NAME_TOO_LONG":
-    "Длина отображаемого имени клиента OAuth не должна превышать выбранное количество символов.",
+    "Отображаемое имя клиента OAuth не должно превышать 120 символов.",
   "error.reason.OAUTH_CLIENT_NOT_FOUND": "Клиент OAuth не найден.",
   "error.reason.OAUTH_CLIENT_UNKNOWN": "Неизвестный клиент OAuth.",
   "error.reason.OAUTH_CODE_CHALLENGE_INVALID":
@@ -9202,7 +9956,7 @@ const ru: LocaleDictionary = {
     "Пользователь OAuth больше не существует.",
   "error.reason.PLUGIN_ALREADY_INSTALLED": "Этот плагин уже установлен.",
   "error.reason.PLUGIN_ALREADY_VERSION_SELECTED_RELEASE":
-    "У выбранного плагина уже установлена выбранная версия.",
+    "Плагин уже имеет версию выбранного релиза.",
   "error.reason.PLUGIN_ARCHIVE_EXTRACTOR_CONFLICT":
     "Этот формат поддерживают несколько включённых плагинов распаковки архивов. Отключите один из них в разделе «Настройки → Плагины».",
   "error.reason.PLUGIN_ARCHIVE_PATH_OUTSIDE_ROOT":
@@ -9210,27 +9964,27 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_ARCHIVE_PATH_UNSAFE":
     "Путь плагина в архиве не является безопасным относительным путём.",
   "error.reason.PLUGIN_ARTIFACT_DIGEST_REQUIRED":
-    "Запрошенное значение должно содержать хотя бы один хеш.",
+    "Артефакт плагина должен содержать хотя бы один хеш.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECTS_NOT_ALLOWED":
-    "Перенаправления артефакта плагина запрещены для выбранного значения.",
+    "Перенаправления для этого артефакта плагина не разрешены.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_DID_NOT_INCLUDE_LOCATION_HEADER":
-    "Перенаправление артефакта плагина для выбранного значения не содержит заголовка Location.",
+    "Перенаправление артефакта плагина не содержало заголовка Location.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_HEADER":
-    "Перенаправление артефакта плагина для выбранного значения содержит недопустимый заголовок Location.",
+    "Перенаправление артефакта плагина содержало некорректный заголовок Location.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_URL":
-    "Перенаправление артефакта плагина для выбранного значения содержит недопустимый URL в Location.",
+    "Перенаправление артефакта плагина содержало некорректный URL в Location.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_LIMIT_EXCEEDED":
-    "Превышен лимит перенаправлений артефакта плагина для выбранного значения.",
+    "Загрузка артефакта плагина перенаправлялась слишком много раз.",
   "error.reason.PLUGIN_ARTIFACT_UNTRUSTED":
     "Не удалось подтвердить доверие к артефакту плагина.",
   "error.reason.PLUGIN_BLOCKED_VERSION_SCRYER_SO_CANNOT_TESTED":
-    "Выбранный плагин заблокирован в этой версии Scryer, поэтому его нельзя проверить. Выбранное значение.",
+    "Этот плагин заблокирован в этой версии Scryer, поэтому его нельзя протестировать.",
   "error.reason.PLUGIN_BROTLI_DECOMPRESSION_NOT_COMPILED_INTO_TARGET":
     "Распаковка плагинов brotli не включена в эту сборку.",
   "error.reason.PLUGIN_BUNDLED_PLUGIN":
-    "Выбранный плагин входит в комплект поставки; удалите загруженную замену, прежде чем загружать локальную сборку.",
+    "Это встроенный плагин; удалите загруженную замену, прежде чем загружать локальную сборку.",
   "error.reason.PLUGIN_CANNOT_REVERT_BUILT_PLUGIN_NO_BUNDLED_DEFINITION_UNAVAILABLE":
-    "Нельзя восстановить встроенный плагин: для выбранного элемента недоступно определение из комплекта поставки.",
+    "Невозможно вернуть этот встроенный плагин: встроенное определение недоступно.",
   "error.reason.PLUGIN_CANNOT_UNINSTALL_BUILT_PLUGINS":
     "Встроенные плагины нельзя удалить; вместо этого отключите их.",
   "error.reason.PLUGIN_CATALOG_ARTIFACTS_MISSING":
@@ -9244,13 +9998,13 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_CATALOG_REDIRECT_OUT_OF_RANGE":
     "Перенаправление каталога плагинов должно содержать хотя бы один артефакт.",
   "error.reason.PLUGIN_CATALOG_REDIRECT_SCHEMA_UNSUPPORTED":
-    "Неподдерживаемая схема перенаправления каталога плагинов: выбранный элемент.",
+    "Перенаправление каталога плагинов использует неподдерживаемую схему.",
   "error.reason.PLUGIN_CATALOG_SCHEMA_UNSUPPORTED":
-    "Неподдерживаемая схема каталога плагинов: выбранный элемент.",
+    "Каталог плагинов использует неподдерживаемую схему.",
   "error.reason.PLUGIN_CATALOG_V3_JSON_INVALID":
     "Недопустимый JSON каталога плагинов v3.",
   "error.reason.PLUGIN_CATALOG_VERSION_INVALID":
-    "Недопустимая версия каталога: выбранный элемент.",
+    "Версия в каталоге некорректна.",
   "error.reason.PLUGIN_CATALOG_VERSION_OUT_OF_RANGE":
     "Версия каталога плагинов должна быть больше нуля.",
   "error.reason.PLUGIN_CHANGED_WHILE_RUNTIME_BEING_PREPARED":
@@ -9258,25 +10012,25 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_CLIENT_CONFIG_JSON_INVALID":
     "Недопустимый config_json клиента.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_APPROVED_TIER_INVALID":
-    "Одобренный уровень источника каталога сообщества для выбранного элемента должен быть verified_community.",
+    "Одобренный уровень источника каталога сообщества должен быть verified_community.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_MUST_PUBLISH_EXACTLY_ONE_PLUGIN":
-    "Выбранный источник каталога сообщества должен публиковать ровно один плагин.",
+    "Источник каталога сообщества должен публиковать ровно один плагин.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_PUBLISHED_PLUGIN":
-    "Выбранный источник каталога сообщества опубликовал выбранный плагин.",
+    "Источник каталога сообщества опубликовал не тот плагин, для которого он был одобрен.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SIGNER_REPO_DOES_NOT_MATCH_APPROVED_REPO":
-    "Репозиторий подписанта выбранного источника каталога сообщества не совпадает с выбранным одобренным репозиторием.",
+    "Репозиторий подписи источника каталога сообщества не совпадает с одобренным репозиторием.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SOURCE_REPO_DOES_NOT_MATCH_APPROVED_REPO":
-    "Репозиторий исходного кода выбранного источника каталога сообщества не совпадает с выбранным одобренным репозиторием.",
+    "Исходный репозиторий источника каталога сообщества не совпадает с одобренным репозиторием.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SUPPORT_TIER_DOES_NOT_MATCH_APPROVED_TIER":
-    "Уровень поддержки выбранного источника каталога сообщества не совпадает с одобренным уровнем.",
+    "Уровень поддержки источника каталога сообщества не совпадает с одобренным уровнем.",
   "error.reason.PLUGIN_COMMUNITY_RULE_PACK_PUBLISH_FORBIDDEN":
-    "Выбранный источник каталога сообщества не должен публиковать пакеты правил.",
+    "Источник каталога сообщества не должен публиковать пакеты правил.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Повторяющийся ID выбранного источника сообщества в каталоге плагинов.",
+    "В каталоге плагинов один и тот же идентификатор источника сообщества указан несколько раз.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_NESTING_FORBIDDEN":
-    "Выбранный источник каталога сообщества не должен публиковать вложенные источники сообщества.",
+    "Источник каталога сообщества не должен публиковать вложенные источники сообщества.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_SUPPORT_TIER_INVALID":
-    "Уровень поддержки выбранного источника сообщества должен быть verified_community.",
+    "Уровень поддержки источника сообщества должен быть verified_community.",
   "error.reason.PLUGIN_COMPONENT_DESCRIPTOR_DIFFERS_PERSISTED_METADATA":
     "Дескриптор компонента отличается от сохранённых метаданных.",
   "error.reason.PLUGIN_COMPONENT_DESCRIPTOR_MISMATCH":
@@ -9286,32 +10040,30 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_COMPONENT_UPGRADE_BLOCKED":
     "Обновление плагина заблокировано установленными компонентами.",
   "error.reason.PLUGIN_DECOMPRESSED_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES":
-    "Распакованные данные запрошенного значения превышают максимальный размер — выбранное количество байт.",
+    "Распакованные данные превышают максимальный размер.",
   "error.reason.PLUGIN_DECOMPRESSED_SIZE_LIMIT_EXCEEDS_PLATFORM_S_MAXIMUM_BUFFER_SIZE":
-    "Лимит размера распакованных данных запрошенного значения, равный выбранному значению, превышает максимальный размер буфера этой платформы.",
+    "Ограничение размера после распаковки превышает максимальный размер буфера на этой платформе.",
   "error.reason.PLUGIN_DESCRIPTOR_ID_MISMATCH":
-    "ID дескриптора загруженного плагина не совпадает с выбранным ID в реестре.",
+    "Идентификатор в дескрипторе загруженного плагина не совпадает с идентификатором в реестре.",
   "error.reason.PLUGIN_DIGEST_ALGORITHM_REQUIRED":
     "Не указан алгоритм хеширования.",
   "error.reason.PLUGIN_DIGEST_MISMATCH":
-    "Хеш запрошенного значения не совпадает: ожидался blake3.",
-  "error.reason.PLUGIN_DIGEST_STRING_INVALID":
-    "Недопустимая строка хеша: выбранный элемент.",
+    "Хеш blake3 артефакта плагина не совпадает.",
+  "error.reason.PLUGIN_DIGEST_STRING_INVALID": "Строка дайджеста некорректна.",
   "error.reason.PLUGIN_DIGEST_VALUE_INVALID":
-    "Выбранное значение хеша должно быть шестнадцатеричным.",
+    "Значение дайджеста должно быть шестнадцатеричным.",
   "error.reason.PLUGIN_DIGEST_VALUE_REQUIRED": "Не указано значение хеша.",
   "error.reason.PLUGIN_DOES_NOT_INCLUDE_BLAKE3_DIGEST":
-    "Запрошенное значение не содержит хеш blake3.",
+    "Артефакт плагина не содержит хеш blake3.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_PLUGIN_TYPE_BUT_REGISTRY_EXPECTS":
-    "Значение plugin_type загруженного выбранного плагина не совпадает со значением, ожидаемым реестром.",
+    "Тип загруженного плагина не совпадает с ожидаемым реестром.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_PROVIDER_TYPE_BUT_REGISTRY_EXPECTS":
-    "Значение provider_type загруженного выбранного плагина не совпадает со значением, ожидаемым реестром.",
+    "Тип поставщика загруженного плагина не совпадает с ожидаемым реестром.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_SDK_VERSION_BUT_SELECTED_RELEASE":
-    "Значение sdk_version загруженного выбранного плагина не совпадает со значением выбранного релиза.",
+    "Версия SDK загруженного плагина не совпадает с выбранным релизом.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_VERSION_BUT_SELECTED_RELEASE":
-    "Версия загруженного выбранного плагина не совпадает с версией выбранного релиза.",
-  "error.reason.PLUGIN_FIELD_REQUIRED":
-    "Необходимо указать запрошенное значение.",
+    "Версия загруженного плагина не совпадает с выбранным релизом.",
+  "error.reason.PLUGIN_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.PLUGIN_GITHUB_OWNER_REQUIRED": "Не указан владелец GitHub.",
   "error.reason.PLUGIN_GITHUB_REPOSITORY_INVALID":
     "Репозиторий GitHub должен включать владельца и имя репозитория.",
@@ -9320,7 +10072,7 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_GITHUB_REPO_NAME_REQUIRED":
     "Не указано имя репозитория GitHub.",
   "error.reason.PLUGIN_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Повторяющийся ID выбранного плагина в каталоге плагинов.",
+    "В каталоге плагинов один и тот же идентификатор плагина указан несколько раз.",
   "error.reason.PLUGIN_INDEXER_HOST_FORBIDDEN":
     "Хост индексатора не разрешён для этого экземпляра.",
   "error.reason.PLUGIN_INSTALLED_PACK_VERSION_INVALID":
@@ -9328,25 +10080,25 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_INSTALLED_PLUGIN_SETTINGS_DESCRIPTOR_UNAVAILABLE":
     "Дескриптор настроек установленного плагина недоступен.",
   "error.reason.PLUGIN_INSTALLED_VERSION_INVALID":
-    "Недопустимая установленная версия: выбранный элемент.",
+    "Установленная версия некорректна.",
   "error.reason.PLUGIN_INVALID_PERSISTED_DESCRIPTOR_JSON":
-    "У выбранного плагина недопустимый сохранённый descriptor_json.",
+    "Сохранённый дескриптор плагина некорректен.",
   "error.reason.PLUGIN_LIST_LINKED_ACCOUNT_REQUIRED":
     "Провайдер списков читает только собственные списки участника и требует привязанную учётную запись этого участника.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_CATALOG_NOT_UTF_8":
     "Каталог плагинов для ручной установки имеет кодировку, отличную от UTF-8.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_CATALOG_SOURCE_MISSING_GITHUB_REPO":
-    "У выбранного источника каталога плагинов для ручной установки не указан репозиторий GitHub.",
+    "У источника каталога для плагина, добавленного вручную, отсутствует репозиторий GitHub.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_MISSING_SOURCE_REPO":
-    "У выбранного плагина для ручной установки не указан репозиторий исходного кода.",
+    "У плагина, добавленного вручную, отсутствует исходный репозиторий.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPOSITORIES_INVALID":
     "Репозитории плагинов для ручной установки должны размещаться на github.com.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_MUST_PUBLISH_EXACTLY_ONE_PLUGIN_ENTRY":
-    "Выбранный репозиторий плагина для ручной установки должен публиковать ровно одну запись плагина.",
+    "Репозиторий плагина, добавленного вручную, должен публиковать ровно одну запись плагина.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_NO_SDK_COMPATIBLE_RELEASE":
-    "В выбранном репозитории плагина для ручной установки нет релиза, совместимого с SDK.",
+    "В репозитории плагина, добавленного вручную, нет релиза, совместимого с SDK.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_PUBLISHED_PLUGIN_SOURCE_REPO":
-    "Выбранный репозиторий плагина для ручной установки опубликовал выбранный плагин из выбранного репозитория исходного кода.",
+    "Репозиторий плагина, добавленного вручную, опубликовал плагин из другого исходного репозитория.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_FILE_NAME_REQUIRED":
     "Необходимо указать имя загружаемого файла плагина для ручной установки.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_INVALID":
@@ -9356,17 +10108,17 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_REQUIRES_EXPLICIT_RISK_ACKNOWLEDGEMENT":
     "Ручная загрузка плагина требует явного подтверждения рисков.",
   "error.reason.PLUGIN_MISSING_PERSISTED_DESCRIPTOR_JSON":
-    "У выбранного плагина отсутствует сохранённый descriptor_json.",
+    "У плагина отсутствует сохранённый дескриптор.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_DIGEST_ALGORITHM":
-    "У выбранного плагина отсутствует сохранённый алгоритм хеширования wasm.",
+    "У плагина отсутствует сохранённый алгоритм дайджеста WASM.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_DIGEST_VALUE":
-    "У выбранного плагина отсутствует сохранённое значение хеша wasm.",
+    "У плагина отсутствует сохранённое значение дайджеста WASM.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_PAYLOAD":
-    "У выбранного плагина отсутствуют сохранённые данные WASM.",
+    "У плагина отсутствуют сохранённые данные WASM.",
   "error.reason.PLUGIN_MISSING_USABLE_BLAKE3_DIGEST":
-    "У запрошенного значения отсутствует пригодный хеш blake3.",
+    "У артефакта плагина отсутствует пригодный хеш blake3.",
   "error.reason.PLUGIN_MUST_USE_SUPPORTED_ALGORITHM_HEX_DIGEST":
-    "Для запрошенного значения необходимо использовать поддерживаемый хеш в формате <algorithm>:<hex>.",
+    "Хеш должен использовать поддерживаемый формат <algorithm>:<hex>.",
   "error.reason.PLUGIN_NETWORK_ENDPOINT_RESOLUTION_FAILED":
     "Не удалось разрешить адреса настроенных конечных точек индексатора.",
   "error.reason.PLUGIN_NEWZNAB_PROFILE_INVALID":
@@ -9374,41 +10126,41 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND":
     "Плагин не найден в каталоге плагинов и недоступен для установки.",
   "error.reason.PLUGIN_NO_LONGER_HOST_COMPATIBLE_RELEASE_SCRYER_VERSION":
-    "Для выбранного плагина больше нет релиза, совместимого с этой версией Scryer.",
+    "У плагина больше нет релиза, совместимого с этой версией Scryer.",
   "error.reason.PLUGIN_NO_LONGER_INSTALLED_NOT_FOUND":
     "Плагин не найден: он больше не установлен.",
   "error.reason.PLUGIN_OFFICIAL_NZBGEEK_PLUGIN_NOT_AVAILABLE_BUILTIN_MIGRATION_NOT_FOUND":
     "Официальный плагин nzbgeek недоступен для миграции встроенного плагина.",
   "error.reason.PLUGIN_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES":
-    "Данные запрошенного значения превышают максимальный размер — выбранное количество байт.",
+    "Данные превышают максимальный размер.",
   "error.reason.PLUGIN_PAYLOAD_TOO_LARGE_VALIDATE_DECOMPRESSED_SIZE":
-    "Данные запрошенного значения слишком велики для проверки размера после распаковки.",
+    "Данные слишком велики для проверки размера после распаковки.",
   "error.reason.PLUGIN_PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE":
-    "Выбранный тип провайдера зарезервирован для собственного кода приложения.",
+    "Этот тип поставщика зарезервирован для собственного кода Scryer.",
   "error.reason.PLUGIN_PROXY_CONFIGURATION_NOT_FOUND":
     "Конфигурация прокси не найдена.",
   "error.reason.PLUGIN_PROXY_DISABLED_DOWNLOAD_CLIENT":
     "Прокси отключён для этого клиента загрузки.",
   "error.reason.PLUGIN_RELEASE_ARTIFACT_BYTES_OUT_OF_RANGE":
-    "Размер в байтах выбранного артефакта выбранного релиза выбранного плагина должен быть больше нуля.",
+    "Размер артефакта релиза плагина должен быть больше нуля.",
   "error.reason.PLUGIN_RELEASE_ARTIFACT_INVALID":
-    "Выбранный артефакт выбранного релиза выбранного плагина должен содержать wasm_digests.",
+    "Артефакт релиза плагина должен содержать wasm_digests.",
   "error.reason.PLUGIN_RELEASE_DUPLICATE_ARTIFACT_VARIANT_ENCODING_ROWS":
-    "Выбранный релиз выбранного плагина содержит повторяющиеся строки варианта/кодировки артефакта.",
+    "В релизе плагина повторяются строки артефактов с одинаковым вариантом и кодировкой.",
   "error.reason.PLUGIN_RELEASE_INVALID_MAX_SCRYER_VERSION":
-    "В выбранном релизе выбранного плагина указано недопустимое значение max_scryer_version.",
+    "У релиза плагина некорректное значение max_scryer_version.",
   "error.reason.PLUGIN_RELEASE_INVALID_MIN_SCRYER_VERSION":
-    "В выбранном релизе выбранного плагина указано недопустимое значение min_scryer_version.",
+    "У релиза плагина некорректное значение min_scryer_version.",
   "error.reason.PLUGIN_RELEASE_MIN_SCRYER_VERSION_GREATER_MAX_SCRYER_VERSION":
-    "В выбранном релизе выбранного плагина значение min_scryer_version больше max_scryer_version.",
+    "У релиза плагина min_scryer_version больше, чем max_scryer_version.",
   "error.reason.PLUGIN_RELEASE_OUT_OF_RANGE":
-    "Выбранный релиз выбранного элемента должен содержать хотя бы один артефакт.",
+    "Релиз должен содержать хотя бы один артефакт.",
   "error.reason.PLUGIN_RELEASE_VERSION_INVALID":
-    "Недопустимая версия релиза плагина: выбранный элемент.",
+    "Версия релиза плагина некорректна.",
   "error.reason.PLUGIN_RELEASE_VERSION_PLUGIN_DUPLICATED":
-    "Повторяющаяся выбранная версия релиза для выбранного плагина.",
+    "У плагина одна и та же версия релиза указана несколько раз.",
   "error.reason.PLUGIN_REQUESTS_HOST_PROCESS_CAPABILITY_WHICH_RESERVED_OFFICIAL_PLUGINS":
-    "Выбранный плагин запрашивает возможность host-process, зарезервированную для официальных плагинов.",
+    "Плагин запрашивает возможность host-process, которая зарезервирована для официальных плагинов.",
   "error.reason.PLUGIN_REQUIRED_PLUGIN_SETTING_REQUIRED":
     "Отсутствует обязательная настройка плагина.",
   "error.reason.PLUGIN_RESOURCE_NOT_FOUND":
@@ -9416,45 +10168,45 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_RULE_PACK_CATALOG_CHANGED_DURING_DOWNLOAD":
     "Каталог пакетов правил изменился во время загрузки.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_DUPLICATE_RULE_ID":
-    "Выбранный пакет правил содержит повторяющийся ID выбранного правила.",
+    "Пакет правил содержит повторяющийся идентификатор правила.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_NO_RULES":
-    "Выбранный пакет правил не содержит правил.",
+    "Пакет правил не содержит правил.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_RULE_REQUIRED_FIELDS_MISSING":
-    "Выбранный пакет правил содержит правило без обязательных полей.",
+    "Пакет правил содержит правило без обязательных полей.",
   "error.reason.PLUGIN_RULE_PACK_DOES_NOT_MATCH_CATALOG_ID_VERSION":
-    "ID или версия выбранного пакета правил не совпадает с каталогом.",
+    "Пакет правил не совпадает с идентификатором и версией в каталоге.",
   "error.reason.PLUGIN_RULE_PACK_EMPTY":
-    "В выбранном пакете правил выбранное значение пусто.",
+    "В пакете правил пусто обязательное поле.",
   "error.reason.PLUGIN_RULE_PACK_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Повторяющийся ID выбранного пакета правил в каталоге плагинов.",
+    "В каталоге плагинов один и тот же идентификатор пакета правил указан несколько раз.",
   "error.reason.PLUGIN_RULE_PACK_INVALID_MIN_SCRYER_VERSION":
-    "В выбранном пакете правил указано недопустимое выбранное значение min_scryer_version.",
+    "У пакета правил некорректное значение min_scryer_version.",
   "error.reason.PLUGIN_RULE_PACK_NOT_FOUND": "Пакет правил не найден.",
   "error.reason.PLUGIN_RULE_PACK_NO_COMPATIBLE_ARTIFACT":
-    "Для выбранного пакета правил нет совместимого артефакта.",
+    "У пакета правил нет совместимого артефакта.",
   "error.reason.PLUGIN_RULE_PACK_RELEASE_INVALID":
-    "Выбранный релиз выбранного пакета правил должен содержать rule_pack_digests.",
+    "Релиз пакета правил должен содержать rule_pack_digests.",
   "error.reason.PLUGIN_RULE_PACK_RELEASE_VERSION_DUPLICATED":
-    "Повторяющаяся выбранная версия релиза для выбранного пакета правил.",
+    "В пакете правил одна и та же версия релиза указана несколько раз.",
   "error.reason.PLUGIN_RULE_PACK_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING":
-    "Выбранный артефакт выбранного пакета правил имеет неподдерживаемую кодировку.",
+    "Выбранный артефакт пакета правил имеет неподдерживаемую кодировку.",
   "error.reason.PLUGIN_RULE_PACK_USES_UNSUPPORTED_SCHEMA_VERSION":
-    "Выбранный пакет правил использует неподдерживаемую выбранную версию схемы.",
+    "Пакет правил использует неподдерживаемую версию схемы.",
   "error.reason.PLUGIN_SDK_CONSTRAINT_PLUGIN_INVALID":
-    "Недопустимое выбранное значение sdk_constraint для выбранного плагина.",
+    "У плагина некорректное значение sdk_constraint.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_BYTES_MISMATCH":
-    "Размер в байтах выбранного артефакта выбранного плагина не совпадает: ожидалось выбранное значение, получено выбранное значение.",
+    "Размер выбранного артефакта плагина не совпадает с указанным в каталоге.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_TOO_LARGE_VALIDATE_BYTES":
-    "Выбранный артефакт выбранного плагина слишком велик для проверки размера в байтах.",
+    "Выбранный артефакт плагина слишком велик для проверки.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING":
-    "Выбранный артефакт выбранного плагина имеет неподдерживаемую кодировку.",
+    "Выбранный артефакт плагина имеет неподдерживаемую кодировку.",
   "error.reason.PLUGIN_SETTING_UNKNOWN": "Неизвестная настройка плагина.",
   "error.reason.PLUGIN_SETTING_VALUE_INVALID":
     "Недопустимое значение настройки плагина.",
   "error.reason.PLUGIN_SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET":
     "Проверка подписей плагинов не включена в эту сборку.",
   "error.reason.PLUGIN_SIGNER_REPO_DOES_NOT_MATCH_SOURCE_REPO":
-    "Выбранный репозиторий подписанта выбранного плагина не совпадает с выбранным репозиторием исходного кода.",
+    "Репозиторий подписи плагина не совпадает с его исходным репозиторием.",
   "error.reason.PLUGIN_SUBTITLE_CONFIG_NOT_OBJECT":
     "Значение config_json провайдера субтитров должно быть объектом JSON.",
   "error.reason.PLUGIN_SUBTITLE_HOST_BINDING_REQUIRED":
@@ -9476,21 +10228,21 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_SUBTITLE_SYNC_OUTPUT_TOO_LARGE":
     "Результат синхронизации субтитров превышает ограничение размера.",
   "error.reason.PLUGIN_TEST_CONNECTION_UNSUPPORTED":
-    "Проверка подключения не поддерживается для выбранного типа клиента.",
+    "Проверка подключения не поддерживается для этого типа клиента.",
   "error.reason.PLUGIN_TYPE_BUILT_PREPARATION_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при подготовке встроенного плагина.",
+    "Этот тип плагина не поддерживается для подготовки встроенных плагинов.",
   "error.reason.PLUGIN_TYPE_BUILT_RESTORE_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при восстановлении встроенного плагина.",
+    "Этот тип плагина не поддерживается для восстановления встроенных плагинов.",
   "error.reason.PLUGIN_TYPE_RUNTIME_REMOVAL_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при удалении из среды выполнения.",
+    "Этот тип плагина не поддерживается для удаления во время работы.",
   "error.reason.PLUGIN_TYPE_RUNTIME_UPSERT_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при добавлении или обновлении в среде выполнения.",
+    "Этот тип плагина не поддерживается для установки или обновления во время работы.",
   "error.reason.PLUGIN_URL_INVALID":
-    "Выбранный URL запрошенного значения должен использовать http или https; получен выбранный элемент.",
+    "URL некорректен; он должен использовать http или https.",
   "error.reason.PLUGIN_USES_UNSUPPORTED_DIGEST_ALGORITHM":
-    "Запрошенное значение использует выбранный неподдерживаемый алгоритм хеширования.",
+    "Дайджест использует неподдерживаемый алгоритм.",
   "error.reason.PLUGIN_WASM_ARTIFACT_TOO_LARGE":
-    "Заявленный размер WASM-артефакта выбранного плагина, равный выбранному значению, превышает максимальный размер — выбранное количество байт.",
+    "Артефакт WASM плагина превышает ограничение в 128 МиБ.",
   "error.reason.PLUGIN_ZSTD_COMPRESSION_NOT_COMPILED_INTO_TARGET":
     "Сжатие плагинов zstd не включено в эту сборку.",
   "error.reason.PLUGIN_ZSTD_DECOMPRESSION_NOT_COMPILED_INTO_TARGET":
@@ -9535,16 +10287,15 @@ const ru: LocaleDictionary = {
     "Срок действия результатов поиска истёк. Выполните поиск снова.",
   "error.reason.RELEASE_TOKEN_INVALID":
     "Не удалось проверить выбор релиза. Выполните поиск снова.",
-  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
     "Не удалось создать движок правил запросов.",
-  "error.reason.REQUEST_RULE_FIELD_REQUIRED":
-    "Запрошенное значение не должно быть пустым.",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
-    "Срок действия должен быть не больше выбранного количества дней (десять лет) либо бессрочным.",
-  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+    "Срок действия должен быть от 1 до 3650 дней (десять лет) либо бессрочным.",
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
     "Тип библиотеки не соответствует типу запрошенных медиа.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
-  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
     "У вас нет права просматривать решение по этому запросу.",
   "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
     "Запросы медиа должны содержать внешние идентификаторы SMG.",
@@ -9554,11 +10305,11 @@ const ru: LocaleDictionary = {
     "Запрос медиа не найден.",
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения нужно право управления разрешениями. Попросите администратора сохранить его или перепишите правило без этих сведений.",
-  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
-    "Запрос может содержать не более выбранного количества тегов; передано выбранное количество.",
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
+    "Запрос может содержать не более 16 тегов.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить правило.",
-  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE":
+  "error.reason.REQUEST_RULE_COMPILE_FAILED":
     "Не удалось скомпилировать правило.",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED":
     "Проверка правила не пройдена.",
@@ -9567,13 +10318,13 @@ const ru: LocaleDictionary = {
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND":
     "Автор запроса для примера не найден.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "Набор правил запросов не найден.",
-  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
-    "Тег содержит выбранное количество символов; допускается не более выбранного количества.",
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
+    "Тег может быть длиной не более 64 символов.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
-    "Выбранный тег содержит выбранный неподдерживаемый символ; используйте буквы, цифры, '.', '_', '-' или пробелы.",
+    "Тег содержит неподдерживаемый символ; используйте буквы, цифры, '.', '_', '-' или пробелы.",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "Тег не должен быть пустым.",
   "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
-    "Выбранный тег использует выбранный зарезервированный префикс.",
+    "Тег не может начинаться с зарезервированного префикса 'scryer:'.",
   "error.reason.RULE_AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR":
     "Для автоматического обновления пакетов правил требуется стабильное исправление в рамках установленной основной и дополнительной версии.",
   "error.reason.RULE_BUNDLED_RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":
@@ -9585,7 +10336,7 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_BUNDLED_TRASH_PACK_UNSUPPORTED_IDENTITY_SCHEMA":
     "Пакет TRaSH из комплекта поставки имеет неподдерживаемый идентификатор или схему.",
   "error.reason.RULE_CANNOT_ADOPT_DUPLICATE_LEGACY_LOCALE_RULES":
-    "Нельзя принять в управление повторяющиеся устаревшие правила локали для выбранного значения.",
+    "Невозможно принять повторяющиеся устаревшие правила локали для этого шаблона.",
   "error.reason.RULE_COPYING_TRACKED_RULE_REQUIRES_DISABLING_SOURCE":
     "Для копирования отслеживаемого правила необходимо отключить его источник.",
   "error.reason.RULE_COPY_DISABLES_SOURCE_REQUIRES_COPY_SOURCE_RULE_SET":
@@ -9595,7 +10346,7 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_EPISODE_CANNOT_SELECTED_WHEN_TESTING_MOVIE_RULE":
     "При проверке правила для фильма нельзя выбирать эпизод.",
   "error.reason.RULE_EPISODE_DOES_NOT_BELONG_TITLE":
-    "Эпизод с выбранным значением не относится к тайтлу с выбранным значением.",
+    "Эпизод не принадлежит этому тайтлу.",
   "error.reason.RULE_EPISODE_NOT_FOUND": "Эпизод не найден.",
   "error.reason.RULE_EPISODE_REQUIRED_WHEN_TESTING_SERIES_ANIME_RULE":
     "Для проверки правила сериала или аниме необходимо указать эпизод.",
@@ -9612,14 +10363,14 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_MANAGED_TRACKED_RULES_INVALID":
     "Управляемые или отслеживаемые правила необходимо скопировать перед редактированием.",
   "error.reason.RULE_MEDIA_FILE_DOES_NOT_COVER_EPISODE":
-    "Медиафайл с выбранным значением не содержит эпизод с выбранным значением.",
+    "Медиафайл не охватывает этот эпизод.",
   "error.reason.RULE_MEDIA_FILE_NOT_FOUND": "Медиафайл тайтла не найден.",
   "error.reason.RULE_ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP":
-    "Только одно включённое правило может использовать выбранную группу взаимоисключения.",
+    "Эксклюзивную группу может использовать только одно включённое правило.",
   "error.reason.RULE_PACK_ALREADY_INSTALLED":
-    "Выбранный пакет правил уже установлен.",
+    "Этот пакет правил уже установлен.",
   "error.reason.RULE_PACK_FACET_INVALID":
-    "Недопустимый тип пакета правил с выбранным значением.",
+    "Некорректный тип медиа пакета правил.",
   "error.reason.RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":
     "Установка пакета правил вступила в конфликт с другим изменением.",
   "error.reason.RULE_PACK_PRIORITY_TEMPLATE_ID_DUPLICATED":
@@ -9639,7 +10390,7 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_PREVIEW_REQUIRES_EITHER_DRAFT_SAVED_RULE_SET":
     "Для предварительного просмотра необходим либо черновик, либо сохранённый набор правил.",
   "error.reason.RULE_PUBLISHED_INVALID":
-    "Дата публикации должна быть временной меткой RFC 2822 или RFC 3339; получено выбранное значение.",
+    "Дата публикации должна быть меткой времени в формате RFC 2822 или RFC 3339.",
   "error.reason.RULE_RELEASE_NAME_TOO_LARGE_SCORING_PREVIEW":
     "Название релиза слишком велико для предварительного расчёта оценки.",
   "error.reason.RULE_RULES_PACK_CANNOT_COPIED":
@@ -9676,11 +10427,11 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_TRACKED_RULE_PACK_NOT_FOUND":
     "Отслеживаемый пакет правил не найден.",
   "error.reason.RULE_TRACKED_RULE_REQUIRED":
-    "Отсутствует отслеживаемое правило с выбранным значением.",
+    "Отслеживаемое правило отсутствует.",
   "error.reason.RULE_VALIDATION_ERROR": "Ошибка проверки правила.",
   "error.reason.RULE_VALIDATION_FAILED": "Проверка правила не пройдена.",
   "error.reason.RULE_VERSION_INVALID":
-    "Версия запрошенного значения не соответствует формату семантического версионирования.",
+    "Версия не соответствует формату семантического версионирования.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE":
     "Количество голосов не может быть отрицательным.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "Недопустимое расписание скрипта.",
@@ -9704,18 +10455,24 @@ const ru: LocaleDictionary = {
     "Сеанс аутентификации аннулирован.",
   "error.reason.SECURITY_BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD":
     "Этот пакет резервной копии зашифрован и требует пароля.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED":
+    "Резервная копия содержит что-то кроме файлов и папок, поэтому её нельзя восстановить.",
   "error.reason.SECURITY_BACKUP_BUNDLE_INVALID":
     "Недопустимый пакет резервной копии.",
   "error.reason.SECURITY_BACKUP_BUNDLE_NOT_FOUND":
     "Пакет резервной копии не найден.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW":
+    "Недостаточно свободного места на диске, чтобы распаковать эту резервную копию для восстановления.",
   "error.reason.SECURITY_BACKUP_BUNDLE_STILL_BEING_CREATED":
     "Пакет резервной копии ещё создаётся.",
   "error.reason.SECURITY_BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG":
-    "Набор таблиц пакета резервной копии не соответствует текущему каталогу восстановления: отсутствуют [выбранное значение], лишние [выбранное значение]. Выбранное значение.",
+    "Таблицы резервной копии не совпадают с тем, что может восстановить эта версия Scryer.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES":
+    "Резервная копия содержит больше записей, чем бывает в резервной копии Scryer, поэтому её нельзя восстановить.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MANIFEST_INCOMPLETE":
-    "Манифест контрольных сумм резервной копии неполон: отсутствуют [выбранное значение], лишние [выбранное значение].",
+    "Манифест контрольных сумм резервной копии неполон.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MISMATCH":
-    "Контрольная сумма резервной копии для выбранного значения не совпадает.",
+    "Контрольная сумма резервной копии не совпадает.",
   "error.reason.SECURITY_BACKUP_CREATION_FAILED":
     "Не удалось создать резервную копию.",
   "error.reason.SECURITY_BACKUP_DOWNLOAD_SUBJECT_UNKNOWN":
@@ -9739,7 +10496,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_BACKUP_FILENAME_INVALID":
     "Недопустимое имя файла резервной копии.",
   "error.reason.SECURITY_BACKUP_FORMAT_VERSION_UNSUPPORTED":
-    "Неподдерживаемая версия формата резервной копии с выбранным значением.",
+    "Эта версия формата резервной копии не поддерживается.",
   "error.reason.SECURITY_BACKUP_MANIFEST_INVALID":
     "Недопустимый манифест резервной копии.",
   "error.reason.SECURITY_BACKUP_MANIFEST_MISSING":
@@ -9785,13 +10542,13 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_CANNOT_RESET_OWN_AUTHENTICATION_FACTORS":
     "Нельзя сбросить собственные факторы аутентификации.",
   "error.reason.SECURITY_CANNOT_RESOLVE_BACKUP_DOWNLOAD_SIGNING_KEY_ACTOR":
-    "Не удалось определить ключ подписи загрузки резервной копии для субъекта с выбранным значением.",
+    "Не удалось получить ключ подписи загрузки резервной копии для этого пользователя.",
   "error.reason.SECURITY_CANNOT_RESOLVE_RELEASE_CANDIDATE_SIGNING_KEY_ACTOR":
-    "Не удалось определить ключ подписи кандидата релиза для субъекта с выбранным значением.",
+    "Не удалось получить ключ подписи кандидата релиза для этого пользователя.",
   "error.reason.SECURITY_CONNECTION_DISABLED":
-    "Подключение запрошенного значения отключено.",
+    "Это подключение для входа отключено.",
   "error.reason.SECURITY_CONNECTION_NOT_CONFIGURED":
-    "Подключение запрошенного значения не настроено для внешней аутентификации.",
+    "Это подключение для входа не настроено для внешнего входа.",
   "error.reason.SECURITY_COULD_NOT_ALLOCATE_SCRYER_USERNAME_EXTERNAL_ACCOUNT":
     "Не удалось выделить имя пользователя Scryer для внешней учётной записи.",
   "error.reason.SECURITY_CREDENTIALS_INVALID": "Недопустимые учётные данные.",
@@ -9833,7 +10590,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID":
     "Данные зашифрованной резервной копии усечены или недопустимы.",
   "error.reason.SECURITY_ENCRYPTED_BACKUP_VERSION_UNSUPPORTED":
-    "Неподдерживаемая версия зашифрованной резервной копии с выбранным значением.",
+    "Эта версия зашифрованной резервной копии не поддерживается.",
   "error.reason.SECURITY_EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD":
     "Пользователи под внешним управлением не могут установить пароль Scryer.",
   "error.reason.SECURITY_EXTERNAL_ACCOUNT_DISABLED":
@@ -9904,7 +10661,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_NEW_PASSWORD_MUST_DIFFER_TEMPORARY_PASSWORD":
     "Новый пароль должен отличаться от временного.",
   "error.reason.SECURITY_NOT_ENABLED":
-    "Запрошенное значение не включено для выбранного значения.",
+    "Этот поставщик входа не включён для этого использования.",
   "error.reason.SECURITY_OAUTH_CLIENT_UNAVAILABLE": "Клиент OAuth недоступен.",
   "error.reason.SECURITY_OAUTH_GRANT_UNAVAILABLE":
     "Разрешение OAuth не подходит для привязки Jellyfin.",
@@ -9982,7 +10739,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_PLEX_SERVER_DISCOVERY_REQUIRED_BEFORE_USING_PLEX_AUTH":
     "Перед использованием Plex для аутентификации необходимо обнаружить сервер Plex.",
   "error.reason.SECURITY_PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY":
-    "Подготовленный каталог резервной копии содержит неподдерживаемый элемент с выбранным значением.",
+    "Подготовленный каталог резервной копии содержит неподдерживаемый элемент.",
   "error.reason.SECURITY_RECOVERY_ADMIN_LOGIN_MANAGED_ENVIRONMENT":
     "Вход администратора восстановления управляется окружением.",
   "error.reason.SECURITY_RECOVERY_ADMIN_USER_EXTERNALLY_MANAGED_CANNOT_REPAIRED_LOCAL_LOGIN":
@@ -10014,11 +10771,11 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_RELEASE_CANDIDATE_TOKEN_UNKNOWN_SCOPE":
     "Неизвестная область действия токена кандидата на загрузку релиза.",
   "error.reason.SECURITY_RELEASE_REPORTS_SEEDERS_BELOW_MINIMUM_INDEXER":
-    "В релизе указано выбранное число сидов, что меньше выбранного минимального значения для этого индексатора.",
+    "У релиза меньше сидов, чем минимум для этого индексатора.",
   "error.reason.SECURITY_REQUESTED_LOGIN_VERIFICATION_FACTOR_UNAVAILABLE":
     "Запрошенный фактор проверки входа недоступен.",
   "error.reason.SECURITY_RESERVED_INSTANCE_RECOVERY":
-    "Запрошенное значение зарезервировано для восстановления экземпляра.",
+    "Имя пользователя recovery-admin зарезервировано для восстановления экземпляра.",
   "error.reason.SECURITY_RESTRICTED_AUTHENTICATION_TOKENS_CANNOT_CARRY_ACTOR_CAPABILITIES":
     "Токены аутентификации с ограничениями не могут содержать полномочия исполнителя.",
   "error.reason.SECURITY_SCRYER_ADMIN_USERNAME_CONFLICTS_EXISTING_USERNAME":
@@ -10047,7 +10804,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_USERNAME_REQUIRED":
     "Необходимо указать имя пользователя.",
   "error.reason.SECURITY_USER_ALREADY_EXISTS":
-    "Пользователь с выбранным значением уже существует.",
+    "Этот пользователь уже существует.",
   "error.reason.SECURITY_USER_NOT_FOUND": "Пользователь не найден.",
   "error.reason.SECURITY_USE_CHANGE_OWN_PASSWORD_UPDATE_OWN_PASSWORD":
     "Чтобы изменить собственный пароль, используйте change_own_password.",
@@ -10062,7 +10819,7 @@ const ru: LocaleDictionary = {
   "error.reason.SERVICES_COMPLETED_DOWNLOAD_NOT_FOUND":
     "Завершённая загрузка не найдена.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_ASSIGNED_PROXY_WHICH_DISABLED":
-    "Клиенту загрузки с выбранным значением назначен прокси с выбранным значением, который отключён.",
+    "Клиенту загрузки назначен отключённый прокси.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_ITEM_ID_REQUIRED":
     "Необходим идентификатор элемента клиента загрузки.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_REFERENCES_PROXY_CONFIGURATION_WHICH_NOT_FOUND":
@@ -10094,23 +10851,23 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_CANNOT_REPLACED_CLEARED_SAME_REQUEST":
     "Нельзя одновременно заменить и удалить ключ автоматического резервного копирования в одном запросе.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_OUT_OF_RANGE":
-    "Ключ автоматического резервного копирования должен содержать не менее выбранного числа непробельных символов.",
+    "Ключ автоматического резервного копирования должен содержать не менее 8 непробельных символов.",
   "error.reason.SETTINGS_BACKUP_PATH_INVALID":
     "Путь резервного копирования должен указывать на каталог.",
   "error.reason.SETTINGS_BACKUP_PATH_NOT_WRITABLE":
     "Путь резервного копирования недоступен для записи.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_GLOBAL_DEFAULT":
-    "Нельзя удалить выбранный профиль качества: он используется по умолчанию глобально.",
+    "Невозможно удалить этот профиль качества: он используется глобально по умолчанию.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_ALLOWS_REQUESTS":
-    "Нельзя удалить выбранный профиль качества: выбранная библиотека разрешает его для запросов.",
+    "Невозможно удалить этот профиль качества: библиотека разрешает его для запросов.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_REFERENCES":
-    "Нельзя удалить выбранный профиль качества: на него ссылается выбранная библиотека.",
+    "Невозможно удалить этот профиль качества: его использует библиотека.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_NOT_CONFIGURED":
-    "Нельзя удалить выбранный профиль качества: он настроен для выбранного значения.",
+    "Невозможно удалить этот профиль качества: он настроен для типа медиа.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_PENDING_MEDIA_REQUEST_S_REFERENCE":
-    "Нельзя удалить выбранный профиль качества: на него ссылается выбранное число ожидающих запросов на медиаконтент.",
+    "Невозможно удалить этот профиль качества: его используют ожидающие запросы медиа.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_TITLE_S_REFERENCE":
-    "Нельзя удалить выбранный профиль качества: на него ссылается выбранное число тайтлов.",
+    "Невозможно удалить этот профиль качества: его используют тайтлы.",
   "error.reason.SETTINGS_CANNOT_SAVE_RESET_TRUSTED_PROXIES_TOGETHER":
     "Нельзя одновременно сохранить и сбросить доверенные прокси.",
   "error.reason.SETTINGS_CATALOG_VIEW_COLUMNS_INVALID":
@@ -10130,7 +10887,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_DELAY_PROFILE_ID_REQUIRED":
     "Необходим идентификатор профиля задержки.",
   "error.reason.SETTINGS_DELAY_PROFILE_NAMES_UNKNOWN_LIBRARY":
-    "Выбранный профиль задержки указывает на неизвестную выбранную библиотеку.",
+    "Профиль задержки ссылается на неизвестную библиотеку.",
   "error.reason.SETTINGS_DELAY_PROFILE_NOT_FOUND":
     "Профиль задержки не найден.",
   "error.reason.SETTINGS_DOWNLOAD_CLIENT_ROUTING_ENTRY_REQUIRES_CLIENT_ID":
@@ -10154,7 +10911,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_INDEXER_ROUTING_ENTRY_REQUIRES_INDEXER_ID":
     "Для записи маршрутизации индексатора необходим indexer_id.",
   "error.reason.SETTINGS_LANGUAGE_OUT_OF_RANGE":
-    "Язык должен быть задан кодом длиной не более выбранного числа букв, цифр или дефисов.",
+    "Язык должен быть кодом языка длиной не более 16 букв, цифр или дефисов.",
   "error.reason.SETTINGS_LIBRARY_ACCESS_DENIED":
     "У вас нет доступа к этой библиотеке.",
   "error.reason.SETTINGS_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
@@ -10175,13 +10932,13 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_MOVIE_RELEASE_MARKET_INVALID":
     "Рынок выпуска фильма должен быть задан двухбуквенным кодом страны ISO-3166.",
   "error.reason.SETTINGS_MUST_ABSOLUTE_PATH_COMMAND_NAME_WITHOUT_PATH_SEPARATORS":
-    "Запрошенное значение должно быть абсолютным путём или именем команды без разделителей пути.",
+    "Интерпретатор должен быть абсолютным путём или именем команды без разделителей пути.",
   "error.reason.SETTINGS_MUST_RRGGBB_HEX_COLOR":
-    "Запрошенное значение должно быть шестнадцатеричным цветом в формате #RRGGBB.",
+    "Цвет должен быть шестнадцатеричным в формате #RRGGBB.",
   "error.reason.SETTINGS_PASSWORD_MINIMUM_LENGTH_OUT_OF_RANGE":
-    "Минимальная длина пароля должна быть не меньше выбранного значения.",
+    "Минимальная длина пароля должна быть не меньше 8.",
   "error.reason.SETTINGS_PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID":
-    "Недопустимое выбранное значение настройки permissions.chown_group: числовой gid выходит за допустимый диапазон.",
+    "Некорректная группа для прав доступа: числовой идентификатор группы вне допустимого диапазона.",
   "error.reason.SETTINGS_PERSONA_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE":
     "Необходимо указать Persona, если inherit_global имеет значение false.",
   "error.reason.SETTINGS_PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME":
@@ -10192,21 +10949,21 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_PROFILE_ID_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE":
     "Необходимо указать Profile_id, если inherit_global имеет значение false.",
   "error.reason.SETTINGS_QUALITY_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE":
-    "Выбранные идентификаторы профилей качества отличаются только регистром ASCII.",
+    "Два идентификатора профилей качества отличаются только регистром букв.",
   "error.reason.SETTINGS_QUALITY_PROFILE_ID_AMBIGUOUS_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE":
-    "Выбранный идентификатор профиля качества неоднозначен: идентификаторы профилей отличаются только регистром ASCII.",
+    "Этот идентификатор профиля качества неоднозначен: идентификаторы профилей отличаются только регистром букв.",
   "error.reason.SETTINGS_QUALITY_PROFILE_ID_REQUIRED":
     "Необходим идентификатор профиля качества.",
   "error.reason.SETTINGS_QUALITY_PROFILE_NOT_FOUND":
     "Профиль качества не найден.",
   "error.reason.SETTINGS_QUALITY_PROFILE_UNKNOWN":
-    "Неизвестный выбранный профиль качества.",
+    "Профиль качества неизвестен.",
   "error.reason.SETTINGS_RECYCLE_BIN_PATH_UNSAFE":
     "Путь корзины небезопасен или пересекается с управляемыми медиафайлами.",
   "error.reason.SETTINGS_RECYCLE_BIN_RETENTION_OUT_OF_RANGE":
-    "Срок хранения в корзине должен составлять от 1 до выбранного числа дней.",
+    "Срок хранения в корзине должен быть от 1 до 3650 дней.",
   "error.reason.SETTINGS_REQUEST_QUALITY_PROFILE_UNKNOWN":
-    "Неизвестный профиль качества запросов с выбранным значением.",
+    "Профиль качества для запросов неизвестен.",
   "error.reason.SETTINGS_RE_CONVERGE_BACKSTOP_CANNOT_NEGATIVE":
     "Предельный интервал повторного согласования не может быть отрицательным.",
   "error.reason.SETTINGS_ROOT_FOLDER_PATH_REQUIRED":
@@ -10220,7 +10977,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_SESSION_DURATION_OUT_OF_RANGE":
     "Продолжительность сеанса должна составлять от 1 до 365 дней.",
   "error.reason.SETTINGS_SETTING_VALUE_INVALID":
-    "Недопустимое выбранное значение выбранной настройки: ожидается восьмеричная маска из 3 или 4 цифр.",
+    "Некорректное значение настройки. Маска прав доступа задаётся восьмеричным числом из 3 или 4 цифр.",
   "error.reason.SETTINGS_SOURCE_REQUIRED": "Необходимо указать источник.",
   "error.reason.SETTINGS_SUBTITLE_MINIMUM_SCORE_PERCENTAGES_OUT_OF_RANGE":
     "Минимальная оценка субтитров в процентах должна быть от 0 до 100.",
@@ -10233,7 +10990,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_TABLE_COLUMN_ORDER_OUT_OF_RANGE":
     "Порядковый номер столбца таблицы должен быть не меньше 0.",
   "error.reason.SETTINGS_TABLE_COLUMN_UNSUPPORTED":
-    "Неподдерживаемый выбранный столбец выбранной таблицы.",
+    "Столбец таблицы не поддерживается.",
   "error.reason.SETTINGS_TITLE_IMAGE_CACHE_REFRESH_ALREADY_RUNNING":
     "Обновление кеша изображений тайтлов уже выполняется.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_INVALID":
@@ -10241,7 +10998,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Набор доверенных сертификатов может содержать только блоки PEM сертификатов X.509.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
-    "Повторяющаяся настройка столбца таблицы интерфейса для выбранных значений и выбранного столбца.",
+    "В настройках столбцов таблицы один и тот же столбец указан несколько раз.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
     "У вас нет разрешения на просмотр профилей качества.",
   "error.reason.SETTINGS_VIEW_RECYCLE_BIN_SETTINGS_PERMISSION_DENIED":
@@ -10270,7 +11027,7 @@ const ru: LocaleDictionary = {
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_EXCEEDS_NESTING_INPUT_LIMITS":
     "Материал субтитров превышает ограничения вложенности или входных данных.",
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT":
-    "После распаковки материал субтитров превышает выбранный лимит в байтах.",
+    "Артефакт субтитров после распаковки превышает ограничение в 128 МиБ.",
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_FORMAT_UNSUPPORTED":
     "Неподдерживаемый формат материала субтитров.",
   "error.reason.SUBTITLES_SUBTITLE_FORMAT_UNSUPPORTED":
@@ -10300,7 +11057,7 @@ const ru: LocaleDictionary = {
   "error.reason.SUBTITLES_TITLE_NOT_FOUND": "Тайтл не найден.",
   "error.reason.TITLE_NOT_FOUND": "Не удалось найти тайтл.",
   "error.reason.WORKFLOW_ACQUISITION_RECEIPT_REQUIRED":
-    "Для поиска в рамках обслуживания необходимо принятое подтверждение запуска соответствующего задания получения контента.",
+    "Для поиска в рамках жизненного цикла необходимо принятое подтверждение запуска соответствующего задания получения контента.",
   "error.reason.WORKFLOW_CLEANUP_IDENTITY_REQUIRED":
     "Для ручной очистки необходимо указать тайтл и тип медиаконтента.",
   "error.reason.WORKFLOW_DOWNLOAD_AWAITING_RETRY_RECONCILIATION":
@@ -10339,10 +11096,26 @@ const ru: LocaleDictionary = {
     "Правило должно объявлять назначенный ему пакет.",
   "error.ruleInputImportUnsupported":
     "Обращайтесь к входным данным правила напрямую, а не импортируйте их под другим именем.",
+  "error.ruleActionValueNotLiteral":
+    "Присвойте этой голове простой литерал: строку в кавычках, целое число для set_lease_days или список строк в кавычках для голов тегов и языков аудио.",
+  "error.ruleActionValueInvalid":
+    "Значение этой головы недопустимо: имя не может быть пустым, теги должны быть допустимыми метками, срок хранения — от 0 до 3650 дней, а значения отслеживания и языков — из тех, что предлагает Scryer.",
+  "error.ruleActionUnknownQualityProfile":
+    "Профиля качества с таким именем нет, поэтому правило не может его применить.",
+  "error.ruleActionUndefinedTag":
+    "Этот тег не определён в Настройки › Теги, поэтому при применении правила он отбрасывается.",
+  "settings.regoSnippet.shapeRequest":
+    "Задать срок хранения, который запишет одобрение, если факт выполняется.",
+  "settings.regoSnippet.tagRequest":
+    "Пометить запрошенный тайтл тегом, если факт выполняется.",
+  "error.ruleHostHelperRedefined":
+    "days_since предоставляется Scryer и не может быть переопределён. Дайте своему помощнику другое имя.",
+  "error.ruleUnreferencedRule":
+    "Это правило не является действием, и ничто в исходном коде его не использует. Проверьте написание, если оно задумывалось как действие.",
   "error.ruleMatchRequired":
-    "Определите логическое правило match для этого условия обслуживания.",
+    "Определите логическое правило match для этого условия жизненного цикла.",
   "error.ruleVoteRequired":
-    "Определите approve, deny, manual или tags для этого условия запросов.",
+    "Определите для этого правила запросов голос (approve, deny или manual), значение, меняющее одобрение, или add_tags.",
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
     "Выберите действие или последовательность действий, но не оба варианта.",
   "error.reason.INTERFACE_ACTION_DEFINITION_REQUIRED":
@@ -10412,7 +11185,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTERFACE_BROWSE_DIRECTORY_UNAVAILABLE":
     "Не удаётся открыть каталог.",
   "error.reason.INTERFACE_RULE_ACTION_INVALID":
-    "Недопустимое определение действия обслуживания.",
+    "Недопустимое определение действия жизненного цикла.",
   "error.reason.INTERFACE_REQUEST_RULE_SAMPLE_INVALID":
     "Недопустимый пример для правила запросов.",
   "error.reason.INTERFACE_ACQUISITION_SCOPE_INVALID":
@@ -10525,8 +11298,8 @@ const ru: LocaleDictionary = {
     "Задайте непротиворечивые требования MFA для этого способа входа.",
   "error.reason.INTERFACE_LOGIN_MFA_REQUIRED":
     "Выберите требование MFA для входа через Jellyfin.",
-  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND":
-    "Не удалось найти правило обслуживания.",
+  "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND":
+    "Не удалось найти правило жизненного цикла.",
   "error.reason.INTERFACE_METADATA_DATE_INVALID":
     "Введите допустимую дату метаданных.",
   "error.reason.INTERFACE_METADATA_ID_INVALID":
@@ -10543,6 +11316,10 @@ const ru: LocaleDictionary = {
     "Введите идентификатор профиля качества.",
   "error.reason.INTERFACE_QUALITY_PROFILE_NAME_REQUIRED":
     "Введите имя профиля качества.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID":
+    "Минимум недостающих серий для пакета должен быть не меньше 1.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID":
+    "Укажите процент от 0 до 100 для многосезонных пакетов.",
   "error.reason.INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED":
     "Добавьте хотя бы один уровень качества.",
   "error.reason.INTERFACE_QUALITY_PROFILE_VALUE_INVALID":
@@ -10611,7 +11388,7 @@ const ru: LocaleDictionary = {
   "error.ruleTargetsPerson":
     "Для использования полей автора запроса в правиле необходимы права управления разрешениями.",
   "error.rulePackUpToDate": "Этот набор правил уже обновлён.",
-  "error.maintenanceArmCountMismatch":
+  "error.lifecycleArmCountMismatch":
     "Число кандидатов изменилось. Ещё раз проверьте и подтвердите текущее число.",
   "error.mfaStepUpRequired":
     "Срок действия проверки настроек истёк. Введите код из приложения-аутентификатора, чтобы продолжить.",
@@ -10688,7 +11465,7 @@ const ru: LocaleDictionary = {
   "settings.regoHelper.count":
     "Подсчитать элементы массива, множества или объекта либо символы строки.",
   "settings.regoHelper.objectGet":
-    "Прочитать значение по ключу объекта, возвращая значение по умолчанию при отсутствии ключа. В правилах запросов и обслуживания используйте именованный факт входных данных.",
+    "Прочитать значение по ключу объекта, возвращая значение по умолчанию при отсутствии ключа. В правилах запросов и жизненного цикла используйте именованный факт входных данных.",
   "settings.regoHelper.startsWith":
     "Вернуть признак того, что строка начинается с префикса.",
   "settings.regoSnippet.scoreEntry":
@@ -10701,8 +11478,14 @@ const ru: LocaleDictionary = {
     "Отклонить запрос, если его признак контента для взрослых имеет значение true.",
   "settings.regoSnippet.manualRequest":
     "Потребовать ручной проверки, когда число недавних одобрений достигает порога.",
-  "settings.regoSnippet.matchTag":
-    "Выбрать объект обслуживания по тегу. Это условие не определяет действие.",
+  "settings.regoHelper.daysSince":
+    "Полные дни между меткой времени RFC3339 и временем вычисления. Только для правил жизненного цикла.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Отключить отслеживание объекта с тегом.",
+  "settings.regoSnippet.tagAfterDays":
+    "Пометить тегом объект, добавленный больше заданного числа дней назад.",
+  "settings.regoSnippet.setProfile":
+    "Перевести крупные тайтлы на указанный профиль качества.",
   "settings.trustedProxiesTitle":
     "Доверенные прокси для ограничения частоты запросов",
   "settings.trustedProxiesHelp":
@@ -10856,6 +11639,8 @@ const ru: LocaleDictionary = {
   "dashboard.layout.dragPanel": "Перетащить {{name}} на панель управления",
   "dashboard.layout.movePanel": "Переместить {{name}}",
   "dashboard.layout.removePanel": "Убрать {{name}}",
+  "dashboard.layout.configurePanel": "Настроить {{name}}",
+  "dashboard.layout.applyPanelSettings": "Применить",
   "dashboard.layout.empty":
     "На панели управления нет блоков. Откройте раздел «Блоки», чтобы добавить их.",
   "dashboard.layout.saved": "Компоновка панели управления сохранена.",
@@ -10877,6 +11662,8 @@ const ru: LocaleDictionary = {
     "Один из блоков этой компоновки находится за пределами сетки.",
   "dashboard.layout.refusal.sizeInvalid":
     "У одного из блоков этой компоновки не задана ширина или высота.",
+  "dashboard.layout.refusal.panelSettingsInvalid":
+    "У одного из блоков этой компоновки настройки, которые сервер не может сохранить.",
   "settings.enableFormLogin": "Включить вход",
   "settings.securitySetAdminPasswordTitle": "Задайте пароль администратора",
   "settings.securitySetAdminPasswordDescription":
@@ -11325,7 +12112,7 @@ const ru: LocaleDictionary = {
     "Это отзовёт активные сеансы пользователя {{name}} и потребует выбрать новый пароль после локального входа.",
   "settings.advancedConfig": "Расширенные настройки",
   "settings.indexerRateLimits": "Ограничения частоты запросов",
-  "settings.arrImportAction": "Импортировать пользовательский формат Arr",
+  "settings.arrImportAction": "Импорт из Arr",
   "settings.ruleAiPrompt": "Запрос для ИИ",
   "settings.ruleAiPromptTitle": "Создать правило с помощью ИИ",
   "settings.ruleAiPromptDescription":
@@ -11336,8 +12123,6 @@ const ru: LocaleDictionary = {
   "settings.ruleAiPromptCopy": "Копировать запрос",
   "settings.ruleAiPromptCopied": "Скопировано",
   "settings.arrImportTitle": "Импортировать пользовательские форматы Arr",
-  "settings.arrImportDescription":
-    "Вставьте экспорт пользовательских форматов Sonarr или Radarr, чтобы создать новый черновик правила Rego.",
   "settings.arrImportSource": "Исходное приложение",
   "settings.arrImportJson": "JSON пользовательских форматов",
   "settings.arrImportJsonPlaceholder":
@@ -11385,6 +12170,114 @@ const ru: LocaleDictionary = {
     "Импортировано из JSON пользовательских форматов Arr.",
   "settings.arrImportDiagnostics": "Примечания к преобразованию",
   "settings.arrImportApply": "Использовать импортированный черновик",
+  "settings.arrImportDialogDescription":
+    "Импорт пользовательских форматов Sonarr или Radarr как правил оценки.",
+  "settings.arrImportTabConnect": "Подключение",
+  "settings.arrImportTabPaste": "Вставить JSON",
+  "settings.arrImportBaseUrl": "Базовый URL",
+  "settings.arrImportApiKey": "Ключ API",
+  "settings.arrImportStart": "Начать импорт",
+  "settings.arrImportStartAnother": "Импортировать снова",
+  "settings.arrImportRunning": "Импорт пользовательских форматов…",
+  "settings.arrImportRunFailed":
+    "Импорт остановился, не сохранив ни одного правила.",
+  "settings.arrImportCounts":
+    "Пользовательских форматов: {{total}}; сохранено: {{saved}}, на проверку: {{review}}, пропущено: {{skipped}}, с ошибкой: {{failed}}",
+  "settings.arrImportStateSaved": "Сохранено, отключено",
+  "settings.arrImportStateNeedsReview":
+    "Сохранено, отключено, требует проверки",
+  "settings.arrImportStateSavedFailedTranslation": "Сохранено без перевода",
+  "settings.arrImportStateSkipped": "Уже существует, пропущено",
+  "settings.arrImportStatePending": "Ожидает",
+  "settings.arrImportStateFailed": "Не импортировано",
+  "settings.arrImportUnmatchedProfiles":
+    "Профили качества без профиля Scryer с тем же именем: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Имена профилей качества, которые источник повторяет с разными оценками: {{names}}",
+  "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.maintainerrImportAction": "Перенести из Maintainerr",
+  "settings.maintainerrImportTitle": "Перенос из Maintainerr",
+  "settings.maintainerrImportDescription":
+    "Scryer читает группы правил работающего Maintainerr и сохраняет каждую как правило жизненного цикла.",
+  "settings.maintainerrImportBaseUrl": "URL Maintainerr",
+  "settings.maintainerrImportStart": "Начать импорт",
+  "settings.maintainerrImportStartAnother": "Импортировать снова",
+  "settings.maintainerrImportRunning": "Импорт групп правил…",
+  "settings.maintainerrImportRunningCount":
+    "Импорт групп правил… {{done}} из {{total}}",
+  "settings.maintainerrImportRunFailed":
+    "Импорт остановился до того, как были сохранены все группы правил.",
+  "settings.maintainerrImportCounts":
+    "Групп правил: {{total}}; сохранено: {{saved}}, сохранено без перевода: {{untranslated}}, пропущено: {{skipped}}, не импортировано: {{failed}}",
+  "settings.maintainerrImportStateSaved": "Сохранено, отключено",
+  "settings.maintainerrImportStateSavedFailedTranslation":
+    "Сохранено без перевода, отключено",
+  "settings.maintainerrImportStateSkipped": "Уже существует, пропущено",
+  "settings.maintainerrImportStatePending": "Ожидает",
+  "settings.maintainerrImportStateFailed": "Не импортировано",
+  "settings.maintainerrImportSeverityError": "Не переведено",
+  "settings.maintainerrImportSeverityWarning": "Проверьте",
+  "settings.maintainerrImportDiagnostic": "{{severity}}: {{message}}",
+  "settings.maintainerrImportDiagnosticAtRule":
+    "{{severity}}: {{message}} (правило {{rule}})",
+  "settings.maintainerrImportCode.groupInvalid":
+    "Правила группы в том виде, как их объединяет Maintainerr, никогда не совпадут.",
+  "settings.maintainerrImportCode.groupRulesDisabled":
+    "Группа не использует правила.",
+  "settings.maintainerrImportCode.groupRulesEmpty": "В группе нет правил.",
+  "settings.maintainerrImportCode.groupRulesTooMany":
+    "В группе больше правил, чем вмещает одно правило жизненного цикла.",
+  "settings.maintainerrImportCode.groupMediaTypeUnsupported":
+    "Тип медиа группы не тот, с которым работает Scryer.",
+  "settings.maintainerrImportCode.ruleInvalid": "Правило составлено неверно.",
+  "settings.maintainerrImportCode.ruleSecondValueMissing":
+    "Правило сравнивает с другим свойством, которого нет.",
+  "settings.maintainerrImportCode.ruleUsernameMissing":
+    "Правило для пользователя не называет пользователя.",
+  "settings.maintainerrImportCode.applicationUnknown":
+    "Правило читает приложение, которого нет в списке Maintainerr, обычно не подключённое к нему.",
+  "settings.maintainerrImportCode.propertyUnknown":
+    "Правило читает свойство, которого нет в списке Maintainerr.",
+  "settings.maintainerrImportCode.propertyUnmapped":
+    "Правило читает свойство, для которого у Scryer нет соответствующего факта.",
+  "settings.maintainerrImportCode.propertyCollectionUnsupported":
+    "Правило читает коллекции, плейлисты или метки медиасервера.",
+  "settings.maintainerrImportCode.propertyLevelUnsupported":
+    "Правило читает свойство, которое у Scryer есть только для другого типа медиа.",
+  "settings.maintainerrImportCode.comparatorUnsupported":
+    "Сравнение в правиле нельзя точно выразить в Scryer.",
+  "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
+    "Правило сравнивает даты на равенство, а это зависит от часового пояса Maintainerr.",
+  "settings.maintainerrImportCode.comparatorPartialListWidens":
+    "Правило читает список, который в Scryer хранится лишь частично, так что оно могло бы совпасть с тайтлами, с которыми не совпало бы в Maintainerr.",
+  "settings.maintainerrImportCode.comparatorAbsenceWidens":
+    "Правило срабатывает при отсутствии значения, а в Scryer его может не быть там, где в Maintainerr оно есть.",
+  "settings.maintainerrImportCode.comparatorDateDriftWidens":
+    "Правило сравнивает дату, которую Scryer может записать иначе, чем Maintainerr, в направлении, при котором оно могло бы совпасть с лишними тайтлами.",
+  "settings.maintainerrImportCode.usernameUnknownWidens":
+    "Правило называет пользователя, которого нет в Scryer, и совпало бы с каждым тайтлом без его просмотров.",
+  "settings.maintainerrImportCode.scopeAllLibraries":
+    "В Maintainerr группа относится к одной библиотеке медиасервера; импортированное правило относится ко всем библиотекам Scryer.",
+  "settings.maintainerrImportCode.customValueInvalid":
+    "Значение правила нельзя прочитать так, как его читает Maintainerr.",
+  "settings.maintainerrImportCode.actionMissing": "У группы нет действия.",
+  "settings.maintainerrImportCode.actionUnsupported":
+    "У действия группы нет аналога в Scryer для её типа медиа.",
+  "settings.maintainerrImportCode.qualityProfileUnresolved":
+    "Профиля качества группы нет в списке Sonarr или Radarr.",
+  "settings.maintainerrImportCode.qualityProfileNotInScryer":
+    "Ни один профиль качества Scryer не называется как профиль качества группы.",
+  "settings.maintainerrImportCode.sourceTooLarge":
+    "Переведённое правило больше, чем допускается для правила жизненного цикла.",
+  "settings.maintainerrImportCode.sourceInvalid":
+    "Переведённое правило не прошло проверку правил жизненного цикла.",
+  "settings.maintainerrImportCode.usernameUnknown":
+    "Правило называет пользователя, которого нет в Scryer, поэтому для этого пользователя оно ни с чем не совпадает.",
+  "settings.maintainerrImportCode.factApproximate":
+    "Правило читает факт Scryer, который немного отличается от факта Maintainerr.",
+  "settings.maintainerrImportCode.actionApproximate":
+    "Действие группы соответствует действиям Scryer, которые немного отличаются от действий Maintainerr.",
+  "settings.arrImportDiagnosticAtCondition": "{{message}} (условие {{number}})",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",
   "settings.refReleaseHasHdrFallback":
@@ -11490,6 +12383,15 @@ const ru: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Без ограничений",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Максимум запросов в минуту должен быть целым числом не меньше 1; оставьте поле пустым для отключения ограничения.",
+  "form.indexerMaxRequestsPerMonth": "Максимум запросов в месяц",
+  "form.indexerMaxGrabsPerMonth": "Максимум загрузок в месяц",
+  "form.indexerMonthlyLimitPlaceholder": "Без ограничений",
+  "form.indexerMonthlyLimitHelp":
+    "Учитывается только трафик этого экземпляра Scryer. Загрузка резервируется до получения файла и остаётся учтённой, если результат неизвестен. Лимиты сбрасываются в 00:00 UTC в первый день месяца.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Максимум запросов в месяц должен быть целым числом не меньше 1 или пустым.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Максимум загрузок в месяц должен быть целым числом не меньше 1 или пустым.",
   "form.subtitleProviderFacetsRequired":
     "Выберите хотя бы один тип содержимого. Scryer никогда не выполняет поиск через провайдера, у которого не выбран ни один тип.",
   "qualityProfile.qualityPreference": "Приоритет качества",
@@ -11835,227 +12737,148 @@ const ru: LocaleDictionary = {
   "settings.recycleBinValidationError":
     "Автоматическая очистка приостановлена до устранения проблемы: {{error}}",
   "settings.recycleBinScheduledDeletion": "Удаление по расписанию",
-  "settings.maintenanceActionSequence": "Последовательность действий",
-  "settings.maintenanceSequenceTitle": "Последовательность действий",
-  "settings.maintenanceSequenceHelp":
-    "Выполнять эти шаги по порядку после окончания периода отсрочки для объекта. Пустая последовательность только фиксирует совпадения, не выполняя никаких действий.",
-  "settings.maintenanceSequenceEmpty":
-    "Только пробный запуск — шаги действий не настроены.",
-  "settings.maintenanceSequenceObserveOnly": "Только пробный запуск",
-  "settings.maintenanceSequenceSummary": "Сводка последовательности",
-  "settings.maintenanceSequenceSummaryTarget": "Объекты: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "При включении: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Последствия: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "соответствующий условию тайтл",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "соответствующий условию тайтл, его сезоны и эпизоды",
-  "settings.maintenanceSequenceTargetSeason": "соответствующий условию сезон",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "соответствующий условию сезон и его эпизоды",
-  "settings.maintenanceSequenceTargetEpisode": "соответствующий условию эпизод",
-  "settings.maintenanceSequencePreviewPlan":
-    "Последствия по порядку для этого предпросмотра",
-  "settings.maintenanceSequencePreviewDescendants": "включая дочерние объекты",
-  "settings.maintenanceSequencePreviewMatchedScope":
-    "только объекты выбранной области, соответствующие условию",
-  "settings.maintenanceSequenceAdd": "Добавить шаг",
-  "settings.maintenanceSequencePreset": "Шаблон последовательности",
-  "settings.maintenanceSequencePresetApply": "Заменить шаблоном",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Изменить профиль, затем выполнить поиск, если он изменился",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Отключить отслеживание дочерних объектов, затем удалить файлы",
-  "settings.maintenanceSequenceTerminal": "Завершающий",
-  "settings.maintenanceSequenceDependencies": "Требуется: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "Включить сезоны и эпизоды",
-  "settings.maintenanceSequenceSearchCondition": "Условие поиска",
-  "settings.maintenanceSequenceSearchUnconditional": "Всегда запрашивать поиск",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Только после изменения профиля",
-  "settings.maintenanceSequenceSearchRequested":
-    "Этот шаг запрашивает поиск и отмечается как принятый только после принятия запроса. Дальнейшие действия по получению и загрузке могут оставаться приостановленными.",
-  "settings.maintenanceSequenceHistoryWaiting": "ожидание предыдущего шага",
-  "settings.maintenanceSequenceHistorySearchRequested": "поиск запрошен",
-  "settings.maintenanceSequenceHistorySearchAccepted": "принято",
-  "settings.maintenanceSequenceHistoryJob": "задание {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "Завершается при принятии",
-  "settings.maintenanceSequenceCompletionCompleted":
-    "Завершается по окончании выполнения",
-  "settings.maintenanceSequenceStepUnavailable":
-    "Этот сохранённый шаг недоступен в текущем каталоге. Удалите его или восстановите совместимый каталог перед сохранением или предпросмотром.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "Каталог шагов действий недоступен. Сохранённые шаги по-прежнему видны, но сохранение и предпросмотр несохранённых изменений приостановлены до его загрузки.",
-  "settings.maintenanceSequenceStepUnmonitor": "Отключить отслеживание",
-  "settings.maintenanceSequenceStepDeleteFiles": "Удалить файлы",
-  "settings.maintenanceSequenceStepChangeQualityProfile":
+  "settings.lifecycleActionSequence": "Последовательность действий",
+  "settings.lifecycleSequenceObserveOnly": "Только пробный запуск",
+  "settings.lifecycleSequenceHistoryWaiting": "ожидание предыдущего шага",
+  "settings.lifecycleSequenceHistorySearchRequested": "поиск запрошен",
+  "settings.lifecycleSequenceHistorySearchAccepted": "принято",
+  "settings.lifecycleSequenceHistoryJob": "задание {{id}}",
+  "settings.lifecycleSequenceStepUnmonitor": "Отключить отслеживание",
+  "settings.lifecycleSequenceStepDeleteFiles": "Удалить файлы",
+  "settings.lifecycleSequenceStepChangeQualityProfile":
     "Изменить профиль качества",
-  "settings.maintenanceSequenceStepSearch": "Поиск",
-  "settings.maintenanceSequenceStepAddTags": "Добавить теги",
-  "settings.maintenanceSequenceStepRemoveTags": "Удалить теги",
-  "settings.maintenanceSequenceStepDeleteTitleAndFiles":
-    "Удалить тайтл и файлы",
-  "settings.maintenanceRuleStorageRoot": "Корневая папка хранилища",
-  "settings.maintenanceRuleStorageRootNone":
-    "Корневая папка хранилища не выбрана",
-  "settings.maintenanceRuleStorageRootHelp":
-    "Выберите настроенную корневую папку, чтобы получать сведения о её ёмкости и удалять только файлы, действительно расположенные в ней.",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp":
-    "Выбранная корневая папка ограничивает только удаление файлов. Отключение отслеживания по-прежнему применяется ко всему соответствующему условию объекту, поэтому файлы в других корневых папках сохраняются, но больше не отслеживаются.",
-  "settings.maintenanceRuleStorageRootClear":
-    "Сбросить корневую папку хранилища",
-  "settings.maintenanceStorageRootFileSummary":
-    "Выбранная корневая папка: файлов — {{count}} · {{size}}",
-  "settings.maintenanceRuleSaveDisabledNote":
-    "Новые правила создаются отключёнными. Проверьте предпросмотр, попробуйте пробный запуск, затем включите правило.",
-  "settings.maintenanceRuleState": "Состояние",
-  "settings.maintenanceRuleStateHelp":
+  "settings.lifecycleSequenceStepSearch": "Поиск",
+  "settings.lifecycleSequenceStepAddTags": "Добавить теги",
+  "settings.lifecycleSequenceStepRemoveTags": "Удалить теги",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles": "Удалить тайтл и файлы",
+  "settings.lifecycleRuleState": "Состояние",
+  "settings.lifecycleRuleStateHelp":
     "Отключённые правила никогда не проверяются. Пробный запуск фиксирует кандидатов без выполнения действий. Включённые правила выполняют действия над кандидатами по окончании периода отсрочки для каждого из них.",
-  "settings.maintenanceRuleStateUpdated": "Правило «{{name}}» обновлено.",
-  "settings.maintenanceRuleStateDisabled": "Отключено",
-  "settings.maintenanceRuleStateDisabledHelp": "Никогда не проверяется.",
-  "settings.maintenanceRuleStateDryRun": "Пробный запуск",
-  "settings.maintenanceRuleStateDryRunHelp":
+  "settings.lifecycleRuleStateUpdated": "Правило «{{name}}» обновлено.",
+  "settings.lifecycleRuleStateDisabled": "Отключено",
+  "settings.lifecycleRuleStateDisabledHelp": "Никогда не проверяется.",
+  "settings.lifecycleRuleStateDryRun": "Пробный запуск",
+  "settings.lifecycleRuleStateDryRunHelp":
     "Фиксирует кандидатов; не выполняет действий.",
-  "settings.maintenanceRuleStateEnabled": "Включено",
-  "settings.maintenanceRuleStateEnabledHelp":
+  "settings.lifecycleRuleStateEnabled": "Включено",
+  "settings.lifecycleRuleStateEnabledHelp":
     "Выполняет действия над кандидатами по окончании их периода отсрочки.",
-  "settings.maintenanceRuleEditedSinceEnabled":
+  "settings.lifecycleRuleEditedSinceEnabled":
     "Правило изменено после включения. Проверьте кандидатов и включите его снова.",
-  "settings.maintenanceRuleSystemOwned": "Встроенное",
+  "settings.lifecycleRuleSystemOwned": "Встроенное",
+  "settings.lifecycleRuleView": "Просмотр",
+  "settings.lifecycleRuleViewTitle": "Просмотр встроенного правила",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "Это правило входит в состав Scryer и не редактируется. Его состояние меняется в списке правил.",
   "settings.expiredRequestLeasesHelp":
-    "Удаляет запрошенный тайтл и его файлы после истечения срока хранения по запросу и окончания периода отсрочки. При изменении периода отсрочки правило переходит в режим пробного запуска, пока вы не включите его снова. Как и любое правило обслуживания, оно работает только при включённом обслуживании.",
-  "settings.maintenanceSwitchEnabled": "Обслуживание",
-  "settings.maintenanceSwitchEnabledHelp":
+    "Удаляет запрошенный тайтл и его файлы после истечения срока хранения по запросу и окончания периода отсрочки. При изменении периода отсрочки правило переходит в режим пробного запуска, пока вы не включите его снова. Как и любое правило жизненного цикла, оно работает только при включённом жизненном цикле.",
+  "settings.lifecycleSwitchEnabled": "Жизненный цикл",
+  "settings.lifecycleSwitchEnabledHelp":
     "Проверять правила и показывать их кандидатов на этом экземпляре.",
-  "settings.maintenanceSwitchActionsPaused": "Приостановить все действия",
-  "settings.maintenanceSwitchActionsPausedHelp":
+  "settings.lifecycleSwitchActionsPaused": "Приостановить все действия",
+  "settings.lifecycleSwitchActionsPausedHelp":
     "Во время приостановки включённые правила продолжают фиксировать кандидатов, но отслеживание не отключается, ничего не изменяется и не удаляется.",
-  "settings.maintenanceSwitchesLocked":
-    "Для просмотра переключателей обслуживания требуется разрешение на доступ к системным настройкам. Уточните у администратора, включено ли обслуживание и приостановлены ли действия.",
-  "settings.maintenanceSwitchesUpdated": "Настройки обслуживания обновлены.",
-  "settings.maintenanceUnpauseConfirmTitle":
-    "Возобновить действия обслуживания?",
-  "settings.maintenanceUnpauseConfirmBody":
+  "settings.lifecycleSwitchesLocked":
+    "Для просмотра переключателей жизненного цикла требуется разрешение на доступ к системным настройкам. Уточните у администратора, включены ли правила жизненного цикла и приостановлены ли действия.",
+  "settings.lifecycleSwitchesUpdated": "Настройки жизненного цикла обновлены.",
+  "settings.lifecycleUnpauseConfirmTitle":
+    "Возобновить действия жизненного цикла?",
+  "settings.lifecycleUnpauseConfirmBody":
     "Включённые правила будут выполнять действия над кандидатами по окончании периода отсрочки для каждого из них, в том числе правила, удаляющие файлы.",
-  "settings.maintenanceUnpauseConfirmAction": "Возобновить действия",
-  "settings.maintenanceCandidatesEmptyMaintenanceOff":
-    "Обслуживание на этом экземпляре не включено, поэтому кандидаты не отображаются.",
-  "settings.maintenanceCandidatesEmptyAllDisabled":
+  "settings.lifecycleUnpauseConfirmAction": "Возобновить действия",
+  "settings.lifecycleCandidatesEmptyLifecycleOff":
+    "Правила жизненного цикла на этом экземпляре не включены, поэтому кандидаты не отображаются.",
+  "settings.lifecycleCandidatesEmptyAllDisabled":
     "Все правила отключены, поэтому проверка не выполняется. Сначала переведите правило в режим пробного запуска.",
-  "settings.maintenanceArmDestructiveIntro":
+  "settings.lifecycleArmDestructiveIntro":
     "Правило «{{name}}» удаляет файлы. После включения оно будет выполнять действия над указанными ниже кандидатами по окончании периода отсрочки для каждого из них, если действия не приостановлены.",
-  "settings.maintenanceArmDestructiveTitle":
-    "Включить правило, удаляющее файлы?",
-  "settings.maintenanceArmDestructiveConfirm": "Включить",
-  "settings.maintenanceCandidatesTitle": "Скоро будут удалены",
-  "settings.maintenanceCandidatesSubtitle":
+  "settings.lifecycleArmDestructiveTitle": "Включить правило, удаляющее файлы?",
+  "settings.lifecycleArmDestructiveConfirm": "Включить",
+  "settings.lifecycleCandidatesTitle": "Скоро будут удалены",
+  "settings.lifecycleCandidatesSubtitle":
     "Тайтлы, соответствующие правилу, начиная с ближайшего срока. Действия ни над одним из них ещё не выполнялись.",
-  "settings.maintenanceFileSummary": "Файлов: {{count}} · {{size}}",
-  "settings.maintenanceTestTitle": "Выберите тайтл для проверки",
-  "settings.maintenanceNoSubjects":
-    "В этом тайтле нет объектов для выбранной области действия.",
-  "settings.maintenancePreviewExcluded": "Исключено из действий",
-  "settings.maintenancePreviewEstimatedDue": "При совпадении сейчас: {{time}}",
-  "settings.maintenancePreviewDue": "Окончание отсрочки: {{time}}",
-  "settings.maintenancePreviewSubject": "Проверяемый объект",
-  "settings.maintenancePreviewSample": "Выборка из медиатеки",
-  "settings.maintenanceRuleScope": "Область действия правила",
-  "settings.maintenanceRuleTemplate": "Шаблон",
-  "settings.maintenanceRuleTemplatePlaceholder": "Начать с шаблона",
-  "settings.maintenanceScopeSeason": "Сезон",
-  "settings.maintenanceScopeEpisode": "Эпизод",
-  "settings.maintenanceFileDeleted": "Удалён",
-  "settings.maintenanceFilePending": "Ожидает",
-  "settings.maintenanceFileResults": "Результаты обработки файлов",
-  "settings.maintenanceFileProgress":
+  "settings.lifecycleFileSummary": "Файлов: {{count}} · {{size}}",
+  "settings.lifecycleTestTitle": "Выберите тайтл для проверки",
+  "settings.lifecyclePreviewExcluded": "Исключено из действий",
+  "settings.lifecyclePreviewEstimatedDue": "При совпадении сейчас: {{time}}",
+  "settings.lifecyclePreviewDue": "Окончание отсрочки: {{time}}",
+  "settings.lifecyclePreviewSubject": "Проверяемый объект",
+  "settings.lifecyclePreviewSample": "Выборка из медиатеки",
+  "settings.lifecycleRuleTemplate": "Шаблон",
+  "settings.lifecycleRuleTemplatePlaceholder": "Начать с шаблона",
+  "settings.lifecycleFileDeleted": "Удалён",
+  "settings.lifecycleFilePending": "Ожидает",
+  "settings.lifecycleFileColPath": "Файл",
+  "settings.lifecycleFileResults": "Результаты обработки файлов",
+  "settings.lifecycleFileProgress":
     "Удалено: {{completed}} · осталось: {{remaining}}",
-  "settings.refMaintSubjectId":
+  "settings.refLifecycleSubjectId":
     "ID тайтла, коллекции или эпизода Scryer для выбранной области действия",
-  "settings.refMaintCollectionId":
+  "settings.refLifecycleCollectionId":
     "ID коллекции сезона, которой принадлежит сезон или эпизод, если известен",
-  "settings.refMaintFactsEpisodePositionByAirDate":
+  "settings.refLifecycleFactsEpisodePositionByAirDate":
     "Позиция эпизода по дате выхода в рамках сериала",
-  "settings.refMaintFactsSeasonPositionByAirDate":
+  "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Позиция сезона по самому новому подходящему загруженному эпизоду",
-  "settings.refMaintFactsStorageRootId":
-    "Настроенная корневая папка, выбранная для определения ёмкости хранилища и удаления файлов",
-  "settings.refMaintFactsStorageAvailableBytes":
-    "Количество байтов, доступных сейчас в выбранной корневой папке",
-  "settings.refMaintFactsStorageTotalBytes":
-    "Общая ёмкость выбранной корневой папки в байтах",
-  "settings.refMaintFactsStorageAvailablePercent":
-    "Процент доступного сейчас места в выбранной корневой папке",
-  "settings.refMaintFactsListsEnabledIds":
+  "settings.refLifecycleFactsListsEnabledIds":
     "Идентификаторы включённых списков, общедоступных или личных, в которых объект ещё присутствует",
-  "settings.refMaintFactsListsPublicCount":
+  "settings.refLifecycleFactsListsPublicCount":
     "Количество общедоступных списков, в которых объект ещё присутствует",
-  "settings.refMaintFactsListsPersonalCount":
+  "settings.refLifecycleFactsListsPersonalCount":
     "Количество личных списков, в которых объект ещё присутствует",
-  "settings.refMaintFactsListsFirstSeenAt":
+  "settings.refLifecycleFactsListsFirstSeenAt":
     "Когда объект впервые появился в списке, в котором он всё ещё присутствует",
-  "settings.refMaintFactsListsLastSeenAt":
+  "settings.refLifecycleFactsListsLastSeenAt":
     "Когда объект последний раз отмечался в списке, в котором он всё ещё присутствует",
-  "settings.refMaintFactsListsDaysOnList":
+  "settings.refLifecycleFactsListsDaysOnList":
     "Количество полных дней с первого появления объекта в списке, в котором он всё ещё присутствует",
-  "settings.refMaintFactsListsBestRank":
+  "settings.refLifecycleFactsListsBestRank":
     "Наилучшая (наименьшая) позиция объекта среди списков, в которых он всё ещё присутствует",
-  "settings.refMaintFactsListsOnLeave":
+  "settings.refLifecycleFactsListsOnLeave":
     "Что делают включённые списки, содержащие объект, при его исключении",
-  "settings.refMaintFactsListsLeftHandled":
+  "settings.refLifecycleFactsListsLeftHandled":
     "Применено ли действие при исключении для каждого случая исключения из списка",
-  "settings.refMaintFactsListsMembershipStates":
+  "settings.refLifecycleFactsListsMembershipStates":
     "Состояния объекта в списках, в которых он всё ещё присутствует",
-  "settings.refMaintFactsRequestOrigin":
+  "settings.refLifecycleFactsRequestOrigin":
     "Источник запроса, по которому был создан тайтл",
-  "settings.refMaintFactsRequestListName":
+  "settings.refLifecycleFactsRequestListName":
     "Общедоступный список, из которого был запрошен тайтл",
-  "settings.refMaintFactsEpisodePositionByAirDateValue":
+  "settings.refLifecycleFactsEpisodePositionByAirDateValue":
     "Позиция 1 — самый новый подходящий загруженный эпизод, уже вышедший в эфир и не являющийся специальным. При одинаковых датах выхода порядок определяется номерами сезона и эпизода, затем стабильными ID.",
-  "settings.refMaintFactsSeasonPositionByAirDateValue":
+  "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Позиция 1 — сезон с самым новым подходящим загруженным эпизодом, уже вышедшим в эфир и не являющимся специальным. Защищённые файлы также занимают позиции.",
-  "settings.refMaintFactsStorageRootIdValue":
-    "Постоянный идентификатор настроенной корневой папки медиатеки, выбранной в этой редакции",
-  "settings.refMaintFactsStorageAvailableBytesValue":
-    "Доступная ёмкость в байтах, измеренная непосредственно в выбранной корневой папке",
-  "settings.refMaintFactsStorageTotalBytesValue":
-    "Общая ёмкость в байтах, измеренная непосредственно в выбранной корневой папке",
-  "settings.refMaintFactsStorageAvailablePercentValue":
-    "Доступная ёмкость, делённая на общую ёмкость, от 0 до 100",
-  "settings.refMaintFactsListsEnabledIdsValue":
+  "settings.refLifecycleFactsListsEnabledIdsValue":
     "Отсортированные идентификаторы списков; никогда не название списка",
-  "settings.refMaintFactsListsPublicCountValue":
+  "settings.refLifecycleFactsListsPublicCountValue":
     "Количество общедоступных списков, включённых или приостановленных",
-  "settings.refMaintFactsListsPersonalCountValue":
+  "settings.refLifecycleFactsListsPersonalCountValue":
     "Количество личных списков, включённых или приостановленных",
-  "settings.refMaintFactsListsFirstSeenAtValue":
+  "settings.refLifecycleFactsListsFirstSeenAtValue":
     "Метка времени RFC3339; отсутствует с причиной not_on_a_list, если объект не содержится ни в одном списке",
-  "settings.refMaintFactsListsLastSeenAtValue":
+  "settings.refLifecycleFactsListsLastSeenAtValue":
     "Метка времени RFC3339; отсутствует с причиной not_on_a_list, если объект не содержится ни в одном списке",
-  "settings.refMaintFactsListsDaysOnListValue":
+  "settings.refLifecycleFactsListsDaysOnListValue":
     "Полные дни до момента проверки; отсутствует с причиной not_on_a_list, если объект не содержится ни в одном списке",
-  "settings.refMaintFactsListsBestRankValue":
+  "settings.refLifecycleFactsListsBestRankValue":
     "Номер позиции; отсутствует с причиной no_list_rank, если ни один список, содержащий объект, не присваивает ему позицию",
-  "settings.refMaintFactsListsOnLeaveValue":
+  "settings.refLifecycleFactsListsOnLeaveValue":
     "Отсортированные значения из keep, log, unmonitor и tag",
-  "settings.refMaintFactsListsLeftHandledValue":
+  "settings.refLifecycleFactsListsLeftHandledValue":
     "True после обработки всех случаев исключения; отсутствует с причиной no_list_left, если объект не был исключён ни из одного списка",
-  "settings.refMaintFactsListsMembershipStatesValue":
+  "settings.refLifecycleFactsListsMembershipStatesValue":
     "Отсортированные состояния, например in_library, added, requested или held",
-  "settings.refMaintFactsRequestOriginValue":
+  "settings.refLifecycleFactsRequestOriginValue":
     "Одно из значений manual, public_list или personal_list; отсутствует с причиной title_not_requested, если тайтл создан не по запросу",
-  "settings.refMaintFactsRequestListNameValue":
+  "settings.refLifecycleFactsRequestListNameValue":
     "Название этого общедоступного списка; отсутствует с причиной no_public_request_list для ручных запросов и запросов из личных списков, поскольку название личного списка никогда не раскрывается",
-  "settings.refMaintFileIs3d":
+  "settings.refLifecycleFileIs3d":
     "True, если метаданные медиафайла указывают на 3D-видео. False означает, что оно не обнаружено, в том числе для ещё не проанализированных файлов.",
   "settings.requestRulesDefault":
     "Если нет включённых правил, запросы участников с разрешением на автоодобрение одобряются, а все остальные ожидают проверки.",
   "settings.requestRuleEnabledUpdated": "Правило «{{name}}» обновлено.",
   "settings.requestRuleRequesterFieldsHint":
     "Это правило использует поля автора запроса; для сохранения требуется разрешение на управление.",
-  "settings.requestRuleSaveDisabledNote":
-    "Новое правило сохраняется отключённым. Установите флажок «Включено» в таблице, чтобы оно могло принимать решения по запросам.",
-  "settings.requestDecisionsSubtitle":
-    "Недавние решения правил обработки запросов.",
   "requests.fallbackLibraryPermission":
     "Одобрено на основании разрешения автора запроса «Автоодобрение запросов».",
   "settings.refReqRequestList":
@@ -12075,6 +12898,10 @@ const ru: LocaleDictionary = {
     "Политика списков владельца: auto, approval или none; approval, если значение не сохранено",
   "settings.refReqRequestListRank":
     "Позиция элемента в списке; отсутствует, если список не присваивает ему позицию",
+  "settings.refReqRequestListIsWatchlist":
+    "True, если это собственный список «смотреть позже» владельца в привязанной учётной записи",
+  "settings.refReqRequestListSourceType":
+    "Тип списка у провайдера, в нижнем регистре (например watchlist, plantowatch или list)",
   "move.gatheringInfo": "Сбор всех сведений...",
   "move.methodManaged": "Scryer переместит файлы",
   "move.methodManual": "Я перемещу файлы сам",
@@ -12504,6 +13331,27 @@ const ru: LocaleDictionary = {
   "script.schedule.cronUnreadable": "Не удалось описать это выражение.",
   "script.schedule.invalid": "Некорректное расписание",
   "script.schedule.nextRuns": "Ближайшие запуски",
+  "script.schedule.describe.everySeconds": "Каждые {{count}} секунды",
+  "script.schedule.describe.everySeconds.one": "Каждую {{count}} секунду",
+  "script.schedule.describe.everySeconds.few": "Каждые {{count}} секунды",
+  "script.schedule.describe.everySeconds.many": "Каждые {{count}} секунд",
+  "script.schedule.describe.everyMinute": "Каждую минуту",
+  "script.schedule.describe.everyMinutes": "Каждые {{count}} минуты",
+  "script.schedule.describe.everyMinutes.one": "Каждую {{count}} минуту",
+  "script.schedule.describe.everyMinutes.few": "Каждые {{count}} минуты",
+  "script.schedule.describe.everyMinutes.many": "Каждые {{count}} минут",
+  "script.schedule.describe.everyHour": "Каждый час",
+  "script.schedule.describe.everyHours": "Каждые {{count}} часа",
+  "script.schedule.describe.everyHours.one": "Каждый {{count}} час",
+  "script.schedule.describe.everyHours.few": "Каждые {{count}} часа",
+  "script.schedule.describe.everyHours.many": "Каждые {{count}} часов",
+  "script.schedule.describe.everyDay": "Каждый день",
+  "script.schedule.describe.everyDays": "Каждые {{count}} дня",
+  "script.schedule.describe.everyDays.one": "Каждый {{count}} день",
+  "script.schedule.describe.everyDays.few": "Каждые {{count}} дня",
+  "script.schedule.describe.everyDays.many": "Каждые {{count}} дней",
+  "script.schedule.describe.daily": "Каждый день в {{time}}",
+  "script.schedule.describe.weekly": "{{days}} в {{time}}",
   "settings.scriptInterpreters.title": "Интерпретаторы скриптов",
   "settings.scriptInterpreters.description":
     "Программы, которые Scryer использует для запуска скриптов на каждом языке. Оставьте поле пустым, чтобы использовать программу, найденную в PATH.",
@@ -12678,12 +13526,9 @@ const ru: LocaleDictionary = {
   "uiText.thisAccountHasNoAvailableReauthenticationFactorSignOutAndSignInAgainThenRetryTheAccountSecurityChange":
     "У этого аккаунта нет доступного фактора повторной аутентификации. Выйдите и войдите снова, затем повторите изменение параметров безопасности аккаунта.",
   "uiText.community": "Сообщество",
-  "uiText.backToPacks": "← К пакетам",
   "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
     "Выберите правила для включения после установки. Правила остаются управляемыми",
   "uiText.managedByThePackAuthor": "Управляется автором пакета.",
-  "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled":
-    "При установке этого пакета существующие пользовательские копии не передаются под его управление и не отключаются.",
   "uiText.toNotifyAMediaServerIeJellyfinFirstCreateA":
     "Чтобы отправлять уведомления медиасерверу (например, Jellyfin), сначала создайте",
   "uiText.mediaServerConnection": "подключение медиасервера",
@@ -12734,8 +13579,6 @@ const ru: LocaleDictionary = {
   "uiText.deny": "Запретить",
   "uiText.isReadyToApply": "готово к применению.",
   "uiText.installedRulePacks": "Установленные пакеты правил",
-  "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization":
-    "Названия, описания и категории, заданные автором пакета, остаются управляемыми. Некоторые пакеты позволяют копировать отдельные правила для настройки.",
   "uiText.pack": "Пакет",
   "uiText.lastUpdated": "Последнее обновление",
   "uiText.autoUpdate": "Автообновление",
@@ -12787,10 +13630,6 @@ const ru: LocaleDictionary = {
     "Только предварительная оценка. Она не сохраняет это правило, не разрешает загрузку и не создаёт историю.",
   "rules.previewDraftSafety":
     "Только предварительная оценка. Она не сохраняет этот черновик, не разрешает загрузку и не создаёт историю.",
-  "rules.packChooseCustomizable":
-    "Выберите правила, которые нужно включить после установки. Правила остаются управляемыми; каждое из них можно скопировать для собственной настройки.",
-  "rules.packChooseManaged":
-    "Выберите правила, которые нужно включить после установки. Правила остаются управляемыми.",
   "uiAttr.18_and_over": "Только для совершеннолетних",
   "uiAttr.My_Indexer": "Мой индексатор",
   "uiAttr.Select_provider": "Выберите провайдера",
@@ -12951,7 +13790,7 @@ const ru: LocaleDictionary = {
   "rules.template.block-old-releases.title":
     "Понижать оценку релизов старше года",
   "rules.template.block-old-releases.description":
-    "Резко понижает оценку релизов, которым было более 365 дней на момент обнаружения или захвата. Возраст фиксируется при захвате: хранение файла в библиотеке не делает его старым.",
+    "Резко понижает оценку релизов, которым было более 365 дней на момент обнаружения или захвата. Возраст фиксируется при захвате: хранение файла в библиотеке не делает его старым. Оценка релизов, возраст которых неизвестен, не понижается.",
   "rules.template.block-obfuscated-retagged.title":
     "Понижать оценку релизов с запутанными или изменёнными именами",
   "rules.template.block-obfuscated-retagged.description":
@@ -13052,16 +13891,15 @@ const ru: LocaleDictionary = {
   "jobs.builtin.AcquisitionSearch.name": "Поиск для загрузки",
   "jobs.builtin.AcquisitionSearch.description":
     "Интерактивный поиск загрузок для выбранных отсутствующих материалов или улучшений качества.",
+  "jobs.builtin.ReleaseGrab.name": "Загрузка релиза",
+  "jobs.builtin.ReleaseGrab.description":
+    "Передача одного выбранного оператором релиза клиенту загрузки в фоновом режиме.",
   "jobs.builtin.ApplicationUpgrade.name": "Обновление приложения",
   "jobs.builtin.ApplicationUpgrade.description":
     "Загрузка, проверка и применение подписанного обновления приложения.",
-  "jobs.builtin.MaintenanceRuleEvaluation.name": "Оценка правил обслуживания",
-  "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Оценка включённых правил обслуживания и сверка кандидатов жизненного цикла. Никогда не выполняет действия.",
-  "jobs.builtin.LifecycleActionHandling.name":
-    "Выполнение действий обслуживания",
-  "jobs.builtin.LifecycleActionHandling.description":
-    "Обработка готовых кандидатов обслуживания для активированных правил наблюдения с учётом ограничений экземпляра и полных повторных проверок безопасности.",
+  "jobs.builtin.LifecycleRuleEvaluation.name": "Оценка правил жизненного цикла",
+  "jobs.builtin.LifecycleRuleEvaluation.description":
+    "Запуск и истечение аренд запросов по расписанию. Каждое правило жизненного цикла оценивается по собственному расписанию; запуск вручную оценивает все включённые правила и никогда не выполняет действия.",
   "jobs.builtin.MediaServerSignalSync.name":
     "Синхронизация просмотров медиасерверов",
   "jobs.builtin.MediaServerSignalSync.description":
@@ -13072,6 +13910,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.LocationOperation.name": "Перемещение контента",
   "jobs.builtin.LocationOperation.description":
     "Перемещение контента и записей каталога между корневыми папками или библиотеками.",
+  "jobs.builtin.ExternalRuleImport.name": "Импорт внешних правил",
+  "jobs.builtin.ExternalRuleImport.description":
+    "Импорт пользовательских форматов Sonarr или Radarr либо групп правил Maintainerr в виде отключённых правил.",
   "jobs.builtin.CustomJob.name": "Пользовательское задание",
   "jobs.builtin.CustomJob.description":
     "Запуск пользовательского скрипта по его собственному расписанию.",
@@ -13217,7 +14058,7 @@ const ru: LocaleDictionary = {
   "pendingImports.conflict.sampledFiles":
     "Показана только выборка путей; счётчики учитывают все файлы.",
   "pendingImports.conflict.ownershipHelp":
-    "Этому тайтлу уже принадлежит {{folder}}. Просмотрите варианты «Принять все» или «Оставить одну», чтобы упорядочить его папки.",
+    "Этому тайтлу уже принадлежит {{folder}}. Просмотрите варианты «Принять все» или «Оставить одну», чтобы упорядочить его папки, или нажмите «Исправить соответствие», если эта папка относится к другому тайтлу.",
   "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
     "Выберите ожидающие конфликты папок для разрешения.",
   "error.reason.LOCATION_CONFLICT_NOT_FOUND":
@@ -13378,6 +14219,20 @@ const ru: LocaleDictionary = {
   "dashboard.recycleBinWindow": "Ближайшие 72 часа",
   "dashboard.recycleBinDueNow": "Уже пора",
   "dashboard.recycleBinDueIn": "Через {{hours}} ч",
+  "dashboard.lifecycleUpcoming": "Предстоящие действия жизненного цикла",
+  "dashboard.panel.lifecycleUpcomingDescription":
+    "Действия, которые включённые правила жизненного цикла скоро выполнят, начиная с ближайших. Добавьте блок несколько раз, чтобы следить за разными действиями.",
+  "dashboard.lifecycleUpcomingEmpty":
+    "Ни у одного включённого правила жизненного цикла нет предстоящих действий.",
+  "dashboard.lifecycleUpcomingEmptyFiltered":
+    "Ни у одного включённого правила жизненного цикла нет предстоящих действий из выбранных.",
+  "dashboard.lifecycleUpcomingOff":
+    "Правила жизненного цикла выключены для этого экземпляра, поэтому предстоящих действий нет.",
+  "dashboard.lifecycleUpcomingPaused": "Действия приостановлены",
+  "dashboard.lifecycleUpcomingSettingsDescription":
+    "Выберите, за какими действиями следит этот блок и как он называется.",
+  "dashboard.lifecycleUpcomingName": "Название блока",
+  "dashboard.lifecycleUpcomingAllActions": "Все действия",
   "settings.seedingProfileNameRequired": "Введите название профиля.",
   "settings.seedingProfileRatioInvalid":
     "Введите число не меньше нуля или оставьте поле пустым.",
@@ -13425,6 +14280,8 @@ const ru: LocaleDictionary = {
     "Медиасервер вернул непросмотренные элементы в ответ на запрос просмотренных.",
   "settings.watchSyncReason.unmappedPlayedMovies":
     "Некоторые просмотренные фильмы не удалось сопоставить с тайтлами библиотеки.",
+  "settings.watchSyncReason.unplacedFavorites":
+    "Часть избранного не удалось сопоставить с медиа библиотеки, поэтому избранное этой учётной записи не считается известным.",
   "settings.watchSyncReason.storeFailed":
     "Scryer не смог сохранить прочитанную историю просмотров.",
   "settings.watchSyncReason.sourceUnavailable":
@@ -13568,109 +14425,107 @@ const ru: LocaleDictionary = {
     "Перетащите, чтобы изменить порядок {{value}}",
   "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
   "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
-  "mediaFile.markBad": "Пометить как плохое",
-  "mediaFile.markBadFile": "Пометить файл {{file}}",
-  "mediaFile.numberedVersion": "Версия {{number}}",
-  "mediaFile.markBadDescription": "Сообщить о {{file}} как о плохой версии. Политика библиотеки определяет, требуется ли проверка оператором.",
-  "mediaFile.markBadOnly": "Только пометить",
-  "mediaFile.markBadOnlyHint": "Оставить файл на диске и исключить его из покрытия.",
-  "mediaFile.markBadRecycleSearch": "Пометить, переместить и искать замену",
-  "mediaFile.markBadRecycleSearchHint": "Отдельно подтвердить перемещение и поиск замены.",
-  "mediaFile.markBadReason": "Причина",
-  "mediaFile.submitBadReport": "Отправить жалобу",
-  "mediaFile.markBadSubmitted": "Сообщение о плохом медиа отправлено",
-  "mediaFile.markBadSubmitFailed": "Не удалось отправить сообщение",
-  "mediaFile.confirmedContentBlocks": "Подтвержденные блокировки контента",
-  "mediaFile.clearContentBlock": "Снять блокировку контента",
-  "mediaFile.badMedia": "Плохой медиафайл",
-  "mediaIssue.reviewTitle": "Проверка проблем с медиа",
-  "mediaIssue.reviewHint": "Проверяйте сообщения операторов и подтверждайте их защитные действия.",
-  "mediaIssue.library": "Библиотека",
-  "mediaIssue.reports": "Сообщения",
-  "mediaIssue.reviewStatus": "Состояние проверки",
-  "mediaIssue.pending": "Ожидает",
-  "mediaIssue.approved": "Одобрено",
-  "mediaIssue.rejected": "Отклонено",
-  "mediaIssue.canceled": "Отменено",
-  "mediaIssue.allReports": "Все сообщения",
-  "mediaIssue.noPending": "Нет ожидающих сообщений",
-  "mediaIssue.noReports": "Сообщения отсутствуют",
-  "mediaIssue.reportsFailed": "Не удалось загрузить сообщения",
-  "mediaIssue.previousPage": "Предыдущая",
-  "mediaIssue.nextPage": "Следующая",
-  "mediaIssue.viewReport": "Просмотреть сообщение",
-  "mediaIssue.hideReport": "Скрыть сообщение",
-  "mediaIssue.titleId": "Тайтл: {{id}}",
-  "mediaIssue.file": "Файл",
-  "mediaIssue.episodes": "Эпизоды",
-  "mediaIssue.noEpisodeAssociations": "Нет привязки к эпизодам",
-  "mediaIssue.requestedAction": "Запрошенное действие",
-  "mediaIssue.approvedAction": "Одобренное действие",
-  "mediaIssue.executionError": "Ошибка выполнения",
-  "mediaIssue.notStarted": "Не начато",
-  "mediaIssue.blocked": "Заблокировано",
-  "mediaIssue.recycling": "Перемещение",
-  "mediaIssue.recycleFailed": "Перемещение не выполнено",
-  "mediaIssue.noEligibleRelease": "Нет подходящего релиза",
-  "mediaIssue.downloadQueued": "Загрузка поставлена в очередь",
-  "mediaIssue.replacementImported": "Замена импортирована",
-  "mediaIssue.searching": "Поиск замены",
-  "mediaIssue.complete": "Завершено",
-  "mediaIssue.failed": "Не выполнено",
-  "mediaIssue.approveMarkOnly": "Одобрить только пометку",
-  "mediaIssue.approveMarkOnlyHint": "Блокировать совпадающий контент и оставить файл на диске.",
-  "mediaIssue.reviewRecycle": "Проверить перемещение и поиск",
-  "mediaIssue.approveRecycle": "Одобрить перемещение и поиск",
-  "mediaIssue.approveRecycleHint": "Проверить файлы, заблокировать контент и переместить файл.",
-  "mediaIssue.previewFingerprint": "Отпечаток проверенного файла",
-  "mediaIssue.typeConfirmation": "Введите DELETE для подтверждения перемещения.",
-  "mediaIssue.unexpectedPreviewScope": "Предварительный просмотр затрагивает неожидаемый набор файлов.",
-  "mediaIssue.reviewSaved": "Проверка сохранена",
-  "mediaIssue.recycleUnavailable": "Перемещение недоступно",
-  "mediaIssue.remediationUnavailable": "Требуется отдельное разрешение для перемещения и поиска",
-  "mediaIssue.reportedFileChanged": "Заявленный файл изменился; повторите проверку",
-  "mediaIssue.reject": "Отклонить",
-  "mediaIssue.rejectHint": "Отклонить это сообщение без блокировки контента.",
-  "mediaIssue.blocksHint": "Подтвержденные блокировки контента",
-  "mediaIssue.noBlocks": "Нет блокировок контента",
-  "mediaIssue.blocksFailed": "Не удалось загрузить блокировки",
-  "mediaIssue.blockLimit": "Показаны последние {{count}} блокировок контента.",
-  "mediaIssue.clearHint": "Снятие блокировки не восстанавливает удаленные файлы.",
-  "mediaIssue.clearFailed": "Не удалось снять блокировку",
-  "mediaIssue.blockNotFound": "Блокировка контента не найдена",
-  "settings.requestRuleApplicability": "Применимость правила запроса",
-  "settings.requestRuleApplicabilityAcquisition": "Для запросов на получение",
-  "settings.requestRuleApplicabilityMediaIssue": "Для проблем с медиа",
-  "settings.requestRuleApplicabilityBoth": "Для запросов и проблем с медиа",
-  "settings.requestRuleMode": "Режим правила",
-  "settings.requestRuleModeDisabled": "Отключено",
-  "settings.requestRuleModeShadow": "Теневая проверка",
-  "requests.fallbackShadow": "Теневое правило не подтверждает изменения",
-  "requests.fallbackWiderHashImpact": "Расширенное влияние на контент неизвестно",
-  "requests.fallbackIssueRemediationNotArmed": "Исправление медиа не вооружено",
-  "settings.requestRuleModeEnforce": "Применять",
-  "settings.requestPreviewMediaFileId": "ID медиафайла",
-  "settings.requestPreviewIssueReason": "Причина проблемы",
-  "settings.requestPreviewRemediation": "Исправление",
-  "settings.requestPreviewMarkBad": "Пометить плохим",
-  "settings.requestPreviewRecycleAndSearch": "Переместить и искать замену",
-  "settings.refReqMediaIssueAffectedSeriesMovieLinkIds": "Затронутые привязки сериала к фильмам",
-  "settings.refReqMediaIssueWiderHashImpact": "Расширенное влияние контрольной выборки",
-  "settings.refReqRequestKind": "Тип запроса",
-  "settings.refReqRequestMediaIssue": "Документ проблемы с медиа",
-  "settings.refReqSectionRequestMediaIssue": "Раздел проблемы с медиа",
-  "settings.refReqMediaIssueOperation": "Операция с проблемой",
-  "settings.refReqMediaIssueReasonCode": "Код причины",
-  "settings.refReqMediaIssueRemediation": "Исправление проблемы",
-  "settings.refReqMediaIssueTitleId": "ID тайтла",
-  "settings.refReqMediaIssueLibraryId": "ID библиотеки",
-  "settings.refReqMediaIssueMediaFileId": "ID медиафайла",
-  "settings.refReqMediaIssueAffectedEpisodeIds": "Затронутые эпизоды",
-  "settings.refReqMediaIssueProvenance": "Происхождение медиа",
-  "settings.refReqFactsMediaIssue": "Факты проблемы с медиа",
-  "settings.refReqSectionFactsMediaIssue": "Факты проблемы с медиа",
-  "settings.refReqFactsReporterRequestedAffectedMedia": "Сообщивший запросил затронутые медиа",
-
+  "ruleOutput.lifecycle.add_tags": "Добавить теги",
+  "ruleOutput.lifecycle.remove_tags": "Удалить теги",
+  "ruleOutput.lifecycle.set_quality_profile": "Изменить профиль качества",
+  "ruleOutput.lifecycle.monitor": "Отслеживать",
+  "ruleOutput.lifecycle.search": "Поиск",
+  "ruleOutput.lifecycle.fetch_subtitles": "Загрузить субтитры",
+  "ruleOutput.lifecycle.move_to_library": "Переместить в библиотеку",
+  "ruleOutput.lifecycle.move_to_root": "Переместить в корневую папку",
+  "ruleOutput.lifecycle.unmonitor": "Отключить отслеживание",
+  "ruleOutput.lifecycle.delete_files": "Удалить файлы",
+  "ruleOutput.lifecycle.delete_title": "Удалить тайтл и файлы",
+  "ruleOutput.lifecycle.notify": "Уведомить",
+  "ruleOutput.lifecycle.monitor_season": "Отслеживать сезон",
+  "ruleOutput.lifecycle.fetch_season_subtitles": "Загрузить субтитры сезона",
+  "ruleOutput.lifecycle.unmonitor_season": "Отключить отслеживание сезона",
+  "ruleOutput.lifecycle.delete_season_files": "Удалить файлы сезона",
+  "ruleOutput.lifecycle.notify_season": "Уведомить о сезоне",
+  "ruleOutput.lifecycle.monitor_episode": "Отслеживать эпизод",
+  "ruleOutput.lifecycle.fetch_episode_subtitles": "Загрузить субтитры эпизода",
+  "ruleOutput.lifecycle.unmonitor_episode": "Отключить отслеживание эпизода",
+  "ruleOutput.lifecycle.delete_episode_files": "Удалить файлы эпизода",
+  "ruleOutput.lifecycle.notify_episode": "Уведомить об эпизоде",
+  "ruleSubject.lifecycle.title": "Тайтл",
+  "ruleSubject.lifecycle.season": "Сезон",
+  "ruleSubject.lifecycle.episode": "Эпизод",
+  "ruleOutput.lifecycle.notify.placeholder": "Текст уведомления",
+  "ruleOutput.request.approve": "Одобрить",
+  "ruleOutput.request.deny": "Отклонить",
+  "ruleOutput.request.manual": "Оставить на рассмотрение",
+  "ruleOutput.request.set_quality_profile": "Профиль качества",
+  "ruleOutput.request.set_lease_days": "Срок хранения",
+  "ruleOutput.request.set_lease_days.placeholder":
+    "Дни, или 0, чтобы хранить вечно",
+  "ruleOutput.request.set_monitor": "Отслеживание",
+  "ruleOutput.request.set_required_audio_languages": "Обязательные языки аудио",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Предпочитаемые языки аудио",
+  "ruleOutput.request.add_tags": "Добавить теги",
+  "ruleOutput.request.notify": "Уведомить",
+  "ruleOutput.request.notify.placeholder": "Текст уведомления",
+  "ruleOutput.request.reasons": "Коды причин",
+  "ruleOutput.request.reasons.placeholder": "По одному коду причины в строке",
+  "settings.proxyReachThrough": "Подключаться через",
+  "settings.proxyReachThroughHelp":
+    "Scryer отправляет запросы к этому решателю через выбранный транспортный прокси или туннель. «Напрямую» — подключение из собственной сети Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "К решателю проверок нельзя подключаться через другой решатель проверок.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "К решателю проверок нельзя подключаться через него самого.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Прокси или туннель для подключения к решателю не найден.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Прокси или туннель для подключения к решателю отключён.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Через другой прокси можно подключаться только к решателю проверок.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Через этот прокси подключаются один или несколько решателей проверок. Сначала измените их.",
+  "tours.onboarding.welcome.title": "Добро пожаловать в Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer находит, скачивает и упорядочивает ваши фильмы, сериалы и аниме. Вот короткая экскурсия; её можно пропустить в любой момент.",
+  "tours.onboarding.search.title": "Ищите что угодно",
+  "tours.onboarding.search.body":
+    "Находите тайтл, настройку или действие откуда угодно. Нажмите ⌘K или Ctrl+K, чтобы открыть поиск с клавиатуры.",
+  "tours.onboarding.libraries.title": "Ваши библиотеки",
+  "tours.onboarding.libraries.body":
+    "У фильмов, сериалов и аниме своя библиотека: что у вас есть, чего не хватает и что уже в пути.",
+  "tours.onboarding.discover.title": "Находите и запрашивайте",
+  "tours.onboarding.discover.body":
+    "Смотрите рекомендации на основе ваших библиотек, запрашивайте тайтлы и следите за каждым запросом в разделе «Запросы».",
+  "tours.onboarding.lists.title": "Списки",
+  "tours.onboarding.lists.body":
+    "Подписывайтесь на списки из таких источников, как Trakt или ваш список Plex Watchlist. Scryer синхронизирует их и добавляет или запрашивает их тайтлы за вас.",
+  "tours.onboarding.activity.title": "Активность",
+  "tours.onboarding.activity.body":
+    "Загрузки и импорт в реальном времени, а также всё, что ждёт вашего решения.",
+  "tours.onboarding.indexers.title": "Индексаторы и клиенты загрузки",
+  "tours.onboarding.indexers.body":
+    "Scryer нужен хотя бы один индексатор, чтобы находить релизы, и клиент загрузки, чтобы их скачивать. Клиенты загрузки находятся чуть ниже.",
+  "tours.onboarding.indexers.action": "Добавить индексатор",
+  "tours.onboarding.qualityProfiles.title": "Профили качества",
+  "tours.onboarding.qualityProfiles.body":
+    "Профиль качества задаёт, какое качество допустимо для тайтла и когда Scryer продолжает искать релиз лучше.",
+  "tours.onboarding.rules.title": "Правила",
+  "tours.onboarding.rules.body":
+    "Правила оценивают релизы, чтобы Scryer выбирал нужные вам и пропускал ненужные.",
+  "tours.onboarding.mediaServers.title": "Медиасерверы",
+  "tours.onboarding.mediaServers.body":
+    "Подключите Jellyfin, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
+  "tours.onboarding.notifications.title": "Уведомления",
+  "tours.onboarding.notifications.body":
+    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
+  "tours.onboarding.plugins.title": "Плагины",
+  "tours.onboarding.plugins.body":
+    "Плагины добавляют индексаторы, клиенты загрузки и службы уведомлений. Устанавливайте и обновляйте их здесь.",
+  "tours.stepOf": "Шаг {{current}} из {{total}}",
+  "tours.skip": "Пропустить обзор",
+  "tours.back": "Назад",
+  "tours.next": "Далее",
+  "tours.done": "Готово",
+  "tours.saveFailed":
+    "Не удалось сохранить прогресс обзора, поэтому он может появиться снова.",
 };
 
 export default ru;

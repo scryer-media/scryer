@@ -11,11 +11,13 @@ use super::inspection::{ImportedFormat, MAX_SPECIFICATIONS, Specification};
 use super::js::utf16_len;
 use super::onig::{self, AssertionKind, Node};
 use super::rego::{
-    Expr, Rule, Term, array, call, call_term, compare, number, predicate, print_module, ref_terms,
-    reference, single, text, var,
+    Expr, Rule, Term, array, call, call_term, compare, number, predicate, print_module,
+    print_rules, ref_terms, reference, single, text, var,
 };
 use super::specifications::{Compiled, compile_leaf};
-use super::{ArrDiagnostic, ArrDiagnosticSeverity, ArrFormatStatus, ArrSourceApplication};
+use super::{
+    ArrDiagnostic, ArrDiagnosticSeverity, ArrFormatScoring, ArrFormatStatus, ArrSourceApplication,
+};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -672,7 +674,9 @@ fn comments(lines: &[String]) -> String {
             let mut out = String::from("# ");
             let mut in_break = false;
             for c in line.chars() {
-                if c == '\r' || c == '\n' {
+                // Any control character, or a line or paragraph separator,
+                // could end the comment or the source early.
+                if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
                     if !in_break {
                         out.push(' ');
                     }
@@ -686,6 +690,275 @@ fn comments(lines: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// One format's rules and how translation went.
+struct CompiledFormat {
+    rules: Vec<Rule>,
+    outcome: FormatOutcome,
+    /// Why the format is disabled, for the module's trailing comments.
+    annotation: Option<String>,
+    /// The per-profile score rules a review module prints commented out.
+    review_rules: Vec<Rule>,
+}
+
+fn scores_name(format_index: usize) -> String {
+    format!("_arr_{format_index}_scores")
+}
+
+fn profile_table(format_index: usize, scores: &[(String, i32)]) -> Rule {
+    Rule {
+        name: scores_name(format_index),
+        args: vec![],
+        key: None,
+        value: Some(Term::Object(
+            scores
+                .iter()
+                .map(|(profile, score)| (text(profile.as_str()), number(f64::from(*score))))
+                .collect(),
+        )),
+        body: vec![],
+    }
+}
+
+fn score_rule(format_index: usize, score_key: &str, value: Term) -> Rule {
+    Rule {
+        name: "score_entry".to_string(),
+        args: vec![],
+        key: Some(text(score_key)),
+        value: Some(value),
+        body: vec![predicate(&format_name(format_index), false)],
+    }
+}
+
+/// `_arr_<n>_scores[input.profile.name]`: undefined, so no entry at all, for a
+/// profile the table does not list.
+fn profile_score(format_index: usize) -> Term {
+    ref_terms(vec![
+        var(scores_name(format_index)),
+        reference(&["input", "profile", "name"]),
+    ])
+}
+
+fn compile_format(
+    format_index: usize,
+    format: &ImportedFormat,
+    score: Option<&ArrFormatScoring>,
+) -> CompiledFormat {
+    let mut rules: Vec<Rule> = Vec::new();
+    let mut local = format.inspection_diagnostics.clone();
+    if format.specifications.len() > MAX_SPECIFICATIONS {
+        local.push(diagnostic(
+            codes::FORMAT_TOO_LARGE,
+            format!("Format exceeds the {MAX_SPECIFICATIONS}-specification import limit."),
+            &format.id,
+            None,
+        ));
+    }
+    if format.specifications.is_empty() {
+        local.push(diagnostic(
+            codes::SPECIFICATIONS_EMPTY,
+            "A format needs at least one valid condition.",
+            &format.id,
+            None,
+        ));
+    }
+    let compiled: Vec<Compiled> = format
+        .specifications
+        .iter()
+        .take(MAX_SPECIFICATIONS)
+        .enumerate()
+        .map(|(position, spec)| {
+            compile_specification(
+                spec,
+                format,
+                &format!("_arr_{format_index}_spec_{position}"),
+            )
+        })
+        .collect();
+    for item in &compiled {
+        local.extend(item.diagnostics.iter().cloned());
+    }
+    if score.is_none() {
+        local.push(diagnostic(
+            codes::SCORE_INVALID,
+            "Choose a signed 32-bit integer score before translating this format.",
+            &format.id,
+            None,
+        ));
+    }
+    let literal = match score {
+        Some(ArrFormatScoring::Literal(value)) => *value,
+        _ => 0,
+    };
+    let disabled = local
+        .iter()
+        .any(|item| item.severity == ArrDiagnosticSeverity::Error);
+    let score_key = format!("{}_{}", identifier(&format.name), format_index + 1);
+    if disabled {
+        let annotation = format!(
+            "{}: disabled ({})",
+            format.name,
+            local
+                .iter()
+                .map(|item| item.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        rules.push(Rule {
+            name: "score_entry".to_string(),
+            args: vec![],
+            key: Some(text(score_key)),
+            value: Some(number(f64::from(literal))),
+            body: vec![single(Term::Bool(false))],
+        });
+        return CompiledFormat {
+            rules,
+            outcome: FormatOutcome {
+                status: ArrFormatStatus::Disabled,
+                diagnostics: local,
+            },
+            annotation: Some(annotation),
+            review_rules: Vec::new(),
+        };
+    }
+
+    let mut by_implementation: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (position, (spec, item)) in format
+        .specifications
+        .iter()
+        .zip(compiled.iter())
+        .enumerate()
+    {
+        match by_implementation
+            .iter_mut()
+            .find(|(implementation, _)| *implementation == spec.implementation)
+        {
+            Some((_, positions)) => positions.push(position),
+            None => by_implementation.push((&spec.implementation, vec![position])),
+        }
+        rules.extend(item.rules.iter().cloned());
+        rules.push(helper_rule(
+            specification_name(format_index, position),
+            item.body.clone(),
+        ));
+        for alternative in &item.alternatives {
+            rules.push(helper_rule(
+                specification_name(format_index, position),
+                alternative.clone(),
+            ));
+        }
+    }
+    let matches = |index: usize| {
+        predicate(
+            &specification_name(format_index, index),
+            format.specifications[index].negate && !compiled[index].handles_negation,
+        )
+    };
+    for (group_index, (_, positions)) in by_implementation.iter().enumerate() {
+        let required: Vec<usize> = positions
+            .iter()
+            .copied()
+            .filter(|index| format.specifications[*index].required)
+            .collect();
+        // Arr's DidMatch needs every required spec and at least one spec in
+        // the group; any required match already satisfies the latter.
+        if required.is_empty() {
+            for option in positions {
+                rules.push(helper_rule(
+                    group_name(format_index, group_index),
+                    vec![matches(*option)],
+                ));
+            }
+        } else {
+            rules.push(helper_rule(
+                group_name(format_index, group_index),
+                required.iter().map(|index| matches(*index)).collect(),
+            ));
+        }
+    }
+    rules.push(helper_rule(
+        format_name(format_index),
+        (0..by_implementation.len())
+            .map(|index| predicate(&group_name(format_index, index), false))
+            .collect(),
+    ));
+    let mut review_rules = Vec::new();
+    match score {
+        Some(ArrFormatScoring::ProfileTable(scores)) => {
+            rules.push(profile_table(format_index, scores));
+            rules.push(score_rule(
+                format_index,
+                &score_key,
+                profile_score(format_index),
+            ));
+        }
+        Some(ArrFormatScoring::ReviewTable(scores)) => {
+            rules.push(score_rule(format_index, &score_key, number(0.0)));
+            review_rules.push(profile_table(format_index, scores));
+            review_rules.push(score_rule(
+                format_index,
+                &score_key,
+                profile_score(format_index),
+            ));
+        }
+        Some(ArrFormatScoring::Literal(_)) | None => {
+            rules.push(score_rule(
+                format_index,
+                &score_key,
+                number(f64::from(literal)),
+            ));
+        }
+    }
+    CompiledFormat {
+        rules,
+        outcome: FormatOutcome {
+            status: ArrFormatStatus::Translated,
+            diagnostics: Vec::new(),
+        },
+        annotation: None,
+        review_rules,
+    }
+}
+
+/// `# `-prefixed copy of printed Rego. Printed strings escape every line
+/// break, so each source line stays one comment line.
+fn commented(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                "#".to_string()
+            } else {
+                format!("# {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Compiles one format into its own module. `notes` become the module's
+/// trailing comments; a review table follows them commented out, under
+/// `review_notes`.
+pub(super) fn translate_single(
+    format: &ImportedFormat,
+    scoring: &ArrFormatScoring,
+    notes: &[String],
+    review_notes: &[String],
+) -> (Option<String>, FormatOutcome) {
+    let compiled = compile_format(0, format, Some(scoring));
+    if compiled.outcome.status == ArrFormatStatus::Disabled {
+        return (None, compiled.outcome);
+    }
+    let mut source = format!("{}\n\n{}\n", print_module(&compiled.rules), comments(notes));
+    if !compiled.review_rules.is_empty() {
+        source.push('\n');
+        source.push_str(&comments(review_notes));
+        source.push_str("\n#\n");
+        source.push_str(&commented(&print_rules(&compiled.review_rules)));
+        source.push('\n');
+    }
+    (Some(source), compiled.outcome)
 }
 
 /// Compiles normalized formats into Rego source.
@@ -705,148 +978,19 @@ pub(super) fn translate_formats(
     for (format_index, format) in formats.iter().enumerate() {
         has_radarr |= format.source == ArrSourceApplication::Radarr;
         has_sonarr |= format.source == ArrSourceApplication::Sonarr;
-        let mut local = format.inspection_diagnostics.clone();
-        if format.specifications.len() > MAX_SPECIFICATIONS {
-            local.push(diagnostic(
-                codes::FORMAT_TOO_LARGE,
-                format!("Format exceeds the {MAX_SPECIFICATIONS}-specification import limit."),
-                &format.id,
-                None,
-            ));
+        let score = scores
+            .get(&format.id)
+            .copied()
+            .map(ArrFormatScoring::Literal);
+        let compiled = compile_format(format_index, format, score.as_ref());
+        rules.extend(compiled.rules);
+        if let Some(annotation) = compiled.annotation {
+            annotations.push(annotation);
         }
-        if format.specifications.is_empty() {
-            local.push(diagnostic(
-                codes::SPECIFICATIONS_EMPTY,
-                "A format needs at least one valid condition.",
-                &format.id,
-                None,
-            ));
+        if compiled.outcome.status == ArrFormatStatus::Disabled {
+            diagnostics.extend(compiled.outcome.diagnostics.iter().cloned());
         }
-        let compiled: Vec<Compiled> = format
-            .specifications
-            .iter()
-            .take(MAX_SPECIFICATIONS)
-            .enumerate()
-            .map(|(position, spec)| {
-                compile_specification(
-                    spec,
-                    format,
-                    &format!("_arr_{format_index}_spec_{position}"),
-                )
-            })
-            .collect();
-        for item in &compiled {
-            local.extend(item.diagnostics.iter().cloned());
-        }
-        let score = scores.get(&format.id).copied();
-        if score.is_none() {
-            local.push(diagnostic(
-                codes::SCORE_INVALID,
-                "Choose a signed 32-bit integer score before translating this format.",
-                &format.id,
-                None,
-            ));
-        }
-        let disabled = local
-            .iter()
-            .any(|item| item.severity == ArrDiagnosticSeverity::Error);
-        let score_key = format!("{}_{}", identifier(&format.name), format_index + 1);
-        if disabled {
-            annotations.push(format!(
-                "{}: disabled ({})",
-                format.name,
-                local
-                    .iter()
-                    .map(|item| item.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-            rules.push(Rule {
-                name: "score_entry".to_string(),
-                args: vec![],
-                key: Some(text(score_key)),
-                value: Some(number(f64::from(score.unwrap_or(0)))),
-                body: vec![single(Term::Bool(false))],
-            });
-            diagnostics.extend(local.iter().cloned());
-            outcomes.push(FormatOutcome {
-                status: ArrFormatStatus::Disabled,
-                diagnostics: local,
-            });
-            continue;
-        }
-
-        let mut by_implementation: Vec<(&str, Vec<usize>)> = Vec::new();
-        for (position, (spec, item)) in format
-            .specifications
-            .iter()
-            .zip(compiled.iter())
-            .enumerate()
-        {
-            match by_implementation
-                .iter_mut()
-                .find(|(implementation, _)| *implementation == spec.implementation)
-            {
-                Some((_, positions)) => positions.push(position),
-                None => by_implementation.push((&spec.implementation, vec![position])),
-            }
-            rules.extend(item.rules.iter().cloned());
-            rules.push(helper_rule(
-                specification_name(format_index, position),
-                item.body.clone(),
-            ));
-            for alternative in &item.alternatives {
-                rules.push(helper_rule(
-                    specification_name(format_index, position),
-                    alternative.clone(),
-                ));
-            }
-        }
-        let matches = |index: usize| {
-            predicate(
-                &specification_name(format_index, index),
-                format.specifications[index].negate && !compiled[index].handles_negation,
-            )
-        };
-        for (group_index, (_, positions)) in by_implementation.iter().enumerate() {
-            let required: Vec<usize> = positions
-                .iter()
-                .copied()
-                .filter(|index| format.specifications[*index].required)
-                .collect();
-            // Arr's DidMatch needs every required spec and at least one spec in
-            // the group; any required match already satisfies the latter.
-            if required.is_empty() {
-                for option in positions {
-                    rules.push(helper_rule(
-                        group_name(format_index, group_index),
-                        vec![matches(*option)],
-                    ));
-                }
-            } else {
-                rules.push(helper_rule(
-                    group_name(format_index, group_index),
-                    required.iter().map(|index| matches(*index)).collect(),
-                ));
-            }
-        }
-        rules.push(helper_rule(
-            format_name(format_index),
-            (0..by_implementation.len())
-                .map(|index| predicate(&group_name(format_index, index), false))
-                .collect(),
-        ));
-        rules.push(Rule {
-            name: "score_entry".to_string(),
-            args: vec![],
-            key: Some(text(score_key)),
-            value: Some(number(f64::from(score.unwrap_or(0)))),
-            body: vec![predicate(&format_name(format_index), false)],
-        });
-        outcomes.push(FormatOutcome {
-            status: ArrFormatStatus::Translated,
-            diagnostics: Vec::new(),
-        });
+        outcomes.push(compiled.outcome);
     }
 
     let rego = print_module(&rules);

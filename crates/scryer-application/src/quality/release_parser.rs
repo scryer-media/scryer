@@ -244,11 +244,19 @@ fn synthesize_release_parse_context(raw: &str) -> ReleaseParseContext {
     } else {
         (&stripped_tokens, 0)
     };
+    let scan_separators = if stripped_tokens.is_empty() {
+        token_leading_separators(raw)
+    } else {
+        token_leading_separators(stripped)
+    };
     let title_boundary = scan_tokens
         .iter()
         .enumerate()
         .skip(title_start)
-        .find(|(_, token)| looks_like_release_metadata_token(token, scan_tokens))
+        .find(|(index, token)| {
+            looks_like_release_metadata_token(token, scan_tokens)
+                && !is_title_embedded_number(*index, scan_tokens, &scan_separators)
+        })
         .map(|(index, _)| index)
         .unwrap_or(scan_tokens.len());
     let title_tokens = scan_tokens
@@ -303,6 +311,104 @@ fn synthesize_release_parse_context(raw: &str) -> ReleaseParseContext {
     }
 }
 
+/// The separator run in front of each token, split exactly as
+/// `synthesize_release_parse_context` tokenizes.
+fn token_leading_separators(value: &str) -> Vec<String> {
+    let mut separators = Vec::new();
+    let mut previous_end = 0;
+    let mut piece_start = 0;
+    for (offset, ch) in value
+        .char_indices()
+        .chain(std::iter::once((value.len(), ' ')))
+    {
+        if !matches!(
+            ch,
+            '.' | '_' | ' ' | '-' | '/' | '[' | ']' | '(' | ')' | '{' | '}'
+        ) {
+            continue;
+        }
+        let piece = &value[piece_start..offset];
+        let trimmed = piece.trim();
+        if !trimmed.is_empty() {
+            let token_start = piece_start + (piece.len() - piece.trim_start().len());
+            separators.push(value[previous_end..token_start].to_string());
+            previous_end = token_start + trimmed.len();
+        }
+        piece_start = offset + ch.len_utf8();
+    }
+    separators
+}
+
+/// A spaced dash (`Show - 12`) introduces an episode number in anime names.
+fn is_spaced_dash(separator: &str) -> bool {
+    separator.contains('-') && separator.chars().any(char::is_whitespace)
+}
+
+/// A bare number that belongs to the show's name (`The.140.Lanterns...S02E01`,
+/// `Quiet Meridian 140 III - 01`) rather than numbering this release. It counts as
+/// title text only when the release numbers itself later with an unmistakable
+/// marker: `SxxEyy`, `Sxx`, a spelled season, or a dash-led episode number with
+/// title words in between. A number introduced by a spaced dash is the episode.
+fn is_title_embedded_number(index: usize, tokens: &[String], separators: &[String]) -> bool {
+    let Some(token) = tokens.get(index) else {
+        return false;
+    };
+    if !(2..=4).contains(&token.len())
+        || !token.chars().all(|ch| ch.is_ascii_digit())
+        || parse_context_year(token).is_some()
+        || looks_like_release_provenance_normalized(token)
+        || separators.get(index).is_some_and(|sep| is_spaced_dash(sep))
+    {
+        return false;
+    }
+    let mut saw_word = false;
+    for (later_index, later) in tokens.iter().enumerate().skip(index + 1) {
+        let normalized = later
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_uppercase();
+        if looks_like_resolution_dimensions(&normalized) {
+            return false;
+        }
+        if looks_like_standard_episode_token(&normalized)
+            || looks_like_bare_season_token(&normalized)
+            || spelled_season_marker(&normalized, tokens)
+        {
+            // `Show 25 (S02E01)`: a bracketed marker is alternate numbering for
+            // the bare number, which is then this release's absolute episode.
+            return !separators
+                .get(later_index)
+                .is_some_and(|sep| sep.contains(['(', '[', '{']));
+        }
+        if looks_like_absolute_episode_token(&normalized)
+            && later.chars().all(|ch| ch.is_ascii_digit())
+        {
+            return saw_word
+                && separators
+                    .get(later_index)
+                    .is_some_and(|sep| is_spaced_dash(sep));
+        }
+        if looks_like_release_metadata_token(later, tokens) {
+            return false;
+        }
+        if later.chars().any(char::is_alphabetic) {
+            saw_word = true;
+        }
+    }
+    false
+}
+
+/// `1920x1080` reads as `NxM` episode numbering but is a frame size.
+fn looks_like_resolution_dimensions(normalized: &str) -> bool {
+    normalized.split_once('X').is_some_and(|(width, height)| {
+        (3..=4).contains(&width.len())
+            && (3..=4).contains(&height.len())
+            && width.chars().all(|ch| ch.is_ascii_digit())
+            && height.chars().all(|ch| ch.is_ascii_digit())
+    })
+}
+
 fn guess_context_facet(raw: &str, tokens: &[String]) -> ContextFacetHint {
     if tokens
         .iter()
@@ -310,6 +416,9 @@ fn guess_context_facet(raw: &str, tokens: &[String]) -> ContextFacetHint {
         || tokens.iter().any(|token| looks_like_daily_token(token))
         || looks_like_daily_token_sequence(tokens)
         || looks_like_season_pack_release(tokens)
+        || tokens.iter().any(|token| {
+            looks_like_season_pack_marker(&normalize_alphanumeric_upper(token), tokens)
+        })
     {
         return ContextFacetHint::Series;
     }

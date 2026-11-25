@@ -33,7 +33,7 @@ pub const WORKFLOW_IMPORT_RELEASE_STALE: &str = "WORKFLOW_IMPORT_RELEASE_STALE";
 /// import not found
 pub const WORKFLOW_IMPORT_NOT_FOUND: &str = "WORKFLOW_IMPORT_NOT_FOUND";
 
-/// maintenance Search requires an accepted receipt for its acquisition job run
+/// lifecycle Search requires an accepted receipt for its acquisition job run
 pub const WORKFLOW_ACQUISITION_RECEIPT_REQUIRED: &str = "WORKFLOW_ACQUISITION_RECEIPT_REQUIRED";
 
 /// manual cleanup requires title and facet

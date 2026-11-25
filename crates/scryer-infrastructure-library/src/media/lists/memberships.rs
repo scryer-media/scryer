@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::AppResult;
-use scryer_application::lists::ListMembershipRepository;
+use scryer_application::lists::{ListMembershipIdentity, ListMembershipRepository};
 use scryer_domain::{ListMembership, ListMembershipState, MediaFacet};
 
 use super::{ListStore, json_arg, json_column, parse_or_repo_err, placeholders};
@@ -130,6 +130,43 @@ impl ListMembershipRepository for ListStore {
                 .unwrap_or(usize::MAX)
         });
         Ok(rows)
+    }
+
+    /// Served by the primary key's `subscription_id` prefix; decodes only the
+    /// identity columns.
+    async fn list_active_identities_by_subscriptions(
+        &self,
+        subscription_ids: &[String],
+    ) -> AppResult<Vec<ListMembershipIdentity>> {
+        let mut unique_ids = subscription_ids.to_vec();
+        unique_ids.sort();
+        unique_ids.dedup();
+        let mut identities = Vec::new();
+        for chunk in unique_ids.chunks(MEMBERSHIP_SUBSCRIPTION_ID_CHUNK) {
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            let rows = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT subscription_id, kind, external_ids_json, smg_title_id, first_seen_at
+                       FROM list_memberships
+                      WHERE subscription_id IN ({})
+                        AND left_at IS NULL",
+                    placeholders(chunk.len())
+                ),
+                &args,
+            )
+            .await?;
+            for row in &rows {
+                identities.push(ListMembershipIdentity {
+                    subscription_id: row.text("subscription_id")?,
+                    kind: parse_or_repo_err("kind", &row.text("kind")?, MediaFacet::parse)?,
+                    external_ids: json_column(row, "external_ids_json", "[]")?,
+                    smg_title_id: row.opt_i64("smg_title_id")?,
+                    first_seen_at: row.timestamp("first_seen_at")?,
+                });
+            }
+        }
+        Ok(identities)
     }
 
     async fn list_by_title(&self, title_id: &str) -> AppResult<Vec<ListMembership>> {

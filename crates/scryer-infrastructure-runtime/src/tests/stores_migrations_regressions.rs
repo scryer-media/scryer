@@ -1551,6 +1551,75 @@ async fn housekeeping_batched_retention_deletes_the_same_rows_as_one_statement()
     let _ = std::fs::remove_file(new_db);
 }
 
+/// Attempts of every outcome, `pending` included, age out on the attempt
+/// retention; newer attempts of every outcome stay. The prune seeks the
+/// outcome index rather than scanning the table.
+#[tokio::test]
+async fn housekeeping_prunes_release_attempts_of_every_outcome_past_retention() {
+    let (services, db) = temp_services("scryer_housekeeping_release_attempts").await;
+    let now = Utc::now();
+    let mut seeded = 0;
+    for outcome in ["success", "failed", "pending"] {
+        for (age_days, label) in [(120, "old"), (5, "recent")] {
+            seeded += 1;
+            let attempted_at = (now - chrono::Duration::days(age_days)).to_rfc3339();
+            sqlx::query(
+                "INSERT INTO release_download_attempts
+                     (id, title_id, source_hint, source_title, outcome,
+                      attempted_at, created_at, updated_at)
+                 VALUES (?, NULL, NULL, 'Lantern.Cove.S01E01.1080p.WEB-DL', ?, ?, ?, ?)",
+            )
+            .bind(format!("attempt-{outcome}-{label}"))
+            .bind(outcome)
+            .bind(&attempted_at)
+            .bind(&attempted_at)
+            .bind(&attempted_at)
+            .execute(services.pool())
+            .await
+            .expect("seed release attempt");
+        }
+    }
+    assert_eq!(seeded, 6);
+
+    let deleted = housekeeping_store(&services)
+        .delete_release_attempts_older_than(90)
+        .await
+        .expect("prune release attempts");
+    assert_eq!(deleted, 3);
+    let remaining: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM release_download_attempts ORDER BY id")
+            .fetch_all(services.pool())
+            .await
+            .expect("list attempts");
+    assert_eq!(
+        remaining,
+        vec![
+            "attempt-failed-recent".to_string(),
+            "attempt-pending-recent".to_string(),
+            "attempt-success-recent".to_string(),
+        ]
+    );
+
+    let plan: Vec<String> = sqlx::query(
+        "EXPLAIN QUERY PLAN SELECT id FROM release_download_attempts
+          WHERE outcome IN ('success', 'failed', 'pending') AND attempted_at < ?",
+    )
+    .bind(now.to_rfc3339())
+    .fetch_all(services.pool())
+    .await
+    .expect("query plan")
+    .iter()
+    .map(|row| sqlx::Row::get::<String, _>(row, "detail"))
+    .collect();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("idx_release_download_attempts_outcome_attempted")),
+        "the prune must seek the outcome index: {plan:#?}"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
 /// A title id list longer than one SQLite statement accepts is deleted, in
 /// one transaction, instead of failing on the bind limit.
 #[tokio::test]
@@ -1604,6 +1673,234 @@ async fn housekeeping_title_id_deletes_accept_lists_past_the_bind_limit() {
             .await
             .expect("list attempts");
     assert_eq!(remaining, vec!["attempt-kept".to_string()]);
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// The narrow pending-release reads answer exactly what the full lists they
+/// replace would: the existence checks match the lists' emptiness, and the
+/// indexerless page walk returns the same rows as filtering the full list.
+#[tokio::test]
+async fn pending_release_narrow_reads_match_the_full_lists() {
+    use scryer_application::PendingReleaseStatus;
+
+    let (services, db) = temp_services("scryer_pending_release_narrow_reads").await;
+    let pending_store =
+        PendingReleaseStore::new(services.datastore(), services.encryption_key_state());
+    let now = Utc::now();
+    let past = (now - chrono::Duration::hours(2)).to_rfc3339();
+    let future = (now + chrono::Duration::hours(2)).to_rfc3339();
+    let now_text = now.to_rfc3339();
+
+    let row = |key: &str, delay_until: &str, indexer_id: Option<&str>| {
+        scryer_application::PendingRelease {
+            id: format!("pending-{key}"),
+            wanted_item_id: format!("wanted-{key}"),
+            title_id: "title-lantern-cove".to_string(),
+            release_title: format!("Lantern.Cove.S01E0{}.1080p-GRP", key.len()),
+            release_url: Some(format!("https://indexer.invalid/{key}.nzb")),
+            source_kind: None,
+            release_size_bytes: Some(1_024),
+            release_score: 100,
+            scoring_log_json: None,
+            indexer_source: Some("indexer-a".to_string()),
+            indexer_id: indexer_id.map(str::to_string),
+            release_guid: Some(format!("guid-{key}")),
+            added_at: past.clone(),
+            last_observed_at: past.clone(),
+            delay_until: delay_until.to_string(),
+            status: PendingReleaseStatus::Waiting,
+            grabbed_at: None,
+            source_password: None,
+            published_at: None,
+            info_hash: None,
+            seed_minimums: Default::default(),
+            seeders: None,
+            release_identity: format!("guid:indexer-a:guid-{key}"),
+            coverage_identity: format!("scope:wanted-{key}"),
+            role: scryer_application::PendingReleaseRole::Primary,
+            last_decision_code: None,
+            release_age_unknown: false,
+            release_listing_json: None,
+            http_release: None,
+        }
+    };
+
+    let check = |label: &'static str| {
+        let pending_store = &pending_store;
+        let now_text = now_text.clone();
+        async move {
+            let waiting = PendingReleaseRepository::list_waiting_pending_releases(pending_store)
+                .await
+                .expect("waiting list");
+            let expired =
+                PendingReleaseRepository::list_expired_pending_releases(pending_store, &now_text)
+                    .await
+                    .expect("expired list");
+            assert_eq!(
+                PendingReleaseRepository::has_waiting_pending_releases(pending_store)
+                    .await
+                    .expect("has waiting"),
+                !waiting.is_empty(),
+                "{label}: has_waiting"
+            );
+            assert_eq!(
+                PendingReleaseRepository::has_expired_pending_releases(pending_store, &now_text)
+                    .await
+                    .expect("has expired"),
+                !expired.is_empty(),
+                "{label}: has_expired"
+            );
+            let mut expected: Vec<String> = waiting
+                .iter()
+                .filter(|row| row.indexer_id.is_none())
+                .map(|row| row.id.clone())
+                .collect();
+            expected.sort();
+            // Page size 2 forces the keyset walk across several pages.
+            let mut walked = Vec::new();
+            let mut after: Option<String> = None;
+            loop {
+                let page = PendingReleaseRepository::list_waiting_indexerless_pending_releases(
+                    pending_store,
+                    after.as_deref(),
+                    2,
+                )
+                .await
+                .expect("indexerless page");
+                if page.is_empty() {
+                    break;
+                }
+                after = page.last().map(|row| row.id.clone());
+                walked.extend(page.into_iter().map(|row| row.id));
+            }
+            assert_eq!(walked, expected, "{label}: indexerless walk");
+        }
+    };
+
+    check("empty").await;
+
+    let mut ids = Vec::new();
+    for (key, delay, indexer) in [
+        ("a", future.as_str(), None),
+        ("bb", future.as_str(), Some("indexer-1")),
+        ("ccc", future.as_str(), None),
+        ("dddd", future.as_str(), None),
+        ("eeeee", future.as_str(), None),
+    ] {
+        ids.push(
+            PendingReleaseRepository::insert_pending_release(
+                &pending_store,
+                &row(key, delay, indexer),
+            )
+            .await
+            .expect("insert pending release"),
+        );
+    }
+    check("only future waiting rows").await;
+
+    // Standby and terminal rows: standby still counts as waiting, terminal
+    // rows count for nothing.
+    for (id, status) in [
+        (&ids[2], PendingReleaseStatus::Standby),
+        (&ids[3], PendingReleaseStatus::Grabbed),
+    ] {
+        assert!(
+            PendingReleaseRepository::compare_and_set_pending_release_status(
+                &pending_store,
+                id,
+                PendingReleaseStatus::Waiting,
+                status,
+                None,
+            )
+            .await
+            .expect("status transition")
+        );
+    }
+    check("standby and grabbed rows").await;
+
+    // A standby row whose delay has passed is not expired; a waiting one is.
+    PendingReleaseRepository::update_pending_release_delay_until(&pending_store, &ids[2], &past)
+        .await
+        .expect("standby delay");
+    check("past-due standby only").await;
+    PendingReleaseRepository::update_pending_release_delay_until(&pending_store, &ids[0], &past)
+        .await
+        .expect("waiting delay");
+    check("past-due waiting row").await;
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// A begun attempt is one `pending` row; settling writes the outcome onto that
+/// row, so nothing is left `pending` and the failure lookups still see it.
+#[tokio::test]
+async fn a_begun_release_attempt_is_settled_in_place() {
+    let (services, db) = temp_services("scryer_release_attempt_settle").await;
+    services
+        .set_encryption_key(crate::encryption::EncryptionKey::from_bytes([23; 32]))
+        .await
+        .expect("encryption key should configure");
+    let release_store = ReleaseStore::new(services.datastore(), services.encryption_key_state());
+    title_store(&services)
+        .create_or_get_existing(make_test_title("title-harbor-lights", None))
+        .await
+        .expect("title should insert");
+    let live_url = "https://indexer.invalid/api?t=get&id=harbor-lights&apikey=live-indexer-key";
+
+    let id = ReleaseAttemptRepository::begin_release_attempt(
+        &release_store,
+        Some("title-harbor-lights".to_string()),
+        Some(live_url.to_string()),
+        Some("Harbor.Lights.2031.1080p.WEB-DL".to_string()),
+        Some("nzb-password".to_string()),
+    )
+    .await
+    .expect("attempt should begin")
+    .expect("the store keeps a row to settle");
+    ReleaseAttemptRepository::settle_release_attempt(
+        &release_store,
+        &id,
+        ReleaseDownloadAttemptOutcome::Failed,
+        Some("client refused".to_string()),
+    )
+    .await
+    .expect("attempt should settle");
+
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, outcome, error_message, source_hint FROM release_download_attempts",
+    )
+    .fetch_all(services.pool())
+    .await
+    .expect("attempts readable");
+    assert_eq!(
+        rows,
+        vec![(
+            id,
+            "failed".to_string(),
+            Some("client refused".to_string()),
+            Some(
+                "https://indexer.invalid/api?t=get&id=harbor-lights&apikey=[redacted]".to_string()
+            ),
+        )]
+    );
+    let failures = ReleaseAttemptRepository::list_failed_release_signatures_for_title(
+        &release_store,
+        "title-harbor-lights",
+        10,
+    )
+    .await
+    .expect("failures list");
+    assert_eq!(failures.len(), 1);
+    let password = ReleaseAttemptRepository::get_latest_source_password(
+        &release_store,
+        Some("title-harbor-lights"),
+        Some(live_url),
+        None,
+    )
+    .await
+    .expect("password lookup");
+    assert_eq!(password.as_deref(), Some("nzb-password"));
 
     let _ = std::fs::remove_file(db);
 }

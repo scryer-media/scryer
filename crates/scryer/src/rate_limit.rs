@@ -231,6 +231,27 @@ impl ScryerRateLimiter {
         }
     }
 
+    /// A limiter whose per-user API bucket admits `api` requests an hour,
+    /// with every other bucket generous.
+    #[cfg(test)]
+    pub(crate) fn for_api_test(api: u32) -> Self {
+        let mut limiter = Self::for_authentication_test(1_000, 1_000, 1_000, 1_000);
+        let buckets = Arc::get_mut(&mut limiter.inner).expect("fresh limiter is unshared");
+        buckets.api = Bucket::for_test(api);
+        limiter
+    }
+
+    /// A limiter whose search, mutation and API buckets admit the given
+    /// requests an hour, with the authentication buckets generous.
+    #[cfg(test)]
+    pub(crate) fn for_class_test(search: u32, mutation: u32, api: u32) -> Self {
+        let mut limiter = Self::for_api_test(api);
+        let buckets = Arc::get_mut(&mut limiter.inner).expect("fresh limiter is unshared");
+        buckets.search = Bucket::for_test(search);
+        buckets.mutation = Bucket::for_test(mutation);
+        limiter
+    }
+
     #[cfg(test)]
     pub(crate) fn for_network_test(trusted_proxy_specs: &[&str], bypass_specs: &[&str]) -> Self {
         let mut limiter = Self::for_authentication_test(1, 1, 1, 10);
@@ -266,6 +287,17 @@ impl ScryerRateLimiter {
         class: GraphqlRateLimitClass,
         key: &RateLimitKey,
     ) -> Result<(), RateLimitDecision> {
+        self.check_graphql_cells(class, 1, key)
+    }
+
+    /// Charges `cells` from the bucket of `class`. Only the search class is
+    /// ever charged more than one cell; see [`graphql_search_cost`].
+    pub(crate) fn check_graphql_cells(
+        &self,
+        class: GraphqlRateLimitClass,
+        cells: u32,
+        key: &RateLimitKey,
+    ) -> Result<(), RateLimitDecision> {
         if self.is_bypassed(key) {
             return Ok(());
         }
@@ -285,7 +317,7 @@ impl ScryerRateLimiter {
             GraphqlRateLimitClass::Mutation => &self.inner.mutation,
             GraphqlRateLimitClass::Api => &self.inner.api,
         };
-        bucket.check(&key.value, class)?;
+        bucket.check_cells(&key.value, class, cells)?;
         Ok(())
     }
 
@@ -396,6 +428,38 @@ impl Bucket {
         let key = key.to_string();
         let class = class.into();
         self.limiter.check_key(&key).map_err(|blocked| {
+            let retry_after = blocked.wait_time_from(self.limiter.clock().now());
+            RateLimitDecision {
+                message: rate_limited_message(class),
+                retry_after: Some(retry_after),
+            }
+        })
+    }
+
+    /// Charges `cells` at once, or nothing when the bucket cannot cover them
+    /// yet. A cost above the bucket's whole burst charges the full burst, so
+    /// such an operation waits for a full bucket instead of never fitting.
+    fn check_cells(
+        &self,
+        key: &str,
+        class: impl Into<RateLimitMessageClass>,
+        cells: u32,
+    ) -> Result<(), RateLimitDecision> {
+        let Some(cells) = NonZeroU32::new(cells).filter(|cells| cells.get() > 1) else {
+            return self.check(key, class);
+        };
+        let key = key.to_string();
+        let class = class.into();
+        let outcome = match self.limiter.check_key_n(&key, cells) {
+            Ok(outcome) => outcome,
+            Err(governor::InsufficientCapacity(capacity)) => {
+                let capacity = NonZeroU32::new(capacity).unwrap_or(NonZeroU32::MIN);
+                self.limiter
+                    .check_key_n(&key, capacity)
+                    .unwrap_or_else(|_| self.limiter.check_key(&key))
+            }
+        };
+        outcome.map_err(|blocked| {
             let retry_after = blocked.wait_time_from(self.limiter.clock().now());
             RateLimitDecision {
                 message: rate_limited_message(class),
@@ -929,21 +993,62 @@ fn login_principal_for_field(
     }
 }
 
+const EXPENSIVE_FIELDS: [&str; 10] = [
+    "searchReleases",
+    "searchMetadata",
+    "searchMetadataMulti",
+    "externalSubtitles",
+    "subtitleSearch",
+    "subtitleDownload",
+    "releaseDecisions",
+    "beginManualImportSelection",
+    "pendingImportBindingPreview",
+    "titleAcquisitionDiagnostics",
+];
+
 fn contains_expensive_field(query: &str) -> bool {
-    [
-        "searchReleases",
-        "searchMetadata",
-        "searchMetadataMulti",
-        "externalSubtitles",
-        "subtitleSearch",
-        "subtitleDownload",
-        "releaseDecisions",
-        "beginManualImportSelection",
-        "pendingImportBindingPreview",
-        "titleAcquisitionDiagnostics",
-    ]
-    .iter()
-    .any(|field| query.contains(field))
+    EXPENSIVE_FIELDS.iter().any(|field| query.contains(field))
+}
+
+/// Search-bucket cells one request costs: one for each expensive root field
+/// the executed operation selects, counting aliases and fragment spreads, and
+/// never fewer than one. Each such field runs its own remote search, so an
+/// operation that repeats one under several aliases is throttled sooner.
+pub(crate) fn graphql_search_cost(request: &async_graphql::Request) -> u32 {
+    let Ok(document) = parse_query(&request.query) else {
+        return 1;
+    };
+    let Some(operation) = selected_operation(&document, request.operation_name.as_deref()) else {
+        return 1;
+    };
+    let mut fields = Vec::new();
+    let mut fragment_stack = Vec::new();
+    let mut traversed = 0;
+    // A traversal cut short by a cycle, the depth cap or the selection budget
+    // keeps the fields it reached; the executor refuses such documents anyway.
+    let _complete = collect_top_level_fields(
+        &document,
+        &operation.node.selection_set.node,
+        0,
+        &mut fields,
+        &mut fragment_stack,
+        &mut traversed,
+    );
+    let expensive = fields
+        .iter()
+        .filter(|field| EXPENSIVE_FIELDS.contains(&field.name.node.as_str()))
+        .count();
+    u32::try_from(expensive).unwrap_or(u32::MAX).max(1)
+}
+
+/// Search-bucket cells a whole batch costs on the signed-in user's key.
+pub(crate) fn graphql_batch_search_cost(batch: &BatchRequest) -> u32 {
+    batch
+        .iter()
+        .filter(|request| classify_graphql_request(request) == GraphqlRateLimitClass::Search)
+        .map(graphql_search_cost)
+        .fold(0_u32, u32::saturating_add)
+        .max(1)
 }
 
 fn stricter_class(
@@ -1365,6 +1470,92 @@ mod tests {
             )));
             assert_eq!(classify_graphql(&batch), GraphqlRateLimitClass::Search);
         }
+    }
+
+    #[test]
+    fn search_cost_counts_expensive_root_fields_through_aliases_and_fragments() {
+        let single = async_graphql::Request::new(
+            r#"query SearchMetadata { searchMetadata(query: "example", type: MOVIE) { id } }"#,
+        );
+        assert_eq!(graphql_search_cost(&single), 1);
+
+        let aliased = async_graphql::Request::new(
+            r#"{
+              a: searchMetadata(query: "one", type: MOVIE) { id }
+              b: searchMetadata(query: "two", type: MOVIE) { id }
+              c: searchReleases(input: { titleId: "1" }) { title }
+              titles(query: "") { totalCount }
+            }"#,
+        );
+        assert_eq!(graphql_search_cost(&aliased), 3);
+
+        let fragments = async_graphql::Request::new(
+            r#"query Many { ...Searches ... on Query { d: searchMetadataMulti(query: "x") { id } } }
+            fragment Searches on Query {
+              a: searchMetadata(query: "one", type: MOVIE) { id }
+              b: searchMetadata(query: "two", type: MOVIE) { id }
+            }"#,
+        );
+        assert_eq!(graphql_search_cost(&fragments), 3);
+
+        let selected = async_graphql::Request::new(
+            r#"query One { searchMetadata(query: "one", type: MOVIE) { id } }
+            query Two {
+              a: searchMetadata(query: "one", type: MOVIE) { id }
+              b: searchMetadata(query: "two", type: MOVIE) { id }
+            }"#,
+        )
+        .operation_name("Two");
+        assert_eq!(graphql_search_cost(&selected), 2);
+
+        let nested_only = async_graphql::Request::new(
+            r#"{ wantedItem(id: "1") { releaseDecisions(limit: 5) { items { id } } } }"#,
+        );
+        assert_eq!(graphql_search_cost(&nested_only), 1);
+        assert_eq!(
+            graphql_search_cost(&async_graphql::Request::new("{ not valid")),
+            1
+        );
+    }
+
+    #[test]
+    fn aliased_searches_drain_the_search_bucket_per_field_without_refusal() {
+        let limiter = ScryerRateLimiter::for_class_test(4, 1, 1);
+        let key = RateLimitKey::new(IpAddr::from([198, 51, 100, 7]), Some("user-a"));
+        limiter
+            .check_graphql_cells(GraphqlRateLimitClass::Search, 3, &key)
+            .expect("three cells fit a four-cell bucket");
+        let decision = limiter
+            .check_graphql_cells(GraphqlRateLimitClass::Search, 2, &key)
+            .expect_err("two more cells do not fit");
+        assert_eq!(decision.message, "search rate limit exceeded");
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Search, &key)
+            .expect("a refused charge spends nothing, so one cell still fits");
+
+        let other = RateLimitKey::new(IpAddr::from([198, 51, 100, 8]), Some("user-b"));
+        limiter
+            .check_graphql_cells(GraphqlRateLimitClass::Search, 50, &other)
+            .expect("a cost above the burst charges the whole bucket instead of never fitting");
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Search, &other)
+            .expect_err("the bucket is now empty");
+    }
+
+    #[test]
+    fn batch_search_cost_sums_search_requests_only() {
+        let batch = BatchRequest::Batch(vec![
+            async_graphql::Request::new(
+                r#"{ a: searchMetadata(query: "one", type: MOVIE) { id } b: searchMetadata(query: "two", type: MOVIE) { id } }"#,
+            ),
+            async_graphql::Request::new(r#"{ titles(query: "") { totalCount } }"#),
+            async_graphql::Request::new(r#"{ searchReleases(input: { titleId: "1" }) { title } }"#),
+        ]);
+        assert_eq!(graphql_batch_search_cost(&batch), 3);
+        let single = BatchRequest::Single(async_graphql::Request::new(
+            r#"{ searchMetadata(query: "one", type: MOVIE) { id } }"#,
+        ));
+        assert_eq!(graphql_batch_search_cost(&single), 1);
     }
 
     #[test]

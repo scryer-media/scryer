@@ -2,7 +2,10 @@ import * as React from "react";
 import { useLocation } from "react-router";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { OverviewTitleTarget, ViewId } from "@/components/root/types";
-import { persistOverviewWindowScroll } from "@/lib/hooks/use-overview-window-scroll-restoration";
+import {
+  persistOverviewWindowScroll,
+  useOverviewElementScrollRestoration,
+} from "@/lib/hooks/use-overview-window-scroll-restoration";
 import type { TitleRecord } from "@/lib/types";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { TitleCard } from "@/components/title-card";
@@ -67,6 +70,13 @@ export const PosterGrid = React.memo(function PosterGrid({
 }: PosterGridProps) {
   const t = useTranslate();
   const endSentinelRef = React.useRef<HTMLDivElement | null>(null);
+  const gridRef = React.useRef<HTMLDivElement | null>(null);
+  useOverviewElementScrollRestoration({
+    enabled: scrollContainer && catalogInitialLoadComplete && titles.length > 0,
+    ready: catalogInitialLoadComplete,
+    storageKeySuffix: "poster-grid",
+    scrollRef: gridRef,
+  });
 
   React.useEffect(() => {
     if (
@@ -124,6 +134,7 @@ export const PosterGrid = React.memo(function PosterGrid({
 
   return (
     <div
+      ref={gridRef}
       data-catalog-scroll-root={scrollContainer ? "true" : undefined}
       className={
         scrollContainer

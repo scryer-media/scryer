@@ -40,7 +40,7 @@ pub const SIGNAL_EXTERNAL_ID_SOURCES: [&str; 3] = ["tmdb", "tvdb", "imdb"];
 /// Which Scryer subject an observation was attributed to.
 ///
 /// The two fields move together by design. A movie signal carries a title and
-/// no episode. An episode signal carries **both** or **neither**: attributing
+/// no episode, and so does a series or season favourite. An episode signal carries **both** or **neither**: attributing
 /// an episode observation to its series alone would be a show-level rollup,
 /// and this wave stores none.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -84,7 +84,10 @@ fn facet_accepts(kind: MediaServerSignalKind, facet: &MediaFacet) -> bool {
         MediaServerSignalKind::Movie => *facet == MediaFacet::Movie,
         // Anime is a distinct facet in Scryer but the same thing to a provider:
         // an episode signal must be allowed to land on either.
-        MediaServerSignalKind::Episode => matches!(facet, MediaFacet::Series | MediaFacet::Anime),
+        // A favourite series or season answers for the series as a whole.
+        MediaServerSignalKind::Episode
+        | MediaServerSignalKind::Series
+        | MediaServerSignalKind::Season => matches!(facet, MediaFacet::Series | MediaFacet::Anime),
     }
 }
 
@@ -101,8 +104,8 @@ fn facet_accepts(kind: MediaServerSignalKind, facet: &MediaFacet) -> bool {
 /// rule 4 says retain it unattributed instead.
 pub fn resolve_title(item: &ProviderPlayedItem, index: &TitleExternalIdIndex) -> Option<String> {
     let ids = match item.kind {
-        MediaServerSignalKind::Movie => &item.external_ids,
-        MediaServerSignalKind::Episode => &item.series_external_ids,
+        MediaServerSignalKind::Movie | MediaServerSignalKind::Series => &item.external_ids,
+        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => &item.series_external_ids,
     };
 
     for source in SIGNAL_EXTERNAL_ID_SOURCES {
@@ -160,6 +163,12 @@ impl ScryerLibraryPaths {
         }
     }
 
+    /// A server file path in Scryer's spelling, through the connection's path
+    /// mappings. A path no mapping covers is returned as the server spelt it.
+    pub fn to_scryer_path(&self, server_path: &str) -> String {
+        map_media_server_path(server_path, &self.to_scryer)
+    }
+
     /// Whether a server file path could be one of Scryer's files: once mapped
     /// to Scryer's spelling it lies inside a library root, or the roots are
     /// unknown.
@@ -194,8 +203,8 @@ pub fn is_foreign_item(
         return false;
     }
     let ids = match item.kind {
-        MediaServerSignalKind::Movie => &item.external_ids,
-        MediaServerSignalKind::Episode => &item.series_external_ids,
+        MediaServerSignalKind::Movie | MediaServerSignalKind::Series => &item.external_ids,
+        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => &item.series_external_ids,
     };
     let mut usable = SIGNAL_EXTERNAL_ID_SOURCES
         .iter()
@@ -255,6 +264,12 @@ pub fn resolve_subject(
                 episode_id: Some(episode_id),
             },
             None => MappedSignalSubject::unmapped(),
+        },
+        // A series or season favourite belongs to the title itself; a season
+        // keeps its number on the row, not an episode id.
+        MediaServerSignalKind::Series | MediaServerSignalKind::Season => MappedSignalSubject {
+            title_id: Some(title_id),
+            episode_id: None,
         },
     }
 }

@@ -6,6 +6,7 @@ import {
   hasAnyPrivilegedLibraryAccess,
   hasAppPermission,
 } from "@/lib/utils/permissions";
+import { usePersonalListsRefused } from "@/lib/hooks/use-personal-lists-refused";
 import { canAccessListsPage } from "@/lib/utils/routes";
 
 export function usePermissions(authenticatedUser: AuthUser) {
@@ -50,9 +51,11 @@ export function usePermissions(authenticatedUser: AuthUser) {
     authenticatedUser,
     APP_PERMISSIONS.manageLists,
   );
+  const personalListsRefused = usePersonalListsRefused(authenticatedUser.id);
   const canAccessLists = canAccessListsPage(
     canViewCatalog || canRequestMedia || canManageTitle,
     canManageLists || canManageSystemSettings,
+    personalListsRefused,
   );
   const canManageUsers = canManageUserAccounts || canManagePermissions;
   const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
@@ -75,6 +78,7 @@ export function usePermissions(authenticatedUser: AuthUser) {
     canManageCatalogSettings,
     canManageLists,
     canAccessLists,
+    personalListsRefused,
     canManageUsers,
     canManageConfig,
     canManageLibrarySettings,

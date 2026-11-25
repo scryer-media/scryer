@@ -1258,7 +1258,12 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     ) -> Option<Arc<dyn IndexerClient>> {
         let provider_key = config.provider_type.trim().to_ascii_lowercase();
         let (proxy_id, proxy_revision) = proxy_config
-            .map(|config| (config.id.clone(), config.updated_at.to_rfc3339()))
+            .map(|config| {
+                (
+                    config.id.clone(),
+                    scryer_application::transport_proxy::transport_proxy_revision(config),
+                )
+            })
             .unwrap_or_else(|| (String::new(), String::new()));
         let now = (self.clock)();
         let cache_key = (
@@ -3438,23 +3443,30 @@ pub fn build_archive_extractor_plugin_provider_from_runtime_plugins(
 /// call `describe()` to get the plugin descriptor, and return a provider that
 /// can create indexer clients for any loaded plugin type.
 pub fn load_indexer_plugins(plugins_dir: &Path) -> Result<WasmIndexerPluginProvider, String> {
+    use scryer_application::disk::{Disk, EntryKind};
     let mut provider = WasmIndexerPluginProvider::empty();
 
-    let entries = std::fs::read_dir(plugins_dir).map_err(|e| {
-        format!(
-            "failed to read plugins directory {}: {e}",
-            plugins_dir.display()
-        )
-    })?;
+    let disk = Disk::process();
+    let entries = disk
+        .list_blocking(plugins_dir)
+        .map_err(|e| format!("failed to read plugins directory: {e}"))?;
 
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
+    for entry in entries {
+        let dir = entry.path;
+        // A link, or an entry the listing could not classify, is followed.
+        let is_dir = match entry.reading.kind() {
+            Some(EntryKind::Directory) => true,
+            Some(EntryKind::File | EntryKind::Other) => false,
+            Some(EntryKind::Symlink) | None => {
+                disk.follow_blocking(&dir).kind() == Some(EntryKind::Directory)
+            }
+        };
+        if !is_dir {
             continue;
         }
 
         let wasm_path = dir.join("plugin.wasm");
-        if !wasm_path.exists() {
+        if disk.follow_blocking(&wasm_path).exists() != Some(true) {
             continue;
         }
 
@@ -3510,8 +3522,9 @@ pub fn load_indexer_plugins(plugins_dir: &Path) -> Result<WasmIndexerPluginProvi
 }
 
 fn load_single_plugin(wasm_path: &Path) -> Result<(PluginDescriptor, Vec<u8>), String> {
-    let wasm_bytes = std::fs::read(wasm_path)
-        .map_err(|e| format!("failed to read {}: {e}", wasm_path.display()))?;
+    let wasm_bytes = scryer_application::disk::Disk::process()
+        .read_blocking(wasm_path)
+        .map_err(|e| e.to_string())?;
 
     load_from_bytes(&wasm_bytes)
 }

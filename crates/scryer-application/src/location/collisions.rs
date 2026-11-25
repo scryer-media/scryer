@@ -1185,6 +1185,7 @@ mod tests {
             move_crc: Some(7),
             crc_algorithm: Some(crate::location::model::MoveCrcAlgorithm::Crc64Nvme),
             hash_computed_at: Some(chrono::Utc::now()),
+            mark: None,
         };
 
         assert_eq!(
@@ -1202,6 +1203,7 @@ mod tests {
             move_crc: None,
             crc_algorithm: None,
             hash_computed_at: None,
+            mark: None,
         };
 
         assert_eq!(FullHash::from_persisted(Some(&hashes)), FullHash::Stale);

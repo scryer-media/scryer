@@ -83,8 +83,11 @@ import { loginChallengeErrorMessage } from "@/lib/utils/login-challenge-error-me
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
 import {
   buildIndexerSavePayload,
+  indexerMonthlyGrabLimitDraftValue,
+  indexerMonthlyRequestLimitDraftValue,
   indexerQueryBudgetDraftValue,
   indexerRateLimitSecondsDraftValue,
+  parseIndexerMonthlyLimit,
   parseIndexerQueryBudget,
   parseIndexerRateLimitSeconds,
 } from "@/lib/utils/indexer-payload";
@@ -106,6 +109,8 @@ const INDEXER_INITIAL_DRAFT = {
   storedSecretKeys: [] as string[],
   rateLimitSeconds: "",
   maxQueriesPerMinute: "",
+  maxRequestsPerMonth: "",
+  maxGrabsPerMonth: "",
   isEnabled: true,
   enableInteractiveSearch: true,
   enableAutoSearch: true,
@@ -1075,6 +1080,14 @@ export function SettingsIndexersContainer({
       setGlobalStatus(t("form.indexerMaxQueriesPerMinuteInvalid"));
       return;
     }
+    if (!parseIndexerMonthlyLimit(indexerDraft.maxRequestsPerMonth).valid) {
+      setGlobalStatus(t("form.indexerMaxRequestsPerMonthInvalid"));
+      return;
+    }
+    if (!parseIndexerMonthlyLimit(indexerDraft.maxGrabsPerMonth).valid) {
+      setGlobalStatus(t("form.indexerMaxGrabsPerMonthInvalid"));
+      return;
+    }
 
     if (missingRequiredConfigField) {
       setGlobalStatus(
@@ -1117,6 +1130,8 @@ export function SettingsIndexersContainer({
               proxyConfigId: payload.proxyConfigId,
               rateLimitSeconds: payload.rateLimitSeconds,
               maxQueriesPerMinute: payload.maxQueriesPerMinute,
+              maxRequestsPerMonth: payload.maxRequestsPerMonth,
+              maxGrabsPerMonth: payload.maxGrabsPerMonth,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
               enableAutoSearch: payload.enableAutoSearch,
@@ -1150,6 +1165,8 @@ export function SettingsIndexersContainer({
               proxyConfigId: payload.proxyConfigId,
               rateLimitSeconds: payload.rateLimitSeconds,
               maxQueriesPerMinute: payload.maxQueriesPerMinute,
+              maxRequestsPerMonth: payload.maxRequestsPerMonth,
+              maxGrabsPerMonth: payload.maxGrabsPerMonth,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
               enableAutoSearch: payload.enableAutoSearch,
@@ -1217,6 +1234,8 @@ export function SettingsIndexersContainer({
         storedSecretKeys: indexer.storedSecretKeys,
         rateLimitSeconds: indexerRateLimitSecondsDraftValue(indexer),
         maxQueriesPerMinute: indexerQueryBudgetDraftValue(indexer),
+        maxRequestsPerMonth: indexerMonthlyRequestLimitDraftValue(indexer),
+        maxGrabsPerMonth: indexerMonthlyGrabLimitDraftValue(indexer),
         isEnabled: indexer.isEnabled,
         enableInteractiveSearch: indexer.enableInteractiveSearch,
         enableAutoSearch: indexer.enableAutoSearch,
@@ -1551,7 +1570,12 @@ export function SettingsIndexersContainer({
   const updateIndexerRateLimits = useCallback(
     async (
       indexer: IndexerRecord,
-      draft: { rateLimitSeconds: string; maxQueriesPerMinute: string },
+      draft: {
+        rateLimitSeconds: string;
+        maxQueriesPerMinute: string;
+        maxRequestsPerMonth: string;
+        maxGrabsPerMonth: string;
+      },
     ): Promise<boolean> => {
       const interval = parseIndexerRateLimitSeconds(draft.rateLimitSeconds);
       if (!interval.valid) {
@@ -1563,6 +1587,16 @@ export function SettingsIndexersContainer({
         setGlobalStatus(t("form.indexerMaxQueriesPerMinuteInvalid"));
         return false;
       }
+      const requestLimit = parseIndexerMonthlyLimit(draft.maxRequestsPerMonth);
+      if (!requestLimit.valid) {
+        setGlobalStatus(t("form.indexerMaxRequestsPerMonthInvalid"));
+        return false;
+      }
+      const grabLimit = parseIndexerMonthlyLimit(draft.maxGrabsPerMonth);
+      if (!grabLimit.valid) {
+        setGlobalStatus(t("form.indexerMaxGrabsPerMonthInvalid"));
+        return false;
+      }
       setMutatingIndexerId(indexer.id);
       try {
         const { error } = await client
@@ -1571,6 +1605,8 @@ export function SettingsIndexersContainer({
               id: indexer.id,
               rateLimitSeconds: interval.value,
               maxQueriesPerMinute: budget.value,
+              maxRequestsPerMonth: requestLimit.value,
+              maxGrabsPerMonth: grabLimit.value,
             },
           })
           .toPromise();

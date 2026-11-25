@@ -375,6 +375,8 @@ fn from_security_settings(
         skip_login_for_local_ips: settings.skip_login_for_local_ips,
         api_keys_restrict_to_system_settings_users: settings
             .api_keys_restrict_to_system_settings_users,
+        mcp_enabled: settings.mcp_enabled,
+        mcp_enabled_env_override: settings.mcp_enabled_env_override,
         mfa_require_config_step_up: settings.mfa_require_config_step_up,
         mfa_require_password_login: settings.mfa_require_password_login,
         mfa_require_jellyfin_login: settings.totp_require_jellyfin_login,
@@ -384,6 +386,8 @@ fn from_security_settings(
         effective_form_login_enabled: auth_runtime.effective_form_login_enabled,
         env_override_active: auth_runtime.env_override_active,
         env_override_description: auth_runtime.env_override_description.clone(),
+        local_trust_allowed_hosts: settings.local_trust_allowed_hosts,
+        restrict_local_trust_to_trusted_proxies: settings.restrict_local_trust_to_trusted_proxies,
     }
 }
 
@@ -625,10 +629,36 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
                         y: item.y,
                         w: item.w,
                         h: item.h,
+                        settings: item.settings.map(async_graphql::Json),
                     })
                     .collect(),
             })
             .collect(),
+        tours: settings
+            .tours
+            .into_iter()
+            .map(|tour| UiTourProgressPayload {
+                tour_id: tour.tour_id,
+                outcome: from_ui_tour_outcome(tour.outcome),
+                recorded_at: tour.recorded_at,
+            })
+            .collect(),
+    }
+}
+
+fn from_ui_tour_outcome(outcome: scryer_application::UiTourOutcome) -> UiTourOutcomeValue {
+    match outcome {
+        scryer_application::UiTourOutcome::Completed => UiTourOutcomeValue::Completed,
+        scryer_application::UiTourOutcome::Skipped => UiTourOutcomeValue::Skipped,
+    }
+}
+
+pub(crate) fn to_app_ui_tour_outcome(
+    outcome: UiTourOutcomeValue,
+) -> scryer_application::UiTourOutcome {
+    match outcome {
+        UiTourOutcomeValue::Completed => scryer_application::UiTourOutcome::Completed,
+        UiTourOutcomeValue::Skipped => scryer_application::UiTourOutcome::Skipped,
     }
 }
 
@@ -669,6 +699,7 @@ pub(crate) fn dashboard_layout_from_input(
                 y: item.y,
                 w: item.w,
                 h: item.h,
+                settings: item.settings.map(|settings| settings.0),
             })
             .collect(),
     }
@@ -897,7 +928,7 @@ pub(crate) fn from_title_tag_rewrite_counts(
         titles: title_tag_count(counts.titles),
         series_movies: title_tag_count(counts.series_movies),
         delay_profiles: title_tag_count(counts.delay_profiles),
-        maintenance_rule_sets: title_tag_count(counts.maintenance_rule_sets),
+        lifecycle_rule_sets: title_tag_count(counts.lifecycle_rule_sets),
         release_rule_sets: title_tag_count(counts.release_rule_sets),
         managed_tag_filters: title_tag_count(counts.managed_tag_filters),
         request_rule_sets: title_tag_count(counts.request_rule_sets),

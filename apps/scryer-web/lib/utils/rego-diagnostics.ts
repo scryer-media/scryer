@@ -23,6 +23,9 @@ export type RegoValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: RuleValidationDiagnostic[];
+  /// Findings that never block saving. Lifecycle and request validation
+  /// send them.
+  warnings?: RuleValidationDiagnostic[];
   unavailable?: boolean;
 };
 export type RegoDiagnostic = { line: number; column: number; message: string };
@@ -35,6 +38,30 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_MATCH_REQUIRED: "error.ruleMatchRequired",
   RULE_VOTE_REQUIRED: "error.ruleVoteRequired",
   RULE_TARGETS_PERSON: "error.ruleTargetsPerson",
+  RULE_ACTION_VALUE_NOT_LITERAL: "error.ruleActionValueNotLiteral",
+  RULE_ACTION_VALUE_INVALID: "error.ruleActionValueInvalid",
+  RULE_ACTION_UNKNOWN_QUALITY_PROFILE: "error.ruleActionUnknownQualityProfile",
+  RULE_ACTION_UNDEFINED_TAG: "error.ruleActionUndefinedTag",
+  RULE_HOST_HELPER_REDEFINED: "error.ruleHostHelperRedefined",
+  RULE_UNREFERENCED_RULE: "error.ruleUnreferencedRule",
+  RULE_ACTION_REQUIRED: "error.ruleActionRequired",
+  RULE_ACTION_HEAD_FUNCTION: "error.ruleActionHeadFunction",
+  RULE_FOREIGN_DATA_REFERENCE: "error.ruleForeignDataReference",
+  RULE_WITH_TARGET_NOT_ALLOWED: "error.ruleWithTargetNotAllowed",
+  RULE_HEAD_DEFINED_AS_FUNCTION: "error.ruleHeadDefinedAsFunction",
+  RULE_QUALITY_PROFILE_UNKNOWN: "error.ruleQualityProfileUnknown",
+  RULE_QUALITY_PROFILE_AMBIGUOUS: "error.ruleQualityProfileAmbiguous",
+  RULE_MONITOR_UNSUPPORTED: "error.ruleMonitorUnsupported",
+  RULE_AUDIO_LANGUAGE_UNKNOWN: "error.ruleAudioLanguageUnknown",
+  // Lifecycle's live checks, reported by validation and by a refused save.
+  CATALOG_NOT_DEFINED_TAG: "error.reason.CATALOG_NOT_DEFINED_TAG",
+  LIFECYCLE_QUALITY_PROFILE_NOT_FOUND:
+    "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND",
+  LIFECYCLE_MOVE_LIBRARY_NOT_FOUND:
+    "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND",
+  LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH:
+    "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH",
+  LIFECYCLE_MOVE_ROOT_NOT_FOUND: "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND",
 };
 
 /** Compiler-owned diagnostics keep their detail; owned conditions use i18n. */

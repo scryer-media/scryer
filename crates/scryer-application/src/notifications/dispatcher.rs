@@ -10,15 +10,15 @@ use crate::{
 use scryer_domain::{
     DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType, DomainExternalIds,
     DownloadFailedEventData, Episode, ExternalId, ImportCompletedEventData,
-    ImportRejectedEventData, ListRequestSubmittedEventData, ListSyncFailedEventData,
-    ListTitleAddedEventData, ListTitleLeftEventData, ListUnfollowedEventData,
-    MediaFileDeletedEventData, MediaFileDeletedReason, MediaFileRenamedEventData,
-    MediaFileRestoredEventData, MediaFileUpgradedEventData, MediaPathUpdate,
-    MediaRequestResolvedEventData, MediaRequestSubmittedEventData, MediaUpdateType,
-    NotificationEventType, NotificationTargetKind, PostProcessingCompletedEventData,
-    PostProcessingResult, ReleaseGrabbedEventData, SubtitleDownloadedEventData,
-    SubtitleSearchFailedEventData, Title, TitleAddedEventData, TitleContextSnapshot,
-    TitleDeletedEventData, TitleMovedEventData,
+    ImportRejectedEventData, LifecycleRuleNotifiedEventData, ListRequestSubmittedEventData,
+    ListSyncFailedEventData, ListTitleAddedEventData, ListTitleLeftEventData,
+    ListUnfollowedEventData, MediaFileDeletedEventData, MediaFileDeletedReason,
+    MediaFileRenamedEventData, MediaFileRestoredEventData, MediaFileUpgradedEventData,
+    MediaPathUpdate, MediaRequestResolvedEventData, MediaRequestSubmittedEventData,
+    MediaUpdateType, NotificationEventType, NotificationTargetKind,
+    PostProcessingCompletedEventData, PostProcessingResult, ReleaseGrabbedEventData,
+    SubtitleDownloadedEventData, SubtitleSearchFailedEventData, Title, TitleAddedEventData,
+    TitleContextSnapshot, TitleDeletedEventData, TitleMovedEventData,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use tokio_util::sync::CancellationToken;
@@ -58,6 +58,7 @@ macro_rules! notification_event_mappings {
             list_title_left => DomainEventPayload::ListTitleLeft(_) => DomainEventPayload::ListTitleLeft(data) => DomainEventType::ListTitleLeft => NotificationEventType::ListTitleLeft => build_list_title_left_notification(data),
             list_sync_failed => DomainEventPayload::ListSyncFailed(_) => DomainEventPayload::ListSyncFailed(data) => DomainEventType::ListSyncFailed => NotificationEventType::ListSyncFailed => build_list_sync_failed_notification(data),
             list_unfollowed => DomainEventPayload::ListUnfollowed(_) => DomainEventPayload::ListUnfollowed(data) => DomainEventType::ListUnfollowed => NotificationEventType::ListUnfollowed => build_list_unfollowed_notification(data),
+            lifecycle_rule_notified => DomainEventPayload::LifecycleRuleNotified(_) => DomainEventPayload::LifecycleRuleNotified(data) => DomainEventType::LifecycleRuleNotified => NotificationEventType::LifecycleRuleNotified => build_lifecycle_rule_notified_notification(data),
         }
     };
 }
@@ -1046,10 +1047,19 @@ fn build_media_request_submitted_notification(
     data: &MediaRequestSubmittedEventData,
 ) -> BuiltNotification {
     let title = media_request_submitted_title_context(data);
+    // Each request rule `notify` message follows on its own line, attributed
+    // to the rule set that sent it.
+    let mut message = format!("Submitted media request for '{}'.", data.title_name);
+    for notification in &data.rule_notifications {
+        message.push_str(&format!(
+            "\n{}: {}",
+            notification.rule_set_name, notification.text
+        ));
+    }
     let mut payload = base_notification_payload(
         NotificationEventType::MediaRequestSubmitted,
         format!("Media request submitted: {}", data.title_name),
-        format!("Submitted media request for '{}'.", data.title_name),
+        message,
         Some(&title),
         &[],
         &[],
@@ -1190,6 +1200,23 @@ fn build_list_unfollowed_notification(data: &ListUnfollowedEventData) -> BuiltNo
                 data.list.list_name
             ),
             None,
+            &[],
+            &[],
+        ),
+    }
+}
+
+/// A lifecycle rule's own message, named by the rule and the subject it
+/// acted on. The message is the operator's, sent as the rule wrote it.
+fn build_lifecycle_rule_notified_notification(
+    data: &LifecycleRuleNotifiedEventData,
+) -> BuiltNotification {
+    BuiltNotification {
+        payload: base_notification_payload(
+            NotificationEventType::LifecycleRuleNotified,
+            format!("{}: {}", data.rule_name, data.subject_label),
+            data.message.clone(),
+            Some(&data.title),
             &[],
             &[],
         ),
@@ -2817,6 +2844,7 @@ mod tests {
                 payload: DomainEventPayload::MediaRequestSubmitted(
                     MediaRequestSubmittedEventData {
                         requested_lease_days: None,
+                        rule_notifications: Vec::new(),
                         request_id: "request-1".to_string(),
                         library_id: "library-series".to_string(),
                         facet: MediaFacet::Series,
@@ -2969,6 +2997,20 @@ mod tests {
                 DomainEventPayload::ListUnfollowed(scryer_domain::ListUnfollowedEventData {
                     list: list_sample_subject(),
                 }),
+            ),
+            list_sample_event(
+                24,
+                DomainEventPayload::LifecycleRuleNotified(
+                    scryer_domain::LifecycleRuleNotifiedEventData {
+                        title: title_context("Kept Movie", MediaFacet::Movie),
+                        rule_set_id: "rule-1".to_string(),
+                        rule_name: "Archive finished".to_string(),
+                        subject_kind: "title".to_string(),
+                        subject_id: "title-1".to_string(),
+                        subject_label: "Kept Movie".to_string(),
+                        message: "Moved to the archive.".to_string(),
+                    },
+                ),
             ),
         ]
     }
@@ -3643,6 +3685,7 @@ mod tests {
             (
                 DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
                     requested_lease_days: None,
+                    rule_notifications: Vec::new(),
                     request_id: "request-submitted".to_string(),
                     library_id: "library-series".to_string(),
                     facet: MediaFacet::Series,
@@ -3893,6 +3936,51 @@ mod tests {
             json["release_facts"],
             serde_json::json!({ "quality": "720p" }),
             "unknown facts are left out rather than written as null"
+        );
+    }
+
+    #[test]
+    fn a_submitted_request_message_carries_each_rule_notification() {
+        let mut data = MediaRequestSubmittedEventData {
+            request_id: "request-1".to_string(),
+            library_id: "library-movie".to_string(),
+            facet: MediaFacet::Movie,
+            title_name: "Fixture Film".to_string(),
+            external_ids: media_request_test_external_ids(),
+            poster_url: None,
+            year: None,
+            requested_quality_profile_id: None,
+            requested_quality_profile_name: None,
+            requested_monitor_type: None,
+            requested_lease_days: None,
+            rule_notifications: Vec::new(),
+        };
+        let plain = build_media_request_submitted_notification(&data).payload;
+        assert_eq!(
+            plain.summary_message,
+            "Submitted media request for 'Fixture Film'."
+        );
+        assert!(
+            serde_json::to_value(&data).expect("event serialises")["rule_notifications"].is_null(),
+            "an event without notifications keeps its old shape"
+        );
+
+        data.rule_notifications = vec![
+            scryer_domain::RequestRuleNotification {
+                rule_set_id: "rule-a".to_string(),
+                rule_set_name: "Kids".to_string(),
+                text: "Check the rating".to_string(),
+            },
+            scryer_domain::RequestRuleNotification {
+                rule_set_id: "rule-b".to_string(),
+                rule_set_name: "Big files".to_string(),
+                text: "Short lease set".to_string(),
+            },
+        ];
+        let noted = build_media_request_submitted_notification(&data).payload;
+        assert_eq!(
+            noted.summary_message,
+            "Submitted media request for 'Fixture Film'.\nKids: Check the rating\nBig files: Short lease set"
         );
     }
 }

@@ -141,6 +141,30 @@ export function isSolverProxyProvider(providerType: string): boolean {
   return proxyProviderFamily(providerType) === "solver";
 }
 
+/**
+ * Only a challenge solver can be reached through another proxy: Scryer then
+ * dials the solver, and sends its own requests that reuse the solver's
+ * clearance, through that transport proxy or tunnel.
+ */
+export function supportsProxyReachThrough(providerType: string): boolean {
+  return isSolverProxyProvider(providerType);
+}
+
+/**
+ * The proxies a solver can be reached through: enabled transport proxies and
+ * tunnels. The one already selected stays listed even when it is no longer
+ * eligible, so the form still shows what is stored.
+ */
+export function proxyReachThroughOptions<
+  T extends { id: string; providerType: string; isEnabled: boolean },
+>(proxies: readonly T[], selectedId: string): T[] {
+  return proxies.filter(
+    (proxy) =>
+      proxy.id === selectedId ||
+      (proxy.isEnabled && !isSolverProxyProvider(proxy.providerType)),
+  );
+}
+
 export function isTunnelProxyProvider(providerType: string): boolean {
   return proxyProviderFamily(providerType) === "tunnel";
 }
@@ -451,6 +475,11 @@ export type ProxyRecord = {
    */
   tunnelKeepaliveSeconds: number | null;
   /**
+   * Challenge solvers only: the transport proxy or tunnel this solver is
+   * reached through, or null when it is reached directly.
+   */
+  reachThroughProxyConfigId: string | null;
+  /**
    * Host key pinned on the first successful tunnel connect, as OpenSSH prints
    * it (`SHA256:<base64>`), or null before the first connect.
    */
@@ -519,6 +548,11 @@ export type ProxyDraft = {
   tunnelKeepaliveSeconds: string;
   /** Whether the row being edited stores a keepalive. Same rule as the MTU. */
   hasStoredTunnelKeepaliveSeconds: boolean;
+  /**
+   * Challenge solvers only: the transport proxy or tunnel to reach the solver
+   * through, or empty to reach it directly.
+   */
+  reachThroughProxyConfigId: string;
   /** SOCKS only: resolve destination hostnames at the proxy (`socks5h`). */
   remoteDns: boolean;
   isEnabled: boolean;
@@ -563,6 +597,7 @@ export const PROXY_INITIAL_DRAFT: ProxyDraft = {
   hasStoredTunnelMtu: false,
   tunnelKeepaliveSeconds: "",
   hasStoredTunnelKeepaliveSeconds: false,
+  reachThroughProxyConfigId: "",
   remoteDns: false,
   isEnabled: true,
 };

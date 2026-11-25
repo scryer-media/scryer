@@ -7,7 +7,7 @@ import type {
 /**
  * The dashboard grid's data: which panels exist, how small each may get, how
  * its content density follows its size, and the default arrangement at every
- * breakpoint. Icons and renderers are bound to these ids in
+ * breakpoint. Icons and renderers are bound to these kinds in
  * `components/views/dashboard/dashboard-panel-registry.tsx`; this half stays
  * free of React so it can be tested on its own.
  *
@@ -82,7 +82,12 @@ export const DASHBOARD_MAX_ITEMS = 64;
 const PANEL_ID_PATTERN = /^[a-z0-9-]+$/;
 const PANEL_ID_MAX_LENGTH = 64;
 
-export const DASHBOARD_PANEL_IDS = [
+/**
+ * Every kind of panel. A placed panel's id names its kind: a single-use kind is
+ * placed under its own name, and an instanced kind may be placed any number of
+ * times, each placement as `<kind>--<suffix>` with its own settings.
+ */
+export const DASHBOARD_PANEL_KINDS = [
   "stats",
   "requests",
   "manual-imports",
@@ -92,9 +97,17 @@ export const DASHBOARD_PANEL_IDS = [
   "storage",
   "active-queue",
   "recycle-bin",
+  "lifecycle-upcoming",
 ] as const;
 
-export type DashboardPanelId = (typeof DASHBOARD_PANEL_IDS)[number];
+export type DashboardPanelKind = (typeof DASHBOARD_PANEL_KINDS)[number];
+
+const INSTANCED_PANEL_KINDS: ReadonlySet<DashboardPanelKind> = new Set([
+  "lifecycle-upcoming",
+]);
+const INSTANCE_SEPARATOR = "--";
+const INSTANCE_SUFFIX_PATTERN = /^[a-z0-9]{1,16}$/;
+const INSTANCE_SUFFIX_LENGTH = 6;
 
 type PerBreakpoint<T> = Readonly<Record<DashboardBreakpoint, T>>;
 
@@ -136,7 +149,7 @@ const TABLE_TIERS: PerBreakpoint<DashboardTierThresholds> = {
 };
 
 export const DASHBOARD_PANELS: Readonly<
-  Record<DashboardPanelId, DashboardPanelSpec>
+  Record<DashboardPanelKind, DashboardPanelSpec>
 > = {
   // Compact stacks the tiles, regular sets them two across and expanded three
   // across. XS only ever stacks; SM tops out at two across, as before.
@@ -205,10 +218,16 @@ export const DASHBOARD_PANELS: Readonly<
     min: { XS: size(1, 5), SM: size(3, 5), MD: size(4, 5), LG: size(3, 5) },
     tiers: LIST_TIERS,
   },
+  "lifecycle-upcoming": {
+    titleKey: "dashboard.lifecycleUpcoming",
+    descriptionKey: "dashboard.panel.lifecycleUpcomingDescription",
+    min: { XS: size(1, 5), SM: size(3, 5), MD: size(4, 5), LG: size(3, 5) },
+    tiers: LIST_TIERS,
+  },
 };
 
 const item = (
-  panelId: DashboardPanelId,
+  panelId: DashboardPanelKind,
   x: number,
   y: number,
   w: number,
@@ -283,8 +302,65 @@ export const DEFAULT_DASHBOARD_LAYOUTS: Readonly<DashboardLayouts> = {
   ],
 };
 
-export function isDashboardPanelId(value: string): value is DashboardPanelId {
+function isDashboardPanelKind(value: string): value is DashboardPanelKind {
   return Object.hasOwn(DASHBOARD_PANELS, value);
+}
+
+/** Whether a kind may be placed more than once, each with its own settings. */
+export function isInstancedDashboardPanelKind(
+  kind: DashboardPanelKind,
+): boolean {
+  return INSTANCED_PANEL_KINDS.has(kind);
+}
+
+/**
+ * The kind a placed panel's id names, or null when this build knows no such
+ * panel. A single-use kind is placed under its own name; an instanced kind
+ * only as `<kind>--<suffix>`.
+ */
+export function dashboardPanelKind(panelId: string): DashboardPanelKind | null {
+  if (!isWellFormedPanelId(panelId)) {
+    return null;
+  }
+  const separator = panelId.indexOf(INSTANCE_SEPARATOR);
+  if (separator < 0) {
+    return isDashboardPanelKind(panelId) &&
+      !isInstancedDashboardPanelKind(panelId)
+      ? panelId
+      : null;
+  }
+  const kind = panelId.slice(0, separator);
+  const suffix = panelId.slice(separator + INSTANCE_SEPARATOR.length);
+  return isDashboardPanelKind(kind) &&
+    isInstancedDashboardPanelKind(kind) &&
+    INSTANCE_SUFFIX_PATTERN.test(suffix)
+    ? kind
+    : null;
+}
+
+/**
+ * The id a new placement of `kind` takes: the kind itself for a single-use
+ * kind, otherwise the kind with a fresh random suffix no id in `taken` uses.
+ */
+export function newDashboardPanelId(
+  kind: DashboardPanelKind,
+  taken: Iterable<string> = [],
+  random: () => number = Math.random,
+): string {
+  if (!isInstancedDashboardPanelKind(kind)) {
+    return kind;
+  }
+  const used = new Set(taken);
+  for (;;) {
+    let suffix = "";
+    while (suffix.length < INSTANCE_SUFFIX_LENGTH) {
+      suffix += Math.floor(random() * 36).toString(36);
+    }
+    const id = `${kind}${INSTANCE_SEPARATOR}${suffix.slice(0, INSTANCE_SUFFIX_LENGTH)}`;
+    if (!used.has(id)) {
+      return id;
+    }
+  }
 }
 
 /** Whether a string is a panel id the server will accept at all. */
@@ -316,11 +392,11 @@ function fits(
 
 /** How much a panel shows at its current size. */
 export function dashboardPanelTier(
-  panelId: DashboardPanelId,
+  kind: DashboardPanelKind,
   breakpoint: DashboardBreakpoint,
   current: DashboardGridSize,
 ): DashboardTier {
-  const thresholds = DASHBOARD_PANELS[panelId].tiers[breakpoint];
+  const thresholds = DASHBOARD_PANELS[kind].tiers[breakpoint];
   if (fits(current, thresholds.expanded)) {
     return "expanded";
   }
@@ -332,25 +408,61 @@ export function dashboardPanelTier(
 
 /** Size a panel takes when added: its default at that breakpoint. */
 export function dashboardPanelDefaultSize(
-  panelId: DashboardPanelId,
+  kind: DashboardPanelKind,
   breakpoint: DashboardBreakpoint,
 ): DashboardGridSize {
   const placed = DEFAULT_DASHBOARD_LAYOUTS[breakpoint].find(
-    (entry) => entry.panelId === panelId,
+    (entry) => entry.panelId === kind,
   );
   if (placed) {
     return { w: placed.w, h: placed.h };
   }
-  return { ...DASHBOARD_PANELS[panelId].min[breakpoint] };
+  return { ...DASHBOARD_PANELS[kind].min[breakpoint] };
 }
 
 /** Smallest size, never wider than the breakpoint's grid. */
 export function dashboardPanelMinSize(
-  panelId: DashboardPanelId,
+  kind: DashboardPanelKind,
   breakpoint: DashboardBreakpoint,
 ): DashboardGridSize {
-  const min = DASHBOARD_PANELS[panelId].min[breakpoint];
+  const min = DASHBOARD_PANELS[kind].min[breakpoint];
   return { w: Math.min(min.w, DASHBOARD_COLUMNS[breakpoint]), h: min.h };
+}
+
+function isSettingsObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Settings are values: two panels' settings are equal when their JSON is. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (isSettingsObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function sameSettings(
+  left: DashboardLayoutItem["settings"],
+  right: DashboardLayoutItem["settings"],
+): boolean {
+  return canonicalJson(left ?? null) === canonicalJson(right ?? null);
+}
+
+/**
+ * An item with its settings kept only when they are an object. Settings are
+ * never changed in place; a change replaces the object.
+ */
+function withSettings(
+  entry: Omit<DashboardLayoutItem, "settings">,
+  settings: unknown,
+): DashboardLayoutItem {
+  return isSettingsObject(settings) ? { ...entry, settings } : { ...entry };
 }
 
 function cloneItems(
@@ -373,10 +485,10 @@ function toInt(value: number, fallback: number): number {
 }
 
 /**
- * Brings items into this build's grid for a breakpoint: unknown and repeated
- * panel ids are dropped, a layout saved against another column count is scaled
- * to this one, and every item is clamped inside the grid at no less than its
- * minimum size.
+ * Brings items into this build's grid for a breakpoint: ids of no known kind
+ * and repeated ids are dropped, a layout saved against another column count is
+ * scaled to this one, and every item is clamped inside the grid at no less
+ * than its kind's minimum size. Settings that are an object are kept.
  */
 export function normalizeDashboardItems(
   items: readonly DashboardLayoutItem[],
@@ -388,16 +500,19 @@ export function normalizeDashboardItems(
   const seen = new Set<string>();
   const normalized: DashboardLayoutItem[] = [];
   for (const entry of items) {
-    if (!isDashboardPanelId(entry.panelId) || seen.has(entry.panelId)) {
+    const kind = dashboardPanelKind(entry.panelId);
+    if (kind === null || seen.has(entry.panelId)) {
       continue;
     }
     seen.add(entry.panelId);
-    const min = dashboardPanelMinSize(entry.panelId, breakpoint);
+    const min = dashboardPanelMinSize(kind, breakpoint);
     const w = Math.min(columns, Math.max(min.w, toInt(entry.w * scale, min.w)));
     const h = Math.max(min.h, toInt(entry.h, min.h));
     const x = Math.min(columns - w, Math.max(0, toInt(entry.x * scale, 0)));
     const y = Math.max(0, toInt(entry.y, 0));
-    normalized.push({ panelId: entry.panelId, x, y, w, h });
+    normalized.push(
+      withSettings({ panelId: entry.panelId, x, y, w, h }, entry.settings),
+    );
   }
   return normalized;
 }
@@ -452,7 +567,8 @@ export function sameDashboardItems(
       entry.x === other.x &&
       entry.y === other.y &&
       entry.w === other.w &&
-      entry.h === other.h
+      entry.h === other.h &&
+      sameSettings(entry.settings, other.settings)
     );
   });
 }
@@ -482,21 +598,42 @@ export function dashboardLayoutInput(
   };
 }
 
-/** Adds a panel below everything else, at its default size. */
+/**
+ * Adds a panel below everything else, at its kind's default size. `panelId`
+ * is the placement's id: a single-use kind's own name, or an instance id from
+ * `newDashboardPanelId`. An id already placed, or of no known kind, changes
+ * nothing.
+ */
 export function appendDashboardPanel(
   items: readonly DashboardLayoutItem[],
-  panelId: DashboardPanelId,
+  panelId: string,
   breakpoint: DashboardBreakpoint,
 ): DashboardLayoutItem[] {
-  if (items.some((entry) => entry.panelId === panelId)) {
+  const kind = dashboardPanelKind(panelId);
+  if (kind === null || items.some((entry) => entry.panelId === panelId)) {
     return cloneItems(items);
   }
   const bottom = items.reduce(
     (lowest, entry) => Math.max(lowest, entry.y + entry.h),
     0,
   );
-  const { w, h } = dashboardPanelDefaultSize(panelId, breakpoint);
+  const { w, h } = dashboardPanelDefaultSize(kind, breakpoint);
   return [...cloneItems(items), { panelId, x: 0, y: bottom, w, h }];
+}
+
+/** Replaces one placed panel's settings; null clears them. */
+export function setDashboardPanelSettings(
+  items: readonly DashboardLayoutItem[],
+  panelId: string,
+  settings: Record<string, unknown> | null,
+): DashboardLayoutItem[] {
+  return items.map((entry) => {
+    if (entry.panelId !== panelId) {
+      return { ...entry };
+    }
+    const { panelId: id, x, y, w, h } = entry;
+    return withSettings({ panelId: id, x, y, w, h }, settings);
+  });
 }
 
 function overlaps(
@@ -514,28 +651,37 @@ function overlaps(
 /**
  * Places a panel where it was dropped, clamped inside the grid. Nothing else
  * moves: when the drop lands on another panel, the new one goes down its
- * column to the first rows that are free.
+ * column to the first rows that are free. A panel already placed under the
+ * same id keeps its settings.
  */
 export function placeDashboardPanel(
   items: readonly DashboardLayoutItem[],
-  panelId: DashboardPanelId,
+  panelId: string,
   breakpoint: DashboardBreakpoint,
   position: { x: number; y: number; w?: number; h?: number },
 ): DashboardLayoutItem[] {
+  const kind = dashboardPanelKind(panelId);
   const rest = normalizeDashboardItems(
     items.filter((entry) => entry.panelId !== panelId),
     breakpoint,
   );
-  const fallback = dashboardPanelDefaultSize(panelId, breakpoint);
+  if (kind === null) {
+    return rest;
+  }
+  const previous = items.find((entry) => entry.panelId === panelId);
+  const fallback = dashboardPanelDefaultSize(kind, breakpoint);
   const [placed] = normalizeDashboardItems(
     [
-      {
-        panelId,
-        x: position.x,
-        y: position.y,
-        w: position.w ?? fallback.w,
-        h: position.h ?? fallback.h,
-      },
+      withSettings(
+        {
+          panelId,
+          x: position.x,
+          y: position.y,
+          w: position.w ?? fallback.w,
+          h: position.h ?? fallback.h,
+        },
+        previous?.settings,
+      ),
     ],
     breakpoint,
   );

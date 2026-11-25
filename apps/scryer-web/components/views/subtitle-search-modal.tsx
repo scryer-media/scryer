@@ -90,6 +90,9 @@ export function SubtitleSearchModal({
     availableLanguagesRef.current = availableLanguages;
   }, [availableLanguages]);
 
+  // Ends the search in flight, if any.
+  const activeSearchRef = React.useRef<(() => void) | null>(null);
+
   const loadBlocklistEntries = React.useCallback(async () => {
     const { data, error } = await client
       .query(
@@ -114,19 +117,38 @@ export function SubtitleSearchModal({
         announceNoResults?: boolean;
       },
     ) => {
+      // A provider search is slow. Starting another one, or closing the
+      // modal, ends the one in flight so the server stops working on it and a
+      // late answer cannot replace the newer one.
+      activeSearchRef.current?.();
+      let superseded = false;
       setSearching(true);
       setHasSearched(true);
       setResults([]);
       try {
         const trimmed = nextLanguage?.trim() ?? "";
-        const { data, error } = await client
-          .mutation(searchSubtitlesMutation, {
-            input: {
-              mediaFileId,
-              ...(trimmed ? { language: trimmed } : {}),
-            },
-          })
-          .toPromise();
+        const { data, error } = await new Promise<{
+          data?: { searchSubtitles?: unknown };
+          error?: unknown;
+        }>((resolve) => {
+          const subscription = client
+            .mutation(searchSubtitlesMutation, {
+              input: {
+                mediaFileId,
+                ...(trimmed ? { language: trimmed } : {}),
+              },
+            })
+            .subscribe(resolve);
+          activeSearchRef.current = () => {
+            superseded = true;
+            subscription.unsubscribe();
+            resolve({});
+          };
+        });
+        if (superseded) return;
+        activeSearchRef.current?.();
+        activeSearchRef.current = null;
+        superseded = false;
         if (error) throw error;
         const payload = data?.searchSubtitles as
           SubtitleSearchPayload | undefined;
@@ -165,7 +187,7 @@ export function SubtitleSearchModal({
           { level: "ERROR" },
         );
       } finally {
-        setSearching(false);
+        if (!superseded) setSearching(false);
       }
     },
     [client, mediaFileId, setGlobalStatus, t],
@@ -195,6 +217,9 @@ export function SubtitleSearchModal({
 
     return () => {
       cancelled = true;
+      activeSearchRef.current?.();
+      activeSearchRef.current = null;
+      setSearching(false);
     };
   }, [loadBlocklistEntries, open, runSearch, setGlobalStatus, t]);
 

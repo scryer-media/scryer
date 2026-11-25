@@ -10,12 +10,12 @@
 //! [`MediaRequestMetadataSnapshot::partial`] with the unavailable groups named in `missing`, so a
 //! fact derived from them reads as *unknown* (⇒ manual review) rather than quietly absent.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use scryer_domain::CanonicalMediaTag;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{ContentRating, MdblistSummary, TitleAward, TitleRatingSummary};
-use crate::{MovieMetadata, SeriesMetadata};
+use crate::{EpisodeMetadata, MovieMetadata, SeriesMetadata};
 
 /// Bump when a stored snapshot's *meaning* changes, not when a field is added — every field is
 /// `serde(default)`, so an older document still reads correctly into a newer struct.
@@ -63,6 +63,134 @@ pub struct MediaRequestMetadataSnapshot {
     pub awards: Vec<TitleAward>,
     /// True when any canonical tag is flagged adult.
     pub is_adult: bool,
+    /// Series and anime: the episode layout SMG reported, as counts. `None`
+    /// on a movie, and on any snapshot captured before the group existed,
+    /// which the fact builder reads as *unknown*, never as "no episodes".
+    pub series_shape: Option<SnapshotSeriesShape>,
+    /// Movies: the earliest release date of each kind. `None` on a series, and
+    /// on any snapshot captured before the group existed.
+    pub release_dates: Option<SnapshotReleaseDates>,
+}
+
+/// A series' episode layout at capture, reduced to what the request facts
+/// read. The episode list itself is not stored: a long-running series has
+/// thousands of rows and no rule reads one.
+///
+/// Specials (season 0) are left out of every figure. An episode is *aired*
+/// when its air day is on or before the day in question; an episode with no
+/// readable air date is never aired.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotSeriesShape {
+    /// Seasons with at least one regular episode.
+    pub season_count: i64,
+    /// Regular episodes.
+    pub episode_count: i64,
+    /// Regular episodes whose air day is on or before the capture day.
+    pub aired_at_capture: i64,
+    /// `YYYY-MM-DD` air days of the regular episodes after the capture day,
+    /// ascending, one entry per episode. Kept so a later evaluation can move
+    /// the aired line forward without the episode list.
+    pub upcoming_air_dates: Vec<String>,
+}
+
+impl SnapshotSeriesShape {
+    /// Built from the hydration's episode list. The series copy a hydration
+    /// hands back for the snapshot carries no episodes, so a shape read from it
+    /// would report a known zero for every count.
+    pub fn from_episodes(episodes: &[EpisodeMetadata], captured_at: DateTime<Utc>) -> Self {
+        let capture_day = captured_at.date_naive();
+        let mut seasons = std::collections::BTreeSet::new();
+        let mut shape = Self::default();
+        for episode in episodes.iter().filter(|episode| episode.season_number != 0) {
+            seasons.insert(episode.season_number);
+            shape.episode_count += 1;
+            match parse_metadata_day(&episode.aired) {
+                Some(day) if day <= capture_day => shape.aired_at_capture += 1,
+                Some(day) => shape
+                    .upcoming_air_dates
+                    .push(day.format("%Y-%m-%d").to_string()),
+                None => {}
+            }
+        }
+        shape.season_count = seasons.len() as i64;
+        shape.upcoming_air_dates.sort();
+        shape
+    }
+
+    /// Regular episodes aired on or before `day`. A day before the capture day
+    /// reads the capture-day figure: the snapshot cannot tell which of those
+    /// episodes aired in between.
+    pub fn aired_on_or_before(&self, day: NaiveDate) -> i64 {
+        let since_capture = self
+            .upcoming_air_dates
+            .iter()
+            .filter(|air| parse_metadata_day(air).is_some_and(|air| air <= day))
+            .count() as i64;
+        self.aired_at_capture + since_capture
+    }
+
+    /// The first regular episode air day after `day`, if one is scheduled.
+    pub fn next_air_date_after(&self, day: NaiveDate) -> Option<String> {
+        self.upcoming_air_dates
+            .iter()
+            .find(|air| parse_metadata_day(air).is_some_and(|air| air > day))
+            .cloned()
+    }
+}
+
+/// A movie's earliest release date of each kind at capture, as `YYYY-MM-DD`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotReleaseDates {
+    /// False when SMG had not collected release dates for the title; every
+    /// date is then unknown rather than missing.
+    pub fetched: bool,
+    pub theatrical: Option<String>,
+    pub digital: Option<String>,
+    pub physical: Option<String>,
+}
+
+impl SnapshotReleaseDates {
+    /// The release market's earliest date of each kind, else the earliest from
+    /// any market: the same choice the lifecycle release-date facts make.
+    pub fn from_movie(movie: &MovieMetadata) -> Self {
+        let Some(dates) = movie.movie_release_dates.as_ref() else {
+            return Self::default();
+        };
+        let earliest = |market: &[String], any_market: &[String]| {
+            earliest_day(market).or_else(|| earliest_day(any_market))
+        };
+        Self {
+            fetched: dates.fetched,
+            theatrical: earliest(&dates.theatrical_dates, &dates.any_market_theatrical_dates),
+            digital: earliest(&dates.digital_dates, &dates.any_market_digital_dates),
+            physical: earliest(&dates.physical_dates, &dates.any_market_physical_dates),
+        }
+    }
+}
+
+fn earliest_day(values: &[String]) -> Option<String> {
+    values
+        .iter()
+        .filter_map(|value| parse_metadata_day(value))
+        .min()
+        .map(|day| day.format("%Y-%m-%d").to_string())
+}
+
+/// A metadata date as a calendar day: `YYYY-MM-DD`, or the UTC day of an
+/// RFC3339 timestamp.
+pub fn parse_metadata_day(value: &str) -> Option<NaiveDate> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(day) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return Some(day);
+    }
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc).date_naive())
 }
 
 /// The literal a `to_json` failure falls back to. It is a valid, parseable, explicitly partial
@@ -112,10 +240,16 @@ impl MediaRequestMetadataSnapshot {
             first_aired: None,
             awards: movie.awards.clone(),
             is_adult: movie.canonical_tags.iter().any(|tag| tag.is_adult),
+            series_shape: None,
+            release_dates: Some(SnapshotReleaseDates::from_movie(movie)),
         }
     }
 
-    pub fn from_series(series: &SeriesMetadata, captured_at: DateTime<Utc>) -> Self {
+    pub fn from_series(
+        series: &SeriesMetadata,
+        episodes: &[EpisodeMetadata],
+        captured_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             schema_version: MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION,
             captured_at: Some(captured_at),
@@ -141,6 +275,8 @@ impl MediaRequestMetadataSnapshot {
             first_aired: non_empty(series.first_aired.clone()),
             awards: series.awards.clone(),
             is_adult: series.canonical_tags.iter().any(|tag| tag.is_adult),
+            series_shape: Some(SnapshotSeriesShape::from_episodes(episodes, captured_at)),
+            release_dates: None,
         }
     }
 

@@ -21,9 +21,6 @@ import {
   deleteEpisodeFilesMutation,
   deleteTitlesMutation,
   setCollectionMonitoredMutation,
-  queueBestReleaseMutation,
-  queueExistingMutation,
-  queueReplacementMutation,
   setEpisodeMonitoredMutation,
   setPrimaryMovieFileMutation,
   setSeriesMovieMonitoredMutation,
@@ -58,6 +55,7 @@ import {
   pruneSeriesMovieLinkMediaFiles,
 } from "@/lib/utils/series-episode-details";
 import { useClient } from "urql";
+import { useGrab } from "@/lib/hooks/use-grab";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { handleFixTitleMatchComplete as applyFixTitleMatchCompletion } from "@/lib/fix-title-match";
@@ -436,8 +434,10 @@ export const SeriesOverviewContainer = React.memo(
     const trackJobRun = useTrackedJobRuns();
     const { registerInteractiveJobRun } = useJobRunToasts();
     const t = useTranslate();
-    const { startAutomaticSearch, isSearching } = useAutomaticSearch();
+    const { startAutomaticSearch, searchItem, isSearching } =
+      useAutomaticSearch();
     const client = useClient();
+    const grab = useGrab();
     const auth = useAuth();
     const { confirmReplaceConflict, replaceConflictDialog } =
       useDownloadConflictConfirmation();
@@ -1992,76 +1992,20 @@ export const SeriesOverviewContainer = React.memo(
         if (!title) return;
 
         try {
-          const input = {
-            titleId: title.id,
-            scope: { episode: episode.id },
-          };
-          const payload = await retryWithReplaceOnConflict(
-            input,
-            async (nextInput) => {
-              const { data, error } = await client
-                .mutation(queueBestReleaseMutation, {
-                  input: nextInput,
-                })
-                .toPromise();
-              if (error) throw error;
-              return data?.queueBestRelease;
-            },
-            "A download is already in progress for this episode.",
-            confirmReplaceConflict,
-          );
-          assertNoReplaceConflict(
-            payload,
-            "A download is already in progress for this episode.",
-          );
-          setGlobalStatus(t("status.queuedLatest", { name: title.name }), {
-            level: "SUCCESS",
-          });
+          await searchItem(`episode:${episode.id}`);
           await refreshTitleDetail();
         } catch (error: unknown) {
           reportAutomaticSearchFailure(setGlobalStatus, t, error, title.name);
         }
       },
-      [
-        refreshTitleDetail,
-        client,
-        confirmReplaceConflict,
-        title,
-        t,
-        setGlobalStatus,
-      ],
+      [refreshTitleDetail, searchItem, title, t, setGlobalStatus],
     );
 
     const handleAutoSearchSeriesMovie = React.useCallback(
       async (link: SeriesMovieLink) => {
         if (!title) return;
         try {
-          const input = {
-            titleId: title.id,
-            scope: { seriesMovie: link.id },
-          };
-          const payload = await retryWithReplaceOnConflict(
-            input,
-            async (nextInput) => {
-              const { data, error } = await client
-                .mutation(queueBestReleaseMutation, {
-                  input: nextInput,
-                })
-                .toPromise();
-              if (error) throw error;
-              return data?.queueBestRelease;
-            },
-            "A download is already in progress for this series movie.",
-            confirmReplaceConflict,
-          );
-          assertNoReplaceConflict(
-            payload,
-            "A download is already in progress for this series movie.",
-          );
-          setGlobalStatus(
-            t("status.queuedLatest", { name: link.movie.title }),
-            { level: "SUCCESS" },
-          );
+          await searchItem(`series_movie:${link.id}`);
           await refreshTitleDetail();
         } catch (error: unknown) {
           reportAutomaticSearchFailure(
@@ -2072,14 +2016,7 @@ export const SeriesOverviewContainer = React.memo(
           );
         }
       },
-      [
-        refreshTitleDetail,
-        client,
-        confirmReplaceConflict,
-        title,
-        t,
-        setGlobalStatus,
-      ],
+      [refreshTitleDetail, searchItem, title, t, setGlobalStatus],
     );
 
     const [
@@ -2281,19 +2218,15 @@ export const SeriesOverviewContainer = React.memo(
             scopeEpisodes,
             (filesData?.title?.mediaFiles ?? []) as EpisodeMediaFile[],
           );
-          const mutation = replacesPrimary
-            ? queueReplacementMutation
-            : queueExistingMutation;
           const payload = await retryWithReplaceOnConflict(
             input,
             async (nextInput) => {
-              const { data, error } = await client
-                .mutation(mutation, { input: nextInput })
-                .toPromise();
-              if (error) throw error;
-              return replacesPrimary
-                ? data?.queueReplacementRelease
-                : data?.queueExistingTitleDownload;
+              const outcome = await grab(
+                replacesPrimary
+                  ? { replacement: nextInput }
+                  : { existing: nextInput },
+              );
+              return outcome.queued;
             },
             "A download is already in progress for this collection.",
             confirmReplaceConflict,
@@ -2314,6 +2247,7 @@ export const SeriesOverviewContainer = React.memo(
       },
       [
         client,
+        grab,
         confirmReplaceConflict,
         title,
         refreshTitleDetail,

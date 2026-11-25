@@ -82,7 +82,7 @@ const DISCOVERY_WATCHLIST_SOURCES: &[DiscoveryWatchlistSource] = &[
     },
 ];
 
-pub(super) fn discovery_watchlist_source_matches(subscription: &ListSubscription) -> bool {
+pub(crate) fn discovery_watchlist_source_matches(subscription: &ListSubscription) -> bool {
     let source = &subscription.source;
     DISCOVERY_WATCHLIST_SOURCES.iter().any(|candidate| {
         source

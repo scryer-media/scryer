@@ -88,6 +88,42 @@ pub fn transfer_message(detail: &str) -> String {
     }
 }
 
+/// A title's outcome as the API gives it: the detail in the same plain
+/// language as `transfer_message`, and the refusal's code and facts verbatim.
+pub fn from_location_transfer_title_outcome(
+    outcome: scryer_application::location::live::TransferTitleOutcome,
+) -> crate::types::LocationTransferTitleOutcomePayload {
+    use scryer_application::location::live::TitleRefusalFact;
+    let (refusal_reason, refusal_facts) = match outcome.refusal {
+        Some(refusal) => {
+            let facts = (!refusal.facts.is_empty()).then(|| {
+                async_graphql::Json(serde_json::Value::Object(
+                    refusal
+                        .facts
+                        .into_iter()
+                        .map(|(key, value)| {
+                            let value = match value {
+                                TitleRefusalFact::Text(text) => serde_json::Value::String(text),
+                                TitleRefusalFact::List(items) => serde_json::Value::Array(
+                                    items.into_iter().map(serde_json::Value::String).collect(),
+                                ),
+                            };
+                            (key, value)
+                        })
+                        .collect(),
+                ))
+            });
+            (Some(refusal.reason), facts)
+        }
+        None => (None, None),
+    };
+    crate::types::LocationTransferTitleOutcomePayload {
+        detail: outcome.detail.as_deref().map(transfer_message),
+        refusal_reason,
+        refusal_facts,
+    }
+}
+
 pub fn from_location_transfer(
     snapshot: scryer_application::location::live::TransferSnapshot,
 ) -> crate::types::LocationTransferSnapshotPayload {

@@ -57,7 +57,7 @@ impl AppUseCase {
             .runtime
             .jobs
             .interactive_operation_guards
-            .try_acquire(&format!("maintenance-title:{}", title.id))
+            .try_acquire(&format!("lifecycle-title:{}", title.id))
             .await
             .ok_or_else(|| {
                 AppError::validation_refused(
@@ -209,11 +209,15 @@ pub(crate) struct RequestDecisionProvenance {
     pub(crate) decision_id: Option<String>,
     pub(crate) decided_by_rule_set_ids: Vec<String>,
     /// Tags the policy emitted, already narrowed to the labels the tag registry
-    /// defines. Applied to the created title only on an approval; a denial
-    /// keeps them in the trace and the event alone (FR-050). The unfiltered
-    /// list the rules asked for stays in the decision trace.
+    /// defines. Applied to the created title only on an approval, and empty
+    /// on a denial. The unfiltered list the rules asked for stays in the
+    /// decision trace.
     pub(crate) policy_tags: Vec<String>,
     pub(crate) reason_codes: Vec<String>,
+    /// What the rules set for the approval, already checked against the
+    /// request. Applied only by an automatic approval; the decision trace
+    /// records which rule set set each value.
+    pub(crate) shaping: crate::request_rules::ResolvedShaping,
 }
 
 impl RequestDecisionProvenance {
@@ -222,6 +226,7 @@ impl RequestDecisionProvenance {
             decision_id: evaluation.decision_id.clone(),
             decided_by_rule_set_ids: evaluation.deciding_rule_set_ids.clone(),
             policy_tags: evaluation.tags.clone(),
+            shaping: evaluation.resolved_shaping.clone(),
             reason_codes: evaluation
                 .reasons
                 .iter()
@@ -330,10 +335,10 @@ impl AppUseCase {
                 .as_ref()
                 .expect("movie selection checked above")
                 .series_movies[0];
-            self.enrich_request_draft(&MediaFacet::Movie, movie.external_ids.clone())
+            self.stage_request_metadata(&MediaFacet::Movie, movie.external_ids.clone(), false)
                 .await
         } else {
-            self.enrich_request_draft(&input.facet, external_ids.clone())
+            self.stage_request_metadata(&input.facet, external_ids.clone(), false)
                 .await
         };
         if !list_movie {
@@ -431,22 +436,6 @@ impl AppUseCase {
             created_by_user_id: actor.id.clone(),
             origin: input.origin,
         };
-        let submitted_event = new_global_domain_event(
-            actor,
-            DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
-                request_id: request.id.clone(),
-                library_id: request.library_id.clone(),
-                facet: request.facet.clone(),
-                title_name: request.title.clone(),
-                external_ids: request.external_ids.clone(),
-                poster_url: request.poster_url.clone(),
-                year: request.year,
-                requested_quality_profile_id: request.requested_quality_profile_id.clone(),
-                requested_quality_profile_name: request.requested_quality_profile_name.clone(),
-                requested_monitor_type: request.requested_monitor_type.clone(),
-                requested_lease_days: request.requested_lease_days,
-            }),
-        );
 
         let request_id = request.id.clone();
         // Evaluate the draft before adding its row to the repositories that
@@ -471,6 +460,25 @@ impl AppUseCase {
             &mut evaluation.tags,
         )
         .await;
+        // Rule `notify` messages ride on the submitted event, so they reach the
+        // notification channels exactly once, and only for a real request.
+        let submitted_event = new_global_domain_event(
+            actor,
+            DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
+                request_id: request.id.clone(),
+                library_id: request.library_id.clone(),
+                facet: request.facet.clone(),
+                title_name: request.title.clone(),
+                external_ids: request.external_ids.clone(),
+                poster_url: request.poster_url.clone(),
+                year: request.year,
+                requested_quality_profile_id: request.requested_quality_profile_id.clone(),
+                requested_quality_profile_name: request.requested_quality_profile_name.clone(),
+                requested_monitor_type: request.requested_monitor_type.clone(),
+                requested_lease_days: request.requested_lease_days,
+                rule_notifications: evaluation.shaping.rule_notifications(),
+            }),
+        );
 
         let submission = self
             .services
@@ -786,6 +794,8 @@ impl AppUseCase {
             decided_by_rule_set_ids: request.decided_by_rule_set_ids.clone(),
             policy_tags: approved_tags.clone(),
             reason_codes: Vec::new(),
+            // The approver's own picks are already applied above.
+            shaping: crate::request_rules::ResolvedShaping::default(),
         };
         let mut event_data = media_request_resolved_event_data(
             &request,
@@ -1233,41 +1243,38 @@ impl AppUseCase {
         // labels when the evaluation produced it, so a rule naming a tag nobody
         // defined cannot fail the approval it just granted, and the row, the
         // event and the title all carry the same list.
-
-        let approved_quality_profile_id =
-            request
-                .requested_quality_profile_id
-                .clone()
-                .ok_or_else(|| {
-                    AppError::validation_refused(
-                        crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_REQUIRED,
-                        "approved quality profile is required",
-                    )
-                })?;
-        let approved_quality_profile_name = request
-            .requested_quality_profile_name
-            .clone()
-            .ok_or_else(|| {
-                AppError::validation_refused(
-                    crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_NAME_REQUIRED,
-                    "approved quality profile name is required",
-                )
-            })?;
+        //
+        // A value the rules set takes the place of the requester's, through
+        // the same validators an approver's override goes through. Without one
+        // the requester's own pick is what the approval grants.
+        let shaping = &provenance.shaping;
         let approved_monitor_type = normalize_requested_monitor_type(
             &request.facet,
-            request.requested_monitor_type.clone(),
+            shaping
+                .monitor_type
+                .clone()
+                .or_else(|| request.requested_monitor_type.clone()),
         )?;
+        // A shaped monitor type is never `advanced`, so the requester's season
+        // or movie picks only survive when the rules left monitoring alone.
         let approved_monitor_selection = normalize_requested_monitor_selection(
             approved_monitor_type.as_deref(),
             request.requested_monitor_selection.clone(),
         )?;
-        // The requester's own lease is what a policy approval grants: nobody
-        // overrode it, so `approved` and `requested` are the same window.
-        let approved_lease_days = request.requested_lease_days;
+        let approved_lease_days = match shaping.lease_days {
+            Some(days) => crate::request_rules::validate_lease_days(days)?,
+            None => request.requested_lease_days,
+        };
         let (approved_required_audio_languages, approved_preferred_audio_languages) =
             crate::validated_title_audio_overrides(
-                request.requested_required_audio_languages.clone(),
-                request.requested_preferred_audio_languages.clone(),
+                shaping
+                    .required_audio_languages
+                    .clone()
+                    .or_else(|| request.requested_required_audio_languages.clone()),
+                shaping
+                    .preferred_audio_languages
+                    .clone()
+                    .or_else(|| request.requested_preferred_audio_languages.clone()),
             )?;
         let profile_reference_guard = self
             .runtime
@@ -1275,6 +1282,30 @@ impl AppUseCase {
             .quality_profile_reference_lock
             .lock()
             .await;
+        let (approved_quality_profile_id, approved_quality_profile_name) =
+            match &shaping.quality_profile {
+                Some((profile_id, _)) => self.quality_profile_snapshot(profile_id).await?,
+                None => (
+                    request
+                        .requested_quality_profile_id
+                        .clone()
+                        .ok_or_else(|| {
+                            AppError::validation_refused(
+                                crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_REQUIRED,
+                                "approved quality profile is required",
+                            )
+                        })?,
+                    request
+                        .requested_quality_profile_name
+                        .clone()
+                        .ok_or_else(|| {
+                            AppError::validation_refused(
+                                crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_NAME_REQUIRED,
+                                "approved quality profile name is required",
+                            )
+                        })?,
+                ),
+            };
         let mut new_title = media_request_to_new_title(
             &request,
             Some(&approved_quality_profile_id),
@@ -2314,7 +2345,11 @@ fn series_title_ref_from_external_ids(
     .then_some(series_ref)
 }
 
-#[derive(Clone, Debug)]
+/// The metadata one SMG read established for a request subject, in the shape
+/// a request keeps: what the request row stores and what the request rules
+/// read. It is staged in the store once per subject, and every preview and
+/// submit reads that staged record.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MediaRequestMetadataEnrichment {
     pub(crate) external_ids: Vec<ExternalId>,
     pub(crate) poster_url: Option<String>,
@@ -2329,7 +2364,7 @@ impl MediaRequestMetadataEnrichment {
     /// The enrichment we fall back to when SMG could not be reached or the subject could not be
     /// identified. It keeps today's behaviour for poster/overview/ratings (all absent, so the
     /// caller's own input wins) and says so explicitly in the snapshot.
-    fn unavailable(external_ids: Vec<ExternalId>, reason: &str) -> Self {
+    pub(crate) fn unavailable(external_ids: Vec<ExternalId>, reason: &str) -> Self {
         let mut snapshot = MediaRequestMetadataSnapshot::unavailable(reason);
         snapshot.captured_at = Some(Utc::now());
         Self {
@@ -2341,14 +2376,37 @@ impl MediaRequestMetadataEnrichment {
             snapshot,
         }
     }
+
+    /// True when nothing could be established for the subject.
+    fn is_unavailable(&self) -> bool {
+        self.snapshot
+            .is_missing(crate::media_requests::snapshot::SNAPSHOT_GROUP_ALL)
+    }
 }
 
-/// Cache key for one enrichment: the facet plus the request's normalized external identifiers.
-/// Sorted and joined so two drafts naming the same subject in a different order share one entry.
-pub(crate) fn media_request_enrichment_cache_key(
-    facet: &MediaFacet,
-    external_ids: &[ExternalId],
-) -> String {
+/// How long a staged record answers for its subject. Within it a preview, the
+/// submit that follows and a later request for the same subject read one SMG
+/// answer; after it the next staging asks SMG again, so a metadata correction
+/// reaches new requests within a day.
+pub const STAGED_REQUEST_METADATA_FRESH_FOR: chrono::Duration = chrono::Duration::hours(24);
+
+/// How long a staged record that established nothing answers. Long enough
+/// that a preview and the submit that follows it read the same outage; short
+/// enough that an SMG outage does not hold every later request for the
+/// subject once SMG is back.
+pub const STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR: chrono::Duration =
+    chrono::Duration::minutes(5);
+
+/// How long a staged record is kept before housekeeping removes it. A request
+/// row carries its own copy, so nothing reads a record this old.
+pub const STAGED_REQUEST_METADATA_RETENTION: chrono::Duration = chrono::Duration::days(7);
+
+/// The snapshot source of a preview whose subject was never staged.
+pub const SNAPSHOT_SOURCE_NOT_STAGED: &str = "not_staged";
+
+/// Staging key for one subject: the facet plus the request's normalized external identifiers.
+/// Sorted and joined so two drafts naming the same subject in a different order share one record.
+pub(crate) fn media_request_staging_key(facet: &MediaFacet, external_ids: &[ExternalId]) -> String {
     let mut parts = external_ids
         .iter()
         .map(|external_id| {
@@ -2364,31 +2422,354 @@ pub(crate) fn media_request_enrichment_cache_key(
     format!("{}|{}", facet.as_str(), parts.join(","))
 }
 
+/// One subject of a staging batch: the key its record is stored under, and
+/// what the key was built from.
+struct StagingSubject {
+    key: String,
+    facet: MediaFacet,
+    external_ids: Vec<ExternalId>,
+}
+
+/// Subjects staged per round of a batch: one staged-record read, at most one
+/// SMG movie read and one SMG series read, and one write.
+const STAGE_REQUEST_METADATA_BATCH: usize = 50;
+
+/// What a staged record still answers with, or `None` once it is stale or
+/// unreadable. A record that established nothing goes stale within minutes.
+fn fresh_staged_request_metadata(
+    record: &crate::StagedMediaRequestMetadata,
+    now: DateTime<Utc>,
+) -> Option<MediaRequestMetadataEnrichment> {
+    let age = now - record.staged_at;
+    if age >= STAGED_REQUEST_METADATA_FRESH_FOR {
+        return None;
+    }
+    let staged: MediaRequestMetadataEnrichment = serde_json::from_str(&record.payload_json).ok()?;
+    if staged.is_unavailable() && age >= STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR {
+        return None;
+    }
+    Some(staged)
+}
+
 impl AppUseCase {
-    /// Enrich a request draft, reading through the in-process enrichment cache.
+    /// Stage many subjects ahead of their submits with batched SMG reads, so
+    /// a list that files fifty requests asks SMG a handful of times instead
+    /// of once or twice per request. Each subject is a facet and the
+    /// identifiers its submit will stage under.
     ///
-    /// Pre-flight evaluation and the eventual submit both go through here, so a requester who
-    /// previews a decision and then submits it is judged against **one** SMG read (FR-021) — and
-    /// SMG sees one call, not one per keystroke-debounce.
-    pub(crate) async fn enrich_request_draft(
+    /// It is an optimisation only: a subject it leaves unstaged (an SMG read
+    /// that failed outright, a store that could not be read or written) is
+    /// staged by its own submit, exactly as before. A subject already staged
+    /// and fresh is not read again, the same as a submit.
+    pub(crate) async fn stage_request_metadata_batch(
+        &self,
+        subjects: Vec<(MediaFacet, Vec<ExternalId>)>,
+    ) {
+        let mut seen = std::collections::HashSet::new();
+        let subjects: Vec<StagingSubject> = subjects
+            .into_iter()
+            .filter_map(|(facet, external_ids)| {
+                let key = media_request_staging_key(&facet, &external_ids);
+                seen.insert(key.clone()).then_some(StagingSubject {
+                    key,
+                    facet,
+                    external_ids,
+                })
+            })
+            .collect();
+        if subjects.is_empty() {
+            return;
+        }
+        let language = self.metadata_language().await;
+        for chunk in subjects.chunks(STAGE_REQUEST_METADATA_BATCH) {
+            self.stage_request_metadata_chunk(chunk, &language).await;
+        }
+    }
+
+    async fn stage_request_metadata_chunk(&self, subjects: &[StagingSubject], language: &str) {
+        let store = &self.services.catalog.media_requests;
+        let keys: Vec<String> = subjects.iter().map(|subject| subject.key.clone()).collect();
+        let staged = match store.staged_metadata_many(&keys).await {
+            Ok(staged) => staged,
+            Err(error) => {
+                tracing::warn!(error = %error, "staged request metadata could not be read");
+                return;
+            }
+        };
+        let now = Utc::now();
+        let fresh: std::collections::HashSet<&str> = staged
+            .iter()
+            .filter(|record| fresh_staged_request_metadata(record, now).is_some())
+            .map(|record| record.staging_key.as_str())
+            .collect();
+
+        // A subject that names nothing SMG can look up, or whose facet has no
+        // handler, is left to its submit, which settles it without SMG.
+        let mut movies: Vec<(usize, crate::MovieTitleRef)> = Vec::new();
+        let mut series: Vec<(usize, crate::SeriesTitleRef)> = Vec::new();
+        for (index, subject) in subjects.iter().enumerate() {
+            if fresh.contains(subject.key.as_str()) {
+                continue;
+            }
+            match subject.facet {
+                MediaFacet::Movie => {
+                    if let Some(movie_ref) =
+                        movie_title_ref_from_external_ids(&subject.external_ids)
+                    {
+                        movies.push((index, movie_ref));
+                    }
+                }
+                MediaFacet::Series | MediaFacet::Anime => {
+                    if self.facet_registry.get(&subject.facet).is_some()
+                        && let Some(series_ref) =
+                            series_title_ref_from_external_ids(&subject.external_ids)
+                    {
+                        series.push((index, series_ref));
+                    }
+                }
+            }
+        }
+
+        let mut enrichments: Vec<(usize, MediaRequestMetadataEnrichment)> = Vec::new();
+        if !movies.is_empty() {
+            let refs: Vec<crate::MovieTitleRef> = movies
+                .iter()
+                .map(|(_, movie_ref)| movie_ref.clone())
+                .collect();
+            match self
+                .get_movie_titles_for_current_release_market(&refs, language)
+                .await
+            {
+                Ok(mut result) => {
+                    for (position, (index, _)) in movies.iter().enumerate() {
+                        let subject = &subjects[*index];
+                        let (hydration, raw_movie) = match result.by_ref_index.remove(&position) {
+                            Some(movie) => (
+                                Ok(crate::catalog::facets::handler::movie_to_hydration_result(
+                                    movie.clone(),
+                                    language,
+                                )),
+                                Some((movie, "smg_titles")),
+                            ),
+                            None => (
+                                Err(AppError::not_found_reason(crate::error_reasons::media_requests::MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND, "movie metadata response missing title".to_string())),
+                                None,
+                            ),
+                        };
+                        enrichments.push((
+                            *index,
+                            media_request_enrichment_from_hydration(
+                                &subject.facet,
+                                subject.external_ids.clone(),
+                                hydration,
+                                raw_movie,
+                            ),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        movies = refs.len(),
+                        "batched request metadata read failed for movies; each submit reads its own"
+                    );
+                }
+            }
+        }
+
+        if !series.is_empty() {
+            let gateway = self.services.library.metadata_gateway.as_ref();
+            // Only provider ids SMG may not hold yet (TMDB, IMDb): let SMG
+            // resolve and, when it can, create the series, then address it by
+            // its SMG title id. One call per facet for the whole chunk.
+            for facet in [MediaFacet::Series, MediaFacet::Anime] {
+                let unresolved: Vec<usize> = series
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (index, series_ref))| {
+                        subjects[*index].facet == facet
+                            && series_ref.smg_id.is_none()
+                            && series_ref.tvdb_id.is_none()
+                    })
+                    .map(|(position, _)| position)
+                    .collect();
+                for chunk in unresolved.chunks(crate::lists::gateway::RESOLVE_TITLES_BATCH) {
+                    let refs: Vec<_> = chunk
+                        .iter()
+                        .map(|position| {
+                            crate::lists::gateway::title_ref(
+                                &subjects[series[*position].0].external_ids,
+                            )
+                        })
+                        .collect();
+                    match gateway
+                        .resolve_titles(&refs, crate::lists::gateway::gateway_kind(&facet), true)
+                        .await
+                    {
+                        Ok(resolutions) => {
+                            for resolution in resolutions {
+                                if resolution.resolved
+                                    && let Some(position) = chunk.get(resolution.ref_index)
+                                    && series[*position].1.smg_id.is_none()
+                                {
+                                    series[*position].1.smg_id = resolution.smg_id;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                error = %error,
+                                facet = facet.as_str(),
+                                "media request series could not be resolved by provider id"
+                            );
+                        }
+                    }
+                }
+            }
+            let refs: Vec<crate::SeriesTitleRef> = series
+                .iter()
+                .map(|(_, series_ref)| series_ref.clone())
+                .collect();
+            match gateway.get_series_titles(&refs, language, true, true).await {
+                Ok(mut result) => {
+                    for (position, (index, _)) in series.iter().enumerate() {
+                        let subject = &subjects[*index];
+                        let hydration = result
+                            .by_ref_index
+                            .remove(&position)
+                            .map(|series| {
+                                crate::catalog::facets::handler::series_to_hydration_result(
+                                    series, language,
+                                )
+                            })
+                            .ok_or_else(|| {
+                                crate::catalog_workflow::series_missing_from_gateway(
+                                    &refs[position],
+                                )
+                            });
+                        enrichments.push((
+                            *index,
+                            media_request_enrichment_from_hydration(
+                                &subject.facet,
+                                subject.external_ids.clone(),
+                                hydration,
+                                None,
+                            ),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        series = refs.len(),
+                        "batched request metadata read failed for series; each submit reads its own"
+                    );
+                }
+            }
+        }
+
+        let staged_at = Utc::now();
+        let records: Vec<crate::StagedMediaRequestMetadata> = enrichments
+            .into_iter()
+            .filter_map(
+                |(index, enrichment)| match serde_json::to_string(&enrichment) {
+                    Ok(payload_json) => Some(crate::StagedMediaRequestMetadata {
+                        staging_key: subjects[index].key.clone(),
+                        payload_json,
+                        staged_at,
+                    }),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "request metadata could not be serialized");
+                        None
+                    }
+                },
+            )
+            .collect();
+        if records.is_empty() {
+            return;
+        }
+        if let Err(error) = store.stage_metadata_many(&records).await {
+            tracing::warn!(error = %error, "request metadata could not be staged");
+        }
+    }
+
+    /// The metadata staged for a subject, when a record exists and is still
+    /// fresh. Reads the store only: it never asks SMG and never writes, so a
+    /// preview can call it on every change. `None` covers a subject never
+    /// staged, a stale record, an unreadable one and a store that could not
+    /// be read. A record that established nothing goes stale within minutes,
+    /// so an SMG outage is not remembered for the subject's whole window.
+    pub(crate) async fn staged_request_metadata(
+        &self,
+        facet: &MediaFacet,
+        external_ids: &[ExternalId],
+    ) -> Option<MediaRequestMetadataEnrichment> {
+        let key = media_request_staging_key(facet, external_ids);
+        let record = match self
+            .services
+            .catalog
+            .media_requests
+            .staged_metadata(&key)
+            .await
+        {
+            Ok(record) => record?,
+            Err(error) => {
+                tracing::warn!(error = %error, "staged request metadata could not be read");
+                return None;
+            }
+        };
+        fresh_staged_request_metadata(&record, Utc::now())
+    }
+
+    /// Stage a subject's metadata: answer from the fresh staged record when
+    /// there is one, otherwise make the one SMG read and store what it
+    /// returned, a failure included.
+    ///
+    /// A failure is stored too, and deliberately: a preview that said
+    /// "metadata unavailable, will need approval" must not become an
+    /// auto-approval seconds later because the submit caught SMG on a good
+    /// beat. `retry_unavailable` is for the requester's own staging step,
+    /// which asks SMG again rather than reuse a record that established
+    /// nothing; a submit never retries, so it agrees with its preview.
+    ///
+    /// It does not single-flight: two simultaneous first stagings of one
+    /// subject both reach SMG and the later write wins. That is a duplicate
+    /// read, never a wrong answer.
+    pub(crate) async fn stage_request_metadata(
         &self,
         facet: &MediaFacet,
         external_ids: Vec<ExternalId>,
+        retry_unavailable: bool,
     ) -> MediaRequestMetadataEnrichment {
-        let key = media_request_enrichment_cache_key(facet, &external_ids);
-        if let Some(cached) = self.runtime.catalog.media_request_enrichment.get(&key) {
-            return (*cached).clone();
+        if let Some(staged) = self.staged_request_metadata(facet, &external_ids).await
+            && !(retry_unavailable && staged.is_unavailable())
+        {
+            return staged;
         }
+        let key = media_request_staging_key(facet, &external_ids);
         let enrichment = self
             .enrich_media_request_metadata(facet, external_ids)
             .await;
-        // Failures are cached too, and deliberately: a preview that said "metadata unavailable —
-        // will need approval" must not become an auto-approval seconds later just because the
-        // submit happened to catch SMG on a good beat. FR-021 is about agreement, not optimism.
-        self.runtime
-            .catalog
-            .media_request_enrichment
-            .insert(key, std::sync::Arc::new(enrichment.clone()));
+        match serde_json::to_string(&enrichment) {
+            Ok(payload_json) => {
+                if let Err(error) = self
+                    .services
+                    .catalog
+                    .media_requests
+                    .stage_metadata(&crate::StagedMediaRequestMetadata {
+                        staging_key: key,
+                        payload_json,
+                        staged_at: Utc::now(),
+                    })
+                    .await
+                {
+                    tracing::warn!(error = %error, "request metadata could not be staged");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "request metadata could not be serialized");
+            }
+        }
         enrichment
     }
 
@@ -2484,61 +2865,71 @@ impl AppUseCase {
                     .await
             }
         };
-        match result {
-            Ok(result) => {
-                let captured_at = Utc::now();
-                let overview = normalized_optional_string(result.metadata_update.overview.clone());
-                let poster_url =
-                    normalized_optional_string(result.metadata_update.poster_url.clone());
-                let background_url =
-                    normalized_optional_string(result.metadata_update.background_url.clone());
-                let rating_summary = result.metadata_update.ratings.clone().unwrap_or_default();
-                let snapshot = match (&raw_movie, &result.raw_series) {
-                    (Some((movie, source)), _) => {
-                        let mut snapshot =
-                            MediaRequestMetadataSnapshot::from_movie(movie, captured_at);
-                        snapshot.source = Some((*source).to_string());
-                        snapshot
-                    }
-                    (None, Some(series)) => {
-                        MediaRequestMetadataSnapshot::from_series(series, captured_at)
-                    }
-                    // Hydration succeeded but carried no raw metadata for this facet. That is a
-                    // wiring fault, not an SMG answer, so it is partial rather than empty.
-                    (None, None) => {
-                        tracing::warn!(
-                            facet = facet.as_str(),
-                            "media request hydration returned no raw metadata for the snapshot"
-                        );
-                        let mut snapshot =
-                            MediaRequestMetadataSnapshot::unavailable("raw_metadata_absent");
-                        snapshot.captured_at = Some(captured_at);
-                        snapshot
-                    }
-                };
-                let enriched =
-                    crate::catalog::facets::handler::external_ids_from_hydration_metadata(
-                        external_ids.clone(),
-                        &result.metadata_update,
-                    );
-                MediaRequestMetadataEnrichment {
-                    external_ids: normalize_media_request_external_ids(enriched)
-                        .unwrap_or(external_ids),
-                    poster_url,
-                    background_url,
-                    overview,
-                    rating_summary,
-                    snapshot,
+        media_request_enrichment_from_hydration(facet, external_ids, result, raw_movie)
+    }
+}
+
+/// The request shape of one subject's hydration: what the request row keeps
+/// and what the request rules read. `raw_movie` is the movie the hydration
+/// was built from, with the snapshot source it came by. A failed hydration
+/// yields the "enrichment failed" record.
+fn media_request_enrichment_from_hydration(
+    facet: &MediaFacet,
+    external_ids: Vec<ExternalId>,
+    result: AppResult<crate::catalog::facets::handler::HydrationResult>,
+    raw_movie: Option<(MovieMetadata, &'static str)>,
+) -> MediaRequestMetadataEnrichment {
+    match result {
+        Ok(result) => {
+            let captured_at = Utc::now();
+            let overview = normalized_optional_string(result.metadata_update.overview.clone());
+            let poster_url = normalized_optional_string(result.metadata_update.poster_url.clone());
+            let background_url =
+                normalized_optional_string(result.metadata_update.background_url.clone());
+            let rating_summary = result.metadata_update.ratings.clone().unwrap_or_default();
+            let snapshot = match (&raw_movie, &result.raw_series) {
+                (Some((movie, source)), _) => {
+                    let mut snapshot = MediaRequestMetadataSnapshot::from_movie(movie, captured_at);
+                    snapshot.source = Some((*source).to_string());
+                    snapshot
                 }
+                (None, Some(series)) => {
+                    MediaRequestMetadataSnapshot::from_series(series, &result.episodes, captured_at)
+                }
+                // Hydration succeeded but carried no raw metadata for this facet. That is a
+                // wiring fault, not an SMG answer, so it is partial rather than empty.
+                (None, None) => {
+                    tracing::warn!(
+                        facet = facet.as_str(),
+                        "media request hydration returned no raw metadata for the snapshot"
+                    );
+                    let mut snapshot =
+                        MediaRequestMetadataSnapshot::unavailable("raw_metadata_absent");
+                    snapshot.captured_at = Some(captured_at);
+                    snapshot
+                }
+            };
+            let enriched = crate::catalog::facets::handler::external_ids_from_hydration_metadata(
+                external_ids.clone(),
+                &result.metadata_update,
+            );
+            MediaRequestMetadataEnrichment {
+                external_ids: normalize_media_request_external_ids(enriched)
+                    .unwrap_or(external_ids),
+                poster_url,
+                background_url,
+                overview,
+                rating_summary,
+                snapshot,
             }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    facet = facet.as_str(),
-                    "failed to enrich media request external IDs from hydrated metadata"
-                );
-                MediaRequestMetadataEnrichment::unavailable(external_ids, "enrichment_failed")
-            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                facet = facet.as_str(),
+                "failed to enrich media request external IDs from hydrated metadata"
+            );
+            MediaRequestMetadataEnrichment::unavailable(external_ids, "enrichment_failed")
         }
     }
 }
@@ -2586,6 +2977,7 @@ fn media_request_submitted_event_data(
         requested_quality_profile_name,
         requested_monitor_type,
         requested_lease_days: request.requested_lease_days,
+        rule_notifications: Vec::new(),
     }
 }
 

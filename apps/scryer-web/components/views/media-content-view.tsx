@@ -77,6 +77,7 @@ import { TitleCastStrip } from "@/components/views/title-cast-strip";
 import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
 import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import type {
@@ -1193,7 +1194,7 @@ function TitleContextPanel({
     onImportQueued: reloadTitleAndDownloads,
   });
   const panelClassName = cn(
-    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1280px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
+    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1024px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
   );
   const moreLikeThisItems = React.useMemo(
@@ -1386,7 +1387,7 @@ function TitleContextPanel({
     >
       <div
         data-slot="title-context-scroll"
-        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[1280px]:overflow-y-auto sm:p-5 sm:pb-5"
+        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[1024px]:overflow-y-auto sm:p-5 sm:pb-5"
       >
         <div className="-mx-4 -mt-4 sm:-mx-5 sm:-mt-5">
           <TitleWorkspaceHero
@@ -1455,6 +1456,15 @@ function TitleContextPanel({
                     {pill}
                   </span>
                 ))}
+                {title.certificationLabel ? (
+                  <span
+                    id={selectorId("title-hero-certification", title.id)}
+                    title={title.certificationLabel}
+                    className="inline-flex h-6 max-w-[8rem] items-center truncate rounded-[5px] border border-white/25 px-1.5 text-[11px] font-bold tracking-wide text-[#e6ebf7]"
+                  >
+                    {title.certificationLabel}
+                  </span>
+                ) : null}
                 {heroMutedMetadata.map((pill, index) => (
                   <span
                     key={`${index}-${pill}`}
@@ -3172,7 +3182,7 @@ export function MediaContentView({
     void refreshTitles(nextQuery);
   }, [refreshTitles, setTitleFilter, titleFilter, titleFilterInputValue]);
 
-  const handleSelectedOverviewBackToList = React.useCallback(() => {
+  const handleOverviewTitleNotFound = React.useCallback(() => {
     onCloseOverview();
     void refreshTitles(titleFilterInputValue);
   }, [onCloseOverview, refreshTitles, titleFilterInputValue]);
@@ -3216,7 +3226,7 @@ export function MediaContentView({
       }
 
       event.preventDefault();
-      handleSelectedOverviewBackToList();
+      onCloseOverview();
     };
 
     window.addEventListener("keydown", handleSelectedOverviewEscape);
@@ -3224,7 +3234,7 @@ export function MediaContentView({
       window.removeEventListener("keydown", handleSelectedOverviewEscape);
   }, [
     activeOverviewTitleId,
-    handleSelectedOverviewBackToList,
+    onCloseOverview,
     selectedTitleLayoutActive,
     selectedTitleListDrawerModeActive,
   ]);
@@ -4270,8 +4280,8 @@ export function MediaContentView({
                         fullBleedHero
                         heroLeadingAction={titleListDisclosure}
                         initialEpisodeId={routeOverviewEpisodeId}
-                        onTitleNotFound={handleSelectedOverviewBackToList}
-                        onBackToList={handleSelectedOverviewBackToList}
+                        onTitleNotFound={handleOverviewTitleNotFound}
+                        onBackToList={onCloseOverview}
                         onTitleResolved={(resolvedTitle) => {
                           if (resolvedTitle.id !== seriesSidePanelTitleId) {
                             onOpenOverview(view, resolvedTitle);
@@ -4364,7 +4374,7 @@ export function MediaContentView({
                             selectedTitleListInlineActive ||
                               selectedTitlePosterInlineActive
                               ? "grid h-full items-stretch"
-                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[1280px]:overflow-hidden",
+                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[1024px]:overflow-hidden",
                           )
                         : "grid min-h-0 gap-4",
                       !selectedTitleLayoutActive &&

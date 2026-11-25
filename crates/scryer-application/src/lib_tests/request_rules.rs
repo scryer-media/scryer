@@ -1,5 +1,4 @@
-//! Request rules end to end: authoring, arbitration, and the request flow
-//! (spec 0003 FR-010…FR-016, FR-020, FR-021, FR-040, FR-041, FR-050).
+//! Request rules end to end: authoring, arbitration, and the request flow.
 //!
 //! The arbitration half is pure and table-driven. The flow half runs real
 //! submissions through `bootstrap_media_request_app` with the in-memory rule,
@@ -13,16 +12,18 @@ use super::*;
 mod failure_tests;
 use scryer_domain::{
     LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState, MediaRequestStatus,
-    RequestDecisionOutcome, RequestRuleEvaluationMode,
+    RequestDecisionOutcome,
 };
 use scryer_rules::request::{RequestRuleDecision, RequestVote};
+use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue};
 
 use crate::request_rules::arbitration::{
-    FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED,
-    FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER, ScopedError, ScopedVote, arbitrate,
+    ALL_FALLBACKS, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION,
+    FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL, FALLBACK_SHAPING_CONFLICT,
+    FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER, ScopedError, ScopedVote, arbitrate,
 };
 use crate::request_rules::{
-    RequestRuleDraft, RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRuleSample,
+    RequestRuleDraft, RequestRulePreviewRequest, RequestRulePreviewSource, RequestRuleSample,
 };
 
 // ── Matchers used throughout ────────────────────────────────────────────────
@@ -35,7 +36,7 @@ approve if {
 	input.request.origin == "manual"
 }
 
-tags contains "auto-approved" if {
+add_tags := ["auto-approved"] if {
 	input.request.origin == "manual"
 }
 "#;
@@ -49,11 +50,7 @@ manual if {
 	input.request.origin == "manual"
 }
 
-tags contains "auto-approved" if {
-	input.request.origin == "manual"
-}
-
-tags contains "nobody-defined-this" if {
+add_tags := ["auto-approved", "nobody-defined-this"] if {
 	input.request.origin == "manual"
 }
 "#;
@@ -99,14 +96,26 @@ fn vote(id: &str, vote: RequestVote, held: bool, tags: &[&str]) -> ScopedVote {
         rule_set_name: format!("rule {id}"),
         revision_number: 1,
         content_hash: format!("hash-{id}"),
-        mode: RequestRuleEvaluationMode::Enforce,
         decision: RequestRuleDecision {
             vote,
             reason_codes: vec![format!("{id}_reason")],
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            shaping: Default::default(),
+            notify: None,
             held,
         },
     }
+}
+
+fn shaping_vote(
+    id: &str,
+    vote_value: RequestVote,
+    head: RequestActionHead,
+    value: RequestHeadValue,
+) -> ScopedVote {
+    let mut scoped = vote(id, vote_value, false, &[]);
+    scoped.decision.shaping.set(head, Some(value));
+    scoped
 }
 
 fn error(id: &str) -> ScopedError {
@@ -115,7 +124,6 @@ fn error(id: &str) -> ScopedError {
         rule_set_name: format!("rule {id}"),
         revision_number: 1,
         content_hash: format!("hash-{id}"),
-        mode: RequestRuleEvaluationMode::Enforce,
         message: "timed out".to_string(),
     }
 }
@@ -288,6 +296,191 @@ fn tags_are_collected_from_every_rule_that_ran_in_first_appearance_order() {
     assert_eq!(arbitration.tags, vec!["kids", "family", "flagged"]);
 }
 
+#[test]
+fn fallback_codes_are_distinct() {
+    let unique: std::collections::BTreeSet<&str> = ALL_FALLBACKS.into_iter().collect();
+    assert_eq!(unique.len(), ALL_FALLBACKS.len());
+}
+
+#[test]
+fn rules_that_agree_on_a_shaping_value_still_approve() {
+    let votes = vec![
+        shaping_vote(
+            "a",
+            RequestVote::Approve,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(30),
+        ),
+        shaping_vote(
+            "b",
+            RequestVote::Abstain,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(30),
+        ),
+    ];
+    let arbitration = arbitrate(&votes, &[], false);
+    assert_eq!(
+        arbitration.policy_outcome,
+        RequestDecisionOutcome::AutoApprove
+    );
+    assert_eq!(arbitration.fallback_reason, None);
+    let shaped = arbitration
+        .shaping
+        .value(RequestActionHead::SetLeaseDays)
+        .expect("agreed value kept");
+    assert_eq!(shaped.value, RequestHeadValue::Number(30));
+    // The first rule to set the value is the one the trace names.
+    assert_eq!(shaped.rule_set_id, "a");
+    assert!(arbitration.shaping.conflicts.is_empty());
+}
+
+#[test]
+fn rules_that_disagree_on_a_shaping_value_need_a_person() {
+    let votes = vec![
+        shaping_vote(
+            "a",
+            RequestVote::Approve,
+            RequestActionHead::SetQualityProfile,
+            RequestHeadValue::Text("HD".to_string()),
+        ),
+        shaping_vote(
+            "b",
+            RequestVote::Approve,
+            RequestActionHead::SetQualityProfile,
+            RequestHeadValue::Text("4K".to_string()),
+        ),
+        shaping_vote(
+            "c",
+            RequestVote::Abstain,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(7),
+        ),
+    ];
+    let arbitration = arbitrate(&votes, &[], true);
+    assert_eq!(
+        arbitration.policy_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(arbitration.fallback_reason, Some(FALLBACK_SHAPING_CONFLICT));
+    assert_eq!(arbitration.deciding_rule_set_ids, vec!["a", "b"]);
+    assert_eq!(arbitration.shaping.conflicts.len(), 1);
+    assert_eq!(
+        arbitration.shaping.conflicts[0].head,
+        RequestActionHead::SetQualityProfile
+    );
+    assert!(
+        arbitration
+            .shaping
+            .value(RequestActionHead::SetQualityProfile)
+            .is_none()
+    );
+    // The head nobody disagreed on keeps its value for the approver form.
+    assert!(
+        arbitration
+            .shaping
+            .value(RequestActionHead::SetLeaseDays)
+            .is_some()
+    );
+}
+
+#[test]
+fn a_shaping_conflict_does_not_override_a_denial() {
+    let votes = vec![
+        shaping_vote(
+            "a",
+            RequestVote::Deny,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(30),
+        ),
+        shaping_vote(
+            "b",
+            RequestVote::Abstain,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(60),
+        ),
+    ];
+    let arbitration = arbitrate(&votes, &[], false);
+    assert_eq!(arbitration.policy_outcome, RequestDecisionOutcome::Deny);
+    assert_eq!(arbitration.fallback_reason, None);
+    assert_eq!(arbitration.deciding_rule_set_ids, vec!["a"]);
+}
+
+#[test]
+fn a_held_rule_contributes_no_shaping() {
+    let mut held = shaping_vote(
+        "h",
+        RequestVote::Manual,
+        RequestActionHead::SetLeaseDays,
+        RequestHeadValue::Number(60),
+    );
+    held.decision.held = true;
+    let votes = vec![
+        shaping_vote(
+            "a",
+            RequestVote::Approve,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(30),
+        ),
+        held,
+    ];
+    let arbitration = arbitrate(&votes, &[], false);
+    assert_eq!(arbitration.fallback_reason, Some(FALLBACK_HELD));
+    assert!(arbitration.shaping.conflicts.is_empty());
+    assert_eq!(
+        arbitration
+            .shaping
+            .value(RequestActionHead::SetLeaseDays)
+            .map(|shaped| shaped.value.clone()),
+        Some(RequestHeadValue::Number(30))
+    );
+}
+
+#[test]
+fn an_invalid_shaping_value_turns_an_approval_into_manual_review() {
+    let votes = vec![
+        shaping_vote(
+            "a",
+            RequestVote::Approve,
+            RequestActionHead::SetMonitor,
+            RequestHeadValue::Text("future_episodes".to_string()),
+        ),
+        shaping_vote(
+            "b",
+            RequestVote::Approve,
+            RequestActionHead::SetLeaseDays,
+            RequestHeadValue::Number(30),
+        ),
+    ];
+    let mut arbitration = arbitrate(&votes, &[], false);
+    arbitration.refuse_invalid_shaping(&[RequestActionHead::SetMonitor]);
+    assert_eq!(
+        arbitration.policy_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(arbitration.fallback_reason, Some(FALLBACK_SHAPING_INVALID));
+    assert_eq!(arbitration.deciding_rule_set_ids, vec!["a"]);
+    assert_eq!(arbitration.shaping.invalid.len(), 1);
+    assert!(
+        arbitration
+            .shaping
+            .value(RequestActionHead::SetMonitor)
+            .is_none()
+    );
+}
+
+#[test]
+fn notifications_are_collected_once_per_rule_that_ran() {
+    let mut first = vote("a", RequestVote::Approve, false, &[]);
+    first.decision.notify = Some("Approved for the kids' library".to_string());
+    let mut held = vote("h", RequestVote::Manual, true, &[]);
+    held.decision.notify = Some("never sent".to_string());
+    let arbitration = arbitrate(&[first, held], &[], false);
+    let notifications = arbitration.shaping.rule_notifications();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].rule_set_name, "rule a");
+    assert_eq!(notifications[0].text, "Approved for the kids' library");
+}
+
 // ── Authoring ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -303,18 +496,15 @@ async fn a_new_rule_set_is_stored_disabled_and_loads_nothing() {
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
         .expect("rule set should be created");
 
     assert!(!detail.rule_set.enabled);
-    assert_eq!(
-        detail.rule_set.evaluation_mode,
-        RequestRuleEvaluationMode::Disabled
-    );
     assert_eq!(detail.revision.revision_number, 1);
-    assert!(!detail.revision.matcher_content_hash.is_empty());
+    assert!(!detail.revision.source_content_hash.is_empty());
     // A disabled rule is not compiled at all, so the engine is still empty.
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
 }
@@ -330,7 +520,6 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
         .await
         .expect("enabling should succeed");
     assert!(enabled.enabled);
-    assert_eq!(enabled.evaluation_mode, RequestRuleEvaluationMode::Enforce);
 
     let snapshot = harness.app.request_rules_engine_snapshot();
     assert!(!snapshot.is_empty());
@@ -338,7 +527,6 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
         .scopes
         .get(&detail.rule_set.id)
         .expect("the enabled rule is loaded");
-    assert_eq!(scope.mode, RequestRuleEvaluationMode::Enforce);
     assert_eq!(scope.revision_number, 1);
 
     // …and disabling it takes it back out.
@@ -348,11 +536,116 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
         .await
         .expect("disabling should succeed");
     assert!(!disabled.enabled);
-    assert_eq!(
-        disabled.evaluation_mode,
-        RequestRuleEvaluationMode::Disabled
-    );
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
+}
+
+#[tokio::test]
+async fn the_engine_reads_watchlists_only_while_a_loaded_rule_may_use_them() {
+    const READS_WATCHLIST: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.facts.on_requester_watchlist == true
+}
+"#;
+    let harness = bootstrap_media_request_app();
+    let plain = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &plain.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert!(
+        !harness
+            .app
+            .request_rules_engine_snapshot()
+            .fact_reads
+            .watchlist
+    );
+
+    let watching = create_rule(&harness, "Watchlisted titles", READS_WATCHLIST).await;
+    // A disabled rule is not loaded, so it cannot need the read.
+    assert!(
+        !harness
+            .app
+            .request_rules_engine_snapshot()
+            .fact_reads
+            .watchlist
+    );
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &watching.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert!(
+        harness
+            .app
+            .request_rules_engine_snapshot()
+            .fact_reads
+            .watchlist
+    );
+}
+
+#[tokio::test]
+async fn the_engine_reads_only_the_fact_families_a_loaded_rule_may_use() {
+    use crate::request_rules::facts::RequestFactReads;
+    const READS_DEMAND: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.facts.other_requester_count > 1
+}
+"#;
+    const READS_LIBRARY_AND_QUALITY: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.facts.library_title_count < 100
+	input.observations.quality_profile_tiers.status == "known"
+}
+"#;
+    let harness = bootstrap_media_request_app();
+    let plain = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &plain.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert_eq!(
+        harness.app.request_rules_engine_snapshot().fact_reads,
+        RequestFactReads::NONE
+    );
+
+    let demand = create_rule(&harness, "Popular titles", READS_DEMAND).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &demand.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert_eq!(
+        harness.app.request_rules_engine_snapshot().fact_reads,
+        RequestFactReads {
+            catalog: true,
+            ..RequestFactReads::NONE
+        }
+    );
+
+    // A fact named under observations counts as read too.
+    let anything = create_rule(&harness, "Small libraries", READS_LIBRARY_AND_QUALITY).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &anything.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert_eq!(
+        harness.app.request_rules_engine_snapshot().fact_reads,
+        RequestFactReads {
+            catalog: true,
+            library_title_count: true,
+            quality: true,
+            ..RequestFactReads::NONE
+        }
+    );
 }
 
 #[tokio::test]
@@ -380,7 +673,7 @@ async fn enabling_a_rule_set_needs_catalog_settings_authority() {
 }
 
 #[tokio::test]
-async fn a_person_targeting_matcher_needs_permission_authority() {
+async fn a_person_targeting_source_needs_permission_authority() {
     let harness = bootstrap_media_request_app();
 
     // The requester holds `manage_catalog_settings` but not `manage_permissions`.
@@ -394,6 +687,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
                 rego_source: PERSON_TARGETED.to_string(),
                 library_ids: Vec::new(),
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
@@ -415,6 +709,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
                 rego_source: PERSON_TARGETED.to_string(),
                 library_ids: Vec::new(),
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
@@ -431,6 +726,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
                 rego_source: DENY_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
@@ -438,7 +734,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
 }
 
 #[tokio::test]
-async fn an_invalid_matcher_is_refused_with_the_reference_wording() {
+async fn an_invalid_source_is_refused_with_the_reference_wording() {
     let harness = bootstrap_media_request_app();
     let error = harness
         .app
@@ -452,6 +748,7 @@ async fn an_invalid_matcher_is_refused_with_the_reference_wording() {
                         .to_string(),
                 library_ids: Vec::new(),
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
@@ -464,13 +761,13 @@ async fn an_invalid_matcher_is_refused_with_the_reference_wording() {
 }
 
 #[tokio::test]
-async fn editing_a_matcher_appends_a_revision_and_leaves_its_predecessor_alone() {
+async fn editing_a_source_appends_a_revision_and_leaves_its_predecessor_alone() {
     let harness = bootstrap_media_request_app();
     let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
 
     let updated = harness
         .app
-        .update_request_rule_matcher(&harness.manager, &detail.rule_set.id, DENY_EVERYTHING)
+        .update_request_rule_source(&harness.manager, &detail.rule_set.id, DENY_EVERYTHING, None)
         .await
         .expect("matcher edit should succeed");
     assert_eq!(updated.revision.revision_number, 2);
@@ -487,8 +784,8 @@ async fn editing_a_matcher_appends_a_revision_and_leaves_its_predecessor_alone()
         .find(|revision| revision.revision_number == 1)
         .expect("revision 1 survives");
     assert_eq!(
-        first.matcher_content_hash,
-        detail.revision.matcher_content_hash
+        first.source_content_hash,
+        detail.revision.source_content_hash
     );
 }
 
@@ -508,9 +805,50 @@ async fn deleting_a_rule_set_keeps_the_decisions_it_made() {
         .await
         .expect("delete should succeed");
 
-    // The trace outlives the rule (FR-016) and the engine no longer holds it.
+    // The trace outlives the rule and the engine no longer holds it.
     assert_eq!(harness.request_rule_decisions.recorded().await.len(), 1);
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
+}
+
+/// Every application permission the account holds reaches the rule, not a
+/// hand-picked subset of them.
+#[tokio::test]
+async fn previewing_lists_every_app_permission_the_requester_holds() {
+    let harness = bootstrap_media_request_app();
+    harness
+        .app
+        .services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(
+            &harness.user.id,
+            scryer_domain::AppPermissionMask::MANAGE_LISTS,
+        )
+        .await
+        .expect("grant the requester one app permission");
+    harness.users.store.lock().await.push(harness.user.clone());
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preview = harness
+        .app
+        .preview_request_rule(
+            &harness.manager,
+            RequestRulePreviewRequest {
+                source: RequestRulePreviewSource::Inline {
+                    rego_source: APPROVE_EVERYTHING.to_string(),
+                },
+                sample: sample(&harness, &library_id, 9043),
+            },
+        )
+        .await
+        .expect("inline preview should evaluate");
+
+    let input: serde_json::Value =
+        serde_json::from_str(&preview.input_json).expect("the rendered input is JSON");
+    assert_eq!(
+        input["requester"]["app_permissions"],
+        serde_json::json!(["manage_lists"])
+    );
 }
 
 #[tokio::test]
@@ -525,7 +863,7 @@ async fn previewing_reports_the_vote_the_tags_and_the_rendered_input() {
         .preview_request_rule(
             &harness.manager,
             RequestRulePreviewRequest {
-                matcher: RequestRulePreviewMatcher::Stored {
+                source: RequestRulePreviewSource::Stored {
                     rule_set_id: detail.rule_set.id.clone(),
                 },
                 sample: sample(&harness, &library_id, 9041),
@@ -546,7 +884,7 @@ async fn previewing_reports_the_vote_the_tags_and_the_rendered_input() {
         .preview_request_rule(
             &harness.manager,
             RequestRulePreviewRequest {
-                matcher: RequestRulePreviewMatcher::Inline {
+                source: RequestRulePreviewSource::Inline {
                     rego_source: DENY_EVERYTHING.to_string(),
                 },
                 sample: sample(&harness, &library_id, 9041),
@@ -580,9 +918,10 @@ async fn validating_a_source_reports_errors_without_storing_anything() {
     let harness = bootstrap_media_request_app();
     let result = harness
         .app
-        .validate_request_rule_source(&harness.manager, APPROVE_EVERYTHING)
+        .validate_request_rule_source(&harness.manager, APPROVE_EVERYTHING, &[])
         .await
-        .expect("validation should run");
+        .expect("validation should run")
+        .result;
     assert!(result.valid, "unexpected errors: {:?}", result.errors);
 
     let broken = harness
@@ -590,17 +929,19 @@ async fn validating_a_source_reports_errors_without_storing_anything() {
         .validate_request_rule_source(
             &harness.manager,
             "package rules\nimport rego.v1\n\nreasons contains \"x\" if { true }\n",
+            &[],
         )
         .await
-        .expect("validation should run");
+        .expect("validation should run")
+        .result;
     assert!(!broken.valid);
     assert!(
         broken
-            .errors
+            .diagnostics
             .iter()
-            .any(|error| error.contains("can never vote")),
-        "unexpected errors: {:?}",
-        broken.errors
+            .any(|diagnostic| diagnostic.code == scryer_rules::diagnostic_codes::RULE_VOTE_REQUIRED),
+        "unexpected diagnostics: {:?}",
+        broken.diagnostics
     );
     assert!(
         harness
@@ -671,7 +1012,6 @@ async fn an_enabled_rule_decides_with_no_instance_switch_and_stops_once_disabled
 
     let traces = harness.request_rule_decisions.recorded().await;
     assert_eq!(traces.len(), 1);
-    assert_eq!(traces[0].mode, RequestRuleEvaluationMode::Enforce);
     assert_eq!(traces[0].effective_outcome, RequestDecisionOutcome::Deny);
 
     harness
@@ -679,6 +1019,16 @@ async fn an_enabled_rule_decides_with_no_instance_switch_and_stops_once_disabled
         .set_request_rule_enabled(&harness.manager, &detail.rule_set.id, false)
         .await
         .expect("disabling should succeed");
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9045))
+        .await
+        .expect("pre-flight should answer");
+    assert!(
+        !preflight.rules_consulted,
+        "a disabled rule casts no vote, so no rule is consulted"
+    );
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::ManualReview);
     let second = submit(&harness, &library_id, 9045, None).await;
 
     let requests = harness.media_requests.requests.lock().await;
@@ -850,7 +1200,7 @@ async fn a_held_rule_never_approves() {
     assert_eq!(
         requests[0].status,
         MediaRequestStatus::Pending,
-        "an unobservable fact must never read as an approval (FR-012)"
+        "an unobservable fact must never read as an approval"
     );
     drop(requests);
     assert!(harness.titles.store.lock().await.is_empty());
@@ -866,7 +1216,10 @@ async fn a_held_rule_never_approves() {
     assert_eq!(votes[0]["vote"], "manual");
     assert_eq!(votes[0]["held"], true);
     assert_eq!(votes[0]["rule_set_id"], detail.rule_set.id);
-    assert_eq!(votes[0]["mode"], "enforce");
+    assert!(
+        votes[0].get("mode").is_none(),
+        "a recorded vote carries no evaluation mode"
+    );
     assert!(
         votes[0].get("error").is_none(),
         "a held rule is not an errored rule"
@@ -924,6 +1277,7 @@ async fn a_library_scoped_rule_does_not_vote_on_another_librarys_request() {
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: vec![series_library],
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
@@ -1012,6 +1366,18 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     let mut input = media_request_input(library_id, 9052);
     input.requested_lease_days = Some(21);
 
+    // The request dialog stages the subject when it opens, then previews.
+    harness
+        .app
+        .stage_my_request_metadata(
+            &harness.user,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids.clone(),
+        )
+        .await
+        .expect("staging should succeed");
+
     let preflight = harness
         .app
         .preview_my_request_decision(&harness.user, input.clone())
@@ -1020,10 +1386,7 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
     assert_eq!(preflight.tags, vec!["auto-approved"]);
     assert!(!preflight.metadata_partial);
-    assert_eq!(
-        preflight.evaluation_mode,
-        RequestRuleEvaluationMode::Enforce
-    );
+    assert!(preflight.rules_consulted);
 
     harness
         .app
@@ -1036,15 +1399,258 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     assert_eq!(requests[0].policy_tags, preflight.tags);
     drop(requests);
 
-    // The pre-flight trace is inspectable but cannot be mistaken for a decision
-    // about a submitted request.
+    // Only the submit keeps a trace; the pre-flight persisted nothing.
     let traces = harness.request_rule_decisions.recorded().await;
-    assert_eq!(traces.len(), 2);
-    assert!(traces.iter().any(|trace| {
-        trace
-            .request_id
-            .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX)
-    }));
+    assert_eq!(traces.len(), 1);
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+    assert_eq!(traces[0].request_id, request_id);
+}
+
+#[tokio::test]
+async fn preflight_writes_no_decision_trace() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9054);
+    for lease in [Some(7), Some(14), None] {
+        input.requested_lease_days = lease;
+        let preflight = harness
+            .app
+            .preview_my_request_decision(&harness.user, input.clone())
+            .await
+            .expect("pre-flight should answer");
+        assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
+        assert!(preflight.rules_consulted);
+    }
+    assert!(
+        harness.request_rule_decisions.recorded().await.is_empty(),
+        "a preview keeps no trace and writes no rule set link"
+    );
+    assert_eq!(
+        harness
+            .app
+            .request_rule_decision_counts(
+                &harness.manager,
+                std::slice::from_ref(&detail.rule_set.id)
+            )
+            .await
+            .expect("counts")
+            .get(&detail.rule_set.id)
+            .copied()
+            .unwrap_or(0),
+        0
+    );
+}
+
+#[tokio::test]
+async fn rule_decision_counts_are_one_batched_read_with_zero_for_unused_rules() {
+    let harness = bootstrap_media_request_app();
+    let trace = |id: &str, votes: &str| scryer_domain::RequestRuleDecisionRecord {
+        id: id.to_string(),
+        request_id: format!("request-{id}"),
+        evaluated_at: chrono::Utc::now(),
+        effective_outcome: RequestDecisionOutcome::AutoApprove,
+        policy_outcome: RequestDecisionOutcome::AutoApprove,
+        fallback_reason: None,
+        votes_json: votes.to_string(),
+        tags: Vec::new(),
+        shaping_json: None,
+        input_hash: String::new(),
+        input_schema_version: 1,
+        created_at: chrono::Utc::now(),
+    };
+    for (id, votes) in [
+        ("d1", r#"[{"rule_set_id":"rule-a"}]"#),
+        (
+            "d2",
+            r#"[{"rule_set_id":"rule-a"},{"rule_set_id":"rule-b"}]"#,
+        ),
+        ("d3", r#"[{"rule_set_id":"rule-a"}]"#),
+    ] {
+        harness.request_rule_decisions.seed(trace(id, votes)).await;
+    }
+    let ids = ["rule-a", "rule-b", "rule-unused"].map(str::to_string);
+
+    let counts = harness
+        .app
+        .request_rule_decision_counts(&harness.manager, &ids)
+        .await
+        .expect("counts");
+
+    assert_eq!(
+        counts,
+        std::collections::HashMap::from([
+            ("rule-a".to_string(), 3),
+            ("rule-b".to_string(), 1),
+            ("rule-unused".to_string(), 0),
+        ])
+    );
+    assert_eq!(
+        harness
+            .request_rule_decisions
+            .count_batches
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+
+    // The permission check still comes first.
+    let mut viewer = test_admin_user();
+    viewer.id = "viewer".to_string();
+    viewer.authorization = scryer_domain::UserAuthorization {
+        app: scryer_domain::AppPermissionMask::NONE,
+        loaded: true,
+        ..Default::default()
+    };
+    assert!(
+        harness
+            .app
+            .request_rule_decision_counts(&viewer, &ids)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn housekeeping_purges_only_preflight_traces() {
+    let harness = bootstrap_media_request_app();
+    let trace = |id: String, request_id: String| scryer_domain::RequestRuleDecisionRecord {
+        id,
+        request_id,
+        evaluated_at: chrono::Utc::now(),
+        effective_outcome: RequestDecisionOutcome::AutoApprove,
+        policy_outcome: RequestDecisionOutcome::AutoApprove,
+        fallback_reason: None,
+        votes_json: "[]".to_string(),
+        tags: Vec::new(),
+        shaping_json: None,
+        input_hash: String::new(),
+        input_schema_version: 1,
+        created_at: chrono::Utc::now(),
+    };
+    // More than two batches, so the pass loops and stops on a short batch.
+    for index in 0..1_203 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("decision-preflight-{index}"),
+                format!(
+                    "{}{index}",
+                    crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX
+                ),
+            ))
+            .await;
+    }
+    for index in 0..4 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("decision-real-{index}"),
+                format!("request-real-{index}"),
+            ))
+            .await;
+    }
+
+    assert_eq!(
+        harness.app.purge_preflight_request_rule_traces().await,
+        1_203
+    );
+    assert_eq!(harness.app.purge_preflight_request_rule_traces().await, 0);
+    let kept: Vec<String> = harness
+        .request_rule_decisions
+        .recorded()
+        .await
+        .into_iter()
+        .map(|trace| trace.id)
+        .collect();
+    assert_eq!(
+        kept,
+        vec![
+            "decision-real-0",
+            "decision-real-1",
+            "decision-real-2",
+            "decision-real-3",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn housekeeping_keeps_the_newest_three_traces_of_each_rule_set() {
+    let harness = bootstrap_media_request_app();
+    let base = chrono::Utc::now() - chrono::Duration::days(1);
+    let trace = |id: String, minute: i64, votes_json: &str| {
+        let evaluated_at = base + chrono::Duration::minutes(minute);
+        scryer_domain::RequestRuleDecisionRecord {
+            request_id: format!("request-{id}"),
+            id,
+            evaluated_at,
+            effective_outcome: RequestDecisionOutcome::AutoApprove,
+            policy_outcome: RequestDecisionOutcome::AutoApprove,
+            fallback_reason: None,
+            votes_json: votes_json.to_string(),
+            tags: Vec::new(),
+            shaping_json: None,
+            input_hash: String::new(),
+            input_schema_version: 1,
+            created_at: evaluated_at,
+        }
+    };
+    // More than one store call's worth for one rule set, so the pass loops.
+    for index in 0..5_010 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("busy-{index:05}"),
+                index,
+                r#"[{"rule_set_id":"busy"}]"#,
+            ))
+            .await;
+    }
+    for index in 0..2 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("quiet-{index}"),
+                -50 + index,
+                r#"[{"rule_set_id":"quiet"}]"#,
+            ))
+            .await;
+    }
+    // No rule set voted in these: a group of their own.
+    for index in 0..5 {
+        harness
+            .request_rule_decisions
+            .seed(trace(format!("unlinked-{index}"), -500 + index, "[]"))
+            .await;
+    }
+
+    assert_eq!(
+        harness.app.purge_superseded_request_rule_traces().await,
+        5_009
+    );
+    assert_eq!(harness.app.purge_superseded_request_rule_traces().await, 0);
+    let mut kept: Vec<String> = harness
+        .request_rule_decisions
+        .recorded()
+        .await
+        .into_iter()
+        .map(|trace| trace.id)
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        vec![
+            "busy-05007",
+            "busy-05008",
+            "busy-05009",
+            "quiet-0",
+            "quiet-1",
+            "unlinked-2",
+            "unlinked-3",
+            "unlinked-4",
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1828,6 +2434,7 @@ async fn create_rule(
                 rego_source: source.to_string(),
                 library_ids: Vec::new(),
                 applicability: scryer_domain::RequestRuleApplicability::Acquisition,
+                builder_model: None,
             },
         )
         .await
@@ -2064,4 +2671,972 @@ async fn preflight_and_submit_see_the_same_audio_facts() {
     let requests = harness.media_requests.requests.lock().await;
     assert_eq!(requests[0].status, MediaRequestStatus::Rejected);
     assert_eq!(requests[1].status, MediaRequestStatus::Pending);
+}
+
+// ── Shaping heads ───────────────────────────────────────────────────────────
+
+/// Approves every manual request into a seven-day lease on the 4k profile,
+/// tags it, and adds a line to the submission notification.
+const APPROVE_SHAPED: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.request.origin == "manual"
+}
+
+set_lease_days := 7 if {
+	input.request.origin == "manual"
+}
+
+set_quality_profile := "4K" if {
+	input.request.origin == "manual"
+}
+
+notify := "Short lease applied" if {
+	input.request.origin == "manual"
+}
+"#;
+
+/// The same shaping, but leaves the request for a person.
+const MANUAL_SHAPED: &str = r#"package rules
+import rego.v1
+
+manual if {
+	input.request.origin == "manual"
+}
+
+set_lease_days := 7 if {
+	input.request.origin == "manual"
+}
+"#;
+
+fn submitted_rule_notifications(
+    events: &[scryer_domain::DomainEvent],
+    request_id: &str,
+) -> Vec<scryer_domain::RequestRuleNotification> {
+    events
+        .iter()
+        .find_map(|event| match &event.payload {
+            scryer_domain::DomainEventPayload::MediaRequestSubmitted(data)
+                if data.request_id == request_id =>
+            {
+                Some(data.rule_notifications.clone())
+            }
+            _ => None,
+        })
+        .expect("a submitted event for the request")
+}
+
+#[tokio::test]
+async fn an_automatic_approval_applies_the_shaping_and_traces_who_set_it() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Short leases", APPROVE_SHAPED).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9301, Some(30)).await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Approved);
+    // The rule's lease replaces the 30 days asked for.
+    assert_eq!(request.requested_lease_days, Some(30));
+    assert_eq!(request.approved_lease_days, Some(7));
+    assert_eq!(request.approved_quality_profile_id.as_deref(), Some("4k"));
+    assert_eq!(request.approved_quality_profile_name.as_deref(), Some("4K"));
+    drop(requests);
+
+    let claims = harness.lifecycle_claims.all().await;
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].duration_days, Some(7));
+
+    let decisions = harness.request_rule_decisions.recorded().await;
+    let shaping: crate::request_rules::ArbitratedShaping = serde_json::from_str(
+        decisions[0]
+            .shaping_json
+            .as_deref()
+            .expect("the trace records the shaping"),
+    )
+    .expect("the shaping reads back");
+    let lease = shaping
+        .value(RequestActionHead::SetLeaseDays)
+        .expect("the lease is traced");
+    assert_eq!(lease.rule_set_id, detail.rule_set.id);
+    assert_eq!(lease.rule_set_name, "Short leases");
+
+    // The notification text rides on the submitted event, attributed.
+    let events = harness.domain_events.events.lock().await;
+    let notifications = submitted_rule_notifications(&events, &request_id);
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].rule_set_name, "Short leases");
+    assert_eq!(notifications[0].text, "Short lease applied");
+}
+
+#[tokio::test]
+async fn a_lease_of_zero_days_approves_forever_and_writes_no_claim() {
+    let harness = bootstrap_media_request_app();
+    let source = APPROVE_SHAPED.replace("set_lease_days := 7", "set_lease_days := 0");
+    let detail = create_rule(&harness, "Keep forever", &source).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9302, Some(30)).await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Approved);
+    assert_eq!(request.approved_lease_days, None);
+    drop(requests);
+    assert!(harness.lifecycle_claims.all().await.is_empty());
+}
+
+#[tokio::test]
+async fn manual_review_keeps_the_shaping_for_the_approver_and_applies_nothing() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Suggest a lease", MANUAL_SHAPED).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9303, Some(30)).await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Pending);
+    assert_eq!(request.approved_lease_days, None);
+    assert!(request.created_title_id.is_none());
+    drop(requests);
+    assert!(harness.lifecycle_claims.all().await.is_empty());
+
+    let decisions = harness.request_rule_decisions.recorded().await;
+    let shaping: crate::request_rules::ArbitratedShaping =
+        serde_json::from_str(decisions[0].shaping_json.as_deref().expect("stored"))
+            .expect("the shaping reads back");
+    assert_eq!(
+        shaping
+            .value(RequestActionHead::SetLeaseDays)
+            .map(|shaped| shaped.value.clone()),
+        Some(RequestHeadValue::Number(7))
+    );
+}
+
+#[tokio::test]
+async fn a_preflight_shows_the_shaping_but_sends_no_notification() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Short leases", APPROVE_SHAPED).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9304);
+    input.requested_lease_days = Some(30);
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, input)
+        .await
+        .expect("preflight runs");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
+    assert_eq!(
+        preflight
+            .shaping
+            .value(RequestActionHead::SetLeaseDays)
+            .map(|shaped| shaped.value.clone()),
+        Some(RequestHeadValue::Number(7))
+    );
+    // Nothing was submitted, so nothing was announced.
+    assert!(
+        !harness
+            .domain_events
+            .events
+            .lock()
+            .await
+            .iter()
+            .any(|event| matches!(
+                event.payload,
+                scryer_domain::DomainEventPayload::MediaRequestSubmitted(_)
+            ))
+    );
+}
+
+#[tokio::test]
+async fn a_shaping_value_this_instance_cannot_apply_is_refused_at_save_with_its_location() {
+    let harness = bootstrap_media_request_app();
+    let source = "package rules\nimport rego.v1\n\napprove if { input.request.origin == \"manual\" }\n\nset_quality_profile := \"No Such Profile\" if { input.request.origin == \"manual\" }\n";
+    let refusal = harness
+        .app
+        .create_request_rule_set(
+            &harness.manager,
+            RequestRuleDraft {
+                name: "Unknown profile".to_string(),
+                description: String::new(),
+                rego_source: source.to_string(),
+                library_ids: Vec::new(),
+                builder_model: None,
+            },
+        )
+        .await
+        .expect_err("an unknown profile must not be stored");
+    let AppError::ValidationRefused { diagnostics, .. } = &refusal else {
+        panic!("unexpected refusal: {refusal:?}");
+    };
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == scryer_rules::diagnostic_codes::RULE_QUALITY_PROFILE_UNKNOWN
+        })
+        .unwrap_or_else(|| panic!("unexpected diagnostics: {diagnostics:?}"));
+    assert!(diagnostic.line.is_some() && diagnostic.column.is_some());
+    assert_eq!(diagnostic.path.as_deref(), Some("set_quality_profile"));
+    assert!(
+        harness
+            .app
+            .list_request_rule_sets(&harness.manager)
+            .await
+            .expect("list")
+            .is_empty()
+    );
+
+    // The draft validator reports the same condition without storing anything.
+    let validation = harness
+        .app
+        .validate_request_rule_source(&harness.manager, source, &[])
+        .await
+        .expect("validation runs");
+    assert!(!validation.result.valid);
+    assert!(
+        validation
+            .result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code
+                == scryer_rules::diagnostic_codes::RULE_QUALITY_PROFILE_UNKNOWN)
+    );
+    let declared = validation.declared_actions.expect("the source reads");
+    assert_eq!(declared.quality_profiles, vec!["No Such Profile"]);
+}
+
+#[tokio::test]
+async fn a_monitor_no_scoped_library_accepts_is_refused_at_save() {
+    // `advanced` needs a season selection a rule cannot make, so no facet
+    // accepts it from a rule.
+    let harness = bootstrap_media_request_app();
+    let movie_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let source = "package rules\nimport rego.v1\n\napprove if { input.request.origin == \"manual\" }\n\nset_monitor := \"advanced\" if { input.request.origin == \"manual\" }\n";
+    let refusal = harness
+        .app
+        .create_request_rule_set(
+            &harness.manager,
+            RequestRuleDraft {
+                name: "Advanced monitor".to_string(),
+                description: String::new(),
+                rego_source: source.to_string(),
+                library_ids: vec![movie_library],
+                builder_model: None,
+            },
+        )
+        .await
+        .expect_err("no library accepts advanced monitoring from a rule");
+    let AppError::ValidationRefused { diagnostics, .. } = &refusal else {
+        panic!("unexpected refusal: {refusal:?}");
+    };
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic.code
+            == scryer_rules::diagnostic_codes::RULE_MONITOR_UNSUPPORTED),
+        "unexpected diagnostics: {diagnostics:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_builder_model_round_trips_and_is_bounded() {
+    let harness = bootstrap_media_request_app();
+    let model =
+        serde_json::json!({ "family": "request", "version": 1, "rows": [{ "fact": "origin" }] });
+    let created = harness
+        .app
+        .create_request_rule_set(
+            &harness.manager,
+            RequestRuleDraft {
+                name: "Built".to_string(),
+                description: String::new(),
+                rego_source: APPROVE_EVERYTHING.to_string(),
+                library_ids: Vec::new(),
+                builder_model: Some(model.clone()),
+            },
+        )
+        .await
+        .expect("a builder model is stored");
+    let id = created.rule_set.id.clone();
+    let read = |with: bool| {
+        let app = &harness.app;
+        let manager = &harness.manager;
+        let id = id.clone();
+        async move {
+            app.get_request_rule_set(manager, &id, with)
+                .await
+                .expect("read")
+                .expect("present")
+                .builder_model
+        }
+    };
+    assert_eq!(read(true).await, Some(model.clone()));
+    // Only the view that asks for it reads it.
+    assert_eq!(read(false).await, None);
+
+    // Omitted keeps it while the source is unchanged.
+    harness
+        .app
+        .update_request_rule_source(&harness.manager, &id, APPROVE_EVERYTHING, None)
+        .await
+        .expect("edit");
+    assert_eq!(read(true).await, Some(model.clone()));
+
+    // Omitted with a changed source clears it, so a later builder save cannot
+    // revert an edit made by hand.
+    harness
+        .app
+        .update_request_rule_source(&harness.manager, &id, DENY_EVERYTHING, None)
+        .await
+        .expect("edit");
+    assert_eq!(read(true).await, None);
+    harness
+        .app
+        .update_request_rule_source(
+            &harness.manager,
+            &id,
+            DENY_EVERYTHING,
+            Some(Some(model.clone())),
+        )
+        .await
+        .expect("store it again");
+    assert_eq!(read(true).await, Some(model));
+
+    // Not an object, another family's document, and too large, are refused
+    // with the codes every rule family uses.
+    for (bad, code) in [
+        (
+            serde_json::json!(["not", "an", "object"]),
+            crate::error_reasons::rules::BUILDER_MODEL_INVALID,
+        ),
+        (
+            serde_json::json!({ "family": "lifecycle", "version": 1 }),
+            crate::error_reasons::rules::BUILDER_MODEL_INVALID,
+        ),
+        (
+            serde_json::json!({
+                "family": "request",
+                "version": 1,
+                "blob": "x".repeat(crate::rules::builder_model::MAX_BUILDER_MODEL_BYTES),
+            }),
+            crate::error_reasons::rules::BUILDER_MODEL_TOO_LARGE,
+        ),
+    ] {
+        let refusal = harness
+            .app
+            .update_request_rule_source(&harness.manager, &id, DENY_EVERYTHING, Some(Some(bad)))
+            .await
+            .expect_err("refused");
+        assert_eq!(refusal.validation_reason(), Some(code));
+    }
+
+    // Null clears it.
+    harness
+        .app
+        .update_request_rule_source(&harness.manager, &id, DENY_EVERYTHING, Some(None))
+        .await
+        .expect("clear");
+    assert_eq!(read(true).await, None);
+}
+
+async fn create_scoped_rule(
+    harness: &MediaRequestTestHarness,
+    name: &str,
+    source: &str,
+    library_ids: Vec<String>,
+) -> AppResult<crate::request_rules::RequestRuleSetDetail> {
+    harness
+        .app
+        .create_request_rule_set(
+            &harness.manager,
+            RequestRuleDraft {
+                name: name.to_string(),
+                description: String::new(),
+                rego_source: source.to_string(),
+                library_ids,
+                builder_model: None,
+            },
+        )
+        .await
+}
+
+fn diagnostic_codes(refusal: &AppError) -> Vec<&'static str> {
+    let AppError::ValidationRefused { diagnostics, .. } = refusal else {
+        panic!("unexpected refusal: {refusal:?}");
+    };
+    diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect()
+}
+
+fn approve_setting_monitor(monitor: &str) -> String {
+    format!(
+        "package rules\nimport rego.v1\n\napprove if {{ input.request.origin == \"manual\" }}\n\nset_monitor := \"{monitor}\" if {{ input.request.origin == \"manual\" }}\n"
+    )
+}
+
+#[tokio::test]
+async fn a_movie_rule_with_an_episode_monitor_type_is_refused_at_save() {
+    let harness = bootstrap_media_request_app();
+    let movie_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    for episode_monitor in ["allEpisodes", "futureEpisodes", "missingAndFutureEpisodes"] {
+        let refusal = create_scoped_rule(
+            &harness,
+            "Episode monitor on movies",
+            &approve_setting_monitor(episode_monitor),
+            vec![movie_library.clone()],
+        )
+        .await
+        .expect_err("a movie library has no episode monitoring");
+        assert!(
+            diagnostic_codes(&refusal)
+                .contains(&scryer_rules::diagnostic_codes::RULE_MONITOR_UNSUPPORTED),
+            "{episode_monitor}: {refusal:?}"
+        );
+    }
+    create_scoped_rule(
+        &harness,
+        "Unmonitored movies",
+        &approve_setting_monitor("unmonitored"),
+        vec![movie_library],
+    )
+    .await
+    .expect("a movie library accepts unmonitored");
+}
+
+#[tokio::test]
+async fn an_episode_monitor_type_on_a_movie_request_goes_to_manual_review() {
+    // Unscoped, so the series libraries let it save; the movie request it
+    // meets cannot take it.
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(
+        &harness,
+        "All episodes",
+        &approve_setting_monitor("allEpisodes"),
+    )
+    .await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9311, None).await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Pending);
+    assert!(request.created_title_id.is_none());
+    drop(requests);
+    assert!(harness.titles.store.lock().await.is_empty());
+
+    let decisions = harness.request_rule_decisions.recorded().await;
+    assert_eq!(
+        decisions[0].fallback_reason.as_deref(),
+        Some(FALLBACK_SHAPING_INVALID)
+    );
+    let shaping: crate::request_rules::ArbitratedShaping =
+        serde_json::from_str(decisions[0].shaping_json.as_deref().expect("stored"))
+            .expect("the shaping reads back");
+    assert!(shaping.value(RequestActionHead::SetMonitor).is_none());
+    assert_eq!(shaping.invalid.len(), 1);
+    assert_eq!(shaping.invalid[0].head, RequestActionHead::SetMonitor);
+}
+
+#[tokio::test]
+async fn re_scoping_to_a_library_that_cannot_take_the_shaped_monitor_is_refused() {
+    let harness = bootstrap_media_request_app();
+    let series_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let movie_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let detail = create_scoped_rule(
+        &harness,
+        "Future episodes",
+        &approve_setting_monitor("futureEpisodes"),
+        vec![series_library.clone()],
+    )
+    .await
+    .expect("a series library takes future episodes");
+
+    let refusal = harness
+        .app
+        .update_request_rule_metadata(
+            &harness.manager,
+            &detail.rule_set.id,
+            "Future episodes".to_string(),
+            String::new(),
+            vec![movie_library],
+        )
+        .await
+        .expect_err("a movie library has no episode monitoring");
+    assert!(
+        diagnostic_codes(&refusal)
+            .contains(&scryer_rules::diagnostic_codes::RULE_MONITOR_UNSUPPORTED),
+        "{refusal:?}"
+    );
+    let stored = harness
+        .app
+        .get_request_rule_set(&harness.manager, &detail.rule_set.id, false)
+        .await
+        .expect("read")
+        .expect("present");
+    assert_eq!(stored.rule_set.library_ids, vec![series_library.clone()]);
+
+    // A rename that keeps the scope is not re-checked and still saves.
+    harness
+        .app
+        .update_request_rule_metadata(
+            &harness.manager,
+            &detail.rule_set.id,
+            "Renamed".to_string(),
+            String::new(),
+            vec![series_library],
+        )
+        .await
+        .expect("rename");
+}
+
+#[tokio::test]
+async fn an_ambiguous_quality_profile_name_is_refused_at_save_and_held_at_run_time() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Short leases", APPROVE_SHAPED).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    // A second profile now carries the name the rule sets.
+    let mut twin = crate::builtin_4k_profile();
+    twin.id = "4k-twin".to_string();
+    harness
+        .quality_profiles
+        .set_profiles(vec![
+            crate::builtin_4k_profile(),
+            twin,
+            crate::builtin_1080p_profile(),
+        ])
+        .await;
+
+    let refusal = create_rule_result(&harness, "Twin", APPROVE_SHAPED)
+        .await
+        .expect_err("the name does not say which profile");
+    assert!(
+        diagnostic_codes(&refusal)
+            .contains(&scryer_rules::diagnostic_codes::RULE_QUALITY_PROFILE_AMBIGUOUS),
+        "{refusal:?}"
+    );
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9312, Some(30)).await;
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Pending);
+    assert_eq!(request.approved_quality_profile_id, None);
+    drop(requests);
+    let decisions = harness.request_rule_decisions.recorded().await;
+    assert_eq!(
+        decisions[0].fallback_reason.as_deref(),
+        Some(FALLBACK_SHAPING_INVALID)
+    );
+}
+
+async fn create_rule_result(
+    harness: &MediaRequestTestHarness,
+    name: &str,
+    source: &str,
+) -> AppResult<crate::request_rules::RequestRuleSetDetail> {
+    create_scoped_rule(harness, name, source, Vec::new()).await
+}
+
+#[tokio::test]
+async fn a_denial_traces_its_shaping_applies_none_of_it_and_still_notifies() {
+    let harness = bootstrap_media_request_app();
+    let source = APPROVE_SHAPED.replacen("approve if", "deny if", 1);
+    let detail = create_rule(&harness, "Shaped denial", &source).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9313, Some(30)).await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    let request = requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Rejected);
+    assert_eq!(request.approved_lease_days, None);
+    assert_eq!(request.approved_quality_profile_id, None);
+    assert!(request.created_title_id.is_none());
+    drop(requests);
+    assert!(harness.titles.store.lock().await.is_empty());
+    assert!(harness.lifecycle_claims.all().await.is_empty());
+
+    let decisions = harness.request_rule_decisions.recorded().await;
+    assert_eq!(decisions[0].effective_outcome, RequestDecisionOutcome::Deny);
+    let shaping: crate::request_rules::ArbitratedShaping =
+        serde_json::from_str(decisions[0].shaping_json.as_deref().expect("stored"))
+            .expect("the shaping reads back");
+    assert_eq!(
+        shaping
+            .value(RequestActionHead::SetLeaseDays)
+            .map(|shaped| shaped.value.clone()),
+        Some(RequestHeadValue::Number(7))
+    );
+
+    // The request was really submitted, so the rule's line rides on the
+    // submitted event like any other.
+    let events = harness.domain_events.events.lock().await;
+    let notifications = submitted_rule_notifications(&events, &request_id);
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].rule_set_name, "Shaped denial");
+    assert_eq!(notifications[0].text, "Short lease applied");
+}
+
+#[tokio::test]
+async fn a_manual_review_request_carries_the_rule_notification() {
+    let harness = bootstrap_media_request_app();
+    let source = format!(
+        "{MANUAL_SHAPED}\nnotify := \"Needs a look\" if {{\n\tinput.request.origin == \"manual\"\n}}\n"
+    );
+    let detail = create_rule(&harness, "Review", &source).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9314, None).await;
+    assert_eq!(
+        harness
+            .media_requests
+            .requests
+            .lock()
+            .await
+            .iter()
+            .find(|request| request.id == request_id)
+            .expect("request stored")
+            .status,
+        MediaRequestStatus::Pending
+    );
+    let events = harness.domain_events.events.lock().await;
+    let notifications = submitted_rule_notifications(&events, &request_id);
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].rule_set_name, "Review");
+    assert_eq!(notifications[0].text, "Needs a look");
+}
+
+#[tokio::test]
+async fn an_automatic_approval_applies_the_shaped_monitor_and_audio_languages() {
+    let harness = bootstrap_media_request_app();
+    let source = "package rules\nimport rego.v1\n\napprove if { input.request.origin == \"manual\" }\n\nset_monitor := \"unmonitored\" if { input.request.origin == \"manual\" }\n\nset_required_audio_languages := [\"en\"] if { input.request.origin == \"manual\" }\n\nset_preferred_audio_languages := [\"fr\"] if { input.request.origin == \"manual\" }\n";
+    let detail = create_rule(&harness, "Quiet English", source).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = audio_request_input(
+        &library_id,
+        9315,
+        Some(vec!["ja".to_string()]),
+        Some(vec!["de".to_string()]),
+    );
+    input.requested_monitor_type = Some("monitored".to_string());
+    let request_id = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("submit")
+        .request_id;
+
+    let request = harness
+        .media_requests
+        .requests
+        .lock()
+        .await
+        .iter()
+        .find(|request| request.id == request_id)
+        .cloned()
+        .expect("request stored");
+    assert_eq!(request.status, MediaRequestStatus::Approved);
+    // The requester's own picks stay on the request; the rule's go to the title.
+    assert_eq!(request.requested_monitor_type.as_deref(), Some("monitored"));
+    let title_id = request.created_title_id.expect("a title was created");
+
+    let title = harness
+        .titles
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|title| title.id == title_id)
+        .cloned()
+        .expect("title stored");
+    assert!(!title.monitored);
+    assert!(
+        title
+            .tags
+            .iter()
+            .any(|tag| tag == "scryer:monitor-type:unmonitored"),
+        "{:?}",
+        title.tags
+    );
+
+    let expected = |codes: &[&str]| {
+        crate::settings::runtime::validated_preference_languages(
+            "audio language",
+            codes.iter().map(|code| code.to_string()).collect(),
+        )
+        .expect("known languages")
+    };
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&title_id)
+            .await
+            .unwrap(),
+        Some(expected(&["en"]))
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_title_preferred_audio_override(&title_id)
+            .await
+            .unwrap(),
+        Some(expected(&["fr"]))
+    );
+
+    let decisions = harness.request_rule_decisions.recorded().await;
+    let shaping: crate::request_rules::ArbitratedShaping =
+        serde_json::from_str(decisions[0].shaping_json.as_deref().expect("stored"))
+            .expect("the shaping reads back");
+    for head in [
+        RequestActionHead::SetMonitor,
+        RequestActionHead::SetRequiredAudioLanguages,
+        RequestActionHead::SetPreferredAudioLanguages,
+    ] {
+        assert_eq!(
+            shaping
+                .value(head)
+                .map(|shaped| shaped.rule_set_name.as_str()),
+            Some("Quiet English"),
+            "{head:?}"
+        );
+    }
+}
+
+/// An approver's tag list is held to the same shape a rule's tags are: each
+/// condition refuses with its own reason, and the sentence names the tag.
+#[test]
+fn an_approver_tag_list_is_checked_like_a_rule_tag() {
+    use crate::error_reasons::request_rules::{
+        TAG_CONTAINS_UNSUPPORTED_CHARACTER, TAG_LIMIT_EXCEEDED, TAG_REQUIRED, TAG_TOO_LONG,
+        TAG_USES_RESERVED_PREFIX,
+    };
+    use crate::request_rules::validate_tag_list;
+    use scryer_rules::policy::{MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX};
+
+    fn refusal(tags: &[&str]) -> (&'static str, String) {
+        let error = validate_tag_list(tags.iter().map(|tag| tag.to_string()).collect())
+            .expect_err("refused");
+        match error {
+            AppError::ValidationRefused {
+                reason,
+                message,
+                facts,
+                diagnostics,
+            } => {
+                assert!(facts.is_empty(), "{tags:?}");
+                assert!(diagnostics.is_empty(), "{tags:?}");
+                (reason, message)
+            }
+            other => panic!("{tags:?}: {other:?}"),
+        }
+    }
+    fn accepted(tags: &[&str]) -> Vec<String> {
+        validate_tag_list(tags.iter().map(|tag| tag.to_string()).collect()).expect("accepted")
+    }
+
+    let longest = "a".repeat(MAX_TAG_LEN);
+    let too_long = "a".repeat(MAX_TAG_LEN + 1);
+    // Two bytes each: within the length in characters, past it in bytes.
+    let wide = "é".repeat(MAX_TAG_LEN / 2 + 1);
+    let reserved = format!("{RESERVED_TAG_PREFIX}family");
+
+    assert_eq!(accepted(&[]), Vec::<String>::new());
+    assert_eq!(
+        accepted(&[" family ", "a.b_c d-E9", "family", longest.as_str()]),
+        vec![
+            "family".to_string(),
+            "a.b_c d-E9".to_string(),
+            longest.clone()
+        ]
+    );
+    let most: Vec<String> = (0..MAX_TAGS).map(|i| format!("t{i}")).collect();
+    let most: Vec<&str> = most.iter().map(String::as_str).collect();
+    assert_eq!(accepted(&most).len(), MAX_TAGS);
+
+    let too_many: Vec<String> = (0..=MAX_TAGS).map(|i| format!("t{i}")).collect();
+    let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
+    assert_eq!(
+        refusal(&too_many),
+        (
+            TAG_LIMIT_EXCEEDED,
+            format!(
+                "a request may carry at most {MAX_TAGS} tags, {} were supplied",
+                MAX_TAGS + 1
+            )
+        )
+    );
+    for empty in ["", "   ", "\t"] {
+        assert_eq!(
+            refusal(&["ok", empty]),
+            (TAG_REQUIRED, "tag must not be empty".to_string()),
+            "{empty:?}"
+        );
+    }
+    assert_eq!(
+        refusal(&[too_long.as_str()]),
+        (
+            TAG_TOO_LONG,
+            format!(
+                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+                MAX_TAG_LEN + 1
+            )
+        )
+    );
+    assert_eq!(
+        refusal(&[wide.as_str()]),
+        (
+            TAG_TOO_LONG,
+            format!(
+                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+                wide.len()
+            )
+        )
+    );
+    assert_eq!(
+        refusal(&[reserved.as_str()]),
+        (
+            TAG_USES_RESERVED_PREFIX,
+            format!("tag '{reserved}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix")
+        )
+    );
+    for (tag, bad) in [
+        ("fam/ily", '/'),
+        ("café", 'é'),
+        ("a:b", ':'),
+        ("a\tb", '\t'),
+    ] {
+        assert_eq!(
+            refusal(&[tag]),
+            (
+                TAG_CONTAINS_UNSUPPORTED_CHARACTER,
+                format!(
+                    "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, \
+                     '.', '_', '-', or spaces"
+                )
+            ),
+            "{tag:?}"
+        );
+    }
+}
+
+/// A list request is submitted as the list's owner, whose authorization the
+/// owner row does not carry. It is read once for the whole submission, the
+/// rule check and the requester document included, and every permission the
+/// owner holds still reaches the rules.
+#[tokio::test]
+async fn a_list_request_reads_its_owners_authorization_once() {
+    use crate::lists::AppListActions;
+    use crate::lists::act::ListActions;
+
+    const APPROVE_FOR_GRANTED_REQUESTERS: &str = r#"package rules
+import rego.v1
+
+approve if {
+	"request" in input.requester.library_permissions
+	"view" in input.requester.library_permissions
+	not "manage_library" in input.requester.library_permissions
+	"manage_lists" in input.requester.app_permissions
+}
+"#;
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(
+        &harness,
+        "Approve granted requesters",
+        APPROVE_FOR_GRANTED_REQUESTERS,
+    )
+    .await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut owner = harness.user.clone();
+    owner.id = "list-owner-fixture".to_string();
+    owner.username = "list_owner_fixture".to_string();
+    owner.authorization = scryer_domain::UserAuthorization {
+        loaded: false,
+        ..Default::default()
+    };
+    harness.users.store.lock().await.push(owner.clone());
+    harness
+        .libraries
+        .set_app_permission_mask_for_user(&owner.id, AppPermissionMask::MANAGE_LISTS)
+        .await
+        .unwrap();
+    harness
+        .libraries
+        .set_grants_for_user(
+            &owner.id,
+            vec![scryer_domain::LibraryGrant {
+                user_id: owner.id.clone(),
+                library_id: library_id.clone(),
+                permissions: scryer_domain::LibraryPermissionMask::from_permissions([
+                    scryer_domain::LibraryPermission::View,
+                    scryer_domain::LibraryPermission::Request,
+                ]),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let mut list = crate::lists::test_support::subscription("public-list-one");
+    list.owner_user_id = owner.id.clone();
+    let route = crate::lists::test_support::route(MediaFacet::Movie, &library_id);
+    let mut item = crate::lists::test_support::resolved_item("alpha");
+    item.external_ids = vec![ExternalId::new("tvdb", "9056")];
+
+    AppListActions::new(&harness.app)
+        .submit_request(&list, &route, &item, false)
+        .await
+        .expect("list request admitted");
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].status,
+        MediaRequestStatus::Approved,
+        "the rule saw every permission the owner holds"
+    );
+    drop(requests);
+    assert_eq!(
+        harness
+            .libraries
+            .app_permission_reads
+            .lock()
+            .unwrap()
+            .get(&owner.id)
+            .copied(),
+        Some(1)
+    );
 }

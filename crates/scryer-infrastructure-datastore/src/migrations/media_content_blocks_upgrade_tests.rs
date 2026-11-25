@@ -1,12 +1,12 @@
 const SQLITE_BLOCKS: &str =
-    include_str!("../../../scryer/src/db/migrations/0345_media_content_blocks.sql");
+    include_str!("../../../scryer/src/db/migrations/0367_media_content_blocks.sql");
 const POSTGRES_BLOCKS: &str =
-    include_str!("../../../scryer/src/db/postgres/migrations/0345_media_content_blocks.sql");
+    include_str!("../../../scryer/src/db/postgres/migrations/0367_media_content_blocks.sql");
 const SQLITE_RULES: &str = include_str!(
-    "../../../scryer/src/db/migrations/0346_request_rule_media_issue_applicability.sql"
+    "../../../scryer/src/db/migrations/0368_request_rule_media_issue_applicability.sql"
 );
 const POSTGRES_RULES: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0346_request_rule_media_issue_applicability.sql"
+    "../../../scryer/src/db/postgres/migrations/0368_request_rule_media_issue_applicability.sql"
 );
 
 // Both engines run the same assertions against an old rule and a synthetic

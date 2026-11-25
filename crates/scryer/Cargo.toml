@@ -1,6 +1,6 @@
 [package]
 name = "scryer"
-version = "0.22.5"
+version = "0.23.1"
 edition.workspace = true
 
 [features]
@@ -18,7 +18,7 @@ e2e-harness = []
 jemalloc-prof = []
 
 [dependencies]
-application-updater = { git = "https://github.com/scryer-media/application-updater.git", rev = "e55801ce7f66c744667d4fe27dd12432a4697f33" }
+application-updater = { git = "https://github.com/scryer-media/application-updater.git", tag = "v0.1.3" }
 scryer-application = { path = "../scryer-application", features = ["runtime"] }
 scryer-domain = { path = "../scryer-domain" }
 scryer-interface = { path = "../scryer-interface" }
@@ -70,6 +70,7 @@ open = "5"
 governor = { workspace = true }
 webauthn-rs = { workspace = true }
 url = "2"
+rmcp = { workspace = true }
 
 # Scryer does not use the system allocator anywhere. glibc's never plateaus on
 # this workload (it ratchets to ~3 GB on the 111k-item load-test library and is

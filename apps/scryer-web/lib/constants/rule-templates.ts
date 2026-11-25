@@ -99,7 +99,7 @@ score_entry["hevc_bonus"] := 100 if {
 }
 
 score_entry["x264_4k_penalty"] := -200 if {
-    input.release.quality == "2160P"
+    input.release.quality == "2160p"
     scryer.normalize_codec(input.release.video_codec) == "H.264"
 }`,
   },
@@ -164,16 +164,15 @@ score_entry["preferred_release_group"] := 400 if {
     id: "block-old-releases",
     title: "Penalize releases older than 1 year",
     description:
-      "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library",
+      "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library. A release whose age is not known is not penalized",
     category: "Penalties",
-    regoSource: `import rego.v1
+    regoSource: `rule_applies if {
+	is_number(input.release.age_days)
+	input.release.age_days > 365
+}
 
-# age_days is the age when the release was grabbed (or now, for a release
-# not yet grabbed). It is null for files that were scanned in, adopted, or
-# imported before listing facts were kept.
-score_entry["too_old"] := scryer.block_score() if {
-    input.release.age_days > 365
-}`,
+score_entry["too_old"] := scryer.block_score() if rule_applies
+`,
   },
   {
     id: "block-obfuscated-retagged",
@@ -197,10 +196,11 @@ score_entry["retagged_release"] := scryer.block_score() if {
     description:
       "Strongly penalize releases with hardcoded (burned-in) subtitles",
     category: "Penalties",
-    regoSource: `import rego.v1
+    regoSource: `rule_applies if {
+	input.release.is_hardcoded_subs == true
+}
 
-score_entry["hardcoded_subs"] := scryer.block_score() if {
-    input.release.is_hardcoded_subs
-}`,
+score_entry["hardcoded_subs"] := scryer.block_score() if rule_applies
+`,
   },
 ];

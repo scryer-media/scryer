@@ -263,25 +263,58 @@ pub(crate) fn build_movie_probe_path_indexes(
     existing_titles_by_probe_path
 }
 
+/// Whether a metadata match whose ids bound no catalog title may still bind a
+/// same-name title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetadataMatchNameFallback {
+    /// The scanned entry names an external id (folder or file tag, NFO,
+    /// plexmatch, arr import). The match binds an existing title only through
+    /// an id; a same-name title is a different title.
+    IdOnly,
+    /// A text-matched entry. A same-name title binds when its year agrees with
+    /// the match's year, or with the entry's own year when the match has none.
+    ByName { year_hint: Option<u32> },
+}
+
+impl MetadataMatchNameFallback {
+    pub(crate) fn for_candidate(
+        identity_hint: Option<&crate::library_scan_metadata::MetadataIdentityHint>,
+        year_hint: Option<u32>,
+    ) -> Self {
+        if identity_hint.is_some_and(|hint| hint.has_external_ids()) {
+            Self::IdOnly
+        } else {
+            Self::ByName { year_hint }
+        }
+    }
+}
+
 /// The existing catalog title a metadata match refers to, if any: the same
-/// canonical (tvdb) id, else a same-name title whose year agrees with the
-/// match. A same-name title with a *different* year is a different film (the
-/// remake vs the original) and must not absorb the match — that misbinding is
-/// what left an original's folder refused as "already owns another folder"
-/// against the remake's title (#148).
+/// canonical (tvdb) id, else, when `name_fallback` allows it, a same-name title
+/// whose year agrees with the match. A same-name title with a *different* year
+/// is a different film (the remake vs the original) and must not absorb the
+/// match — that misbinding is what left an original's folder refused as
+/// "already owns another folder" against the remake's title.
 pub(crate) fn find_existing_title_index_for_metadata_match(
     selected: &MetadataSearchItem,
     existing_titles: &[Title],
     existing_titles_by_name: &TitleNameIndex,
     existing_titles_by_tvdb_id: &HashMap<String, usize>,
+    name_fallback: MetadataMatchNameFallback,
 ) -> Option<usize> {
     if !selected.tvdb_id.trim().is_empty()
         && let Some(&index) = existing_titles_by_tvdb_id.get(&selected.tvdb_id)
     {
         return Some(index);
     }
+    let MetadataMatchNameFallback::ByName { year_hint } = name_fallback else {
+        return None;
+    };
     let key = normalize_title_key(&selected.name);
-    let selected_year = selected.year.and_then(|year| u32::try_from(year).ok());
+    let selected_year = selected
+        .year
+        .and_then(|year| u32::try_from(year).ok())
+        .or(year_hint);
     existing_titles_by_name
         .get(&key)?
         .iter()
@@ -304,6 +337,7 @@ pub(crate) fn find_existing_series_title_index_for_metadata_match(
     existing_titles: &[Title],
     existing_titles_by_name: &TitleNameIndex,
     existing_titles_by_tvdb_id: &HashMap<String, usize>,
+    name_fallback: MetadataMatchNameFallback,
 ) -> Option<usize> {
     if selected.tvdb_id.trim().is_empty() {
         let smg_id = selected.smg_id.map(|value| value.to_string());
@@ -349,9 +383,14 @@ pub(crate) fn find_existing_series_title_index_for_metadata_match(
         existing_titles,
         existing_titles_by_name,
         existing_titles_by_tvdb_id,
+        name_fallback,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a movie match reads every in-memory id index and the name index together"
+)]
 pub(crate) fn find_existing_movie_title_index_for_metadata_match(
     selected: &MetadataSearchItem,
     existing_titles: &[Title],
@@ -360,6 +399,7 @@ pub(crate) fn find_existing_movie_title_index_for_metadata_match(
     existing_titles_by_tvdb_id: &HashMap<String, usize>,
     existing_titles_by_imdb_id: &HashMap<String, usize>,
     existing_titles_by_tmdb_id: &HashMap<String, usize>,
+    name_fallback: MetadataMatchNameFallback,
 ) -> Option<usize> {
     if let Some(smg_id) = selected.smg_id.map(|value| value.to_string())
         && let Some(&index) = existing_titles_by_smg_id.get(&smg_id)
@@ -391,6 +431,7 @@ pub(crate) fn find_existing_movie_title_index_for_metadata_match(
         existing_titles,
         existing_titles_by_name,
         existing_titles_by_tvdb_id,
+        name_fallback,
     )
 }
 

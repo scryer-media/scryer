@@ -307,15 +307,17 @@ pub(crate) fn parsed_release_contradicts_requested_episode(
     )
 }
 
-/// A series pack is worth considering only when it can fill more than 30% of
-/// the regular, already-aired episodes the operator monitors. This deliberately
-/// counts episodes not already owned by a primary file or an in-flight
-/// submission, not quality upgrades: the guard is about avoiding a huge
-/// download for a small hole in an otherwise complete series.
+/// A series pack is worth considering only when it can fill more than
+/// `min_missing_percent` of the regular, already-aired episodes the operator
+/// monitors (the profile's setting, 30% by default). This deliberately counts
+/// episodes not already owned by a primary file or an in-flight submission, not
+/// quality upgrades: the guard is about avoiding a huge download for a small
+/// hole in an otherwise complete series.
 pub(crate) fn series_pack_missing_ratio_qualifies(
     parsed: &ParsedReleaseMetadata,
     episodes: &[Episode],
     owned_episode_ids: &std::collections::HashSet<String>,
+    min_missing_percent: u32,
 ) -> bool {
     let Some(series_pack) = parsed
         .episode
@@ -329,28 +331,35 @@ pub(crate) fn series_pack_missing_ratio_qualifies(
         episodes,
         owned_episode_ids,
         &series_pack.season_numbers,
+        min_missing_percent,
     )
 }
 
 /// Whether a title should issue its one series-pack lookup. A later
 /// result-specific check applies the threshold to the exact seasons the pack
 /// covers. Searching when any season clears the threshold cannot miss a
-/// qualifying multi-season pack: a weighted average above 30% has at least
-/// one component season above 30%.
+/// qualifying multi-season pack: a weighted average above the threshold has
+/// at least one component season above it.
 pub(crate) fn title_series_pack_missing_ratio_qualifies(
     episodes: &[Episode],
     owned_episode_ids: &std::collections::HashSet<String>,
+    min_missing_percent: u32,
 ) -> bool {
-    series_pack_missing_ratio_qualifies_for_seasons(episodes, owned_episode_ids, &[])
-        || eligible_series_pack_season_numbers(episodes)
-            .into_iter()
-            .any(|season| {
-                series_pack_missing_ratio_qualifies_for_seasons(
-                    episodes,
-                    owned_episode_ids,
-                    &[season],
-                )
-            })
+    series_pack_missing_ratio_qualifies_for_seasons(
+        episodes,
+        owned_episode_ids,
+        &[],
+        min_missing_percent,
+    ) || eligible_series_pack_season_numbers(episodes)
+        .into_iter()
+        .any(|season| {
+            series_pack_missing_ratio_qualifies_for_seasons(
+                episodes,
+                owned_episode_ids,
+                &[season],
+                min_missing_percent,
+            )
+        })
 }
 
 /// Collection ids represented by the title's monitored, aired, standard
@@ -431,6 +440,7 @@ fn series_pack_missing_ratio_qualifies_for_seasons(
     episodes: &[Episode],
     owned_episode_ids: &std::collections::HashSet<String>,
     season_numbers: &[u32],
+    min_missing_percent: u32,
 ) -> bool {
     let episode_ids = eligible_series_pack_episode_ids(episodes, season_numbers);
     if episode_ids.is_empty() {
@@ -441,7 +451,11 @@ fn series_pack_missing_ratio_qualifies_for_seasons(
         .filter(|episode_id| !owned_episode_ids.contains(*episode_id))
         .count();
 
-    missing.saturating_mul(100) > episode_ids.len().saturating_mul(30)
+    // Strictly more than the threshold: a pack exactly at it does not qualify.
+    missing.saturating_mul(100)
+        > episode_ids
+            .len()
+            .saturating_mul(min_missing_percent as usize)
 }
 
 fn eligible_series_pack_season_numbers(episodes: &[Episode]) -> std::collections::HashSet<u32> {
@@ -710,6 +724,9 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use scryer_domain::{CollectionType, EpisodeType};
+
+    const DEFAULT_PERCENT: u32 =
+        crate::quality_profile::DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK;
 
     fn episode(id: &str, season: &str, number: &str, absolute: Option<&str>) -> Episode {
         Episode {
@@ -1538,11 +1555,13 @@ mod tests {
         assert!(series_pack_missing_ratio_qualifies(
             &parsed,
             &episodes,
-            &primary_episode_ids
+            &primary_episode_ids,
+            DEFAULT_PERCENT,
         ));
         assert!(title_series_pack_missing_ratio_qualifies(
             &episodes,
-            &primary_episode_ids
+            &primary_episode_ids,
+            DEFAULT_PERCENT,
         ));
     }
 
@@ -1593,7 +1612,8 @@ mod tests {
         assert!(!series_pack_missing_ratio_qualifies(
             &parsed,
             &episodes,
-            &seventy_owned
+            &seventy_owned,
+            DEFAULT_PERCENT,
         ));
 
         let sixty_nine_owned = (1..=69)
@@ -1602,7 +1622,80 @@ mod tests {
         assert!(series_pack_missing_ratio_qualifies(
             &parsed,
             &episodes,
-            &sixty_nine_owned
+            &sixty_nine_owned,
+            DEFAULT_PERCENT,
+        ));
+    }
+
+    #[test]
+    fn a_profile_percent_moves_the_series_pack_threshold() {
+        let episodes = (1..=100)
+            .map(|number| episode(&format!("ep-{number}"), "1", &number.to_string(), None))
+            .collect::<Vec<_>>();
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata {
+            full_season: true,
+            is_series_pack: true,
+            release_type: ParsedEpisodeReleaseType::SeasonPack,
+            ..Default::default()
+        });
+        let owned = |count: usize| {
+            (1..=count)
+                .map(|number| format!("ep-{number}"))
+                .collect::<std::collections::HashSet<_>>()
+        };
+        // 20% missing: below the default, above a 10% profile.
+        let eighty_owned = owned(80);
+        assert!(!series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &eighty_owned,
+            DEFAULT_PERCENT,
+        ));
+        assert!(series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &eighty_owned,
+            10,
+        ));
+        assert!(title_series_pack_missing_ratio_qualifies(
+            &episodes,
+            &eighty_owned,
+            10,
+        ));
+        // 40% missing: above the default, not above a 50% profile, and
+        // exactly at a 40% profile, which is not more than it.
+        let sixty_owned = owned(60);
+        assert!(series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &sixty_owned,
+            DEFAULT_PERCENT,
+        ));
+        assert!(!series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &sixty_owned,
+            50,
+        ));
+        assert!(!series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &sixty_owned,
+            40,
+        ));
+        // 0% takes any pack with a missing episode; 100% takes none.
+        let all_but_one_owned = owned(99);
+        assert!(series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &all_but_one_owned,
+            0,
+        ));
+        assert!(!series_pack_missing_ratio_qualifies(
+            &parsed,
+            &episodes,
+            &owned(0),
+            100,
         ));
     }
 
@@ -1636,11 +1729,13 @@ mod tests {
         assert!(!series_pack_missing_ratio_qualifies(
             &parsed,
             &episodes,
-            &primary_episode_ids
+            &primary_episode_ids,
+            DEFAULT_PERCENT,
         ));
         assert!(!title_series_pack_missing_ratio_qualifies(
             &episodes,
-            &primary_episode_ids
+            &primary_episode_ids,
+            DEFAULT_PERCENT,
         ));
 
         let primary_episode_ids = (1..=6)
@@ -1649,11 +1744,13 @@ mod tests {
         assert!(series_pack_missing_ratio_qualifies(
             &parsed,
             &episodes,
-            &primary_episode_ids
+            &primary_episode_ids,
+            DEFAULT_PERCENT,
         ));
         assert!(title_series_pack_missing_ratio_qualifies(
             &episodes,
-            &primary_episode_ids
+            &primary_episode_ids,
+            DEFAULT_PERCENT,
         ));
     }
 }

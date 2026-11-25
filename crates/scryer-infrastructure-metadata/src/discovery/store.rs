@@ -1479,13 +1479,18 @@ impl DiscoveryRepository for DiscoveryStore {
             .cloned()
             .collect::<Vec<_>>();
         enrich_recommendation_items_from_normalized(&datastore, &language, &mut items).await?;
+        let items = std::sync::Arc::new(items);
+        let card_payloads = std::sync::Arc::new(
+            encode_title_recommendation_cards(std::sync::Arc::clone(&items)).await?,
+        );
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "replace_title_more_like_this_items",
             move |tx| {
                 let title_id = title_id.clone();
                 let language = language.clone();
-                let items = items.clone();
+                let items = std::sync::Arc::clone(&items);
+                let card_payloads = std::sync::Arc::clone(&card_payloads);
                 Box::pin(async move {
                     // Only the cards this title referenced a moment ago can be
                     // orphaned by this refresh: nothing else loses a reference
@@ -1515,11 +1520,16 @@ impl DiscoveryRepository for DiscoveryStore {
                         .collect::<Vec<_>>();
                     let existing_discovery_title_ids =
                         existing_discovery_title_ids_tx(tx, &discovery_title_ids).await?;
-                    for (item, discovery_title_id) in items.iter().zip(&discovery_title_ids) {
+                    for ((item, card_payload), discovery_title_id) in items
+                        .iter()
+                        .zip(card_payloads.iter())
+                        .zip(&discovery_title_ids)
+                    {
                         insert_title_more_like_this_item_tx(
                             tx,
                             &title_id,
                             item,
+                            card_payload,
                             &language,
                             discovery_title_id,
                             existing_discovery_title_ids.contains(discovery_title_id),
@@ -2474,22 +2484,46 @@ async fn backfill_title_recommendation_cards(datastore: &StoreDatastore) -> AppR
         .unzip();
     hydrate_discovery_title_children(datastore, &mut items, &title_ids).await?;
 
-    let cards = title_ids.into_iter().zip(items).collect::<Vec<_>>();
+    let items = std::sync::Arc::new(items);
+    let card_payloads = encode_title_recommendation_cards(std::sync::Arc::clone(&items)).await?;
+    let cards = title_ids.into_iter().zip(card_payloads).collect::<Vec<_>>();
     let cards = std::sync::Arc::new(cards);
     SqlRuntime::run_in_transaction(
         datastore,
         "backfill_title_recommendation_cards",
         move |tx| {
+            let items = std::sync::Arc::clone(&items);
             let cards = std::sync::Arc::clone(&cards);
             Box::pin(async move {
-                for (discovery_title_id, item) in cards.iter() {
-                    upsert_title_recommendation_card_tx(tx, discovery_title_id, item).await?;
+                for (item, (discovery_title_id, card_payload)) in items.iter().zip(cards.iter()) {
+                    upsert_title_recommendation_card_tx(tx, discovery_title_id, item, card_payload)
+                        .await?;
                 }
                 Ok(())
             })
         },
     )
     .await
+}
+
+/// The stored card payload of each item, in order. Serializing and
+/// compressing is CPU work: it runs on the blocking pool, and before the
+/// transaction that stores the cards rather than under the writer gate.
+async fn encode_title_recommendation_cards(
+    items: std::sync::Arc<Vec<DiscoveryItemRecord>>,
+) -> AppResult<Vec<Vec<u8>>> {
+    match tokio::task::spawn_blocking(move || {
+        items
+            .iter()
+            .map(encode_compressed_json)
+            .collect::<AppResult<Vec<_>>>()
+    })
+    .await
+    {
+        Ok(encoded) => encoded,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => Err(AppError::Repository(error.to_string())),
+    }
 }
 
 async fn enrich_recommendation_items_from_normalized(
@@ -6086,8 +6120,10 @@ async fn upsert_title_recommendation_card_tx(
     tx: &mut SqlTx<'_>,
     discovery_title_id: &str,
     item: &DiscoveryItemRecord,
+    // `encode_title_recommendation_cards` of `item`, made before the
+    // transaction opened.
+    payload_blob: &[u8],
 ) -> AppResult<()> {
-    let payload_blob = encode_compressed_json(item)?;
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO title_recommendation_cards
@@ -6100,7 +6136,7 @@ async fn upsert_title_recommendation_card_tx(
         &[
             SqlArg::Text(discovery_title_id.to_string()),
             SqlArg::I32(TITLE_RECOMMENDATION_PAYLOAD_VERSION),
-            SqlArg::OptBytes(Some(payload_blob)),
+            SqlArg::OptBytes(Some(payload_blob.to_vec())),
             SqlArg::Timestamp(item.created_at),
             SqlArg::Timestamp(item.updated_at),
         ],
@@ -6138,6 +6174,7 @@ async fn insert_title_more_like_this_item_tx(
     tx: &mut SqlTx<'_>,
     title_id: &str,
     item: &DiscoveryItemRecord,
+    card_payload: &[u8],
     language: &str,
     discovery_title_id: &str,
     discovery_title_exists: bool,
@@ -6146,7 +6183,7 @@ async fn insert_title_more_like_this_item_tx(
     if discovery_title_exists {
         upsert_discovery_title_tx(tx, item, language, false, false).await?;
     }
-    upsert_title_recommendation_card_tx(tx, &discovery_title_id, item).await?;
+    upsert_title_recommendation_card_tx(tx, &discovery_title_id, item, card_payload).await?;
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO title_more_like_this_items
@@ -10316,6 +10353,94 @@ mod tests {
         .expect("normalized title count should parse");
         assert_eq!(remaining_cards, 12);
         assert_eq!(normalized_titles, 0);
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_keeps_recommendation_card_bytes_when_encoded_ahead_of_the_write() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_recommendation_card_bytes_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id, created_at
+             )
+             VALUES ({}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("card-bytes-source".to_string()),
+                SqlArg::Text("movie_default_library".to_string()),
+                SqlArg::Text("card-bytes-source".to_string()),
+                SqlArg::Text("card-bytes-source".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("canonical_root_for_movie_default_library".to_string()),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await
+        .expect("source title should insert");
+
+        let recommendations = (0..6)
+            .map(|index| {
+                let mut item = discovery_prune_item("recommendations", now);
+                item.id = format!("card-bytes-{index}");
+                item.target_key = format!("tmdb:movie:{}", 61_000 + index);
+                item.display_title = format!("Card Bytes {index}");
+                item.sort_title = Some(item.display_title.clone());
+                item.poster_url = Some(format!("https://images.test/card-bytes-{index}.jpg"));
+                item.sort_index = index;
+                item
+            })
+            .collect::<Vec<_>>();
+        // No discovery title exists for these targets, so the items are
+        // stored as given and each card must hold exactly their encoding.
+        let mut expected = recommendations
+            .iter()
+            .map(|item| {
+                (
+                    discovery_title_id_for(
+                        &discovery_title_target_key_norm(item),
+                        &normalize_discovery_language("eng"),
+                    ),
+                    encode_compressed_json(item).expect("card should encode"),
+                )
+            })
+            .collect::<Vec<_>>();
+        expected.sort();
+
+        store
+            .replace_title_more_like_this_items("card-bytes-source", "eng", &recommendations)
+            .await
+            .expect("recommendations should replace");
+
+        let stored = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            "SELECT discovery_title_id, payload_blob
+               FROM title_recommendation_cards
+              ORDER BY discovery_title_id",
+            &[],
+        )
+        .await
+        .expect("cards should query")
+        .iter()
+        .map(|row| {
+            (
+                row.text("discovery_title_id").expect("card id should read"),
+                row.opt_bytes("payload_blob")
+                    .expect("card payload should read")
+                    .expect("card payload should be stored"),
+            )
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(stored, expected);
 
         let _ = std::fs::remove_file(db);
     }

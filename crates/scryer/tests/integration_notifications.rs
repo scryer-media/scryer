@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -1298,6 +1300,7 @@ async fn notification_event_types_query_returns_only_dispatchable_subscription_e
             "list_title_left",
             "list_sync_failed",
             "list_unfollowed",
+            "lifecycle_rule_notified",
         ]
     );
 }
@@ -1975,6 +1978,7 @@ async fn notification_dispatcher_delivers_global_media_request_to_facet_scope() 
         stream: DomainEventStream::Global,
         payload: DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
             requested_lease_days: None,
+            rule_notifications: Vec::new(),
             request_id: "request-1".to_string(),
             library_id: "library-series".to_string(),
             facet: MediaFacet::Series,

@@ -304,7 +304,10 @@ function SingleSelectField({
   ...selectProps
 }: SingleSelectFieldProps) {
   return (
-    <div className={cn("min-w-0 space-y-1.5", className)}>
+    // A flex column, not `space-y`: inside a form Radix adds a hidden native
+    // select after the trigger, and `space-y` would then give the trigger a
+    // bottom margin that knocks it out of line with buttons beside it.
+    <div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
       {label ? (
         <label
           htmlFor={id}

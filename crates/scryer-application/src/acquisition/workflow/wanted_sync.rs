@@ -232,34 +232,61 @@ impl AppUseCase {
                 }
             }
         }
-        let collection_members = |title_id: &str, collection_id: &str| -> Vec<&str> {
-            episodes_by_title
+        // Each collection's members, in catalog order, indexed once for the
+        // page rather than filtered out of the title's episodes per lookup.
+        type MembersByCollection<'m> = HashMap<&'m str, HashMap<&'m str, Vec<&'m str>>>;
+        fn members_of<'m>(
+            index: &'m MembersByCollection<'m>,
+            title_id: &str,
+            collection_id: &str,
+        ) -> &'m [&'m str] {
+            index
                 .get(title_id)
-                .map(|episodes| {
-                    episodes
-                        .iter()
-                        .filter(|episode| episode.collection_id.as_deref() == Some(collection_id))
-                        .map(|episode| episode.id.as_str())
-                        .collect()
-                })
-                .unwrap_or_default()
+                .and_then(|collections| collections.get(collection_id))
+                .map_or(&[], Vec::as_slice)
+        }
+        fn indices_of<'m>(index: &'m HashMap<&str, Vec<usize>>, title_id: &str) -> &'m [usize] {
+            index.get(title_id).map_or(&[], Vec::as_slice)
+        }
+        let mut members_by_collection: MembersByCollection<'_> = HashMap::new();
+        for (title_id, episodes) in &episodes_by_title {
+            for episode in episodes {
+                if let Some(collection_id) = episode.collection_id.as_deref() {
+                    members_by_collection
+                        .entry(title_id)
+                        .or_default()
+                        .entry(collection_id)
+                        .or_default()
+                        .push(episode.id.as_str());
+                }
+            }
+        }
+        let collection_members = |title_id: &str, collection_id: &str| {
+            members_of(&members_by_collection, title_id, collection_id)
         };
+        // Each title's files, in listing order.
+        let mut files_by_title: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (index, file) in files.iter().enumerate() {
+            files_by_title
+                .entry(file.file.title_id.as_str())
+                .or_default()
+                .push(index);
+        }
+        let title_files = |title_id: &str| indices_of(&files_by_title, title_id);
 
         // Match scopes to files *before* scoring anything: only files that
         // occupy one of the scopes on this page are worth a scoring pass.
         let matches_by_scope: Vec<Vec<usize>> = scopes
             .iter()
             .map(|scope| {
-                files
+                title_files(&scope.title_id)
                     .iter()
-                    .enumerate()
-                    .filter(|(_, file)| file.file.title_id == scope.title_id)
-                    .filter(|(_, file)| {
-                        scope.matches(file, |collection_id| {
+                    .copied()
+                    .filter(|index| {
+                        scope.matches(&files[*index], |collection_id| {
                             collection_members(&scope.title_id, collection_id)
                         })
                     })
-                    .map(|(index, _)| index)
                     .collect()
             })
             .collect();
@@ -281,13 +308,21 @@ impl AppUseCase {
             (usize, Vec<String>),
             crate::quality::landed_bar_memo::LandedBar,
         > = HashMap::new();
+        // Titles on a page share a handful of libraries.
+        let mut library_names: HashMap<String, Option<String>> = HashMap::new();
+        // Each title's scopes, in page order.
+        let mut scopes_by_title: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (scope_index, scope) in scopes.iter().enumerate() {
+            scopes_by_title
+                .entry(scope.title_id.as_str())
+                .or_default()
+                .push(scope_index);
+        }
         for title in &titles {
-            let title_indices: Vec<usize> = scored_indices
+            if !title_files(&title.id)
                 .iter()
-                .copied()
-                .filter(|index| files[*index].file.title_id == title.id)
-                .collect();
-            if title_indices.is_empty() {
+                .any(|index| scored_indices.contains(index))
+            {
                 continue;
             }
             let profile = match self.resolve_quality_profile_for_title(title).await {
@@ -302,7 +337,11 @@ impl AppUseCase {
                 }
             };
             let context = self
-                .resolve_canonical_scoring_context(title, &profile)
+                .resolve_canonical_scoring_context_with_library_names(
+                    title,
+                    &profile,
+                    &mut library_names,
+                )
                 .await;
             let memo_base = memo_ticket.map(|_| {
                 let mut hasher = blake3::Hasher::new();
@@ -313,11 +352,11 @@ impl AppUseCase {
             let title_episodes = episodes_by_title
                 .get(title.id.as_str())
                 .unwrap_or(&no_episodes);
-            for (scope_index, scope) in scopes
-                .iter()
-                .enumerate()
-                .filter(|(_, scope)| scope.title_id == title.id)
+            for &scope_index in scopes_by_title
+                .get(title.id.as_str())
+                .map_or(&[][..], Vec::as_slice)
             {
+                let scope = &scopes[scope_index];
                 for &index in &matches_by_scope[scope_index] {
                     let file = &files[index];
                     let mut episode_ids = Vec::new();
@@ -329,7 +368,8 @@ impl AppUseCase {
                         {
                             episode_ids.extend(
                                 collection_members(&scope.title_id, id)
-                                    .into_iter()
+                                    .iter()
+                                    .copied()
                                     .filter(|id| file.is_primary_for(id))
                                     .map(str::to_owned),
                             );
@@ -445,7 +485,7 @@ impl LandedBarScope {
     fn matches<'a>(
         &self,
         file: &LandedBarFile,
-        collection_members: impl Fn(&str) -> Vec<&'a str>,
+        collection_members: impl Fn(&str) -> &'a [&'a str],
     ) -> bool {
         if let Some(episode_id) = Self::non_empty(&self.episode_id) {
             return file.is_primary_for(episode_id);
@@ -549,8 +589,10 @@ impl AppUseCase {
             library_ids: _,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             limit,
             offset,
+            skip_total,
         } = query;
         let title_search = title_search.and_then(|value| {
             let trimmed = value.trim();
@@ -570,10 +612,15 @@ impl AppUseCase {
                 library_ids: library_ids.clone(),
                 title_search: title_search.clone(),
                 latest_decision_codes: latest_decision_codes.clone(),
+                mismatch_recovery_eligible_only,
                 limit,
                 offset,
+                skip_total,
             })
             .await?;
+        if skip_total {
+            return Ok((items, 0));
+        }
         let total = self
             .services
             .workflow
@@ -585,6 +632,7 @@ impl AppUseCase {
                 library_ids,
                 title_search,
                 latest_decision_codes,
+                mismatch_recovery_eligible_only,
                 ..AcquisitionScopeStatesQuery::default()
             })
             .await?;
@@ -720,7 +768,7 @@ impl AppUseCase {
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(&title_ids)
+            .list_acquisition_scope_states_for_title_ids_without_decisions(&title_ids)
             .await?;
         if items.is_empty() {
             return Ok(if fallback_wanted_item_id.is_empty() {

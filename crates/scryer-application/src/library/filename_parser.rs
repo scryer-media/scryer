@@ -1095,12 +1095,33 @@ fn series_movie_match_keys(link: &SeriesMovieLink) -> Vec<String> {
 }
 
 fn normalized_key_contains_phrase(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
+    let Some(first) = needle.chars().next() else {
         return false;
+    };
+    // Both arguments are normalized keys: words joined by single spaces with
+    // no leading/trailing whitespace. The former padded-string check
+    // (`format!(" {haystack} ").contains(&format!(" {needle} "))`) therefore
+    // only ever asked whether the needle occurs at a word boundary. Do that
+    // directly so each comparison no longer allocates two temporary Strings.
+    let bytes = haystack.as_bytes();
+    let needle_len = needle.len();
+    let advance = first.len_utf8();
+    let mut from = 0;
+    while let Some(relative) = haystack[from..].find(needle) {
+        let start = from + relative;
+        let end = start + needle_len;
+        // Keys are ASCII-space delimited; any other neighbouring byte belongs
+        // to a word character (possibly a multi-byte one), so it is not a
+        // boundary. Advancing by the first character's width keeps `from` on
+        // a UTF-8 boundary for the next search.
+        let left_boundary = start == 0 || bytes[start - 1] == b' ';
+        let right_boundary = end == bytes.len() || bytes[end] == b' ';
+        if left_boundary && right_boundary {
+            return true;
+        }
+        from = start + advance;
     }
-    let haystack = format!(" {haystack} ");
-    let needle = format!(" {needle} ");
-    haystack.contains(&needle)
+    false
 }
 
 fn raw_name_has_explicit_episode_marker(raw_name: &str) -> bool {
@@ -1266,29 +1287,25 @@ fn immediate_parent_has_single_video_file(source_path: &Path) -> bool {
         return false;
     };
 
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return false;
-    };
+    use std::ops::ControlFlow;
+    // An entry the listing failed on is skipped; one whose kind cannot be
+    // read, or a second video, settles it.
     let mut video_count = 0usize;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            return false;
+    let visited = crate::disk::Disk::process().visit_blocking(parent, |entry| {
+        let Ok(entry) = entry else {
+            return ControlFlow::Continue(());
         };
-        if !file_type.is_file() {
-            continue;
+        match entry.kind() {
+            Err(_) => video_count = 2,
+            Ok(kind) if kind != crate::disk::EntryKind::File => {}
+            Ok(_) => video_count += usize::from(is_video_file(entry.path())),
         }
-
-        if is_video_file(&path) {
-            video_count += 1;
-            if video_count > 1 {
-                return false;
-            }
+        match video_count > 1 {
+            true => ControlFlow::Break(()),
+            false => ControlFlow::Continue(()),
         }
-    }
-
-    video_count == 1
+    });
+    visited.is_ok() && video_count == 1
 }
 
 fn fill_missing_release_metadata(
@@ -1648,6 +1665,71 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use scryer_domain::{EpisodeType, ExternalId};
+
+    /// The allocation-free check replaces this padded-string expression. Keep
+    /// it in the test as the reference oracle so any semantic drift is caught.
+    fn padded_key_contains(haystack: &str, needle: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+        format!(" {haystack} ").contains(&format!(" {needle} "))
+    }
+
+    #[test]
+    fn normalized_key_contains_phrase_matches_the_padded_reference() {
+        let cases = [
+            ("", ""),
+            ("foo", ""),
+            ("", "foo"),
+            ("foo", "foo"),
+            ("foo bar", "foo"),
+            ("foo bar", "bar"),
+            ("foo bar", "foo bar"),
+            ("foo bar baz", "bar"),
+            ("foo bar baz", "bar baz"),
+            ("foo bar baz", "foo bar"),
+            ("afoo bar", "foo"),
+            ("foo barking", "foo bar"),
+            ("foo baron", "bar"),
+            ("foo  bar", "foo bar"),
+            ("foo bar ", "bar"),
+            (" foo bar", "foo"),
+            ("one two three one two", "one two"),
+            // Overlapping occurrences: the first one sits inside a word, and
+            // only the one that overlaps it is on a word boundary.
+            ("ax x x", "x x"),
+            ("ax x xa", "x x"),
+            ("éx x x", "x x"),
+            ("foo bar baz", "qux"),
+            ("foo", "foobar"),
+            ("foobar", "foo"),
+            ("élan vital", "élan"),
+            ("élan vital", "lan"),
+            ("vital élan", "élan"),
+            ("s中国人民解放军", "中国人民解放军"),
+        ];
+        for (haystack, needle) in cases {
+            assert_eq!(
+                normalized_key_contains_phrase(haystack, needle),
+                padded_key_contains(haystack, needle),
+                "haystack={haystack:?}, needle={needle:?}"
+            );
+        }
+        // The overlapping case must match, not merely agree with the reference.
+        assert!(normalized_key_contains_phrase("ax x x", "x x"));
+        assert!(!normalized_key_contains_phrase("ax x xa", "x x"));
+    }
+
+    #[test]
+    fn normalized_key_contains_phrase_uses_normalized_keys() {
+        // Regular callers pass the output of `library_name_match_key`.
+        let haystack = library_name_match_key("The.Movie.Collection.Part.Two.2024");
+        let needle = library_name_match_key("Movie Collection");
+        let wrong = library_name_match_key("Movie Two");
+        assert_eq!(haystack, "the movie collection part two 2024");
+        assert!(normalized_key_contains_phrase(&haystack, &needle));
+        assert!(!normalized_key_contains_phrase(&haystack, &wrong));
+    }
 
     #[test]
     fn title_candidates_keep_brackets_that_belong_to_the_title() {

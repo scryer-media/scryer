@@ -998,6 +998,149 @@ async fn graphql_typed_security_settings_reject_short_password_minimum() {
     );
 }
 
+async fn security_exec_from_host(
+    ctx: &TestContext,
+    query: &str,
+    user: scryer_domain::User,
+    host: &str,
+) -> Value {
+    let request =
+        async_graphql::Request::new(query)
+            .data(user)
+            .data(scryer_interface::context::RequestHost(Some(
+                host.to_string(),
+            )));
+    serde_json::to_value(ctx.schema.execute(request).await).expect("serialize gql response")
+}
+
+#[tokio::test]
+async fn graphql_local_trust_settings_round_trip_and_refuse_with_reason_codes() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+
+    let defaults = schema_exec(
+        &ctx,
+        r#"
+        query SecuritySettings {
+          securitySettings {
+            localTrustAllowedHosts
+            restrictLocalTrustToTrustedProxies
+          }
+        }
+        "#,
+        Some(admin.clone()),
+    )
+    .await;
+    assert_no_errors(&defaults);
+    assert_eq!(
+        defaults["data"]["securitySettings"]["localTrustAllowedHosts"],
+        json!([])
+    );
+    assert_eq!(
+        defaults["data"]["securitySettings"]["restrictLocalTrustToTrustedProxies"],
+        false
+    );
+
+    let locked_out = security_exec_from_host(
+        &ctx,
+        r#"
+        mutation UpdateSecuritySettings {
+          updateSecuritySettings(input: { formLoginEnabled: false, passwordMinLength: 8, skipLoginForLocalIps: false, mfaRequireConfigStepUp: false, mfaRequirePasswordLogin: false, mfaRequireJellyfinLogin: false, localTrustAllowedHosts: ["scryer.home.test"] }) {
+            localTrustAllowedHosts
+          }
+        }
+        "#,
+        admin.clone(),
+        "other.home.test:8080",
+    )
+    .await;
+    assert_eq!(
+        locked_out["errors"][0]["extensions"]["reason"],
+        "SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT",
+        "{locked_out}"
+    );
+
+    let saved = security_exec_from_host(
+        &ctx,
+        r#"
+        mutation UpdateSecuritySettings {
+          updateSecuritySettings(input: { formLoginEnabled: false, passwordMinLength: 8, skipLoginForLocalIps: false, mfaRequireConfigStepUp: false, mfaRequirePasswordLogin: false, mfaRequireJellyfinLogin: false, localTrustAllowedHosts: ["Scryer.Home.Test", "nas.home.test"] }) {
+            localTrustAllowedHosts
+            restrictLocalTrustToTrustedProxies
+          }
+        }
+        "#,
+        admin.clone(),
+        "scryer.home.test:8080",
+    )
+    .await;
+    assert_no_errors(&saved);
+    assert_eq!(
+        saved["data"]["updateSecuritySettings"]["localTrustAllowedHosts"],
+        json!(["scryer.home.test", "nas.home.test"])
+    );
+
+    let invalid = security_exec_from_host(
+        &ctx,
+        r#"
+        mutation UpdateSecuritySettings {
+          updateSecuritySettings(input: { formLoginEnabled: false, passwordMinLength: 8, skipLoginForLocalIps: false, mfaRequireConfigStepUp: false, mfaRequirePasswordLogin: false, mfaRequireJellyfinLogin: false, localTrustAllowedHosts: ["http://scryer.home.test/"] }) {
+            localTrustAllowedHosts
+          }
+        }
+        "#,
+        admin.clone(),
+        "scryer.home.test",
+    )
+    .await;
+    assert_eq!(
+        invalid["errors"][0]["extensions"]["reason"], "SETTINGS_LOCAL_TRUST_HOST_INVALID",
+        "{invalid}"
+    );
+
+    let no_proxies = security_exec_from_host(
+        &ctx,
+        r#"
+        mutation UpdateSecuritySettings {
+          updateSecuritySettings(input: { formLoginEnabled: false, passwordMinLength: 8, skipLoginForLocalIps: false, mfaRequireConfigStepUp: false, mfaRequirePasswordLogin: false, mfaRequireJellyfinLogin: false, restrictLocalTrustToTrustedProxies: true }) {
+            restrictLocalTrustToTrustedProxies
+          }
+        }
+        "#,
+        admin.clone(),
+        "scryer.home.test",
+    )
+    .await;
+    assert_eq!(
+        no_proxies["errors"][0]["extensions"]["reason"], "SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY",
+        "{no_proxies}"
+    );
+
+    let read = schema_exec(
+        &ctx,
+        r#"
+        query SecuritySettings {
+          securitySettings {
+            localTrustAllowedHosts
+            restrictLocalTrustToTrustedProxies
+          }
+        }
+        "#,
+        Some(admin),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["securitySettings"]["localTrustAllowedHosts"],
+        json!(["scryer.home.test", "nas.home.test"])
+    );
+    assert_eq!(
+        read["data"]["securitySettings"]["restrictLocalTrustToTrustedProxies"],
+        false
+    );
+}
+
 #[tokio::test]
 async fn graphql_typed_security_settings_rejects_enable_without_usable_admin_login() {
     let ctx = TestContext::new().await;

@@ -382,6 +382,10 @@ pub enum HashDomain {
     IndexerClientRelease,
     /// Per-instance phase offset for the metadata gateway compatibility poll.
     GatewayCompatibilityPollPhase,
+    /// Lookup key for a pending MCP confirmation token.
+    McpConfirmationToken,
+    /// Operation and variables covered by an MCP confirmation.
+    McpConfirmationBinding,
 }
 
 impl HashDomain {
@@ -411,6 +415,8 @@ impl HashDomain {
             Self::RawSearchScope => "scryer.raw-search.scope.v1",
             Self::IndexerClientRelease => "scryer.indexer-client.release.v1",
             Self::GatewayCompatibilityPollPhase => "scryer.metadata-gateway.poll-phase.v1",
+            Self::McpConfirmationToken => "scryer.mcp.confirmation-token.v1",
+            Self::McpConfirmationBinding => "scryer.mcp.confirmation-binding.v1",
         }
     }
 }
@@ -447,11 +453,22 @@ impl HashDomain {
 /// nobody outside Scryer computes or verifies it — it belongs here. If you think
 /// you need SHA-256 for something first-party, the answer is that you do not.
 pub fn blake3_identity_hex(domain: HashDomain, input: impl AsRef<str>) -> String {
+    blake3_identity_hash(domain, input.as_ref())
+        .to_hex()
+        .to_string()
+}
+
+/// The domain-separated identity digest as fixed-size bytes.
+pub fn blake3_identity_bytes(domain: HashDomain, input: impl AsRef<str>) -> [u8; 32] {
+    *blake3_identity_hash(domain, input.as_ref()).as_bytes()
+}
+
+fn blake3_identity_hash(domain: HashDomain, input: &str) -> blake3::Hash {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain.as_str().as_bytes());
     hasher.update(&[0u8]);
-    hasher.update(input.as_ref().as_bytes());
-    hasher.finalize().to_hex().to_string()
+    hasher.update(input.as_bytes());
+    hasher.finalize()
 }
 
 /// Fingerprint of one indexer listing page: its results' identities, in the
@@ -487,125 +504,7 @@ pub(crate) fn to_hex(value: &[u8]) -> String {
     output
 }
 
-/// Total and available bytes of the filesystem backing a path.
-///
-/// `available_bytes` is the space an unprivileged writer can use (the
-/// `f_bavail` figure on unix, the caller-available figure on Windows), so
-/// `total - available` counts reserved blocks as used, matching what an
-/// operator expects a usage percentage to mean.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct FilesystemSpace {
-    pub total_bytes: u64,
-    pub available_bytes: u64,
-}
-
-/// Widen a `statvfs` counter to `u64`.
-///
-/// The block-count fields are `u32` on some unix targets and `u64` on others,
-/// so callers cannot write `u64::from(..)` without tripping
-/// `clippy::useless_conversion` on whichever platform already matches.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn statvfs_field_to_u64<T: Into<u64>>(value: T) -> u64 {
-    value.into()
-}
-
-#[cfg(unix)]
-fn unix_c_path(path: &std::path::Path) -> std::io::Result<std::ffi::CString> {
-    use std::os::unix::ffi::OsStrExt;
-    std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("disk-space path contains an interior NUL: {error}"),
-        )
-    })
-}
-
-/// `statfs`, not `statvfs`: Darwin's `statvfs` interface carries 32-bit block
-/// counts (`fsblkcnt_t` is `unsigned int`), so any volume larger than
-/// `2^32 * f_frsize` bytes wraps — a 23 TB SMB share reads back as ~1 TB.
-/// Darwin's `statfs` carries 64-bit counts sized in `f_bsize` units.
-#[cfg(target_os = "macos")]
-pub(crate) fn filesystem_space_raw(path: &std::path::Path) -> std::io::Result<FilesystemSpace> {
-    let c_path = unix_c_path(path)?;
-    unsafe {
-        let mut buf: libc::statfs = std::mem::zeroed();
-        if libc::statfs(c_path.as_ptr(), &mut buf) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let bsize = u64::from(buf.f_bsize);
-        Ok(FilesystemSpace {
-            total_bytes: buf.f_blocks.saturating_mul(bsize),
-            available_bytes: buf.f_bavail.saturating_mul(bsize),
-        })
-    }
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-pub(crate) fn filesystem_space_raw(path: &std::path::Path) -> std::io::Result<FilesystemSpace> {
-    let c_path = unix_c_path(path)?;
-    unsafe {
-        let mut buf: libc::statvfs = std::mem::zeroed();
-        if libc::statvfs(c_path.as_ptr(), &mut buf) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // Some FUSE filesystems report only `f_bsize`; POSIX says counts are
-        // in `f_frsize` units, so prefer it but fall back when it is zero.
-        let mut frsize = statvfs_field_to_u64(buf.f_frsize);
-        if frsize == 0 {
-            frsize = statvfs_field_to_u64(buf.f_bsize);
-        }
-        Ok(FilesystemSpace {
-            total_bytes: statvfs_field_to_u64(buf.f_blocks).saturating_mul(frsize),
-            available_bytes: statvfs_field_to_u64(buf.f_bavail).saturating_mul(frsize),
-        })
-    }
-}
-
-#[cfg(windows)]
-pub(crate) fn filesystem_space_raw(path: &std::path::Path) -> std::io::Result<FilesystemSpace> {
-    use std::iter;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-    let wide_path: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(iter::once(0))
-        .collect();
-    let mut available = 0_u64;
-    let mut total = 0_u64;
-    let result = unsafe {
-        GetDiskFreeSpaceExW(
-            wide_path.as_ptr(),
-            &mut available,
-            &mut total,
-            std::ptr::null_mut(),
-        )
-    };
-    if result == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(FilesystemSpace {
-        total_bytes: total,
-        available_bytes: available,
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn filesystem_space_raw(_path: &std::path::Path) -> std::io::Result<FilesystemSpace> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "disk-space queries are unsupported on this platform",
-    ))
-}
-
-/// Filesystem usage for `path`, or `None` when it cannot be inspected or the
-/// filesystem reports a degenerate zero total (some FUSE and network mounts).
-pub(crate) fn filesystem_space(path: &str) -> Option<FilesystemSpace> {
-    filesystem_space_raw(std::path::Path::new(path))
-        .ok()
-        .filter(|space| space.total_bytes > 0)
-}
+pub(crate) use scryer_disk::capacity::FilesystemSpace;
 
 fn normalize_tag(raw: String) -> String {
     let raw = raw.trim();

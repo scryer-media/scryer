@@ -934,6 +934,8 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
             rate_limit_seconds,
             rate_limit_burst,
             max_queries_per_minute,
+            max_requests_per_month,
+            max_grabs_per_month,
             is_enabled,
             enable_interactive_search,
             enable_auto_search,
@@ -969,6 +971,12 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
         }
         if let Some(max_queries_per_minute) = max_queries_per_minute {
             item.max_queries_per_minute = max_queries_per_minute;
+        }
+        if let Some(max_requests_per_month) = max_requests_per_month {
+            item.max_requests_per_month = max_requests_per_month;
+        }
+        if let Some(max_grabs_per_month) = max_grabs_per_month {
+            item.max_grabs_per_month = max_grabs_per_month;
         }
         if let Some(is_enabled) = is_enabled {
             item.is_enabled = is_enabled;

@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaRequestCounts,
-    MediaRequestOrder, MediaRequestQualityProfileReferenceCounts, MediaRequestQuery,
-    MediaRequestRepository, MediaRequestResolution, MediaRequestResolutionResult,
-    MediaRequestSubmissionResult, MediaRequestUpdateResult, NewMediaRequest,
+    MediaRequestFingerprintSummary, MediaRequestOrder, MediaRequestQualityProfileReferenceCounts,
+    MediaRequestQuery, MediaRequestRepository, MediaRequestRequesterSummary,
+    MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
+    MediaRequestUpdateResult, NewMediaRequest, StagedMediaRequestMetadata, TitleRequesters,
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
@@ -18,6 +19,12 @@ use crate::media::monitor_selections::{
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
 use crate::workflow::stores::append_domain_event_tx;
+
+/// Staged records removed per transaction at most; one bind each.
+/// Staging keys bound per read, far under both dialects' bind limits.
+const STAGED_METADATA_READ_CHUNK: usize = 500;
+
+const STAGED_METADATA_DELETE_CHUNK: usize = 500;
 
 #[derive(Clone)]
 pub struct MediaRequestStore {
@@ -111,8 +118,8 @@ impl MediaRequestRepository for MediaRequestStore {
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
-        let mut by_title: std::collections::HashMap<String, Vec<String>> =
+    ) -> AppResult<std::collections::HashMap<String, TitleRequesters>> {
+        let mut by_title: std::collections::HashMap<String, TitleRequesters> =
             std::collections::HashMap::new();
         if title_ids.is_empty() {
             return Ok(by_title);
@@ -125,10 +132,12 @@ impl MediaRequestRepository for MediaRequestStore {
 
         // The submitter comes first for every request, so a title with a
         // request is a key here even when it has no extra requester rows.
+        // Rows arrive oldest first, so the first one per title carries the
+        // time the title was first requested.
         let submitters = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
-                "SELECT created_title_id, created_by_user_id
+                "SELECT created_title_id, created_by_user_id, created_at
                    FROM media_requests
                   WHERE created_title_id IN ({placeholders})
                     AND identity_fingerprint NOT LIKE 'list-movie:%'
@@ -138,10 +147,18 @@ impl MediaRequestRepository for MediaRequestStore {
         )
         .await?;
         for row in &submitters {
-            by_title
-                .entry(row.text("created_title_id")?)
-                .or_default()
-                .push(row.text("created_by_user_id")?);
+            let user_id = row.text("created_by_user_id")?;
+            match by_title.entry(row.text("created_title_id")?) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().user_ids.push(user_id);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(TitleRequesters {
+                        user_ids: vec![user_id],
+                        first_requested_at: row.timestamp("created_at")?,
+                    });
+                }
+            }
         }
 
         let requesters = SqlRuntime::fetch_all(
@@ -158,15 +175,18 @@ impl MediaRequestRepository for MediaRequestStore {
         )
         .await?;
         for row in &requesters {
-            by_title
-                .entry(row.text("created_title_id")?)
-                .or_default()
-                .push(row.text("user_id")?);
+            // Every joined request is also a submitter row above, so its
+            // title is already a key.
+            if let Some(entry) = by_title.get_mut(&row.text("created_title_id")?) {
+                entry.user_ids.push(row.text("user_id")?);
+            }
         }
 
-        for user_ids in by_title.values_mut() {
+        for entry in by_title.values_mut() {
             let mut seen = std::collections::HashSet::new();
-            user_ids.retain(|user_id| seen.insert(user_id.clone()));
+            entry
+                .user_ids
+                .retain(|user_id| seen.insert(user_id.clone()));
         }
         Ok(by_title)
     }
@@ -703,6 +723,318 @@ impl MediaRequestRepository for MediaRequestStore {
             request.external_ids = external_ids.remove(&request.id).unwrap_or_default();
         }
         Ok(requests)
+    }
+
+    /// One statement. The outer aggregate walks the identity's requests through
+    /// `idx_media_requests_fingerprint_created`; the people subquery adds the
+    /// joined co-requesters through the `media_request_requesters` primary key.
+    async fn fingerprint_history_summary(
+        &self,
+        identity_fingerprint: &str,
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestFingerprintSummary> {
+        let excluding_outer = if excluding_request_id.is_some() {
+            " AND id <> {}"
+        } else {
+            ""
+        };
+        let excluding_inner = if excluding_request_id.is_some() {
+            " AND r.id <> {}"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT COUNT(*) AS request_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS rejected_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS approved_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} AND created_by_user_id <> {{}}
+                                      THEN 1 ELSE 0 END), 0) AS other_pending_count,
+                    (SELECT COUNT(*) FROM (
+                        SELECT r.created_by_user_id AS user_id
+                          FROM media_requests r
+                         WHERE r.identity_fingerprint = {{}}{excluding_inner}
+                        UNION
+                        SELECT q.user_id AS user_id
+                          FROM media_requests r
+                          JOIN media_request_requesters q ON q.request_id = r.id
+                         WHERE r.identity_fingerprint = {{}}{excluding_inner}
+                    ) people WHERE people.user_id <> {{}}) AS other_requester_count
+               FROM media_requests
+              WHERE identity_fingerprint = {{}}{excluding_outer}"
+        );
+        let fingerprint = SqlArg::Text(identity_fingerprint.to_string());
+        let requester = SqlArg::Text(requester_user_id.to_string());
+        let excluding = excluding_request_id.map(|id| SqlArg::Text(id.to_string()));
+        let mut args = vec![
+            SqlArg::Text(MediaRequestStatus::Rejected.as_str().to_string()),
+            SqlArg::Text(MediaRequestStatus::Approved.as_str().to_string()),
+            SqlArg::Text(MediaRequestStatus::Pending.as_str().to_string()),
+            requester.clone(),
+        ];
+        for _ in 0..2 {
+            args.push(fingerprint.clone());
+            args.extend(excluding.clone());
+        }
+        args.push(requester);
+        args.push(fingerprint);
+        args.extend(excluding);
+        let Some(row) = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?
+        else {
+            return Ok(MediaRequestFingerprintSummary::default());
+        };
+        let count = |column: &str| row.i64(column).map(|value| value.max(0) as u64);
+        Ok(MediaRequestFingerprintSummary {
+            request_count: count("request_count")?,
+            any_rejected: count("rejected_count")? > 0,
+            any_approved: count("approved_count")? > 0,
+            other_requester_count: count("other_requester_count")?,
+            pending_by_other_requester: count("other_pending_count")? > 0,
+        })
+    }
+
+    /// Served by `idx_media_requests_requester_created` on the request side
+    /// and the titles primary key on the join.
+    async fn count_created_titles_in_library_for_requester(
+        &self,
+        user_id: &str,
+        library_id: &str,
+    ) -> AppResult<u64> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(DISTINCT t.id) AS title_count
+               FROM media_requests r
+               JOIN titles t ON t.id = r.created_title_id
+              WHERE r.created_by_user_id = {}
+                AND t.library_id = {}",
+            &[
+                SqlArg::Text(user_id.to_string()),
+                SqlArg::Text(library_id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(row
+            .map(|row| row.i64("title_count"))
+            .transpose()?
+            .unwrap_or(0)
+            .max(0) as u64)
+    }
+
+    /// One statement over the requester's own submissions, served by
+    /// `idx_media_requests_requester_created`. Each conditional sum repeats
+    /// the filter of the matching `count_for_requester` call, and the latest
+    /// creation time is the row `latest_request_at_for_user` orders first.
+    async fn requester_history_summary(
+        &self,
+        user_id: &str,
+        since: chrono::DateTime<Utc>,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestRequesterSummary> {
+        let excluding = if excluding_request_id.is_some() {
+            " AND id <> {}"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS pending_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} AND created_at >= {{}}
+                                      THEN 1 ELSE 0 END), 0) AS approved_since_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} AND created_at >= {{}}
+                                      THEN 1 ELSE 0 END), 0) AS rejected_since_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS approved_count,
+                    MAX(created_at) AS latest_created_at
+               FROM media_requests
+              WHERE created_by_user_id = {{}}{excluding}"
+        );
+        let status = |status: MediaRequestStatus| SqlArg::Text(status.as_str().to_string());
+        let mut args = vec![
+            status(MediaRequestStatus::Pending),
+            status(MediaRequestStatus::Approved),
+            SqlArg::Timestamp(since),
+            status(MediaRequestStatus::Rejected),
+            SqlArg::Timestamp(since),
+            status(MediaRequestStatus::Approved),
+            SqlArg::Text(user_id.to_string()),
+        ];
+        if let Some(request_id) = excluding_request_id {
+            args.push(SqlArg::Text(request_id.to_string()));
+        }
+        let Some(row) = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?
+        else {
+            return Ok(MediaRequestRequesterSummary::default());
+        };
+        let count = |column: &str| row.i64(column).map(|value| value.max(0) as u64);
+        Ok(MediaRequestRequesterSummary {
+            pending_count: count("pending_count")?,
+            approved_since_count: count("approved_since_count")?,
+            rejected_since_count: count("rejected_since_count")?,
+            approved_count: count("approved_count")?,
+            latest_request_at: row.opt_timestamp("latest_created_at")?,
+        })
+    }
+
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<StagedMediaRequestMetadata>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT staging_key, payload_json, staged_at
+               FROM media_request_staged_metadata
+              WHERE staging_key = {}",
+            &[SqlArg::Text(staging_key.to_string())],
+        )
+        .await?;
+        row.map(|row| {
+            Ok(StagedMediaRequestMetadata {
+                staging_key: row.text("staging_key")?,
+                payload_json: row.text("payload_json")?,
+                staged_at: row.timestamp("staged_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn stage_metadata(&self, record: &StagedMediaRequestMetadata) -> AppResult<()> {
+        let args = vec![
+            SqlArg::Text(record.staging_key.clone()),
+            SqlArg::Text(record.payload_json.clone()),
+            SqlArg::Timestamp(record.staged_at),
+        ];
+        SqlRuntime::run_in_transaction(&self.datastore, "stage_media_request_metadata", move |tx| {
+            let args = args.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "INSERT INTO media_request_staged_metadata
+                         (staging_key, payload_json, staged_at)
+                     VALUES ({}, {}, {})
+                     ON CONFLICT (staging_key) DO UPDATE SET
+                         payload_json = excluded.payload_json,
+                         staged_at = excluded.staged_at",
+                    &args,
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+    }
+
+    async fn staged_metadata_many(
+        &self,
+        staging_keys: &[String],
+    ) -> AppResult<Vec<StagedMediaRequestMetadata>> {
+        let mut records = Vec::with_capacity(staging_keys.len());
+        for chunk in staging_keys.chunks(STAGED_METADATA_READ_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT staging_key, payload_json, staged_at
+                   FROM media_request_staged_metadata
+                  WHERE staging_key IN ({placeholders})"
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                records.push(StagedMediaRequestMetadata {
+                    staging_key: row.text("staging_key")?,
+                    payload_json: row.text("payload_json")?,
+                    staged_at: row.timestamp("staged_at")?,
+                });
+            }
+        }
+        Ok(records)
+    }
+
+    async fn stage_metadata_many(&self, records: &[StagedMediaRequestMetadata]) -> AppResult<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<Vec<SqlArg>> = records
+            .iter()
+            .map(|record| {
+                vec![
+                    SqlArg::Text(record.staging_key.clone()),
+                    SqlArg::Text(record.payload_json.clone()),
+                    SqlArg::Timestamp(record.staged_at),
+                ]
+            })
+            .collect();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "stage_media_request_metadata_batch",
+            move |tx| {
+                let rows = rows.clone();
+                Box::pin(async move {
+                    for args in &rows {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO media_request_staged_metadata
+                                 (staging_key, payload_json, staged_at)
+                             VALUES ({}, {}, {})
+                             ON CONFLICT (staging_key) DO UPDATE SET
+                                 payload_json = excluded.payload_json,
+                                 staged_at = excluded.staged_at",
+                            args,
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    /// The select is served by `idx_media_request_staged_metadata_staged_at`,
+    /// so a pass with nothing old enough reads the index and writes nothing.
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: chrono::DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize> {
+        let limit = limit.min(STAGED_METADATA_DELETE_CHUNK);
+        if limit == 0 {
+            return Ok(0);
+        }
+        let keys: Vec<String> = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT staging_key FROM media_request_staged_metadata
+              WHERE staged_at < {}
+              ORDER BY staged_at
+              LIMIT {}",
+            &[SqlArg::Timestamp(cutoff), SqlArg::I64(limit as i64)],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("staging_key"))
+        .collect::<AppResult<_>>()?;
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = std::iter::repeat_n("{}", keys.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        // The cutoff is repeated so a record staged again since the select
+        // is kept.
+        let sql = format!(
+            "DELETE FROM media_request_staged_metadata
+              WHERE staging_key IN ({placeholders}) AND staged_at < {{}}"
+        );
+        let mut args: Vec<SqlArg> = keys.into_iter().map(SqlArg::Text).collect();
+        args.push(SqlArg::Timestamp(cutoff));
+        let removed = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_staged_media_request_metadata",
+            move |tx| {
+                let args = args.clone();
+                let sql = sql.clone();
+                Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+            },
+        )
+        .await?;
+        Ok(removed as usize)
     }
 
     async fn latest_request_at_for_user(

@@ -335,7 +335,7 @@ impl AppUseCase {
                 titles: membership.titles,
                 series_movies: membership.series_movies,
                 delay_profiles,
-                maintenance_rule_sets: references.maintenance,
+                lifecycle_rule_sets: references.lifecycle,
                 release_rule_sets: references.release,
                 managed_tag_filters: references.managed_tag_filters,
                 request_rule_sets: references.request,
@@ -425,7 +425,7 @@ impl AppUseCase {
             titles: membership.titles,
             series_movies: membership.series_movies,
             delay_profiles,
-            maintenance_rule_sets: references.maintenance,
+            lifecycle_rule_sets: references.lifecycle,
             release_rule_sets: references.release,
             managed_tag_filters: references.managed_tag_filters,
             request_rule_sets: references.request,
@@ -623,7 +623,7 @@ impl AppUseCase {
     ///
     /// The read half of [`Self::require_registered_title_tags`], for callers
     /// that need to decide what to do about an undefined label rather than
-    /// refuse outright — the maintenance executor holds its candidate instead
+    /// refuse outright — the lifecycle executor holds its candidate instead
     /// of failing it, and wants to know without catching an error.
     pub(crate) async fn undefined_title_tag_labels(
         &self,
@@ -745,7 +745,7 @@ impl AppUseCase {
     ///
     /// Request rules are matched a little more tightly, on the quoted label
     /// (`"<label>"`) rather than the bare word, because a request matcher's
-    /// only use for a tag is inside a `tags contains "<label>"` head, and the
+    /// only use for a tag is inside an `add_tags := ["<label>"]` head, and the
     /// quotes keep a short label like `hd` from matching every identifier that
     /// happens to contain it. It is still a substring match, not a parse: an
     /// author who builds the string at runtime is not counted.
@@ -763,23 +763,23 @@ impl AppUseCase {
         &self,
         label: &str,
     ) -> AppResult<RuleSetTagReferenceCounts> {
-        let mut maintenance = 0_u64;
+        let mut lifecycle = 0_u64;
         for rule_set in self
             .services
             .customization
-            .maintenance_rule_sets
+            .lifecycle_rule_sets
             .list_rule_sets()
             .await?
         {
             if let Some(revision) = self
                 .services
                 .customization
-                .maintenance_rule_sets
+                .lifecycle_rule_sets
                 .get_revision(&rule_set.id, rule_set.current_revision_number)
                 .await?
                 && revision.rego_source.contains(label)
             {
-                maintenance += 1;
+                lifecycle += 1;
             }
         }
 
@@ -805,28 +805,28 @@ impl AppUseCase {
         }
 
         let quoted = format!("\"{label}\"");
-        let mut request = 0_u64;
-        for rule_set in self
+        let request_keys: Vec<(String, i64)> = self
             .services
             .customization
             .request_rule_sets
             .list_rule_sets()
             .await?
-        {
-            if let Some(revision) = self
-                .services
-                .customization
-                .request_rule_sets
-                .get_revision(&rule_set.id, rule_set.current_revision_number)
-                .await?
-                && revision.rego_source.contains(&quoted)
-            {
-                request += 1;
-            }
-        }
+            .into_iter()
+            .map(|rule_set| (rule_set.id, rule_set.current_revision_number))
+            .collect();
+        let request = self
+            .services
+            .customization
+            .request_rule_sets
+            .get_revisions(&request_keys)
+            .await?
+            .into_iter()
+            .flatten()
+            .filter(|revision| revision.rego_source.contains(&quoted))
+            .count() as u64;
 
         Ok(RuleSetTagReferenceCounts {
-            maintenance,
+            lifecycle,
             release,
             managed_tag_filters,
             request,
@@ -838,7 +838,7 @@ impl AppUseCase {
 /// paths can rewrite: they are what the warning is about.
 #[derive(Clone, Copy, Debug, Default)]
 struct RuleSetTagReferenceCounts {
-    maintenance: u64,
+    lifecycle: u64,
     release: u64,
     managed_tag_filters: u64,
     request: u64,
