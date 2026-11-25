@@ -159,8 +159,8 @@ pub struct MetadataSeriesPayload {
     pub year: Option<i32>,
     /// Provider status.
     pub status: String,
-    /// First-air date.
-    pub first_aired: Date,
+    /// First-air date, or null when the provider has none.
+    pub first_aired: Option<Date>,
     /// Overview text.
     pub overview: String,
     /// Network name.
@@ -233,8 +233,8 @@ pub struct MetadataEpisodePayload {
     pub season_number: i32,
     /// Episode title.
     pub name: String,
-    /// Original air date.
-    pub aired: Date,
+    /// Original air date, or null when the episode is undated.
+    pub aired: Option<Date>,
     /// Runtime in minutes.
     pub runtime_minutes: i32,
     /// Whether the episode is marked filler.
