@@ -4497,7 +4497,6 @@ export const REQUEST_RULE_SET_FIELDS = `
     name
     description
     enabled
-    evaluationMode
     applicability
     libraryIds
     declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}

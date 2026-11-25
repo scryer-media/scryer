@@ -2534,7 +2534,6 @@ input CreateLifecycleRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
-	applicability: RequestRuleApplicabilityValue
 	"""
 	The simple builder's document for the source, or omitted for a rule
 	written by hand.
@@ -2940,6 +2939,10 @@ input CreateRequestRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	"""
+	Which kinds of requests this rule handles. Omitted means acquisition only.
+	"""
+	applicability: RequestRuleApplicabilityValue
 	"""
 	The visual builder's document, stored as given: a JSON object of at
 	most 64 KiB. Omitted or null stores none.
@@ -11069,9 +11072,15 @@ sampled bytes and size agree, not that the complete files are identical.
 type LibraryContentBlockPayload {
 	id: ID!
 	libraryId: ID!
+	"""
+	Versioned identity scheme; sampled content and release hashes are distinct.
+	"""
 	scheme: String!
 	sizeBytes: Int!
 	sampleBytes: Int!
+	"""
+	BLAKE3 digest of the sampled bytes, not a full-file digest.
+	"""
 	sampleBlake3: String!
 	reason: String
 	approvingActorId: ID
@@ -17817,6 +17826,78 @@ type MediaHdrCapabilitiesPayload {
 }
 
 """
+Durable execution state for an approved media issue.
+"""
+enum MediaIssueExecutionStatusValue {
+	NONE
+	BLOCKED
+	RECYCLING
+	RECYCLE_FAILED
+	NO_ELIGIBLE_RELEASE
+	DOWNLOAD_QUEUED
+	REPLACEMENT_IMPORTED
+	SEARCHING
+	COMPLETE
+	FAILED
+}
+
+"""
+A bad-media report and its review/execution state. Filesystem paths are not exposed.
+"""
+type MediaIssuePayload {
+	id: ID!
+	libraryId: ID!
+	titleId: ID!
+	mediaFileId: ID!
+	reporterUserId: ID!
+	reasonCode: String!
+	details: String
+	"""
+	Proposed action, not an authorization.
+	"""
+	remediation: MediaIssueRemediationValue!
+	"""
+	Action explicitly authorized by the final review or policy.
+	"""
+	authorizedRemediation: MediaIssueRemediationValue
+	status: MediaIssueStatusValue!
+	affectedEpisodeIds: [ID!]!
+	affectedSeriesMovieLinkIds: [ID!]!
+	ruleDecisionId: ID
+	ruleInputSchemaVersion: Int
+	ruleInputHash: String
+	ruleSnapshotJson: String
+	ruleVotesJson: [String!]!
+	ruleEffectiveOutcome: String
+	rulePolicyOutcome: String
+	ruleHoldReasons: [String!]!
+	reviewedByUserId: ID
+	reviewedAt: DateTime
+	executionStatus: MediaIssueExecutionStatusValue!
+	executionErrorCode: String
+	createdAt: DateTime!
+	updatedAt: DateTime!
+}
+
+"""
+What a media issue requests after confirmation.
+"""
+enum MediaIssueRemediationValue {
+	MARK_BAD
+	RECYCLE_AND_SEARCH
+}
+
+"""
+Review state of a media issue.
+"""
+enum MediaIssueStatusValue {
+	PENDING
+	APPROVED
+	REJECTED
+	CANCELED
+}
+
+"""
 Mastering display chromaticity coordinates and luminance.
 """
 type MediaMasteringDisplayPayload {
@@ -20168,7 +20249,7 @@ type MutationRoot {
 	): TitlePayload!
 	"""
 	Add and remove user tags across a set of titles, returning the updated titles.
-
+	
 	A patch, not a replacement: reserved `scryer:` settings entries are left
 	exactly as they were, and the merge happens inside the store transaction
 	so a concurrent title-settings save cannot clobber it. Every title's
@@ -20192,7 +20273,7 @@ type MutationRoot {
 	): TitlePayload!
 	"""
 	Correct which existing folder a title owns, rescanning it; never moves files.
-
+	
 	Ownership of a folder another title holds is never taken silently: the
 	default resolution is refused and the caller must choose SWAP or
 	TAKE_OVER.
@@ -20277,7 +20358,7 @@ type MutationRoot {
 	): SeriesMovieLinkPayload!
 	"""
 	Adds and/or removes user tags across a set of series movies.
-
+	
 	Series-movie tags live on the link rather than on a title, so this is a
 	separate mutation from `updateTitleTags`. The rules are the same ones:
 	labels must already exist in the title-tag registry, they are normalized
@@ -20970,7 +21051,7 @@ type MutationRoot {
 	): DelayProfileDeletionPayload!
 	"""
 	Defines a new title tag after checking the catalog-settings permission.
-
+	
 	Deciding which tags exist is catalog configuration, exactly like a delay
 	profile. Deciding which titles carry them is title management and is
 	checked per library by `updateTitleTags` instead.
@@ -20983,7 +21064,7 @@ type MutationRoot {
 	): TitleTagDefinitionMutationPayload!
 	"""
 	Renames or re-describes a title tag after checking the catalog-settings permission.
-
+	
 	A rename rewrites every title and delay profile carrying the old label.
 	Rule sources are immutable and are never rewritten, so the returned
 	counts name how many rules referenced the old label and will stop
@@ -21613,7 +21694,7 @@ type MutationRoot {
 	): DeleteMediaFilePayload!
 	"""
 	Assign an imported series file to different episodes of its own title.
-
+	
 	The links move and the file is renamed on disk to the new episodes'
 	name, in one operation. A target with a primary file is refused unless
 	`replace` is set, which demotes that file to additional; no file is
@@ -21628,7 +21709,7 @@ type MutationRoot {
 	"""
 	Accept a background job deleting every media file linked to the supplied
 	episodes of one title.
-
+	
 	The aggregate preview from `deleteEpisodeFilesPreview` must still match
 	when files are removed from disk. Per-file results land on the returned
 	job run: a file that fails is recorded there while the rest still run.
@@ -21667,6 +21748,61 @@ type MutationRoot {
 		input: RehydrateAllMetadataInput!
 	): RehydrateAllMetadataPayload!
 	"""
+	Submit a bad-media report for one existing media file.
+	"""
+	submitMediaIssue(
+		"""
+		Existing media file and requested bad-media remediation.
+		"""
+		input: SubmitMediaIssueInput!
+	): MediaIssuePayload!
+	"""
+	Explicitly confirm recycle-and-search for a pending media issue through
+	the existing preview/fingerprint/typed-confirmation deletion job.
+	"""
+	approveMediaIssueRecycleSearch(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!,
+		"""
+		Preview fingerprint from the deletion preview.
+		"""
+		previewFingerprint: String!,
+		"""
+		Typed confirmation required by the preview.
+		"""
+		typedConfirmation: String
+	): MediaIssuePayload!
+	"""
+	Confirm a sampled content block for a pending report without moving any files.
+	"""
+	approveMediaIssue(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!
+	): MediaIssuePayload!
+	"""
+	Reject a pending media issue without creating or changing content blocks.
+	"""
+	rejectMediaIssue(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!
+	): MediaIssuePayload!
+	"""
+	Explicitly clear a library's confirmed sampled-content block.
+	Clearing does not restore recycled files or remove a separate release block.
+	"""
+	clearLibraryContentBlock(
+		"""
+		Confirmed content-block identity.
+		"""
+		blockId: ID!
+	): ClearLibraryContentBlockPayload!
+	"""
 	Preview survivor selection and every file disposition before settling conflicts.
 	"""
 	previewPendingImportConflicts(
@@ -21686,15 +21822,15 @@ type MutationRoot {
 	): PendingImportConflictTaskPayload!
 	"""
 	Confirm a previewed location operation and start it in the background.
-
+	
 	The plan is rebuilt server side and compared against the fingerprint the
 	client previewed; a stale fingerprint, or a selection that still holds
 	blocked or unresolved titles, is refused instead of started.
-
+	
 	The mode is confirmed the same way everything else is: it rebuilds the
 	plan, so confirming `USER_MOVED_FILES` against a managed-move
 	fingerprint fails the comparison rather than running the other workflow.
-
+	
 	A root change (US4) and a root consolidation (US5) confirm through the
 	same mutation, the same `rootScope` target, and the same
 	typed-confirmation field; only the destination inside that target
@@ -21708,7 +21844,7 @@ type MutationRoot {
 	): StartLocationOperationPayload!
 	"""
 	Request cancellation; the operation stops at its next title checkpoint.
-
+	
 	Titles already finished stay where the operation put them: cancelling is
 	a safe stop, never a rollback.
 	"""
@@ -21721,7 +21857,7 @@ type MutationRoot {
 	"""
 	Give up on an operation nobody is running: mark it failed, close its
 	Activity run, and release the titles and roots it owns.
-
+	
 	Nothing on disk is touched. Finished titles stay where the operation
 	put them, and the operation can be retried from its last verified
 	checkpoint once the storage is back. An operation whose runner is still
@@ -21736,7 +21872,7 @@ type MutationRoot {
 	"""
 	Pick an interrupted operation back up from its last verified checkpoint,
 	or retry a failed or canceled one from the same place.
-
+	
 	Finished titles are never reprocessed: a retry repeats only the titles
 	that did not settle, after reopening the operation so Activity shows it
 	as queued again. An operation that already finished, or was stored
@@ -21751,7 +21887,7 @@ type MutationRoot {
 	): ResumeLocationOperationPayload!
 	"""
 	Read a request subject's metadata once and keep it for the previews and the submit that follow; requires request permission on the target library.
-
+	
 	The request dialog calls this when it opens. `previewMyRequestDecision`
 	reads the staged record and never fetches metadata itself, so a subject
 	that was not staged previews as metadata unavailable.
@@ -22122,7 +22258,7 @@ type MutationRoot {
 	): LifecycleRuleSet!
 	"""
 	Delete a lifecycle rule set and every revision it owns.
-
+	
 	Refused for a rule that has already run actions, because the delete
 	cascades and would take the record of what it did with it, and for one
 	that is still tracking subjects. Set the rule's mode to `DISABLED`
@@ -22154,7 +22290,7 @@ type MutationRoot {
 	): LifecyclePreviewPayload!
 	"""
 	Set a lifecycle rule to Disabled, Dry run, or Enabled.
-
+	
 	Enabled arms the effects the rule's own action can have. Enabling a rule
 	that can delete files requires a confirmation of the reviewed revision,
 	library scope, and current candidate count. A rule moved back to
@@ -22198,7 +22334,7 @@ type MutationRoot {
 	): LifecycleInstanceGates!
 	"""
 	Exclude a subject from one lifecycle rule, or from every rule when no rule is named.
-
+	
 	The exclusion takes effect at the next evaluation, which is also where an
 	existing candidate for the subject moves to the excluded state.
 	"""
@@ -22219,7 +22355,7 @@ type MutationRoot {
 	): DeleteLifecycleExclusionPayload!
 	"""
 	Run lifecycle evaluation now.
-
+	
 	Without a rule, this starts the ordinary scheduled job so the run shows
 	up in the system-jobs surface, and returns as soon as it is accepted.
 	Scoped to one rule it runs inline instead, because the job seam carries
@@ -22233,7 +22369,7 @@ type MutationRoot {
 	): LifecycleEvaluationTriggerPayload!
 	"""
 	Create a request rule set together with its first source revision.
-
+	
 	The rule is created disabled. Enabling it is a second, deliberate call.
 	"""
 	createRequestRuleSet(
@@ -22244,7 +22380,7 @@ type MutationRoot {
 	): RequestRuleSetDetail!
 	"""
 	Replace a rule set's source by appending revision N+1.
-
+	
 	Revision N is left exactly as written, so a decision recorded against it
 	stays attributable.
 	"""
@@ -22278,7 +22414,7 @@ type MutationRoot {
 	): RequestRuleSet!
 	"""
 	Delete a request rule set and every revision it owns.
-
+	
 	The decisions it took part in are **kept**: a trace is the explanation of
 	a decision already made, and it outlives the rule that produced it.
 	"""
@@ -22299,7 +22435,7 @@ type MutationRoot {
 	): RequestRuleValidationPayload!
 	"""
 	Evaluate one rule against one hypothetical request without saving anything.
-
+	
 	This is the author-side preview: it returns the vote, the reasons, the
 	tags, **and** the exact input document the rule saw. The requester-facing
 	equivalent is the `previewMyRequestDecision` query, which returns none of
@@ -22322,7 +22458,7 @@ type MutationRoot {
 	): TitleClaim!
 	"""
 	Keep a title permanently by ending its lease, so it carries no expiry.
-
+	
 	The lease stays as history in the `CONVERTED` state, so the trail still
 	says a request produced it and an administrator chose to drop the
 	expiry.
@@ -26133,11 +26269,11 @@ type QueryRoot {
 	): ChangeTitleFolderPreviewPayload!
 	"""
 	Preview moving selected titles to another library or root; nothing is moved.
-
+	
 	The returned fingerprint is what `startLocationOperation` confirms. A
 	changed filesystem, catalog, selection, destination, or mode produces a
 	different fingerprint and voids the confirmation.
-
+	
 	The mode picks which preview runs: the managed move plans the copy, and
 	`USER_MOVED_FILES` re-points the catalog at a move the user already made
 	themselves. The reported mode can still come back as `CATALOG_ONLY` when
@@ -26152,14 +26288,14 @@ type QueryRoot {
 	"""
 	Preview a **Change root** (US4 + US5): moving one root's content to a
 	new path, or folding it into another root of the same library.
-
+	
 	FR-020 is one settings action with two destinations, so it is one query
 	with two destinations. Name `destinationPath` for a new location, or
 	`destinationRootId` for a root that already exists; a `destinationPath`
 	that resolves to a configured root of this library is the same request
 	as naming that root, and is planned as a fold either way. Naming both,
 	or neither, is refused.
-
+	
 	Root scoped, so there is no selection: every title assigned to the root
 	goes, and the ledger says so rather than offering a way to exclude one
 	(FR-023). The returned fingerprint is what `startLocationOperation`
@@ -26261,7 +26397,7 @@ type QueryRoot {
 	"""
 	What planning a location operation's unfinished work again would
 	select: the same destination and mode, and the titles it did not finish.
-
+	
 	Read on demand for a stopped operation, since it joins the stored plan
 	with the checkpoints. Null for an unknown operation, one stored without
 	a readable plan, and for the root-scoped operation types, which are
@@ -26275,7 +26411,7 @@ type QueryRoot {
 	): LocationRetrySelectionPayload
 	"""
 	Which files one location operation renames and deduplicates, per title.
-
+	
 	Activity's counters say how many; this says which ones, and whether each
 	has happened yet or is still only what the confirmed plan intends
 	(FR-091). It is a separate read from `locationOperation` because the
@@ -26408,6 +26544,40 @@ type QueryRoot {
 		"""
 		limit: Int
 	): [TitleReleaseBlocklistEntryPayload!]!
+	"""
+	List bounded confirmed bad-media content blocks for a library.
+	"""
+	libraryContentBlocks(
+		"""
+		Library identity whose content blocks are returned.
+		"""
+		libraryId: ID!,
+		"""
+		Maximum entries to return; defaults to 100 and clamps to 1 through 1000.
+		"""
+		limit: Int
+	): [LibraryContentBlockPayload!]!
+	"""
+	List bounded bad-media reports for a library.
+	"""
+	mediaIssues(
+		"""
+		Library identity whose bad-media reports are returned.
+		"""
+		libraryId: ID!,
+		"""
+		Optional review status filter.
+		"""
+		status: MediaIssueStatusValue,
+		"""
+		Maximum entries to return; defaults to 100 and is clamped to 1 through 1000.
+		"""
+		limit: Int,
+		"""
+		Rows to skip in newest-first report order.
+		"""
+		offset: Int
+	): [MediaIssuePayload!]!
 	"""
 	Return grab, upgrade, import, and failure counts for a trailing window and the window before it.
 	"""
@@ -26935,7 +27105,7 @@ type QueryRoot {
 	delayProfiles: [DelayProfilePayload!]!
 	"""
 	Lists every administrator-defined title tag with the number of titles carrying it.
-
+	
 	Readable by any authenticated caller: the tag picker and the catalog
 	filter both need the vocabulary, and the vocabulary says nothing about
 	any particular title.
@@ -27296,7 +27466,7 @@ type QueryRoot {
 	): [LifecycleRuleRevision!]!
 	"""
 	List lifecycle candidates the lifecycle evaluator has recorded; requires system-settings management permission.
-
+	
 	Candidates are ordered by due time across rules, soonest first, and
 	none are returned while lifecycle is switched off for the instance.
 	"""
@@ -27328,7 +27498,7 @@ type QueryRoot {
 	): [LifecycleCandidate!]!
 	"""
 	List recorded lifecycle evaluation runs, newest first.
-
+	
 	Runs carry counts and timing rather than subjects, so the result-display
 	gate does not hide them: they are how an operator sees that dark
 	evaluation is working at all.
@@ -27349,7 +27519,7 @@ type QueryRoot {
 	lifecycleInstanceGates: LifecycleInstanceGates!
 	"""
 	List lifecycle exclusions, newest first.
-
+	
 	Narrowing by rule returns that rule's own exclusions together with every
 	global one, because both are what actually stop it acting.
 	"""
@@ -27400,7 +27570,7 @@ type QueryRoot {
 	): [RequestRuleRevision!]!
 	"""
 	Read the decision recorded for one media request, or null when it was never evaluated.
-
+	
 	Two audiences reach this. A manager of the request's library sees the
 	whole trace. The **requester** sees the outcome, the fallback reason, the
 	reasons, and the tags, with `votes` emptied, which is the same redaction
@@ -27431,7 +27601,7 @@ type QueryRoot {
 	requestRuleInputReference: JSON!
 	"""
 	Evaluate a draft request without submitting it; requires request permission on the target library.
-
+	
 	Takes the submit mutation's own input type, deliberately: the pre-flight
 	and the submit share one input, one metadata read, and one evaluation
 	function, which is what makes "identical drafts yield identical
@@ -28992,6 +29162,24 @@ type RequestDeclaredActions {
 }
 
 """
+The hypothetical request an author-side preview is evaluated against.
+
+It names a real user and a real library on purpose: the question a preview
+answers is "what would this rule do to *this person* asking for *this
+title*", and a synthetic requester would exercise none of the permission,
+history, or linked-provider facts that make request rules useful.
+"""
+input RequestMediaIssuePreviewInput {
+	"""
+	Existing file resolved in the sample library. All associations and
+	provenance come from the server, as on submission.
+	"""
+	mediaFileId: ID!
+	reasonCode: String!
+	remediation: String!
+}
+
+"""
 Requester-side pre-flight: what would happen if this draft were submitted
 now.
 
@@ -29048,6 +29236,12 @@ type RequestPreflightReason {
 	Name of the rule that emitted it.
 	"""
 	ruleName: String!
+}
+
+enum RequestRuleApplicabilityValue {
+	ACQUISITION
+	MEDIA_ISSUE
+	ACQUISITION_AND_MEDIA_ISSUE
 }
 
 """
@@ -29195,14 +29389,6 @@ type RequestRuleRevision {
 	createdAt: DateTime!
 }
 
-"""
-The hypothetical request an author-side preview is evaluated against.
-
-It names a real user and a real library on purpose: the question a preview
-answers is "what would this rule do to *this person* asking for *this
-title*", and a synthetic requester would exercise none of the permission,
-history, or linked-provider facts that make request rules useful.
-"""
 input RequestRuleSampleInput {
 	"""
 	User to evaluate as.
@@ -29212,6 +29398,8 @@ input RequestRuleSampleInput {
 	Library to evaluate against.
 	"""
 	libraryId: ID!
+	kind: String
+	mediaIssue: RequestMediaIssuePreviewInput
 	"""
 	Provider identifiers of the sample title. An empty list is a legitimate
 	preview of requester facts alone, and leaves every metadata fact
@@ -29268,6 +29456,7 @@ type RequestRuleSet {
 	Whether the rule set takes part in deciding requests.
 	"""
 	enabled: Boolean!
+	applicability: RequestRuleApplicabilityValue!
 	"""
 	Libraries the rule is confined to. Empty means every library.
 	"""
@@ -32296,6 +32485,16 @@ input SubmitExternalReleaseInput {
 	Release flags: freeleech, halfleech, double_upload, internal, scene, freeleech_75, freeleech_25, nuked, subtitles, golden, or approved.
 	"""
 	flags: [String!]! = []
+}
+
+"""
+Report one existing media file as bad.
+"""
+input SubmitMediaIssueInput {
+	mediaFileId: ID!
+	reasonCode: String!
+	details: String
+	remediation: MediaIssueRemediationValue!
 }
 
 """
@@ -36665,6 +36864,7 @@ input UpdateRequestRuleMetadataInput {
 	Replacement library scope. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	applicability: RequestRuleApplicabilityValue
 }
 
 """
@@ -37326,7 +37526,7 @@ type WantedItemPayload {
 	sourceProvider: String
 	"""
 	The bar this scope's landed file sets, or null when nothing occupies it.
-
+	
 	The re-derived canonical score of the primary media file occupying the
 	scope: computed on read from the row, never read back from the persisted
 	`acquisition_score`, which is display history and is only valid while the
@@ -37334,7 +37534,7 @@ type WantedItemPayload {
 	unchanged. This is the same number the admission gate compares a
 	candidate against, so the value shown here and the value a grab or import
 	decision used cannot disagree.
-
+	
 	It used to be a per-scope ledger column that only held a landed score in
 	one of its five lifecycle states; after a rejected import it held the
 	score of a release that never landed, which read lower than the

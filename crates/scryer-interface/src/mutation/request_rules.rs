@@ -196,7 +196,6 @@ impl RequestRuleMutations {
         rule_set_payload(ctx, &app, &actor, &rule_set).await
     }
 
-
     /// Enable or disable a request rule set.
     async fn set_request_rule_enabled(
         &self,

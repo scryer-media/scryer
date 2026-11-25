@@ -25,11 +25,9 @@ import { useSessionUser } from "@/lib/hooks/use-auth";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { LibraryRecord } from "@/lib/types";
 import type {
-  RequestEvaluationMode,
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
-  RequestRulePreviewSource,
   RequestRuleSetDetail,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
@@ -85,7 +83,7 @@ import {
   createRequestRuleSetMutation,
   deleteRequestRuleSetMutation,
   previewRequestRuleMutation,
-  setRequestRuleEvaluationModeMutation,
+  setRequestRuleEnabledMutation,
   updateRequestRuleSourceMutation,
   updateRequestRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
@@ -167,8 +165,6 @@ export function SettingsRequestRulesContainer({
       isEditorOpen,
     );
 
-  const [previewSource, setPreviewSource] =
-    useState<RequestRulePreviewSource>("stored");
   const [previewRuleSetId, setPreviewRuleSetId] = useState("");
   const [previewSample, setPreviewSample] =
     useState<RequestRulePreviewSample>(initialPreviewSample);
@@ -669,15 +665,15 @@ export function SettingsRequestRulesContainer({
     }
   };
 
-  const setRuleMode = useCallback(
-    async (record: RequestRuleSetRecord, mode: RequestEvaluationMode) => {
-      if (mode === record.evaluationMode) return;
+  const setRuleEnabled = useCallback(
+    async (record: RequestRuleSetRecord, enabled: boolean) => {
+      if (enabled === record.enabled) return;
       setMutatingRuleSetId(record.id);
       try {
         const { error } = await client
-          .mutation(setRequestRuleEvaluationModeMutation, {
+          .mutation(setRequestRuleEnabledMutation, {
             ruleSetId: record.id,
-            mode,
+            enabled,
           })
           .toPromise();
         if (error) throw error;
@@ -725,9 +721,7 @@ export function SettingsRequestRulesContainer({
       const { data, error } = await client
         .mutation(previewRequestRuleMutation, {
           input: {
-            ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
-            regoSource:
-              previewSource === "draft" ? ruleSetDraft.regoSource : null,
+            ruleSetId: previewRuleSetId,
             sample:
               previewSample.kind === "MEDIA_ISSUE"
                 ? {
@@ -761,14 +755,7 @@ export function SettingsRequestRulesContainer({
     } finally {
       setPreviewing(false);
     }
-  }, [
-    client,
-    previewRuleSetId,
-    previewSample,
-    previewSource,
-    ruleSetDraft.regoSource,
-    t,
-  ]);
+  }, [client, previewRuleSetId, previewSample, t]);
 
   return (
     <>
@@ -800,9 +787,9 @@ export function SettingsRequestRulesContainer({
         deleteRuleSet={setPendingDeleteRuleSet}
         validating={validating}
         validationResult={validationResult}
-        setRuleMode={(record, mode) => void setRuleMode(record, mode)}
-        previewSource={previewSource}
-        setPreviewSource={setPreviewSource}
+        setRuleEnabled={(record, enabled) =>
+          void setRuleEnabled(record, enabled)
+        }
         canManagePermissions={canManagePermissions}
         previewRuleSetId={previewRuleSetId}
         setPreviewRuleSetId={setPreviewRuleSetId}

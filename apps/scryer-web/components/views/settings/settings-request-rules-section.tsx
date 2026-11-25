@@ -75,11 +75,9 @@ import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { LibraryRecord } from "@/lib/types";
 import type {
   RequestDecisionOutcome,
-  RequestEvaluationMode,
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
-  RequestRulePreviewSource,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
   RequestRuleUserOption,
@@ -185,16 +183,10 @@ type SettingsRequestRulesSectionProps = {
   deleteRuleSet: (record: RequestRuleSetRecord) => void;
   validating: boolean;
   validationResult: RequestRuleValidationResult | null;
-  applyRequesters: (usernames: string[]) => void;
-  setRuleMode: (
-    record: RequestRuleSetRecord,
-    mode: RequestEvaluationMode,
-  ) => void;
+  setRuleEnabled: (record: RequestRuleSetRecord, enabled: boolean) => void;
   /// Saving a rule that reads requester fields needs Manage permissions; the
   /// editor warns before save rather than after the API refuses.
   canManagePermissions: boolean;
-  previewSource: RequestRulePreviewSource;
-  setPreviewSource: (source: RequestRulePreviewSource) => void;
   previewRuleSetId: string;
   setPreviewRuleSetId: (id: string) => void;
   previewSample: RequestRulePreviewSample;
@@ -591,11 +583,7 @@ function DecisionRow({
 /// document the matcher actually saw, which is the only honest answer to "why
 /// did this not match".
 function RequestPreviewPanel({
-  isEditorOpen,
-  draftName,
   canManagePermissions,
-  previewSource,
-  setPreviewSource,
   ruleSetRecords,
   libraries,
   qualityProfiles,
@@ -611,6 +599,7 @@ function RequestPreviewPanel({
   previewError,
 }: Pick<
   SettingsRequestRulesSectionProps,
+  | "canManagePermissions"
   | "ruleSetRecords"
   | "libraries"
   | "qualityProfiles"
@@ -662,11 +651,16 @@ function RequestPreviewPanel({
     };
   }, [facet, searchPreviewTitles, titleQuery]);
 
+  const isMediaIssue = previewSample.kind === "MEDIA_ISSUE";
   const canRun =
     !previewing &&
     Boolean(previewSample.userId) &&
     Boolean(previewSample.libraryId) &&
-    previewSample.externalIds.length > 0 &&
+    (isMediaIssue
+      ? canManagePermissions &&
+        Boolean(previewSample.mediaIssue.mediaFileId.trim()) &&
+        Boolean(previewSample.mediaIssue.reasonCode.trim())
+      : previewSample.externalIds.length > 0) &&
     Boolean(previewRuleSetId);
 
   const decision = previewResult?.decision ?? null;
@@ -678,6 +672,29 @@ function RequestPreviewPanel({
       help={t("settings.requestPreviewSubtitle")}
     >
       <div className={FORM_SHELL}>
+        <SingleSelectField
+          id="settings-request-preview-kind"
+          label={t("settings.requestRuleApplicability")}
+          value={previewSample.kind}
+          onValueChange={(kind) =>
+            setPreviewSample((prev) => ({
+              ...prev,
+              kind:
+                kind === "MEDIA_ISSUE" ? "MEDIA_ISSUE" : "ACQUISITION_REQUEST",
+            }))
+          }
+          options={[
+            {
+              value: "ACQUISITION_REQUEST",
+              label: t("settings.requestRuleApplicabilityAcquisition"),
+            },
+            {
+              value: "MEDIA_ISSUE",
+              label: t("settings.requestRuleApplicabilityMediaIssue"),
+              disabled: !canManagePermissions,
+            },
+          ]}
+        />
         <div className="grid gap-3 md:grid-cols-2">
           <div className="flex min-w-0 flex-col gap-1.5">
             <label
@@ -725,133 +742,211 @@ function RequestPreviewPanel({
             }
             libraries={libraries}
           />
-          <SingleSelectField
-            id="settings-request-preview-profile"
-            label={t("settings.requestPreviewProfile")}
-            placeholder={t("settings.requestPreviewProfilePlaceholder")}
-            value={previewSample.qualityProfileId}
-            onValueChange={(value) =>
-              setPreviewSample((prev) => ({ ...prev, qualityProfileId: value }))
-            }
-            options={qualityProfiles.map((profile) => ({
-              value: profile.id,
-              label: profile.name,
-            }))}
-          />
-          <SingleSelectField
-            id="settings-request-preview-monitor"
-            label={t("settings.requestPreviewMonitor")}
-            value={previewSample.monitorType}
-            onValueChange={(value) =>
-              setPreviewSample((prev) => ({ ...prev, monitorType: value }))
-            }
-            options={PREVIEW_MONITOR_TYPES.map((monitorType) => ({
-              value: monitorType,
-              label: monitorType,
-            }))}
-          />
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <SingleSelectField
-            id="settings-request-preview-lease-mode"
-            label={t("settings.requestPreviewLease")}
-            value={previewSample.leaseForever ? "forever" : "days"}
-            onValueChange={(value) =>
-              setPreviewSample((prev) => ({
-                ...prev,
-                leaseForever: value === "forever",
-              }))
-            }
-            options={[
-              { value: "forever", label: t("search.keepForForever") },
-              { value: "days", label: t("settings.requestPreviewLeaseDays") },
-            ]}
-          />
-          {previewSample.leaseForever ? null : (
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <label
-                htmlFor="settings-request-preview-lease-days"
-                className="block text-sm font-medium text-[var(--scry-ink2)]"
-              >
-                {t("settings.requestPreviewLeaseDays")}
+          {isMediaIssue ? (
+            <>
+              <label className="space-y-1.5">
+                <Label asChild>
+                  <span>{t("settings.requestPreviewMediaFileId")}</span>
+                </Label>
+                <Input
+                  id="settings-request-preview-media-file"
+                  value={previewSample.mediaIssue.mediaFileId}
+                  onChange={(event) =>
+                    setPreviewSample((prev) => ({
+                      ...prev,
+                      mediaIssue: {
+                        ...prev.mediaIssue,
+                        mediaFileId: event.target.value,
+                      },
+                    }))
+                  }
+                />
               </label>
-              <Input
-                id="settings-request-preview-lease-days"
-                {...integerInputProps}
-                min={1}
-                max={REQUEST_LEASE_DAYS_MAX}
-                value={previewSample.leaseDays}
-                onChange={(event) =>
+              <label className="space-y-1.5">
+                <Label asChild>
+                  <span>{t("settings.requestPreviewIssueReason")}</span>
+                </Label>
+                <Input
+                  id="settings-request-preview-issue-reason"
+                  value={previewSample.mediaIssue.reasonCode}
+                  onChange={(event) =>
+                    setPreviewSample((prev) => ({
+                      ...prev,
+                      mediaIssue: {
+                        ...prev.mediaIssue,
+                        reasonCode: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </label>
+              <SingleSelectField
+                id="settings-request-preview-remediation"
+                label={t("settings.requestPreviewRemediation")}
+                value={previewSample.mediaIssue.remediation}
+                onValueChange={(value) =>
                   setPreviewSample((prev) => ({
                     ...prev,
-                    leaseDays: Number(sanitizeDigits(event.target.value)) || 0,
+                    mediaIssue: {
+                      ...prev.mediaIssue,
+                      remediation:
+                        value === "recycle_and_search" ? value : "mark_bad",
+                    },
                   }))
                 }
+                options={[
+                  {
+                    value: "mark_bad",
+                    label: t("settings.requestPreviewMarkBad"),
+                  },
+                  {
+                    value: "recycle_and_search",
+                    label: t("settings.requestPreviewRecycleAndSearch"),
+                  },
+                ]}
               />
-            </div>
+            </>
+          ) : (
+            <>
+              <SingleSelectField
+                id="settings-request-preview-profile"
+                label={t("settings.requestPreviewProfile")}
+                placeholder={t("settings.requestPreviewProfilePlaceholder")}
+                value={previewSample.qualityProfileId}
+                onValueChange={(value) =>
+                  setPreviewSample((prev) => ({
+                    ...prev,
+                    qualityProfileId: value,
+                  }))
+                }
+                options={qualityProfiles.map((profile) => ({
+                  value: profile.id,
+                  label: profile.name,
+                }))}
+              />
+              <SingleSelectField
+                id="settings-request-preview-monitor"
+                label={t("settings.requestPreviewMonitor")}
+                value={previewSample.monitorType}
+                onValueChange={(value) =>
+                  setPreviewSample((prev) => ({ ...prev, monitorType: value }))
+                }
+                options={PREVIEW_MONITOR_TYPES.map((monitorType) => ({
+                  value: monitorType,
+                  label: monitorType,
+                }))}
+              />
+            </>
           )}
         </div>
 
-        <div>
-          <Label className="mb-2 block">
-            {t("settings.requestPreviewMedia")}
-          </Label>
-          <Input
-            id="settings-request-preview-title-search"
-            value={titleQuery}
-            placeholder={t("settings.requestPreviewMediaPlaceholder")}
-            onChange={(event) => setTitleQuery(event.target.value)}
-          />
-          {previewSample.titleLabel ? (
-            <p
-              id="settings-request-preview-title-selected"
-              className="mt-1 text-xs text-muted-foreground"
-            >
-              {t("settings.requestPreviewMediaSelected", {
-                title: previewSample.titleLabel,
-              })}
-            </p>
-          ) : null}
-          {titleSearching ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("label.searching")}
-            </p>
-          ) : null}
-          {titleResults.length > 0 ? (
-            <ul className="mt-2 space-y-1">
-              {titleResults.slice(0, 8).map((result) => {
-                const key = String(
-                  result.smgId ?? result.tvdbId ?? result.name,
-                );
-                return (
-                  <li key={key}>
-                    <button
-                      id={settingsRequestPreviewTitleResultId(key)}
-                      type="button"
-                      className="w-full rounded border border-border px-2 py-1 text-left text-xs transition-colors hover:border-primary/40"
-                      onClick={() => {
-                        setPreviewSample((prev) => ({
-                          ...prev,
-                          titleLabel: result.year
-                            ? `${result.name} (${result.year})`
-                            : result.name,
-                          externalIds: metadataExternalIds(result),
-                        }));
-                        setTitleResults([]);
-                        setTitleQuery("");
-                      }}
-                    >
-                      {result.name}
-                      {result.year ? ` (${result.year})` : ""}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-        </div>
+        {!isMediaIssue && (
+          <>
+            <div className="grid gap-3 md:grid-cols-2">
+              <SingleSelectField
+                id="settings-request-preview-lease-mode"
+                label={t("settings.requestPreviewLease")}
+                value={previewSample.leaseForever ? "forever" : "days"}
+                onValueChange={(value) =>
+                  setPreviewSample((prev) => ({
+                    ...prev,
+                    leaseForever: value === "forever",
+                  }))
+                }
+                options={[
+                  { value: "forever", label: t("search.keepForForever") },
+                  {
+                    value: "days",
+                    label: t("settings.requestPreviewLeaseDays"),
+                  },
+                ]}
+              />
+              {previewSample.leaseForever ? null : (
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <label
+                    htmlFor="settings-request-preview-lease-days"
+                    className="block text-sm font-medium text-[var(--scry-ink2)]"
+                  >
+                    {t("settings.requestPreviewLeaseDays")}
+                  </label>
+                  <Input
+                    id="settings-request-preview-lease-days"
+                    {...integerInputProps}
+                    min={1}
+                    max={REQUEST_LEASE_DAYS_MAX}
+                    value={previewSample.leaseDays}
+                    onChange={(event) =>
+                      setPreviewSample((prev) => ({
+                        ...prev,
+                        leaseDays:
+                          Number(sanitizeDigits(event.target.value)) || 0,
+                      }))
+                    }
+                  />
+                </div>
+              )}
+            </div>
 
+            <div>
+              <Label className="mb-2 block">
+                {t("settings.requestPreviewMedia")}
+              </Label>
+              <Input
+                id="settings-request-preview-title-search"
+                value={titleQuery}
+                placeholder={t("settings.requestPreviewMediaPlaceholder")}
+                onChange={(event) => setTitleQuery(event.target.value)}
+              />
+              {previewSample.titleLabel ? (
+                <p
+                  id="settings-request-preview-title-selected"
+                  className="mt-1 text-xs text-muted-foreground"
+                >
+                  {t("settings.requestPreviewMediaSelected", {
+                    title: previewSample.titleLabel,
+                  })}
+                </p>
+              ) : null}
+              {titleSearching ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t("label.searching")}
+                </p>
+              ) : null}
+              {titleResults.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {titleResults.slice(0, 8).map((result) => {
+                    const key = String(
+                      result.smgId ?? result.tvdbId ?? result.name,
+                    );
+                    return (
+                      <li key={key}>
+                        <button
+                          id={settingsRequestPreviewTitleResultId(key)}
+                          type="button"
+                          className="w-full rounded border border-border px-2 py-1 text-left text-xs transition-colors hover:border-primary/40"
+                          onClick={() => {
+                            setPreviewSample((prev) => ({
+                              ...prev,
+                              titleLabel: result.year
+                                ? `${result.name} (${result.year})`
+                                : result.name,
+                              externalIds: metadataExternalIds(result),
+                            }));
+                            setTitleResults([]);
+                            setTitleQuery("");
+                          }}
+                        >
+                          {result.name}
+                          {result.year ? ` (${result.year})` : ""}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
+          </>
+        )}
         <Button
           id="settings-request-preview-run"
           type="button"
@@ -1221,6 +1316,7 @@ export function SettingsRequestRulesSection({
           {pageHead}
           {section === "try" ? (
             <RequestPreviewPanel
+              canManagePermissions={canManagePermissions}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               qualityProfiles={qualityProfiles}
@@ -1495,6 +1591,36 @@ export function SettingsRequestRulesSection({
                     !validationResult.unavailable
                   }
                   warnings={validationResult?.warnings ?? []}
+                />
+
+                <SingleSelectField
+                  id="settings-request-rule-applicability"
+                  label={t("settings.requestRuleApplicability")}
+                  value={ruleSetDraft.applicability}
+                  onValueChange={(value) =>
+                    setRuleSetDraft((prev) => ({
+                      ...prev,
+                      applicability:
+                        value === "MEDIA_ISSUE" ||
+                        value === "ACQUISITION_AND_MEDIA_ISSUE"
+                          ? value
+                          : "ACQUISITION",
+                    }))
+                  }
+                  options={[
+                    {
+                      value: "ACQUISITION",
+                      label: t("settings.requestRuleApplicabilityAcquisition"),
+                    },
+                    {
+                      value: "MEDIA_ISSUE",
+                      label: t("settings.requestRuleApplicabilityMediaIssue"),
+                    },
+                    {
+                      value: "ACQUISITION_AND_MEDIA_ISSUE",
+                      label: t("settings.requestRuleApplicabilityBoth"),
+                    },
+                  ]}
                 />
 
                 <div>

@@ -843,7 +843,9 @@ async fn copy_disagrees_with_stored_hash(
 /// [`file_version`] together with the metadata it was read from, for a caller
 /// that needs both from the one probe.
 #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
-async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::Metadata)> {
+pub(crate) async fn file_version_and_metadata(
+    path: &Path,
+) -> AppResult<(String, std::fs::Metadata)> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
         .map_err(|error| file_error(path, error))?;

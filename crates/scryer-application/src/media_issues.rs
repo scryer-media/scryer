@@ -450,11 +450,7 @@ impl AppUseCase {
                     .services
                     .workflow
                     .blocklist_repo
-                    .reject_media_issue(
-                        &issue.id,
-                        None,
-                        Some(decision_id),
-                    )
+                    .reject_media_issue(&issue.id, None, Some(decision_id))
                     .await?
                     .ok_or_else(|| {
                         AppError::Repository("rejected media issue could not be reloaded".into())
@@ -797,9 +793,7 @@ impl AppUseCase {
                 },
                 release.as_ref(),
                 recycle_fingerprint,
-                &self
-                        .matching_media_issue_file_ids(issue)
-                        .await?,
+                &self.matching_media_issue_file_ids(issue).await?,
             )
             .await?;
         if confirmed {
@@ -811,10 +805,7 @@ impl AppUseCase {
         Ok(confirmed)
     }
 
-    async fn matching_media_issue_file_ids(
-        &self,
-        issue: &MediaIssue,
-    ) -> AppResult<Vec<String>> {
+    async fn matching_media_issue_file_ids(&self, issue: &MediaIssue) -> AppResult<Vec<String>> {
         let mut matched = Vec::new();
         let mut after_id: Option<String> = None;
         loop {

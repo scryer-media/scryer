@@ -158,6 +158,25 @@ pub fn unobservable_facts(document: &serde_json::Value) -> BTreeMap<String, Stri
         .collect()
 }
 
+fn nested_unknown_reason(observation: &serde_json::Value) -> Option<&str> {
+    match observation
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(UNKNOWN_STATUS) => Some(
+            observation
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(UNKNOWN_STATUS),
+        ),
+        Some(_) => None,
+        None => observation
+            .as_object()?
+            .values()
+            .find_map(nested_unknown_reason),
+    }
+}
+
 /// [`unobservable_facts`], plus the unobservable facts of each nested section
 /// that carries its own `observations`, qualified by the section's name:
 /// `season.monitored` for `document.season.observations.monitored`.

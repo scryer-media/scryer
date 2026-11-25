@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, RequestRuleSetRepository};
-use scryer_domain::{
-    RequestRuleApplicability, RequestRuleRevision, RequestRuleSet,
-};
+use scryer_domain::{RequestRuleApplicability, RequestRuleRevision, RequestRuleSet};
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 

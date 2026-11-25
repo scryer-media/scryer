@@ -2876,11 +2876,6 @@ export const setRequestRuleEnabledMutation = `mutation SetRequestRuleEnabled($ru
   }
 }`;
 
-export const setRequestRuleEvaluationModeMutation = `mutation SetRequestRuleEvaluationMode($ruleSetId: ID!, $mode: RequestRuleEvaluationModeValue!) {
-  setRequestRuleEvaluationMode(ruleSetId: $ruleSetId, mode: $mode) {${REQUEST_RULE_SET_FIELDS}
-  }
-}`;
-
 export const deleteRequestRuleSetMutation = `mutation DeleteRequestRuleSet($id: ID!) {
   deleteRequestRuleSet(id: $id) {
     id

@@ -2878,6 +2878,7 @@ async fn a_shaping_value_this_instance_cannot_apply_is_refused_at_save_with_its_
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -2938,6 +2939,7 @@ async fn a_monitor_no_scoped_library_accepts_is_refused_at_save() {
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids: vec![movie_library],
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -2967,6 +2969,7 @@ async fn the_builder_model_round_trips_and_is_bounded() {
                 description: String::new(),
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: Some(model.clone()),
             },
         )
@@ -3069,6 +3072,7 @@ async fn create_scoped_rule(
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids,
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -3181,6 +3185,7 @@ async fn re_scoping_to_a_library_that_cannot_take_the_shaped_monitor_is_refused(
             "Future episodes".to_string(),
             String::new(),
             vec![movie_library],
+            None,
         )
         .await
         .expect_err("a movie library has no episode monitoring");
@@ -3206,6 +3211,7 @@ async fn re_scoping_to_a_library_that_cannot_take_the_shaped_monitor_is_refused(
             "Renamed".to_string(),
             String::new(),
             vec![series_library],
+            None,
         )
         .await
         .expect("rename");

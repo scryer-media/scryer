@@ -768,7 +768,7 @@ impl AppUseCase {
         if !selected.is_empty() {
             let mut cache_evaluator = cache.engine.evaluator();
             let cached = cache_evaluator
-                .evaluate_scoped(&input, |id| selected.contains(id))
+                .evaluate_in_scope(&input, |id| selected.contains(id))
                 .map_err(|error| {
                     AppError::validation_refused(
                         crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
@@ -830,7 +830,7 @@ impl AppUseCase {
                 rule_set_id: record.rule_set_id,
                 rule_set_name: record.rule_set_name,
                 revision_number: 0,
-                content_hash: matcher_content_hash.clone(),
+                content_hash: source_content_hash.clone(),
                 decision: record.decision,
             })
             .collect();
@@ -840,15 +840,13 @@ impl AppUseCase {
                 rule_set_id: rule_set_id.clone(),
                 rule_set_name: policy.name.clone(),
                 revision_number: 0,
-                content_hash: matcher_content_hash.clone(),
+                content_hash: source_content_hash.clone(),
                 message: message.clone(),
             })
             .collect();
         let arbitration = arbitrate(&votes, &errors, false);
-        let (effective_outcome, fallback_reason) = super::evaluation::effective_rule_outcome(
-            &arbitration,
-            draft.media_issue.as_ref(),
-        );
+        let (effective_outcome, fallback_reason) =
+            super::evaluation::effective_rule_outcome(&arbitration, draft.media_issue.as_ref());
         Ok(RequestRulePreviewResult {
             rule_set_id,
             source_content_hash,

@@ -526,6 +526,8 @@ pub struct CreateRequestRuleSetInput {
     pub rego_source: String,
     /// Libraries to confine the rule to. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    /// Which kinds of requests this rule handles. Omitted means acquisition only.
+    pub applicability: Option<RequestRuleApplicabilityValue>,
     /// The visual builder's document, stored as given: a JSON object of at
     /// most 64 KiB. Omitted or null stores none.
     pub builder_model: Option<Json<serde_json::Value>>,

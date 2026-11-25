@@ -3,10 +3,6 @@
 /// requester's library permission does. A rule is created disabled, so
 /// enabling one is always a deliberate second step.
 
-/// Whether an evaluation consulted an enabled rule (`ENFORCE`) or fell back
-/// to the requester's permission (`DISABLED`).
-export type RequestEvaluationMode = "DISABLED" | "ENFORCE" | "SHADOW";
-
 export type RequestRuleApplicability =
   "ACQUISITION" | "MEDIA_ISSUE" | "ACQUISITION_AND_MEDIA_ISSUE";
 
@@ -78,7 +74,6 @@ export type RequestRuleSetRecord = {
   name: string;
   description: string;
   enabled: boolean;
-  evaluationMode: RequestEvaluationMode;
   applicability: RequestRuleApplicability;
   libraryIds: string[];
   /// Absent on payloads that do not select it.
@@ -269,5 +264,3 @@ export type RequestRulePreviewSample = {
   leaseForever: boolean;
   leaseDays: number;
 };
-
-export type RequestRulePreviewSource = "stored" | "draft";

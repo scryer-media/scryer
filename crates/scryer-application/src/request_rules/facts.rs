@@ -850,7 +850,12 @@ fn empty_facts() -> RequestFactsDoc {
     let unset = || fact_reason::NOT_YET_COLLECTED;
     macro_rules! unset_facts {
         ($($field:ident),* $(,)?) => {
-            RequestFactsDoc { $($field: Observation::unknown(unset()),)* }
+            RequestFactsDoc {
+                $($field: Observation::unknown(unset()),)*
+                media_issue: RequestMediaIssueFactsDoc {
+                    reporter_requested_affected_media: Observation::unknown(unset()),
+                },
+            }
         };
     }
     unset_facts!(

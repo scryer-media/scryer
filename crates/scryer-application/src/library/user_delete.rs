@@ -892,10 +892,7 @@ impl AppUseCase {
             crate::location::resolution::file_version_and_metadata(&path).await?;
         if version != issue.file_version
             || !metadata.is_file()
-            || !matches!(
-                crate::location::hardlinks::link_count_from_metadata(&metadata),
-                crate::location::hardlinks::LinkCount::Known(1)
-            )
+            || !crate::location::hardlinks::is_single_link_metadata(&metadata)
         {
             return Err(changed());
         }
@@ -935,10 +932,11 @@ impl AppUseCase {
         receipt: &crate::recycle_bin::PreparedRecycleFile,
     ) -> AppResult<bool> {
         let path = stored_path_to_path_buf(&issue.file_path_snapshot);
-        match tokio::fs::symlink_metadata(&path).await {
-            Ok(_) => return Ok(false),
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => return Err(AppError::Repository(error.to_string())),
+        let reading = Disk::process().uncached(&path).await;
+        match reading.exists() {
+            Some(true) => return Ok(false),
+            Some(false) => {}
+            None => return Err(AppError::Repository(reading.absence().to_string())),
         }
         let title = self
             .services

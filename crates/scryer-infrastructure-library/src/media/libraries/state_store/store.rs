@@ -7,12 +7,13 @@ use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeState,
     AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery, AcquisitionScopeStatus,
-    AcquisitionScopeStatusTally, AppResult, BlocklistMatch, BlocklistRepository,
+    AcquisitionScopeStatusTally, AppError, AppResult, BlocklistMatch, BlocklistRepository,
     DownloadSourceKind, HousekeepingMediaFileRootRow, HousekeepingRepository,
-    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, NewLibraryContentBlock,
-    MediaIssueMatchingCandidate, NewMediaIssue, PendingRelease, PendingReleaseObservation, PendingReleasePageSort,
-    PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery,
-    ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
+    LibraryProbeRepository, LibraryProbeSignature, MediaIssueMatchingCandidate, NewBlocklistEntry,
+    NewLibraryContentBlock, NewMediaIssue, PendingRelease, PendingReleaseObservation,
+    PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
+    PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
+    normalize_release_name,
     subtitles::{
         ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
         SubtitleSearchBackoffKey,
@@ -3485,7 +3486,7 @@ fn library_content_block_row(row: &SqlRow) -> AppResult<LibraryContentBlock> {
         source_report_id: row.opt_text("source_report_id")?,
         source_media_file_id: row.opt_text("source_media_file_id")?,
         provenance_json: row.opt_text("provenance_json")?,
-        created_at: required_timestamp_text(row, "created_at")?,
+        created_at: row.timestamp_text("created_at")?,
     })
 }
 
@@ -3570,11 +3571,11 @@ fn media_issue_row(row: &SqlRow) -> AppResult<MediaIssue> {
         affected_series_movie_link_ids,
         rule_decision_id: row.opt_text("rule_decision_id")?,
         reviewed_by_user_id: row.opt_text("reviewed_by_user_id")?,
-        reviewed_at: opt_timestamp_text(row, "reviewed_at")?,
+        reviewed_at: row.opt_timestamp_text("reviewed_at")?,
         execution_status,
         execution_error_code: row.opt_text("execution_error_code")?,
-        created_at: required_timestamp_text(row, "created_at")?,
-        updated_at: required_timestamp_text(row, "updated_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
     })
 }
 
@@ -3585,7 +3586,7 @@ async fn set_media_issue_review(
     rule_decision_id: Option<&str>,
     status: MediaIssueStatus,
 ) -> AppResult<()> {
-    let now = timestamp_arg_for_datastore(datastore, &Utc::now().to_rfc3339())?;
+    let now = datastore.timestamp_text_arg(&Utc::now().to_rfc3339())?;
     execute_datastore_write(
         datastore,
         "review_media_issue",
@@ -3851,7 +3852,9 @@ impl BlocklistRepository for BlocklistStore {
     }
 
     async fn block_content(&self, entry: &NewLibraryContentBlock) -> AppResult<bool> {
-        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let now = self
+            .datastore
+            .timestamp_text_arg(&Utc::now().to_rfc3339())?;
         let rows = execute_datastore_write(
             &self.datastore,
             "insert_library_content_block",
@@ -3985,7 +3988,9 @@ impl BlocklistRepository for BlocklistStore {
 
     async fn submit_media_issue(&self, issue: &NewMediaIssue) -> AppResult<MediaIssue> {
         let id = Id::new().0;
-        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let now = self
+            .datastore
+            .timestamp_text_arg(&Utc::now().to_rfc3339())?;
         let changed = execute_datastore_write(
             &self.datastore,
             "insert_media_issue",
@@ -4113,8 +4118,12 @@ impl BlocklistRepository for BlocklistStore {
         let mut sql = "SELECT mf.id, mf.title_id, mf.file_path, mf.size_bytes
                          FROM media_files mf
                          JOIN titles t ON t.id = mf.title_id
-                        WHERE t.library_id = {} AND mf.size_bytes = {}".to_string();
-        let mut args = vec![SqlArg::Text(library_id.to_string()), SqlArg::I64(size_bytes)];
+                        WHERE t.library_id = {} AND mf.size_bytes = {}"
+            .to_string();
+        let mut args = vec![
+            SqlArg::Text(library_id.to_string()),
+            SqlArg::I64(size_bytes),
+        ];
         if let Some(after_id) = after_id {
             sql.push_str(" AND mf.id > {}");
             args.push(SqlArg::Text(after_id.to_string()));
@@ -4337,7 +4346,9 @@ impl BlocklistRepository for BlocklistStore {
         recycle_fingerprint: Option<&str>,
         matching_media_file_ids: &[String],
     ) -> AppResult<bool> {
-        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let now = self
+            .datastore
+            .timestamp_text_arg(&Utc::now().to_rfc3339())?;
         let update_args = vec![
             SqlArg::OptText(reviewer_user_id.map(str::to_string)),
             now.clone(),
@@ -4543,7 +4554,9 @@ impl BlocklistRepository for BlocklistStore {
         execution_status: scryer_domain::MediaIssueExecutionStatus,
         execution_error_code: Option<&str>,
     ) -> AppResult<bool> {
-        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let now = self
+            .datastore
+            .timestamp_text_arg(&Utc::now().to_rfc3339())?;
         let rows = execute_datastore_write(
             &self.datastore,
             "set_media_issue_execution_status",
@@ -4572,14 +4585,11 @@ impl BlocklistRepository for BlocklistStore {
         if issue_ids.is_empty() {
             return Ok(0);
         }
-        let (issue_ids, per_statement) = id_list_statements(
-            issue_ids,
-            1,
-            3,
-            max_binds(&self.datastore.read_exec()),
-            500,
-        );
-        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let (issue_ids, per_statement) =
+            id_list_statements(issue_ids, 1, 3, max_binds(&self.datastore.read_exec()), 500);
+        let now = self
+            .datastore
+            .timestamp_text_arg(&Utc::now().to_rfc3339())?;
         let mut updated = 0usize;
         for chunk in issue_ids.chunks(per_statement) {
             let placeholders = placeholders(chunk.len());

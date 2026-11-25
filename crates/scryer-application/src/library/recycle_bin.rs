@@ -905,21 +905,25 @@ pub(crate) async fn execute_new_conflict_recycle(
         })?;
     // Do not use the ordinary recycle path's copy-then-unlink fallback. It
     // cannot condition the final unlink on the reviewed source identity.
-    match crate::fs_safety::exclusive_rename(source, &payload).await {
-        Some(Ok(())) => {}
-        Some(Err(error)) if crate::fs_safety::is_cross_device_error(&error) => {
+    let disk = Disk::process();
+    match disk.move_onto_free_name(source, &payload).await {
+        Ok(FreeNameMove::Moved) => {}
+        Err(error) if error.reason() == crate::disk::reason::DISK_MOVE_NEEDS_COPY => {
             return Err(AppError::validation_refused(
                 crate::error_reasons::media::RECYCLE_FAILED,
                 "cross-device recycling is unavailable; the reviewed source was preserved",
             ));
         }
-        Some(Err(error)) => {
+        Err(error) => {
             return Err(AppError::validation_refused(
                 crate::error_reasons::media::RECYCLE_FAILED,
-                format!("the reviewed file could not be moved without overwriting: {error}"),
+                format!(
+                    "the reviewed file could not be moved without overwriting: {}",
+                    error.words()
+                ),
             ));
         }
-        None => {
+        Ok(FreeNameMove::NotOffered) => {
             return Err(AppError::validation_refused(
                 crate::error_reasons::media::RECYCLE_FAILED,
                 "this filesystem does not support exclusive recycling",
@@ -932,19 +936,24 @@ pub(crate) async fn execute_new_conflict_recycle(
     ) {
         (Ok(true), Ok(after)) if after == before => {}
         (identity, proof) => {
-            let rollback = crate::fs_safety::exclusive_rename(&payload, source).await;
+            let rollback = disk.move_onto_free_name(&payload, source).await;
             let detail = match (identity, proof) {
                 (Ok(false), _) => "the source changed during the recycle move".to_string(),
                 (_, Err(error)) => format!("the recycled payload could not be verified: {error}"),
                 _ => "the recycled payload changed identity".to_string(),
             };
             let rollback_message = match rollback {
-                Some(Ok(())) => "the source was restored".to_string(),
-                Some(Err(error)) => {
-                    format!("rollback failed: {error}; the payload is preserved in the recycle bin")
+                Ok(FreeNameMove::Moved) => "the source was restored".to_string(),
+                Err(error) => {
+                    format!(
+                        "rollback failed: {}; the payload is preserved in the recycle bin",
+                        error.words()
+                    )
                 }
-                None => "rollback was unavailable; the payload is preserved in the recycle bin"
-                    .to_string(),
+                Ok(FreeNameMove::NotOffered) => {
+                    "rollback was unavailable; the payload is preserved in the recycle bin"
+                        .to_string()
+                }
             };
             return Err(AppError::validation_refused(
                 crate::delete_refusal::PREVIEW_STALE,
@@ -953,16 +962,19 @@ pub(crate) async fn execute_new_conflict_recycle(
         }
     }
     if let Err(error) = finish_conflict_recycle(config, prepared).await {
-        let rollback = crate::fs_safety::exclusive_rename(&payload, source).await;
+        let rollback = disk.move_onto_free_name(&payload, source).await;
         let detail = match rollback {
-            Some(Ok(())) => {
+            Ok(FreeNameMove::Moved) => {
                 "the source was restored after the recycle receipt could not be committed"
                     .to_string()
             }
-            Some(Err(error)) => {
-                format!("rollback failed: {error}; the payload is preserved in the recycle bin")
+            Err(error) => {
+                format!(
+                    "rollback failed: {}; the payload is preserved in the recycle bin",
+                    error.words()
+                )
             }
-            None => {
+            Ok(FreeNameMove::NotOffered) => {
                 "rollback was unavailable; the payload is preserved in the recycle bin".to_string()
             }
         };
@@ -977,10 +989,7 @@ async fn reviewed_recycle_identity_matches(path: &Path, expected_version: &str) 
     let (version, metadata) = crate::location::resolution::file_version_and_metadata(path).await?;
     // Rename changes Unix ctime, but not the device, inode, length or mtime.
     Ok(metadata.is_file()
-        && matches!(
-            crate::location::hardlinks::link_count_from_metadata(&metadata),
-            crate::location::hardlinks::LinkCount::Known(1)
-        )
+        && crate::location::hardlinks::is_single_link_metadata(&metadata)
         && version
             .split(':')
             .take(5)
