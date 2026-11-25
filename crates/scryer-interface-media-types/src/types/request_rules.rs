@@ -19,9 +19,13 @@ use super::{DiscoveryContentRatingPayload, ExternalIdInput, MonitorTypeValue};
 
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Which kinds of requests a rule can evaluate.
 pub enum RequestRuleApplicabilityValue {
+    /// Acquisition requests only.
     Acquisition,
+    /// Bad-media reports only.
     MediaIssue,
+    /// Both acquisition requests and bad-media reports.
     AcquisitionAndMediaIssue,
 }
 
@@ -130,6 +134,7 @@ pub struct RequestRuleSet {
     pub description: String,
     /// Whether the rule set takes part in deciding requests.
     pub enabled: bool,
+    /// Kinds of requests evaluated by this rule.
     pub applicability: RequestRuleApplicabilityValue,
     /// Libraries the rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
@@ -557,6 +562,7 @@ pub struct UpdateRequestRuleMetadataInput {
     pub description: Option<String>,
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    /// Replacement request kinds. Omit to keep the current applicability.
     pub applicability: Option<RequestRuleApplicabilityValue>,
 }
 
@@ -570,28 +576,29 @@ pub struct ValidateRequestRuleInput {
     pub library_ids: Option<Vec<String>>,
 }
 
-/// The hypothetical request an author-side preview is evaluated against.
-///
-/// It names a real user and a real library on purpose: the question a preview
-/// answers is "what would this rule do to *this person* asking for *this
-/// title*", and a synthetic requester would exercise none of the permission,
-/// history, or linked-provider facts that make request rules useful.
+/// A bad-media report used as a rule preview sample. No action is taken.
 #[derive(InputObject, Clone)]
 pub struct RequestMediaIssuePreviewInput {
     /// Existing file resolved in the sample library. All associations and
     /// provenance come from the server, as on submission.
     pub media_file_id: ID,
+    /// Reason the hypothetical report gives for marking the file bad.
     pub reason_code: String,
+    /// Hypothetical action: `mark_bad` or `recycle_and_search`.
     pub remediation: String,
 }
 
+/// The hypothetical request an author-side preview evaluates against a real
+/// user and library, without saving a request or report.
 #[derive(InputObject, Clone)]
 pub struct RequestRuleSampleInput {
     /// User to evaluate as.
     pub user_id: ID,
     /// Library to evaluate against.
     pub library_id: ID,
+    /// `acquisition_request` or `media_issue`. Omit to infer from the supplied fields.
     pub kind: Option<String>,
+    /// Report details for a bad-media sample. Omit for an acquisition sample.
     pub media_issue: Option<RequestMediaIssuePreviewInput>,
     /// Provider identifiers of the sample title. An empty list is a legitimate
     /// preview of requester facts alone, and leaves every metadata fact

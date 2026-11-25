@@ -798,6 +798,31 @@ pub async fn file_version(path: &Path) -> AppResult<String> {
     Ok(file_version_and_metadata(path).await?.0)
 }
 
+/// Read a regular file and its persisted version without following links.
+pub(crate) async fn regular_file_snapshot(path: &Path) -> AppResult<(String, crate::disk::Mark)> {
+    let mark = Disk::process()
+        .fingerprint(path)
+        .await
+        .map_err(|reading| file_error(path, reading.absence()))?;
+    if mark.kind() != Some(crate::disk::EntryKind::File) {
+        return Err(file_error(path, "not a regular file"));
+    }
+    #[cfg(unix)]
+    let version = mark.legacy_unix_version();
+    #[cfg(not(unix))]
+    let version = mark
+        .len()
+        .zip(
+            mark.modified()
+                .and_then(crate::file_source_signature::file_source_signature_from_modified),
+        )
+        .map(|(len, signature)| format!("{len}:{}:{}", signature.scheme, signature.value));
+    Ok((
+        version.ok_or_else(|| file_error(path, "file version is unavailable"))?,
+        mark,
+    ))
+}
+
 /// Whether a file read now as `actual` still holds the content a row stored
 /// as `expected`: the same text, or the disk service's answer that both name
 /// one file with the same length and modification time. No probe.
@@ -843,9 +868,7 @@ async fn copy_disagrees_with_stored_hash(
 /// [`file_version`] together with the metadata it was read from, for a caller
 /// that needs both from the one probe.
 #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
-pub(crate) async fn file_version_and_metadata(
-    path: &Path,
-) -> AppResult<(String, std::fs::Metadata)> {
+async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::Metadata)> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
         .map_err(|error| file_error(path, error))?;

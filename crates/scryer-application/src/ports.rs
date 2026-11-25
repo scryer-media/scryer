@@ -11692,24 +11692,8 @@ pub trait BlocklistRepository: Send + Sync {
     /// for the caller that performed the transition.
     async fn confirm_media_issue(
         &self,
-        issue_id: &str,
-        reviewer_user_id: Option<&str>,
-        rule_decision_id: Option<&str>,
-        remediation: scryer_domain::MediaIssueRemediation,
-        block: &NewLibraryContentBlock,
-        release: Option<&NewBlocklistEntry>,
-        recycle_fingerprint: Option<&str>,
-        _matching_media_file_ids: &[String],
+        _confirmation: crate::ConfirmMediaIssue<'_>,
     ) -> AppResult<bool> {
-        let _ = (
-            issue_id,
-            reviewer_user_id,
-            rule_decision_id,
-            remediation,
-            block,
-            release,
-            recycle_fingerprint,
-        );
         Err(AppError::Repository(
             "media issue repository is not configured".into(),
         ))

@@ -960,7 +960,9 @@ pub struct FixTitleMatchPayload {
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 /// What a media issue requests after confirmation.
 pub enum MediaIssueRemediationValue {
+    /// Block matching content and leave the file in place.
     MarkBad,
+    /// Block matching content, recycle the affected file, and search for a replacement.
     RecycleAndSearch,
 }
 
@@ -977,9 +979,13 @@ impl From<scryer_domain::MediaIssueRemediation> for MediaIssueRemediationValue {
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 /// Review state of a media issue.
 pub enum MediaIssueStatusValue {
+    /// Awaiting a decision.
     Pending,
+    /// The report was confirmed.
     Approved,
+    /// The report was declined.
     Rejected,
+    /// Review ended without approval or rejection.
     Canceled,
 }
 
@@ -998,15 +1004,25 @@ impl From<scryer_domain::MediaIssueStatus> for MediaIssueStatusValue {
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 /// Durable execution state for an approved media issue.
 pub enum MediaIssueExecutionStatusValue {
+    /// No remediation has started.
     None,
+    /// Matching content is blocked.
     Blocked,
+    /// The reviewed file is being moved to the recycle bin.
     Recycling,
+    /// The file could not be recycled.
     RecycleFailed,
+    /// The search did not find an eligible replacement.
     NoEligibleRelease,
+    /// A replacement download is queued.
     DownloadQueued,
+    /// A replacement has been imported.
     ReplacementImported,
+    /// A replacement search is underway.
     Searching,
+    /// The approved remediation finished.
     Complete,
+    /// The approved remediation failed.
     Failed,
 }
 
@@ -1033,24 +1049,36 @@ impl From<scryer_domain::MediaIssueExecutionStatus> for MediaIssueExecutionStatu
 /// A confirmed library-scoped sampled-content block. A match means the
 /// sampled bytes and size agree, not that the complete files are identical.
 pub struct LibraryContentBlockPayload {
+    /// ID of the content block.
     pub id: ID,
+    /// Library in which matching content is blocked.
     pub library_id: ID,
     /// Versioned identity scheme; sampled content and release hashes are distinct.
     pub scheme: String,
+    /// Total size of the file that supplied the sample.
     pub size_bytes: i64,
+    /// Number of bytes included in the sample.
     pub sample_bytes: i64,
     /// BLAKE3 digest of the sampled bytes, not a full-file digest.
     pub sample_blake3: String,
+    /// Reason recorded for the block, when supplied.
     pub reason: Option<String>,
+    /// ID of the user who approved the block, if approved by a user.
     pub approving_actor_id: Option<ID>,
+    /// ID of the report that produced the block, when known.
     pub source_report_id: Option<ID>,
+    /// ID of the file that supplied the sample, when known.
     pub source_media_file_id: Option<ID>,
+    /// Recorded origin of the block, encoded as JSON.
     pub provenance_json: Option<String>,
+    /// When the block was created, in UTC.
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(SimpleObject, Clone)]
+/// The result of clearing one library content block.
 pub struct ClearLibraryContentBlockPayload {
+    /// ID of the cleared block.
     pub id: ID,
 }
 
@@ -1083,42 +1111,70 @@ impl LibraryContentBlockPayload {
 #[derive(InputObject, Clone)]
 /// Report one existing media file as bad.
 pub struct SubmitMediaIssueInput {
+    /// ID of the existing library file being reported.
     pub media_file_id: ID,
+    /// Reason for reporting the file.
     pub reason_code: String,
+    /// Optional explanation from the reporter.
     pub details: Option<String>,
+    /// Requested action; reporting does not authorize recycling.
     pub remediation: MediaIssueRemediationValue,
 }
 
 #[derive(SimpleObject, Clone)]
 /// A bad-media report and its review/execution state. Filesystem paths are not exposed.
 pub struct MediaIssuePayload {
+    /// ID of the report.
     pub id: ID,
+    /// ID of the library where the file was reported.
     pub library_id: ID,
+    /// ID of the title associated with the reported file.
     pub title_id: ID,
+    /// ID of the reported file as recorded at submission.
     pub media_file_id: ID,
+    /// ID of the user who submitted the report.
     pub reporter_user_id: ID,
+    /// Reason recorded for the report.
     pub reason_code: String,
+    /// Optional explanation supplied by the reporter.
     pub details: Option<String>,
     /// Proposed action, not an authorization.
     pub remediation: MediaIssueRemediationValue,
     /// Action explicitly authorized by the final review or policy.
     pub authorized_remediation: Option<MediaIssueRemediationValue>,
+    /// Current review state.
     pub status: MediaIssueStatusValue,
+    /// IDs of the episodes associated with the reported file.
     pub affected_episode_ids: Vec<ID>,
+    /// IDs of series-to-movie links associated with the reported file.
     pub affected_series_movie_link_ids: Vec<ID>,
+    /// ID of the recorded request-rule decision, when evaluated.
     pub rule_decision_id: Option<ID>,
+    /// Version of the input contract used for the recorded decision.
     pub rule_input_schema_version: Option<i32>,
+    /// Digest of the rule input used for the recorded decision.
     pub rule_input_hash: Option<String>,
+    /// Rule revision and evaluation snapshot, encoded as JSON.
     pub rule_snapshot_json: Option<String>,
+    /// Individual rule votes, each encoded as JSON.
     pub rule_votes_json: Vec<String>,
+    /// Decision that took effect after applying policy safeguards.
     pub rule_effective_outcome: Option<String>,
+    /// Decision produced by the rules before applying policy safeguards.
     pub rule_policy_outcome: Option<String>,
+    /// Reason codes explaining why the rule decision was held for review.
     pub rule_hold_reasons: Vec<String>,
+    /// ID of the user who reviewed the report, if reviewed by a user.
     pub reviewed_by_user_id: Option<ID>,
+    /// When the report was reviewed, in UTC.
     pub reviewed_at: Option<DateTime<Utc>>,
+    /// Current execution state of the authorized action.
     pub execution_status: MediaIssueExecutionStatusValue,
+    /// Stable reason code for an execution failure, when recorded.
     pub execution_error_code: Option<String>,
+    /// When the report was submitted, in UTC.
     pub created_at: DateTime<Utc>,
+    /// When the report was last updated, in UTC.
     pub updated_at: DateTime<Utc>,
 }
 

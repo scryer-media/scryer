@@ -2092,7 +2092,13 @@ type ClearExternalImportSetupSecretDraftPayload {
 	cleared: Boolean!
 }
 
+"""
+The result of clearing one library content block.
+"""
 type ClearLibraryContentBlockPayload {
+	"""
+	ID of the cleared block.
+	"""
 	id: ID!
 }
 
@@ -11070,23 +11076,53 @@ A confirmed library-scoped sampled-content block. A match means the
 sampled bytes and size agree, not that the complete files are identical.
 """
 type LibraryContentBlockPayload {
+	"""
+	ID of the content block.
+	"""
 	id: ID!
+	"""
+	Library in which matching content is blocked.
+	"""
 	libraryId: ID!
 	"""
 	Versioned identity scheme; sampled content and release hashes are distinct.
 	"""
 	scheme: String!
+	"""
+	Total size of the file that supplied the sample.
+	"""
 	sizeBytes: Int!
+	"""
+	Number of bytes included in the sample.
+	"""
 	sampleBytes: Int!
 	"""
 	BLAKE3 digest of the sampled bytes, not a full-file digest.
 	"""
 	sampleBlake3: String!
+	"""
+	Reason recorded for the block, when supplied.
+	"""
 	reason: String
+	"""
+	ID of the user who approved the block, if approved by a user.
+	"""
 	approvingActorId: ID
+	"""
+	ID of the report that produced the block, when known.
+	"""
 	sourceReportId: ID
+	"""
+	ID of the file that supplied the sample, when known.
+	"""
 	sourceMediaFileId: ID
+	"""
+	Recorded origin of the block, encoded as JSON.
+	"""
 	provenanceJson: String
+	"""
+	When the block was created, in UTC.
+	"""
 	createdAt: DateTime!
 }
 
@@ -17829,15 +17865,45 @@ type MediaHdrCapabilitiesPayload {
 Durable execution state for an approved media issue.
 """
 enum MediaIssueExecutionStatusValue {
+	"""
+	No remediation has started.
+	"""
 	NONE
+	"""
+	Matching content is blocked.
+	"""
 	BLOCKED
+	"""
+	The reviewed file is being moved to the recycle bin.
+	"""
 	RECYCLING
+	"""
+	The file could not be recycled.
+	"""
 	RECYCLE_FAILED
+	"""
+	The search did not find an eligible replacement.
+	"""
 	NO_ELIGIBLE_RELEASE
+	"""
+	A replacement download is queued.
+	"""
 	DOWNLOAD_QUEUED
+	"""
+	A replacement has been imported.
+	"""
 	REPLACEMENT_IMPORTED
+	"""
+	A replacement search is underway.
+	"""
 	SEARCHING
+	"""
+	The approved remediation finished.
+	"""
 	COMPLETE
+	"""
+	The approved remediation failed.
+	"""
 	FAILED
 }
 
@@ -17845,12 +17911,33 @@ enum MediaIssueExecutionStatusValue {
 A bad-media report and its review/execution state. Filesystem paths are not exposed.
 """
 type MediaIssuePayload {
+	"""
+	ID of the report.
+	"""
 	id: ID!
+	"""
+	ID of the library where the file was reported.
+	"""
 	libraryId: ID!
+	"""
+	ID of the title associated with the reported file.
+	"""
 	titleId: ID!
+	"""
+	ID of the reported file as recorded at submission.
+	"""
 	mediaFileId: ID!
+	"""
+	ID of the user who submitted the report.
+	"""
 	reporterUserId: ID!
+	"""
+	Reason recorded for the report.
+	"""
 	reasonCode: String!
+	"""
+	Optional explanation supplied by the reporter.
+	"""
 	details: String
 	"""
 	Proposed action, not an authorization.
@@ -17860,22 +17947,73 @@ type MediaIssuePayload {
 	Action explicitly authorized by the final review or policy.
 	"""
 	authorizedRemediation: MediaIssueRemediationValue
+	"""
+	Current review state.
+	"""
 	status: MediaIssueStatusValue!
+	"""
+	IDs of the episodes associated with the reported file.
+	"""
 	affectedEpisodeIds: [ID!]!
+	"""
+	IDs of series-to-movie links associated with the reported file.
+	"""
 	affectedSeriesMovieLinkIds: [ID!]!
+	"""
+	ID of the recorded request-rule decision, when evaluated.
+	"""
 	ruleDecisionId: ID
+	"""
+	Version of the input contract used for the recorded decision.
+	"""
 	ruleInputSchemaVersion: Int
+	"""
+	Digest of the rule input used for the recorded decision.
+	"""
 	ruleInputHash: String
+	"""
+	Rule revision and evaluation snapshot, encoded as JSON.
+	"""
 	ruleSnapshotJson: String
+	"""
+	Individual rule votes, each encoded as JSON.
+	"""
 	ruleVotesJson: [String!]!
+	"""
+	Decision that took effect after applying policy safeguards.
+	"""
 	ruleEffectiveOutcome: String
+	"""
+	Decision produced by the rules before applying policy safeguards.
+	"""
 	rulePolicyOutcome: String
+	"""
+	Reason codes explaining why the rule decision was held for review.
+	"""
 	ruleHoldReasons: [String!]!
+	"""
+	ID of the user who reviewed the report, if reviewed by a user.
+	"""
 	reviewedByUserId: ID
+	"""
+	When the report was reviewed, in UTC.
+	"""
 	reviewedAt: DateTime
+	"""
+	Current execution state of the authorized action.
+	"""
 	executionStatus: MediaIssueExecutionStatusValue!
+	"""
+	Stable reason code for an execution failure, when recorded.
+	"""
 	executionErrorCode: String
+	"""
+	When the report was submitted, in UTC.
+	"""
 	createdAt: DateTime!
+	"""
+	When the report was last updated, in UTC.
+	"""
 	updatedAt: DateTime!
 }
 
@@ -17883,7 +18021,13 @@ type MediaIssuePayload {
 What a media issue requests after confirmation.
 """
 enum MediaIssueRemediationValue {
+	"""
+	Block matching content and leave the file in place.
+	"""
 	MARK_BAD
+	"""
+	Block matching content, recycle the affected file, and search for a replacement.
+	"""
 	RECYCLE_AND_SEARCH
 }
 
@@ -17891,9 +18035,21 @@ enum MediaIssueRemediationValue {
 Review state of a media issue.
 """
 enum MediaIssueStatusValue {
+	"""
+	Awaiting a decision.
+	"""
 	PENDING
+	"""
+	The report was confirmed.
+	"""
 	APPROVED
+	"""
+	The report was declined.
+	"""
 	REJECTED
+	"""
+	Review ended without approval or rejection.
+	"""
 	CANCELED
 }
 
@@ -29162,12 +29318,7 @@ type RequestDeclaredActions {
 }
 
 """
-The hypothetical request an author-side preview is evaluated against.
-
-It names a real user and a real library on purpose: the question a preview
-answers is "what would this rule do to *this person* asking for *this
-title*", and a synthetic requester would exercise none of the permission,
-history, or linked-provider facts that make request rules useful.
+A bad-media report used as a rule preview sample. No action is taken.
 """
 input RequestMediaIssuePreviewInput {
 	"""
@@ -29175,7 +29326,13 @@ input RequestMediaIssuePreviewInput {
 	provenance come from the server, as on submission.
 	"""
 	mediaFileId: ID!
+	"""
+	Reason the hypothetical report gives for marking the file bad.
+	"""
 	reasonCode: String!
+	"""
+	Hypothetical action: `mark_bad` or `recycle_and_search`.
+	"""
 	remediation: String!
 }
 
@@ -29238,9 +29395,21 @@ type RequestPreflightReason {
 	ruleName: String!
 }
 
+"""
+Which kinds of requests a rule can evaluate.
+"""
 enum RequestRuleApplicabilityValue {
+	"""
+	Acquisition requests only.
+	"""
 	ACQUISITION
+	"""
+	Bad-media reports only.
+	"""
 	MEDIA_ISSUE
+	"""
+	Both acquisition requests and bad-media reports.
+	"""
 	ACQUISITION_AND_MEDIA_ISSUE
 }
 
@@ -29389,6 +29558,10 @@ type RequestRuleRevision {
 	createdAt: DateTime!
 }
 
+"""
+The hypothetical request an author-side preview evaluates against a real
+user and library, without saving a request or report.
+"""
 input RequestRuleSampleInput {
 	"""
 	User to evaluate as.
@@ -29398,7 +29571,13 @@ input RequestRuleSampleInput {
 	Library to evaluate against.
 	"""
 	libraryId: ID!
+	"""
+	`acquisition_request` or `media_issue`. Omit to infer from the supplied fields.
+	"""
 	kind: String
+	"""
+	Report details for a bad-media sample. Omit for an acquisition sample.
+	"""
 	mediaIssue: RequestMediaIssuePreviewInput
 	"""
 	Provider identifiers of the sample title. An empty list is a legitimate
@@ -29456,6 +29635,9 @@ type RequestRuleSet {
 	Whether the rule set takes part in deciding requests.
 	"""
 	enabled: Boolean!
+	"""
+	Kinds of requests evaluated by this rule.
+	"""
 	applicability: RequestRuleApplicabilityValue!
 	"""
 	Libraries the rule is confined to. Empty means every library.
@@ -32491,9 +32673,21 @@ input SubmitExternalReleaseInput {
 Report one existing media file as bad.
 """
 input SubmitMediaIssueInput {
+	"""
+	ID of the existing library file being reported.
+	"""
 	mediaFileId: ID!
+	"""
+	Reason for reporting the file.
+	"""
 	reasonCode: String!
+	"""
+	Optional explanation from the reporter.
+	"""
 	details: String
+	"""
+	Requested action; reporting does not authorize recycling.
+	"""
 	remediation: MediaIssueRemediationValue!
 }
 
@@ -36864,6 +37058,9 @@ input UpdateRequestRuleMetadataInput {
 	Replacement library scope. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	"""
+	Replacement request kinds. Omit to keep the current applicability.
+	"""
 	applicability: RequestRuleApplicabilityValue
 }
 

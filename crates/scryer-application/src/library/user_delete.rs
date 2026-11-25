@@ -888,12 +888,9 @@ impl AppUseCase {
         let config = self
             .recycle_bin_config_for_media_root_path(Some(&root))
             .await;
-        let (version, metadata) =
-            crate::location::resolution::file_version_and_metadata(&path).await?;
-        if version != issue.file_version
-            || !metadata.is_file()
-            || !crate::location::hardlinks::is_single_link_metadata(&metadata)
-        {
+        let (version, mark) = crate::location::resolution::regular_file_snapshot(&path).await?;
+        // The persisted non-Unix version does not identify an inode after a move.
+        if !cfg!(unix) || !mark.has_one_name() || version != issue.file_version {
             return Err(changed());
         }
         crate::location::title_folder_recovery::inspect_path(&path, false).await?;

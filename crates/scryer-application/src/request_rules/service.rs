@@ -724,9 +724,9 @@ impl AppUseCase {
         let metadata_partial = snapshot.partial;
         let context = self
             .assemble_request_input_context(
-                &requester,
-                &library,
-                &draft,
+                requester,
+                library,
+                draft,
                 snapshot,
                 evaluated_at,
                 None,

@@ -188,7 +188,7 @@ mod tests {
             sampled_content_proof_from_reader(&mut reader, "small", bytes.len() as u64).unwrap();
         assert_eq!(proof.size_bytes, bytes.len() as u64);
         assert_eq!(proof.sample_bytes, bytes.len() as u64);
-        assert!(reader.seeks.len() >= 1);
+        assert!(!reader.seeks.is_empty());
         assert_eq!(reader.reads, vec![bytes.len()]);
     }
 

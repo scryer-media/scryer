@@ -888,7 +888,7 @@ pub(crate) async fn execute_new_conflict_recycle(
     expected_source_version: &str,
 ) -> AppResult<()> {
     let (_, payload, _) = pending_conflict_recycle(config, source, prepared).await?;
-    let version = crate::location::resolution::file_version(source).await?;
+    let (version, _) = crate::location::resolution::regular_file_snapshot(source).await?;
     if version != expected_source_version {
         return Err(AppError::validation_refused(
             crate::delete_refusal::PREVIEW_STALE,
@@ -986,14 +986,13 @@ pub(crate) async fn execute_new_conflict_recycle(
 }
 
 async fn reviewed_recycle_identity_matches(path: &Path, expected_version: &str) -> AppResult<bool> {
-    let (version, metadata) = crate::location::resolution::file_version_and_metadata(path).await?;
+    let (version, mark) = crate::location::resolution::regular_file_snapshot(path).await?;
     // Rename changes Unix ctime, but not the device, inode, length or mtime.
-    Ok(metadata.is_file()
-        && crate::location::hardlinks::is_single_link_metadata(&metadata)
-        && version
-            .split(':')
-            .take(5)
-            .eq(expected_version.split(':').take(5)))
+    Ok(cfg!(unix)
+        && mark.has_one_name()
+        && crate::disk::StoredVersion::new(&version)
+            .same_content(crate::disk::StoredVersion::new(expected_version))
+            == crate::disk::Sameness::Same)
 }
 
 pub(crate) async fn recover_reviewed_recycle(
@@ -4162,6 +4161,45 @@ mod tests {
         );
         assert_eq!(std::fs::read(source).unwrap(), b"first file");
         assert_eq!(std::fs::read(original).unwrap(), b"first file");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn media_issue_recycle_accepts_a_legacy_version_and_preserves_unrelated_files() {
+        let temp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source = root.join("reported.mkv");
+        let unrelated = root.join("unrelated.mkv");
+        std::fs::write(&source, b"reviewed bytes").unwrap();
+        std::fs::write(&unrelated, b"unrelated bytes").unwrap();
+        std::fs::File::open(&source)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_millis(1500))
+            .unwrap();
+        let config = test_config(&root.join("bin"));
+        let mut manifest = test_manifest();
+        manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+        manifest.source_operation_id = Some("synthetic-media-issue".to_owned());
+        let version = crate::location::resolution::file_version(&source)
+            .await
+            .unwrap();
+        let receipt = prepare_conflict_recycle(&config, &source, manifest)
+            .await
+            .unwrap();
+
+        execute_new_conflict_recycle(&config, &source, &receipt, &version)
+            .await
+            .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(crate::stored_paths::stored_path_to_path_buf(
+                &receipt.recycled_path
+            ))
+            .unwrap(),
+            b"reviewed bytes"
+        );
+        assert_eq!(std::fs::read(unrelated).unwrap(), b"unrelated bytes");
     }
 
     #[tokio::test]

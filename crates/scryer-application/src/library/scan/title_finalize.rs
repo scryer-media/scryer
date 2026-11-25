@@ -78,15 +78,12 @@ async fn scanned_file_matches_confirmed_bad_content(
     path: &std::path::Path,
     existing_file_id: Option<&str>,
 ) -> AppResult<bool> {
-    if let Ok(metadata) = tokio::fs::metadata(path).await
+    if let Some(size) = crate::disk::Disk::process().follow(path).await.size()
         && !app
             .services
             .workflow
             .blocklist_repo
-            .has_content_block_size(
-                library_id,
-                i64::try_from(metadata.len()).unwrap_or(i64::MAX),
-            )
+            .has_content_block_size(library_id, i64::try_from(size).unwrap_or(i64::MAX))
             .await?
     {
         if let Some(file_id) = existing_file_id {

@@ -99,18 +99,6 @@ pub fn link_count(path: &Path) -> AppResult<LinkCount> {
         .map_or(LinkCount::Unsupported, LinkCount::Known))
 }
 
-/// For a reviewed move, use the same metadata sample as the version check.
-#[cfg(unix)]
-pub(crate) fn is_single_link_metadata(metadata: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    metadata.nlink() == 1
-}
-
-#[cfg(not(unix))]
-pub(crate) fn is_single_link_metadata(_metadata: &std::fs::Metadata) -> bool {
-    false
-}
-
 fn unreadable_for_hardlinks(path: &Path, reading: PathReading) -> AppError {
     AppError::Repository(format!(
         "failed to stat path for hardlink detection: {}: {}",

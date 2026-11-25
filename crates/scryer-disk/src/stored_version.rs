@@ -25,7 +25,7 @@ const FILE_FIELDS: usize = 2;
 const CONTENT_FIELDS: usize = 5;
 
 /// One stored version, borrowed. No probe.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoredVersion<'a>(&'a str);
 
 impl<'a> StoredVersion<'a> {

@@ -472,7 +472,7 @@ impl AppUseCase {
                     );
                     let _ = self.append_domain_event(event).await;
                 }
-                return Ok(rejected);
+                Ok(rejected)
             }
             Some(RequestDecisionOutcome::AutoApprove)
                 if issue.remediation == MediaIssueRemediation::MarkBad =>
@@ -562,13 +562,11 @@ impl AppUseCase {
             })?;
         self.require_library_permission(actor, &block.library_id, LibraryPermission::ManageTitles)
             .await?;
-        let removed = self
-            .services
+        self.services
             .workflow
             .blocklist_repo
             .remove_content_block(block_id)
-            .await;
-        removed
+            .await
     }
 
     pub async fn list_media_issues(
@@ -664,19 +662,21 @@ impl AppUseCase {
                 "could not verify the selected media file identity",
             )
         };
-        let (before, metadata) = crate::location::resolution::file_version_and_metadata(&path)
+        let (before, mark) = crate::location::resolution::regular_file_snapshot(&path)
             .await
             .map_err(|_| changed())?;
-        if !metadata.is_file() || i64::try_from(metadata.len()).ok() != Some(file.size_bytes) {
+        if !u64::try_from(file.size_bytes).is_ok_and(|size| mark.is_len(size)) {
             return Err(changed());
         }
         let proof = crate::fs_integrity::import_content_proof_async(&path)
             .await
             .map_err(|_| changed())?;
-        let after = crate::location::resolution::file_version(&path)
+        let (after, _) = crate::location::resolution::regular_file_snapshot(&path)
             .await
             .map_err(|_| changed())?;
-        if before != after || proof.size_bytes != metadata.len() {
+        if crate::disk::StoredVersion::new(&before) != crate::disk::StoredVersion::new(&after)
+            || !mark.is_len(proof.size_bytes)
+        {
             return Err(changed());
         }
         Ok((before, proof))
@@ -749,7 +749,7 @@ impl AppUseCase {
             .release_listing_json
             .as_deref()
             .and_then(crate::release_listing_view)
-            .and_then(|_| file.grabbed_release_title.as_ref())
+            .and(file.grabbed_release_title.as_ref())
             .filter(|name| !name.trim().is_empty())
             .map(|name| crate::NewBlocklistEntry {
                 title_id: issue.title_id.clone(),
@@ -762,16 +762,16 @@ impl AppUseCase {
             .services
             .workflow
             .blocklist_repo
-            .confirm_media_issue(
-                &issue.id,
-                if rule_decision_id.is_some() {
+            .confirm_media_issue(crate::ConfirmMediaIssue {
+                issue_id: &issue.id,
+                reviewer_user_id: if rule_decision_id.is_some() {
                     None
                 } else {
                     Some(actor.id.as_str())
                 },
                 rule_decision_id,
                 remediation,
-                &NewLibraryContentBlock {
+                block: &NewLibraryContentBlock {
                     library_id: issue.library_id.clone(),
                     proof: scryer_domain::ImportContentProof {
                         size_bytes: issue.size_bytes,
@@ -791,10 +791,10 @@ impl AppUseCase {
                     .to_string()
                     .into(),
                 },
-                release.as_ref(),
+                release: release.as_ref(),
                 recycle_fingerprint,
-                &self.matching_media_issue_file_ids(issue).await?,
-            )
+                matching_media_file_ids: &self.matching_media_issue_file_ids(issue).await?,
+            })
             .await?;
         if confirmed {
             self.runtime

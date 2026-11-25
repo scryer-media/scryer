@@ -438,6 +438,7 @@ pub use catalog::workflow::{
     DeleteEpisodeFilesJobAccepted, DeleteTitlesJobAccepted, DeleteTitlesJobItem,
     DeleteTitlesJobRequest,
 };
+pub use contracts::ConfirmMediaIssue;
 pub use contracts::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeStatesQuery,
     AcquisitionScopeStatusTally, ActivityWindowCounts, AudioStreamDetail, BlocklistMatch,

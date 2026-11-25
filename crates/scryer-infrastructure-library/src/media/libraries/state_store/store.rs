@@ -4337,15 +4337,18 @@ impl BlocklistRepository for BlocklistStore {
 
     async fn confirm_media_issue(
         &self,
-        issue_id: &str,
-        reviewer_user_id: Option<&str>,
-        rule_decision_id: Option<&str>,
-        remediation: scryer_domain::MediaIssueRemediation,
-        block: &NewLibraryContentBlock,
-        release: Option<&NewBlocklistEntry>,
-        recycle_fingerprint: Option<&str>,
-        matching_media_file_ids: &[String],
+        confirmation: scryer_application::ConfirmMediaIssue<'_>,
     ) -> AppResult<bool> {
+        let scryer_application::ConfirmMediaIssue {
+            issue_id,
+            reviewer_user_id,
+            rule_decision_id,
+            remediation,
+            block,
+            release,
+            recycle_fingerprint,
+            matching_media_file_ids,
+        } = confirmation;
         let now = self
             .datastore
             .timestamp_text_arg(&Utc::now().to_rfc3339())?;

@@ -1506,6 +1506,17 @@ pub struct NewLibraryContentBlock {
     pub provenance_json: Option<String>,
 }
 
+pub struct ConfirmMediaIssue<'a> {
+    pub issue_id: &'a str,
+    pub reviewer_user_id: Option<&'a str>,
+    pub rule_decision_id: Option<&'a str>,
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub block: &'a NewLibraryContentBlock,
+    pub release: Option<&'a NewBlocklistEntry>,
+    pub recycle_fingerprint: Option<&'a str>,
+    pub matching_media_file_ids: &'a [String],
+}
+
 /// A pending or reviewed media-issue report.
 #[derive(Clone, Debug)]
 pub struct NewMediaIssue {
