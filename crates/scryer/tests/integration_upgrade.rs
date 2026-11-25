@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -157,6 +159,7 @@ impl MediaFileRepository for FailingPathUpdateMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &scryer_application::MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<scryer_application::ClaimedMediaFile> {
         if self.fail_insert {
             return Err(AppError::Repository(
@@ -164,7 +167,7 @@ impl MediaFileRepository for FailingPathUpdateMediaFileRepo {
             ));
         }
         self.inner
-            .claim_import_destination(input, associations)
+            .claim_import_destination(input, associations, hashes)
             .await
     }
 
@@ -1320,10 +1323,9 @@ async fn disabled_recycle_bin_same_path_upgrade_keeps_backup_until_verified() {
         .expect("read media dir")
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".scryer-upgrade-")
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(".scry-u") || name.starts_with(".scryer-upgrade-")
         })
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "guard files should be cleaned up");
@@ -1390,10 +1392,9 @@ async fn recycle_bin_same_path_upgrade_recycles_original_filename() {
         .expect("read media dir")
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".scryer-upgrade-")
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(".scry-u") || name.starts_with(".scryer-upgrade-")
         })
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "guard files should be cleaned up");
@@ -1486,10 +1487,9 @@ async fn disabled_recycle_bin_same_path_path_update_failure_preserves_old_file()
         .expect("read media dir")
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".scryer-upgrade-")
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(".scry-u") || name.starts_with(".scryer-upgrade-")
         })
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "guard files should be cleaned up");
@@ -1644,12 +1644,7 @@ async fn disabled_recycle_distinct_path_rollback_refuses_occupied_original_path(
     let backups = std::fs::read_dir(media_dir.path())
         .expect("read media dir")
         .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".scryer-upgrade-old-")
-        })
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".scry-uo-"))
         .collect::<Vec<_>>();
     assert_eq!(backups.len(), 1, "old backup should be preserved");
     assert_eq!(

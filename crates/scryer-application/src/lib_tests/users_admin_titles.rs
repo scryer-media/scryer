@@ -596,6 +596,150 @@ async fn library_managers_receive_only_their_scoped_interactive_job_events() {
 }
 
 #[tokio::test]
+async fn a_search_run_is_seen_by_the_user_who_started_it_and_by_managers_only() {
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let (base_app, admin) = bootstrap();
+    let app = base_app.with_test_overrides(|services| services.with_job_runs(job_runs.clone()));
+    let test_password = uuid::Uuid::new_v4().to_string();
+    let searcher = create_user_with_permissions(
+        &app,
+        &admin,
+        "search-starter",
+        &test_password,
+        vec![TestPermissionPreset::TitleManagement],
+    )
+    .await
+    .expect("create searcher");
+    let other_user = create_user_with_permissions(
+        &app,
+        &admin,
+        "other-search-starter",
+        &test_password,
+        vec![TestPermissionPreset::TitleManagement],
+    )
+    .await
+    .expect("create other user");
+    let now = chrono::Utc::now();
+    let search_run = |id: &str, actor_user_id: &str, status: JobRunStatus| JobRunRecord {
+        id: id.to_string(),
+        job_key: JobKey::AcquisitionSearch,
+        operation_type: "acquisition_search".to_string(),
+        status,
+        trigger_source: JobTriggerSource::Manual,
+        actor_user_id: Some(actor_user_id.to_string()),
+        progress_json: None,
+        summary_json: None,
+        summary_text: None,
+        error_text: None,
+        started_at: now,
+        completed_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    // Listing.
+    job_runs
+        .seed(search_run(
+            "own-search",
+            &searcher.id,
+            JobRunStatus::Completed,
+        ))
+        .await;
+    job_runs
+        .seed(search_run(
+            "other-search",
+            &other_user.id,
+            JobRunStatus::Completed,
+        ))
+        .await;
+    let listed = app
+        .list_job_runs(&searcher, JobKey::AcquisitionSearch, 10)
+        .await
+        .expect("a user may list their own searches");
+    assert_eq!(
+        listed.into_iter().map(|run| run.id).collect::<Vec<_>>(),
+        vec!["own-search".to_string()]
+    );
+    let admin_listed = app
+        .list_job_runs(&admin, JobKey::AcquisitionSearch, 10)
+        .await
+        .expect("a manager lists every search")
+        .into_iter()
+        .map(|run| run.id)
+        .collect::<HashSet<_>>();
+    assert!(admin_listed.contains("own-search"));
+    assert!(admin_listed.contains("other-search"));
+
+    // Active runs and events.
+    let own_active = search_run("own-active-search", &searcher.id, JobRunStatus::Running);
+    let other_active = search_run("other-active-search", &other_user.id, JobRunStatus::Running);
+    for run in [&own_active, &other_active] {
+        app.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(run, None))
+            .await;
+    }
+    let active = app
+        .active_job_runs(&searcher)
+        .await
+        .expect("a user lists their own active searches");
+    assert_eq!(
+        active.into_iter().map(|run| run.id).collect::<Vec<_>>(),
+        vec![own_active.id.clone()]
+    );
+    let admin_active = app
+        .active_job_runs(&admin)
+        .await
+        .expect("a manager lists every active search")
+        .into_iter()
+        .map(|run| run.id)
+        .collect::<HashSet<_>>();
+    assert!(admin_active.contains(&own_active.id));
+    assert!(admin_active.contains(&other_active.id));
+
+    let mut events = app
+        .subscribe_job_run_events(&searcher)
+        .await
+        .expect("a user may follow their own searches");
+    // A later state of the user's own search, the last event this test
+    // sends. It arrives in the subscription's replay or live after it, and
+    // either way anything leaked earlier is already queued once it is here.
+    let mut own_progressed = own_active.clone();
+    own_progressed.summary_text = Some("halfway".to_string());
+    app.runtime
+        .jobs
+        .job_run_tracker
+        .upsert_active_run(JobRun::from_record(&other_active, None))
+        .await;
+    app.runtime
+        .jobs
+        .job_run_tracker
+        .upsert_active_run(JobRun::from_record(&own_progressed, None))
+        .await;
+    let mut seen = Vec::new();
+    loop {
+        let event = within_deadline("the user's own search event", events.recv())
+            .await
+            .expect("job event should be delivered");
+        let is_last =
+            event.id == own_progressed.id && event.summary_text.as_deref() == Some("halfway");
+        seen.push(event.id);
+        if is_last {
+            break;
+        }
+    }
+    while let Ok(event) = events.try_recv() {
+        seen.push(event.id);
+    }
+    assert!(seen.contains(&own_active.id));
+    assert!(
+        !seen.contains(&other_active.id),
+        "another user's search must not reach this user: {seen:?}"
+    );
+}
+
+#[tokio::test]
 async fn active_job_runs_use_persisted_rows_without_domain_event_replay() {
     let job_runs = Arc::new(RecordingJobRunRepo::default());
     let domain_events = Arc::new(MockDomainEventRepo::default());
@@ -2286,6 +2430,68 @@ async fn policy_title_cleanup_retires_password_retry_binding() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn library_title_cleanup_leaves_an_active_torrent_in_its_client_and_cancels_usenet() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+        download_queue_commands.clone(),
+    );
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+
+    let title = app
+        .add_title(&user, synthetic_movie("Synthetic Root Removal Movie"))
+        .await
+        .expect("create title");
+    let torrent_id = scryer_domain::download_identity::DownloadId::new();
+    let usenet_id = scryer_domain::download_identity::DownloadId::new();
+    let torrent = deleted_title_submission(&title.id, torrent_id, "qbittorrent", "hash-active");
+    let usenet = deleted_title_submission(&title.id, usenet_id, "sabnzbd", "job-active");
+    for submission in [&torrent, &usenet] {
+        let locator = ClientJobLocator::from_submission(submission);
+        download_submissions
+            .record_submission(submission.clone())
+            .await
+            .expect("record submission");
+        download_submissions
+            .update_tracked_state(&locator, "downloading")
+            .await
+            .expect("record tracked state");
+        registry.bind(locator, submission.download_id).await;
+    }
+
+    app.purge_title_dependent_records(&title.id, (&user).into())
+        .await
+        .expect("purge title records");
+
+    let queued = download_queue_commands.queued.lock().await.clone();
+    assert_eq!(
+        queued.len(),
+        1,
+        "only the usenet job is cancelled: {queued:?}"
+    );
+    assert_eq!(queued[0].canonical_download_id, Some(usenet_id));
+    assert!(
+        queued
+            .iter()
+            .all(|command| command.canonical_download_id != Some(torrent_id)),
+        "no delete is queued for the torrent"
+    );
+    assert!(
+        !registry.is_ended(&torrent_id).await,
+        "the torrent's binding stays live so it can be adopted as unmatched"
+    );
+    assert!(registry.is_ended(&usenet_id).await);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
 #[tokio::test]

@@ -16,10 +16,12 @@
 //! moves the fingerprint and rebuilds the index once.
 
 pub(crate) mod japanese;
+pub(crate) mod russian;
 
 use crate::title_spelling::{TitleScript, title_script};
 
 pub use japanese::JAPANESE_ROMANIZATION_TAG;
+pub use russian::RUSSIAN_ROMANIZATION_TAG;
 
 /// One language's transliteration fold.
 ///
@@ -38,15 +40,23 @@ pub use japanese::JAPANESE_ROMANIZATION_TAG;
 /// * [`sample_tags`](Self::sample_tags): tags `applies_to` accepts. This
 ///   module's tests refuse a registry where one rule set accepts another's
 ///   sample tag.
-/// * [`script`](Self::script): the script the fold reads. A name in any other
-///   script is never folded.
-/// * [`fold`](Self::fold): the comparison key of a name already in
+/// * [`script`](Self::script): the script of the catalog names the fold
+///   reads. A catalog name in any other script is never folded.
+/// * [`fold`](Self::fold): the comparison key of a catalog name already in
 ///   [`title_lookup_form`](crate::title_spelling::title_lookup_form). It must
 ///   be deterministic, and it must only equate spellings its doc comment
 ///   documents as one key. It may equate distinct names only where its doc
 ///   comment lists them as known collisions, relying on the caller's
 ///   competitor check, which proves no other library identity answers to a
-///   key before trusting it.
+///   key before trusting it. An empty key refuses the name: it is never
+///   stored and never matched.
+/// * [`observed_script`](Self::observed_script) and
+///   [`fold_observed`](Self::fold_observed), only when the names a release or
+///   a file carries are written in another script than the catalog's (a
+///   Cyrillic catalog name against its Latin transliteration): the script of
+///   those observed names and their key in the same key space. They default
+///   to [`script`](Self::script) and [`fold`](Self::fold), which is right for
+///   a rule set that compares two spellings in one script.
 /// * [`probes`](Self::probes): a non-empty list of names such that turning
 ///   off any one rule of the fold changes at least one probe's key. The index
 ///   fingerprint hashes these keys, so a rule change that no probe notices
@@ -64,10 +74,22 @@ pub trait LanguageRules: Sync {
     fn script(&self) -> TitleScript;
     fn fold(&self, value: &str) -> String;
     fn probes(&self) -> &'static [&'static str];
+    /// The script of the release and file names this rule set reads.
+    fn observed_script(&self) -> TitleScript {
+        self.script()
+    }
+    /// The key of a release or file name, in the key space of
+    /// [`fold`](Self::fold).
+    fn fold_observed(&self, value: &str) -> String {
+        self.fold(value)
+    }
 }
 
 /// Every registered rule set, in selection order.
-pub static RULES: &[&dyn LanguageRules] = &[&japanese::JapaneseRomanization];
+pub static RULES: &[&dyn LanguageRules] = &[
+    &japanese::JapaneseRomanization,
+    &russian::RussianRomanization,
+];
 
 /// The rule set a catalog language tag selects, if any.
 pub fn rules_for(language: Option<&str>) -> Option<&'static dyn LanguageRules> {
@@ -122,18 +144,21 @@ fn contract_violation(registry: &[&dyn LanguageRules]) -> Option<String> {
 }
 
 /// The comparison-only romanization key of a name, or `None` when the language
-/// tag selects no rule set or the name is not in that rule set's script.
+/// tag selects no rule set, the name is not in that rule set's catalog script,
+/// or the rule set refuses the name.
 /// Indexes that need to find every spelling of a name must key on this as well
 /// as on the literal and collation keys: romanization variance is not a
 /// bounded edit distance, so a Levenshtein-shaped candidate filter can miss it.
 pub fn romanization_key(value: &str, language: Option<&str>) -> Option<String> {
     let rules = rules_for(language)?;
-    (title_script(value) == rules.script()).then(|| rules.fold(value))
+    (title_script(value) == rules.script())
+        .then(|| rules.fold(value))
+        .filter(|key| !key.is_empty())
 }
 
 /// The romanization keys of a release name, which carries no language tag:
 /// one per registered rule set that reads the name's script, without
-/// duplicates. With one registered rule set this is at most one key.
+/// duplicates.
 pub fn release_romanization_keys(value: &str) -> Vec<String> {
     release_keys(RULES, value)
 }
@@ -142,14 +167,33 @@ fn release_keys(registry: &[&dyn LanguageRules], value: &str) -> Vec<String> {
     let script = title_script(value);
     let mut keys = Vec::new();
     for rules in registry {
-        if rules.script() == script {
-            let key = rules.fold(value);
-            if !keys.contains(&key) {
+        if rules.observed_script() == script {
+            let key = rules.fold_observed(value);
+            if !key.is_empty() && !keys.contains(&key) {
                 keys.push(key);
             }
         }
     }
     keys
+}
+
+/// The scripts of the catalog names a release name's romanization keys can
+/// answer to: the catalog script of every registered rule set that reads the
+/// name's script, without duplicates. A matcher that buckets or filters
+/// catalog names by script looks the keys up in each of these.
+pub fn release_romanization_scripts(value: &str) -> Vec<TitleScript> {
+    release_scripts(RULES, value)
+}
+
+fn release_scripts(registry: &[&dyn LanguageRules], value: &str) -> Vec<TitleScript> {
+    let script = title_script(value);
+    let mut scripts = Vec::new();
+    for rules in registry {
+        if rules.observed_script() == script && !scripts.contains(&rules.script()) {
+            scripts.push(rules.script());
+        }
+    }
+    scripts
 }
 
 /// Whether a reported spelling equivalence came from a romanization fold
@@ -315,12 +359,46 @@ mod tests {
         assert_eq!(romanization_key("hoshi kage no machi", Some("en")), None);
         assert_eq!(romanization_key("hoshi kage no machi", None), None);
         assert_eq!(romanization_key("ほしかげ", Some("ja")), None);
+        // A Latin release name is read by both registered rule sets: folded
+        // as romaji, and as written for a transliterated Cyrillic name.
         assert_eq!(
             release_romanization_keys("hoshi kage no machi"),
-            vec!["hoshikagenomachi".to_string()]
+            vec![
+                "hoshikagenomachi".to_string(),
+                "hoshi kage no machi".to_string()
+            ]
         );
         assert!(release_romanization_keys("ほしかげ").is_empty());
         assert!(is_romanization_tag(JAPANESE_ROMANIZATION_TAG));
+        assert!(is_romanization_tag(RUSSIAN_ROMANIZATION_TAG));
         assert!(!is_romanization_tag("ja"));
+    }
+
+    /// A rule set whose catalog names and observed names are in different
+    /// scripts: the catalog key needs the catalog script, the release key the
+    /// observed script, and a matcher is told which catalog scripts to read.
+    #[test]
+    fn a_rule_set_may_read_catalog_and_observed_names_in_different_scripts() {
+        assert_eq!(
+            romanization_key("бавага", Some("ru")).as_deref(),
+            Some("bavaga")
+        );
+        assert_eq!(romanization_key("bavaga", Some("ru")), None);
+        assert_eq!(romanization_key("бавага", Some("x-jat")), None);
+        assert_eq!(romanization_key("бавага", None), None);
+        // A refused name has no key at all.
+        assert_eq!(romanization_key("ґабур", Some("ru")), None);
+        // A Cyrillic release name is not read by any rule set.
+        assert!(release_romanization_keys("бавага").is_empty());
+        assert!(release_romanization_scripts("бавага").is_empty());
+        assert_eq!(
+            release_romanization_scripts("bavaga"),
+            vec![TitleScript::Latin, TitleScript::Cyrillic]
+        );
+        assert_eq!(
+            release_scripts(WITH_SISTER, "bavaga"),
+            vec![TitleScript::Latin]
+        );
+        assert!(release_scripts(WITH_SISTER, "ほしかげ").is_empty());
     }
 }

@@ -81,12 +81,12 @@ export function canAccessSettingsSection(
     case "plugins":
     case "scripts":
     case "notifications":
+    case "lifecycleRules":
       return canManageSystemSettings;
     case "qualityProfiles":
     case "delayProfiles":
     case "titleTags":
     case "rules":
-    case "maintenanceRules":
     case "requestRules":
     case "post-processing":
     case "subtitles":
@@ -129,13 +129,16 @@ export function canAccessDashboard(canManageSystemSettings: boolean): boolean {
  * Anyone who can read a catalog may see which public lists feed it; following,
  * editing and excluding need Manage Lists. A list manager without a catalog
  * grant still reaches the page, because the lists they manage are theirs to
- * run whether or not they browse the libraries those lists fill.
+ * run whether or not they browse the libraries those lists fill. A member
+ * whose lists are not allowed has nothing on the page to use, so it is hidden
+ * from them unless they also manage lists.
  */
 export function canAccessListsPage(
   canViewCatalog: boolean,
   canManageLists: boolean,
+  personalListsRefused = false,
 ): boolean {
-  return canViewCatalog || canManageLists;
+  return canManageLists || (canViewCatalog && !personalListsRefused);
 }
 
 /** Lists availability depends only on the reader's permissions. */

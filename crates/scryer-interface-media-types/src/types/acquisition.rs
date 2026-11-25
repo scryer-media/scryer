@@ -485,6 +485,10 @@ pub struct IndexerConfigPayload {
     /// request already released can still wait for a concurrency permit or the
     /// host limiter and go out later.
     pub max_queries_per_minute: Option<i64>,
+    /// Maximum Scryer-observed requests per UTC calendar month; null means unlimited.
+    pub max_requests_per_month: Option<Long>,
+    /// Maximum Scryer-initiated grabs reserved in a UTC calendar month; null means unlimited.
+    pub max_grabs_per_month: Option<Long>,
     /// UTC time until which the indexer is disabled, or null when not disabled.
     pub disabled_until: Option<DateTime<Utc>>,
     /// UTC time until which the indexer is cooling down after asking Scryer to
@@ -620,6 +624,10 @@ pub struct ProxyConfigPayload {
     /// WireGuard persistent keepalive in seconds, or null to use the engine's
     /// default. Zero means keepalive is switched off.
     pub tunnel_keepalive_seconds: Option<i32>,
+    /// Challenge solvers only: the transport proxy or tunnel Scryer reaches
+    /// this solver through, and through which it sends its own requests that
+    /// reuse the solver's clearance. Null reaches the solver directly.
+    pub reach_through_proxy_config_id: Option<ID>,
     /// Host key pinned on the first successful tunnel connect, formatted as
     /// OpenSSH prints it, or null before the first connect. A host key is
     /// public, so this value is shown rather than masked.
@@ -1072,6 +1080,10 @@ pub struct CreateIndexerConfigInput {
     /// request already released can still wait for a concurrency permit or the
     /// host limiter and go out later.
     pub max_queries_per_minute: Option<i64>,
+    /// Monthly request limit; at least 1, or null for unlimited.
+    pub max_requests_per_month: Option<Long>,
+    /// Monthly grab limit; at least 1, or null for unlimited.
+    pub max_grabs_per_month: Option<Long>,
     /// Whether the indexer is enabled.
     pub is_enabled: Option<bool>,
     /// Whether interactive searches use this indexer.
@@ -1107,6 +1119,10 @@ pub struct UpdateIndexerConfigInput {
     /// request already released can still wait for a concurrency permit or the
     /// host limiter and go out later.
     pub max_queries_per_minute: MaybeUndefined<i64>,
+    /// Request limit per UTC calendar month: omission preserves it, null clears it.
+    pub max_requests_per_month: MaybeUndefined<Long>,
+    /// Grab limit per UTC calendar month: omission preserves it, null clears it.
+    pub max_grabs_per_month: MaybeUndefined<Long>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
     /// Replacement interactive-search state; omission preserves it.
@@ -1178,6 +1194,9 @@ pub struct CreateProxyConfigInput {
     /// WireGuard persistent keepalive in seconds. Omit to use the engine's
     /// default; zero switches keepalive off. Only WireGuard accepts it.
     pub tunnel_keepalive_seconds: Option<i32>,
+    /// Challenge solvers only: an enabled transport proxy or tunnel to reach
+    /// the solver through. Omit to reach the solver directly.
+    pub reach_through_proxy_config_id: Option<ID>,
     /// Whether the proxy is enabled.
     pub is_enabled: Option<bool>,
 }
@@ -1226,6 +1245,10 @@ pub struct UpdateProxyConfigInput {
     /// Replacement WireGuard keepalive in seconds; omission preserves it, null
     /// restores the engine's default, and zero switches keepalive off.
     pub tunnel_keepalive_seconds: MaybeUndefined<i32>,
+    /// Challenge solvers only: the transport proxy or tunnel to reach the
+    /// solver through. Omission preserves it and null reaches the solver
+    /// directly again.
+    pub reach_through_proxy_config_id: MaybeUndefined<ID>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
 }
@@ -1764,6 +1787,9 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     BackedOff,
     /// The indexer takes no text query.
     NoTextSearch,
+    /// A local monthly limit on the indexer refused the search, or its usage
+    /// could not be checked. `failureReasonCode` carries the reason code.
+    MonthlyLimit,
 }
 
 /// How Scryer obtained the capabilities it used to search an indexer.
@@ -1807,7 +1833,9 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub failure_reason: Option<String>,
     /// Stable code for a failure the operator must act on, such as
     /// `ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
-    /// not loaded; null for other failures and when the indexer did not fail.
+    /// not loaded, or the monthly limit reason when `skipReason` is
+    /// `MONTHLY_LIMIT`; null for other failures and when the indexer did not
+    /// fail.
     pub failure_reason_code: Option<String>,
     /// How the capabilities used for this indexer were obtained, or null
     /// before they were resolved.
@@ -1898,6 +1926,44 @@ pub struct ForceGrabPendingReleasePayload {
     pub id: async_graphql::ID,
     /// Whether the release was accepted for grabbing.
     pub grabbed: bool,
+}
+
+/// The result of asking to queue a saved standby candidate.
+#[derive(SimpleObject, Clone)]
+pub struct QueueStandbyReleasePayload {
+    /// Whether the release is now queued (or already was).
+    pub grabbed: bool,
+    /// Running downloads of this title that still need the operator's choice.
+    pub conflicts: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts whose client accepted the cancel request. Scryer stops
+    /// tracking them; a client may still finish a job it was post-processing.
+    pub cancelled: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts whose cancel request failed. They keep running and stay
+    /// tracked; the release is queued anyway.
+    pub cancel_failed: Vec<QueueDownloadConflictPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A grab accepted to run in the background.
+pub struct StartGrabPayload {
+    /// The job doing the grab. Follow it on the job-run event stream, then
+    /// read its outcome with `grabJobResult`.
+    pub job_run: super::JobRunPayload,
+}
+
+#[derive(SimpleObject, Clone, Default)]
+/// Outcome of a finished background grab. Exactly one field is set: the one
+/// matching the kind of grab that was started, holding what the matching
+/// synchronous mutation would have returned.
+pub struct GrabJobResultPayload {
+    /// Outcome of an `existing`, `replacement` or `indexerSearchAssignment` grab.
+    pub queued: Option<QueueDownloadPayload>,
+    /// Outcome of an `unlinked` grab.
+    pub unlinked: Option<QueueUnlinkedReleasePayload>,
+    /// Outcome of a `standby` grab.
+    pub standby: Option<QueueStandbyReleasePayload>,
+    /// Outcome of a `pending` grab.
+    pub pending: Option<ForceGrabPendingReleasePayload>,
 }
 
 #[derive(SimpleObject, Clone)]

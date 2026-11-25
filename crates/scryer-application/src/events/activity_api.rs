@@ -25,6 +25,20 @@ pub const DASHBOARD_ACTIVITY_MIN_WINDOW_HOURS: i64 = 1;
 /// practical ceiling for an interactive dashboard read.
 pub const DASHBOARD_ACTIVITY_MAX_WINDOW_HOURS: i64 = 168;
 
+/// Source pages of 500 events one budgeted domain-event read examines before
+/// it hands back a resume point, however few of them the caller may see.
+pub const DOMAIN_EVENT_FEED_SOURCE_PAGE_BUDGET: usize = 20;
+
+/// The events one domain-event read found visible, in sequence order.
+#[derive(Clone, Debug, Default)]
+pub struct DomainEventFeedPage {
+    pub events: Vec<DomainEvent>,
+    /// Set when the read stopped at its source-page budget: the last sequence
+    /// it examined, which can be later than the last returned event. A read
+    /// with no budget, or one that reached the end or its limit, leaves it unset.
+    pub resume_after_sequence: Option<i64>,
+}
+
 fn dashboard_import_kind(
     event_type: &TitleHistoryEventType,
     evidence: Option<&crate::DashboardImportEvidence>,
@@ -1652,6 +1666,30 @@ impl AppUseCase {
         actor: &User,
         filter: &DomainEventFilter,
     ) -> AppResult<Vec<DomainEvent>> {
+        Ok(self.scan_domain_events(actor, filter, None).await?.events)
+    }
+
+    /// [`Self::list_domain_events`] that reads at most
+    /// [`DOMAIN_EVENT_FEED_SOURCE_PAGE_BUDGET`] source pages. When it stops at
+    /// the budget, the page names the last sequence it examined, and a read
+    /// that resumes after it continues where this one stopped. Reading on from
+    /// each page's resume point, or from its last event when it has none,
+    /// yields the same events in the same order as unbounded reads would.
+    pub async fn list_domain_events_within_budget(
+        &self,
+        actor: &User,
+        filter: &DomainEventFilter,
+    ) -> AppResult<DomainEventFeedPage> {
+        self.scan_domain_events(actor, filter, Some(DOMAIN_EVENT_FEED_SOURCE_PAGE_BUDGET))
+            .await
+    }
+
+    async fn scan_domain_events(
+        &self,
+        actor: &User,
+        filter: &DomainEventFilter,
+        source_page_budget: Option<usize>,
+    ) -> AppResult<DomainEventFeedPage> {
         require_actor_view_library(self, actor).await?;
         let target_len = if filter.limit == 0 {
             100
@@ -1665,6 +1703,7 @@ impl AppUseCase {
         let forward = filter.after_sequence.is_some() && filter.before_sequence.is_none();
         let mut page_filter = filter.clone();
         page_filter.limit = 500;
+        let mut source_pages = 0_usize;
 
         loop {
             let events = self
@@ -1676,6 +1715,7 @@ impl AppUseCase {
             if events.is_empty() {
                 break;
             }
+            source_pages += 1;
 
             let next_sequence = events.last().map(|event| event.sequence);
             let batch_len = events.len();
@@ -1685,7 +1725,10 @@ impl AppUseCase {
                 {
                     visible.push(event);
                     if visible.len() >= target_len {
-                        return Ok(visible);
+                        return Ok(DomainEventFeedPage {
+                            events: visible,
+                            resume_after_sequence: None,
+                        });
                     }
                 }
             }
@@ -1694,13 +1737,23 @@ impl AppUseCase {
                 break;
             }
 
+            if source_page_budget.is_some_and(|budget| source_pages >= budget) {
+                return Ok(DomainEventFeedPage {
+                    events: visible,
+                    resume_after_sequence: next_sequence,
+                });
+            }
+
             if forward {
                 page_filter.after_sequence = next_sequence;
             } else {
                 page_filter.before_sequence = next_sequence;
             }
         }
-        Ok(visible)
+        Ok(DomainEventFeedPage {
+            events: visible,
+            resume_after_sequence: None,
+        })
     }
 
     pub async fn audit_log(

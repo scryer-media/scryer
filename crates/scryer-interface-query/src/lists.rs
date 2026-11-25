@@ -9,9 +9,9 @@ use scryer_interface_media::mappers::{
     from_member_list_policy, list_source_draft_from_input,
 };
 use scryer_interface_media::types::{
-    ListAccountPayload, ListExclusionPayload, ListMembershipPagePayload, ListPreviewPayload,
-    ListProviderAppPayload, ListProviderPayload, ListProviderSettingsPayload, ListSourceInput,
-    ListSubscriptionPayload, ListSyncRunPayload, MemberListPolicyPayload,
+    ListAccountPayload, ListExclusionPayload, ListMembershipPagePayload, ListPolicyValue,
+    ListPreviewPayload, ListProviderAppPayload, ListProviderPayload, ListProviderSettingsPayload,
+    ListSourceInput, ListSubscriptionPayload, ListSyncRunPayload, MemberListPolicyPayload,
 };
 
 /// Cached canonical genre and theme vocabulary supplied by the metadata gateway.
@@ -356,6 +356,14 @@ impl ListQueries {
         let actor = actor_from_ctx(ctx)?;
         let exclusions = app.list_exclusions(&actor).await.map_err(to_gql_error)?;
         Ok(exclusions.into_iter().map(from_list_exclusion).collect())
+    }
+
+    /// The signed-in member's own list policy.
+    async fn my_list_policy(&self, ctx: &Context<'_>) -> GqlResult<ListPolicyValue> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let policy = app.my_list_policy(&actor).await.map_err(to_gql_error)?;
+        Ok(ListPolicyValue::from_domain(policy))
     }
 
     /// Every member's list policy and recent list requests. Requires list

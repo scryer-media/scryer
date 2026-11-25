@@ -148,6 +148,69 @@ export function toScriptScheduleInput(
   }
 }
 
+/**
+ * How a schedule is put in words, as a translation key and its values. A
+ * weekly schedule also carries its days, which the caller names in the
+ * interface language. Null for a cron schedule, which is described from its
+ * expression instead.
+ */
+export type ScheduleDescriptionKey = {
+  key: string;
+  values: { count?: number; time?: string };
+  days?: ScheduleWeekdayValue[];
+};
+
+const INTERVAL_DESCRIPTION_KEYS: Record<
+  IntervalUnit,
+  { single: string; plural: string }
+> = {
+  seconds: {
+    single: "script.schedule.describe.everySeconds",
+    plural: "script.schedule.describe.everySeconds",
+  },
+  minutes: {
+    single: "script.schedule.describe.everyMinute",
+    plural: "script.schedule.describe.everyMinutes",
+  },
+  hours: {
+    single: "script.schedule.describe.everyHour",
+    plural: "script.schedule.describe.everyHours",
+  },
+  days: {
+    single: "script.schedule.describe.everyDay",
+    plural: "script.schedule.describe.everyDays",
+  },
+};
+
+export function scheduleDescriptionKey(
+  schedule: ScriptSchedule,
+): ScheduleDescriptionKey | null {
+  switch (schedule.kind) {
+    case "MANUAL":
+      return { key: "script.schedule.kind.manual", values: {} };
+    case "INTERVAL": {
+      const { amount, unit } = splitIntervalSeconds(schedule.everySeconds);
+      const keys = INTERVAL_DESCRIPTION_KEYS[unit];
+      return amount === 1
+        ? { key: keys.single, values: {} }
+        : { key: keys.plural, values: { count: amount } };
+    }
+    case "DAILY":
+      return {
+        key: "script.schedule.describe.daily",
+        values: { time: schedule.timeLocal ?? DEFAULT_TIME },
+      };
+    case "WEEKLY":
+      return {
+        key: "script.schedule.describe.weekly",
+        values: { time: schedule.timeLocal ?? DEFAULT_TIME },
+        days: orderWeekdays(schedule.days ?? []),
+      };
+    case "CRON":
+      return null;
+  }
+}
+
 const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = [
   "MANUAL",
   "INTERVAL",

@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
@@ -1706,6 +1709,7 @@ pub enum NotificationEventType {
     ListTitleLeft,
     ListSyncFailed,
     ListUnfollowed,
+    LifecycleRuleNotified,
     Test,
 }
 
@@ -1741,6 +1745,7 @@ impl NotificationEventType {
             Self::ListTitleLeft => "list_title_left",
             Self::ListSyncFailed => "list_sync_failed",
             Self::ListUnfollowed => "list_unfollowed",
+            Self::LifecycleRuleNotified => "lifecycle_rule_notified",
             Self::Test => "test",
         }
     }

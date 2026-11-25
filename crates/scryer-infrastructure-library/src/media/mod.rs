@@ -10,5 +10,7 @@ pub mod search;
 pub mod servers;
 pub mod shows;
 pub mod signals;
+pub mod title_awards;
+pub mod title_content_ratings;
 pub mod title_credits;
 pub mod titles;

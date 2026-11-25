@@ -1,5 +1,62 @@
 use super::*;
 
+struct GrabAdmissionProbe {
+    attempts: std::sync::atomic::AtomicUsize,
+    deny: bool,
+}
+
+impl GrabAdmissionProbe {
+    fn new(deny: bool) -> Self {
+        Self {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            deny,
+        }
+    }
+
+    fn attempts(&self) -> usize {
+        self.attempts.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::IndexerStatsTracker for GrabAdmissionProbe {
+    fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+
+    fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+
+    fn record_api_limits(
+        &self,
+        _indexer_id: &str,
+        _api_current: Option<u32>,
+        _api_max: Option<u32>,
+        _grab_current: Option<u32>,
+        _grab_max: Option<u32>,
+    ) {
+    }
+
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: chrono::DateTime<Utc>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.deny {
+                Err(AppError::validation_refused(
+                    crate::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED,
+                    "monthly grab limit reached",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn all_stats(&self) -> Vec<crate::IndexerQueryStats> {
+        Vec::new()
+    }
+}
+
 #[tokio::test]
 async fn manual_grab_retains_scope_history_when_client_item_disappears() {
     let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -541,11 +598,14 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
-    let (app, user) = bootstrap_with_cleanup_tracking(
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
         download_client.clone(),
         download_submissions.clone(),
         pending_releases,
     );
+    let admissions = Arc::new(GrabAdmissionProbe::new(false));
+    let app =
+        base_app.with_test_overrides(|services| services.with_indexer_stats(admissions.clone()));
     let request = NewTitle {
         name: "Queued Once".into(),
         facet: MediaFacet::Movie,
@@ -556,7 +616,7 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
         ..Default::default()
     };
     let queued_release = QueuedReleaseSelection {
-        indexer_id: None,
+        indexer_id: Some("idx-monthly".into()),
         source_hint: Some("https://example.invalid/releases/queued-once.nzb".to_string()),
         source_kind: Some(DownloadSourceKind::NzbUrl),
         source_title: Some("Queued.Once.2026.1080p.WEB-DL".to_string()),
@@ -572,6 +632,7 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
         .expect("first queued add should succeed");
     assert!(!first.reused_existing_title);
     assert!(!first.reused_queued_download);
+    assert_eq!(admissions.attempts(), 1);
 
     let second = app
         .add_title_and_queue_download_with_outcome(&user, request, queued_release)
@@ -581,6 +642,11 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
     assert_eq!(second.download_job_id, first.download_job_id);
     assert!(second.reused_existing_title);
     assert!(second.reused_queued_download);
+    assert_eq!(
+        admissions.attempts(),
+        1,
+        "reusing an accepted submission must not consume another monthly grab"
+    );
 
     let submissions = download_submissions.store.lock().await.clone();
     let expected_signature = normalize_release_selection_signature(
@@ -601,6 +667,100 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
             .await
             .as_slice(),
         &["Queued Once".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn exhausted_monthly_grab_limit_precedes_artifact_fetch_and_client_submission() {
+    struct Resolver(std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl crate::IndexerArtifactResolver for Resolver {
+        async fn resolve_artifact(
+            &self,
+            _request: &crate::IndexerArtifactResolutionRequest,
+        ) -> AppResult<crate::PreparedIndexerArtifact> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(AppError::Repository(
+                "artifact resolver should not run after quota refusal".into(),
+            ))
+        }
+    }
+
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let admissions = Arc::new(GrabAdmissionProbe::new(true));
+    let resolver = Arc::new(Resolver(std::sync::atomic::AtomicUsize::new(0)));
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_indexer_stats(admissions.clone())
+            .with_indexer_artifact_resolver(Some(resolver.clone()))
+    });
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Monthly Grab Limit".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                indexer_id: Some("idx-monthly".into()),
+                source_hint: Some("https://indexer.example/release.nzb".into()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Monthly.Grab.Limit.2026.1080p.WEB-DL".into()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("the local monthly grab cap should refuse the submission");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED)
+    );
+    assert_eq!(admissions.attempts(), 1);
+    assert_eq!(
+        resolver.0.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "quota denial must happen before the indexer artifact fetch"
+    );
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty(),
+        "quota denial must happen before download-client submission"
+    );
+    assert!(
+        app.services
+            .workflow
+            .release_attempts
+            .list_failed_release_signatures_for_title(&title.id, 10)
+            .await
+            .expect("list failed signatures")
+            .is_empty(),
+        "a monthly limit refusal is not a failed attempt of the release"
+    );
+    assert!(
+        title_blocklist_entries(&app, &title.id).await.is_empty(),
+        "a monthly limit refusal must not blocklist the release"
     );
 }
 
@@ -1383,6 +1543,130 @@ async fn an_operator_delete_stops_conflicting_new_submissions_for_its_scope() {
         matches!(reacquired, QueueDownloadOutcome::Queued(_)),
         "a deleted download must not block the reacquire that follows it"
     );
+}
+
+#[tokio::test]
+async fn torrent_bilingual_release_names_are_not_archive_passwords() {
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Northern Lantern".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    for kind in [
+        DownloadSourceKind::TorrentFile,
+        DownloadSourceKind::MagnetUri,
+    ] {
+        for name in [
+            "Северный фонарь / Northern Lantern",
+            "Северный фонарь / Northern Lantern / S1E1-8 of 8 (2026) WEB-DL 2160p",
+        ] {
+            let mut request = crate::DownloadClientAddRequest::from_legacy(
+                &title,
+                None,
+                Some(kind),
+                Some(name.to_string()),
+                None,
+                None,
+            );
+            request.release_title = Some(name.to_string());
+            assert!(request.password_candidates().is_empty(), "{kind:?}");
+            assert_eq!(
+                request.source_title_without_password().as_deref(),
+                Some(name)
+            );
+            assert_eq!(
+                request.release_title_without_password().as_deref(),
+                Some(name)
+            );
+        }
+    }
+    // The resolved artifact also identifies torrents when the hint is absent.
+    for artifact in [
+        crate::ResolvedDownloadArtifact::Magnet {
+            uri: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789".into(),
+            info_hash_hint: None,
+        },
+        crate::ResolvedDownloadArtifact::TorrentFile {
+            bytes: vec![],
+            file_name: None,
+            content_type: None,
+            info_hash_hint: None,
+        },
+    ] {
+        let name = "Северный фонарь / Northern Lantern / S01";
+        let mut request = crate::DownloadClientAddRequest::from_legacy(
+            &title,
+            None,
+            None,
+            Some(name.into()),
+            None,
+            None,
+        );
+        request.resolved_download_artifact = Some(artifact);
+        assert!(request.password_candidates().is_empty());
+        assert_eq!(
+            request.source_title_without_password().as_deref(),
+            Some(name)
+        );
+    }
+    // NZB compatibility and actual, explicitly supplied passwords are unchanged.
+    for kind in [DownloadSourceKind::NzbFile, DownloadSourceKind::NzbUrl] {
+        let request = crate::DownloadClientAddRequest::from_legacy(
+            &title,
+            None,
+            Some(kind),
+            Some("Northern.Lantern / synthetic-secret".into()),
+            None,
+            None,
+        );
+        assert_eq!(
+            request.password_candidates().first(),
+            Some("synthetic-secret")
+        );
+        assert_eq!(
+            request.source_title_without_password().as_deref(),
+            Some("Northern.Lantern")
+        );
+    }
+    for kind in [
+        DownloadSourceKind::TorrentFile,
+        DownloadSourceKind::MagnetUri,
+    ] {
+        for name in [
+            "Northern.Lantern{{synthetic-secret}}",
+            "Northern.Lantern password=synthetic-secret",
+        ] {
+            let request = crate::DownloadClientAddRequest::from_legacy(
+                &title,
+                None,
+                Some(kind),
+                Some(name.into()),
+                Some("indexer-secret".into()),
+                None,
+            );
+            let candidates = request.password_candidates();
+            assert_eq!(
+                candidates.iter().map(String::as_str).collect::<Vec<_>>(),
+                vec!["indexer-secret", "synthetic-secret"]
+            );
+            assert_eq!(
+                request.source_title_without_password().as_deref(),
+                Some("Northern.Lantern")
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -4761,6 +5045,38 @@ async fn background_search_records_scope_indexer_coverage() {
 }
 
 #[tokio::test]
+async fn editing_custom_search_aliases_reopens_covered_convergence() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let configs = vec![synthetic_direct_nab_indexer_config("indexer-a", "newznab")];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let (mut title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    app.record_search_coverage(&title, &subject, &["indexer-a".into()], &[])
+        .await;
+    assert!(scope_is_converged(&app, &title, &subject).await);
+
+    // User-entered query names are persisted as reserved title tags. Old empty
+    // searches must not cover a newly corrected query after the next title walk.
+    title.tags.push(format!(
+        "{}Alternative Query Name",
+        scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+    ));
+    assert!(
+        !scope_is_converged(&app, &title, &subject).await,
+        "old coverage must not suppress the corrected custom query"
+    );
+    app.record_search_coverage(&title, &subject, &["indexer-a".into()], &[])
+        .await;
+    assert!(scope_is_converged(&app, &title, &subject).await);
+}
+
+#[tokio::test]
 async fn scope_converges_only_after_every_routed_indexer_is_covered() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let configs = vec![
@@ -6140,6 +6456,7 @@ async fn a_failed_grab_walks_the_saved_search_results_without_querying_an_indexe
     };
     let fail = |client_id: String, client_type: String, client_item_id: String, suffix: &str| {
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: Some(title.id.clone()),
             client_id,

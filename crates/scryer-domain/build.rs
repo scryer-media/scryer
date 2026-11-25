@@ -7,6 +7,9 @@
 //! the fingerprint whether or not the probes notice — and a fingerprint change
 //! is a projection rebuild, never a silent lookup miss.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::path::{Path, PathBuf};
 
 const PACKAGES: &[&str] = &["icu_collator", "icu_collator_data"];

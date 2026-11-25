@@ -707,30 +707,9 @@ impl AppUseCase {
                 continue;
             }
 
-            let Some(cutoff_tier) = profile
-                .criteria
-                .cutoff_tier
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
+            let Some(normalized_cutoff_tier) = profile.criteria.search_cutoff_tier() else {
                 continue;
             };
-
-            let Some(normalized_cutoff_tier) =
-                crate::quality_profile::normalize_quality_tier(Some(cutoff_tier))
-            else {
-                continue;
-            };
-
-            if !profile
-                .criteria
-                .quality_tiers
-                .iter()
-                .any(|tier| tier == &normalized_cutoff_tier)
-            {
-                continue;
-            }
 
             cutoff_profile_map.insert(
                 title.id.clone(),
@@ -1750,14 +1729,16 @@ impl AppUseCase {
             let configs = self.recycle_bin_configs_for_recycling(media_roots).await;
             let mut purged = 0u32;
             for (media_root, config) in configs {
-                match crate::recycle_bin::list_committed_entries_for_title(
+                match crate::recycle_bin::list_committed_entries_for_title_with_upgrade_links(
                     &config,
                     title_id,
                     recycle_index,
                 )
                 .await
                 {
-                    Ok(entries) => {
+                    Ok((entries, upgrade_links)) => {
+                        let mut upgrades =
+                            crate::jobs::housekeeping::UpgradePurgeContext::listed(upgrade_links);
                         for entry in entries {
                             match self
                                 .purge_recycle_entry_after_validation(
@@ -1765,6 +1746,7 @@ impl AppUseCase {
                                     &config,
                                     &entry,
                                     actor.clone(),
+                                    &mut upgrades,
                                 )
                                 .await
                             {
@@ -1915,6 +1897,22 @@ impl AppUseCase {
                 continue;
             }
 
+            // A torrent stays in its client when its title is removed, so it
+            // keeps seeding; it stays available for unmatched import as the
+            // explicit path above leaves it. An unknown client counts as a
+            // torrent client here.
+            if !explicit && crate::seeding_gate::client_type_is_torrent(self, &identity.client_type)
+            {
+                live_download_ids.insert(submission.download_id);
+                debug!(
+                    title_id = %title_id,
+                    client_type = %identity.client_type,
+                    download_item_id = %identity.item_id,
+                    "leaving active torrent in its client after title deletion"
+                );
+                continue;
+            }
+
             match self
                 .services
                 .workflow
@@ -2027,7 +2025,7 @@ impl AppUseCase {
             .await?
             .into_iter()
             .filter(|record| {
-                match crate::maintenance_rules::safety::queued_import_title_id(record) {
+                match crate::lifecycle_rules::safety::queued_import_title_id(record) {
                     Some(owner) => owner == title_id,
                     None => {
                         from_title_downloads.contains(&record.id)

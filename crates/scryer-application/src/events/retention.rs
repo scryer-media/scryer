@@ -55,7 +55,8 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::ListRequestSubmitted
         | DomainEventType::ListTitleLeft
         | DomainEventType::ListSyncFailed
-        | DomainEventType::ListUnfollowed => DomainEventRetentionClass::UserFacingHistory,
+        | DomainEventType::ListUnfollowed
+        | DomainEventType::LifecycleRuleNotified => DomainEventRetentionClass::UserFacingHistory,
         DomainEventType::LibraryScanStarted
         | DomainEventType::LibraryScanTitleDiscovered
         | DomainEventType::LibraryScanDeltaRecorded

@@ -76,6 +76,17 @@ pub trait ListActions: Send + Sync {
         hold: bool,
     ) -> AppResult<String>;
 
+    /// Stage the request metadata of items about to be passed to
+    /// [`Self::submit_request`], in batched gateway reads rather than one or
+    /// two per request. An optimisation only: a submit stages whatever this
+    /// left unstaged, so doing nothing is always correct.
+    async fn stage_requests(
+        &self,
+        _subscription: &ListSubscription,
+        _items: &[(&ListRoute, &ResolvedItem)],
+    ) {
+    }
+
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()>;
 
     async fn tag_title(&self, title_id: &str, tag: &str) -> AppResult<()>;
@@ -245,6 +256,52 @@ pub async fn act_on_candidate(
         reason: Some(action_failure_reason(&error)),
         ..ActOutcome::state(failed_action_state(&error))
     })
+}
+
+/// Stage, in batched gateway reads, the request metadata of the candidates
+/// [`act_on_candidate`] is about to submit as requests. Candidates that will
+/// be added or only discovered are skipped, since nothing reads staged
+/// metadata for them. The owner's grants are read once per routed library
+/// here; `act_on_candidate` still checks them again per item.
+pub async fn stage_candidate_requests(
+    actions: &dyn ListActions,
+    subscription: &ListSubscription,
+    candidates: &[&ResolvedItem],
+) {
+    let mut requests_by_library: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
+    let mut to_stage = Vec::new();
+    for item in candidates {
+        let Some(route) = item
+            .kind
+            .clone()
+            .and_then(|kind| subscription.route_for(kind))
+        else {
+            continue;
+        };
+        let requests = match requests_by_library.get(&route.library_id) {
+            Some(requests) => *requests,
+            None => {
+                let requests = match subscription.mode {
+                    ListMode::Hold => true,
+                    ListMode::Discover => false,
+                    ListMode::Add if !subscription.is_personal() => false,
+                    ListMode::Add | ListMode::Request => matches!(
+                        actions.owner_manages_titles(subscription, route).await,
+                        Ok(false)
+                    ),
+                };
+                requests_by_library.insert(route.library_id.clone(), requests);
+                requests
+            }
+        };
+        if requests {
+            to_stage.push((route, *item));
+        }
+    }
+    if !to_stage.is_empty() {
+        actions.stage_requests(subscription, &to_stage).await;
+    }
 }
 
 /// Where a failed action leaves its item.

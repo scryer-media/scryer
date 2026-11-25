@@ -2,6 +2,7 @@ pub mod common;
 pub mod compressed_blob;
 pub mod domain_event_payload;
 pub mod json;
+pub mod json_shape;
 pub mod migration;
 pub mod runtime;
 pub mod sanitized_corpus;

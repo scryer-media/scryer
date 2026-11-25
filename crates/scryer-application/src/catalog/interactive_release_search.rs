@@ -148,9 +148,20 @@ pub enum InteractiveIndexerSkipReason {
     BackedOff,
     /// The indexer takes no text query.
     NoTextSearch,
+    /// A local monthly limit on the indexer refused the search, or its usage
+    /// could not be checked. `code` is the stable reason of the refusal.
+    MonthlyLimit { code: &'static str },
 }
 
 impl InteractiveIndexerSkipReason {
+    /// The stable code beside the reason, when the reason carries one.
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            Self::MonthlyLimit { code } => Some(code),
+            _ => None,
+        }
+    }
+
     /// Plain-text form of the reason, for logs and API clients that do not
     /// read the structured reason.
     fn describe(self, until: Option<DateTime<Utc>>) -> String {
@@ -162,6 +173,7 @@ impl InteractiveIndexerSkipReason {
                 None => "in backoff after recent failures".to_string(),
             },
             Self::NoTextSearch => "does not support text search".to_string(),
+            Self::MonthlyLimit { .. } => "not asked because of a local monthly limit".to_string(),
         }
     }
 
@@ -170,6 +182,9 @@ impl InteractiveIndexerSkipReason {
         match outcome {
             crate::IndexerSearchOutcome::Unsupported => Some((Self::NoTextSearch, None)),
             crate::IndexerSearchOutcome::BackedOff { until } => Some((Self::BackedOff, until)),
+            crate::IndexerSearchOutcome::LocalLimit { reason } => {
+                Some((Self::MonthlyLimit { code: reason }, None))
+            }
             _ => None,
         }
     }
@@ -664,7 +679,7 @@ impl AppUseCase {
                 result_count: 0,
                 elapsed_ms: None,
                 failure_reason: skip.map(|(reason, _)| reason.describe(None)),
-                failure_reason_code: None,
+                failure_reason_code: skip.and_then(|(reason, _)| reason.code()),
                 caps: None,
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
@@ -970,7 +985,9 @@ impl AppUseCase {
             } else {
                 source.outcome.and_then(incomplete_indexer_reason)
             };
-            view.failure_reason_code = incomplete.as_ref().and_then(|reason| reason.code);
+            view.failure_reason_code = skip
+                .and_then(|(reason, _)| reason.code())
+                .or_else(|| incomplete.as_ref().and_then(|reason| reason.code));
             view.failure_reason = skip
                 .map(|(reason, until)| reason.describe(until))
                 .or_else(|| incomplete.map(|reason| reason.message));
@@ -1386,7 +1403,7 @@ impl AppUseCase {
             indexer.result_count = 0;
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = Some(reason.describe(until));
-            indexer.failure_reason_code = None;
+            indexer.failure_reason_code = reason.code();
             indexer.rate_limited = false;
             indexer.skip_reason = Some(reason);
             indexer.skipped_until = until;
@@ -1820,6 +1837,8 @@ impl AppUseCase {
             .get("info_hash")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        self.admit_indexer_monthly_grab(result.indexer_id.as_deref())
+            .await?;
         let grab_indexer = self
             .grab_indexer_name(result.indexer_id.as_deref(), Some(result.source.as_str()))
             .await;
@@ -2052,6 +2071,8 @@ impl AppUseCase {
                 .get("info_hash")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
+            self.admit_indexer_monthly_grab(result.indexer_id.as_deref())
+                .await?;
             let artifact = self
                 .services
                 .integrations
@@ -2332,11 +2353,21 @@ struct FetchedSearchArtifact {
 /// Restate which release an artifact fetch failed on: the operator picked
 /// several and the message is all they see. The kind is flattened to a
 /// validation failure because that is what it is for the caller — one of the
-/// releases they chose cannot be downloaded.
+/// releases they chose cannot be downloaded. A failure that names a reason
+/// keeps it, so the client can still tell, for example, a monthly limit
+/// refusal apart from a broken link.
 fn prefix_app_error(error: AppError, release_title: &str) -> AppError {
+    if error.validation_reason().is_none() && error.reason().is_some() {
+        return error;
+    }
+    let reason = error.validation_reason();
     let rendered = error.to_string();
     let detail = rendered.strip_prefix("validation: ").unwrap_or(&rendered);
-    AppError::Validation(format!("{release_title}: {detail}"))
+    let message = format!("{release_title}: {detail}");
+    match reason {
+        Some(reason) => AppError::validation_refused(reason, message),
+        None => AppError::Validation(message),
+    }
 }
 
 /// `<sanitized release title><extension>`, safe to put in a
@@ -2561,5 +2592,49 @@ mod subject_shape_tests {
         }
         validate_interactive_search_subject_shape(Some("link-1"), None, None)
             .expect("series movie subject");
+    }
+}
+
+#[cfg(test)]
+mod prefix_app_error_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_refusal_keeps_its_reason_behind_the_release_title() {
+        let reason = crate::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED;
+        let error = prefix_app_error(
+            AppError::validation_refused(reason, "monthly request limit reached"),
+            "Release.Title.2026.1080p",
+        );
+        assert_eq!(error.validation_reason(), Some(reason));
+        assert!(
+            error.to_string().contains("Release.Title.2026.1080p"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_coded_temporary_failure_is_returned_unchanged() {
+        let reason = crate::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE;
+        let error = prefix_app_error(
+            AppError::temporary_unavailable_reason(reason, "usage could not be checked", None),
+            "Release.Title.2026.1080p",
+        );
+        assert_eq!(error.reason(), Some(reason));
+    }
+
+    #[test]
+    fn an_uncoded_failure_still_names_the_release() {
+        let error = prefix_app_error(
+            AppError::Validation("link expired".to_string()),
+            "Release.Title.2026.1080p",
+        );
+        assert_eq!(error.validation_reason(), None);
+        assert!(
+            error
+                .to_string()
+                .contains("Release.Title.2026.1080p: link expired"),
+            "{error}"
+        );
     }
 }

@@ -9,6 +9,9 @@
 //! `PRAGMA writable_schema` and leaves a plain stand-in behind, and this
 //! asserts both halves plus the integrity of the resulting schema.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use scryer_infrastructure_datastore::migrations::{
     embedded_catalog, replay_source_catalog_for_fresh_install, run_migrations,
 };

@@ -10,10 +10,164 @@
 # on the smallest enclosing item, with a comment naming the contract that fixes
 # the algorithm. Do not add an allow for a hash that is ours to choose.
 
+# Disk operations guard.
+#
+# Code reaches the filesystem only through `scryer_application::disk`, which
+# re-exports the disk service crate (crates/scryer-disk/). The
+# disallowed-methods entries whose reason reads "disk operations go through
+# scryer_application::disk" ban the std, tokio, platform and third-party calls
+# that touch the disk, so a direct call fails `cargo clippy -D warnings`
+# outside an allowed scope.
+#
+# The only standing exemptions are: the disk service crate itself; test,
+# example, bench and build-script code; the plugin WASI sandbox, which manages
+# its own preopened directories; and exactly three crates:
+#   - scryer-launcher, the container entrypoint. Before any service exists it
+#     creates the config directory, re-owns it and, when the database
+#     directory is another one, that directory too, and then replaces itself
+#     with the server. It depends on libc alone.
+#   - scryer-mediainfo, the media parser. It opens the one file it is asked to
+#     describe and reads it through its own handle; to tell that the file is
+#     still the one it opened, it also stats that path by name.
+#   - scryer-mock-apis, fixture tooling that is not part of a Scryer install.
+# A crate is exempt because it is named here, not because of what it depends
+# on, and no other crate is exempt. Each exemption
+# carries `allow(clippy::disallowed_methods)` with a `// disk-guard:` comment
+# saying which exemption it is. Until a crate is converted it carries one
+# crate-level allow marked `// disk-guard: this crate still calls the
+# filesystem directly; ...`; that allow is removed when the crate is converted,
+# and no new one is added.
+#
+# The disk guard and the hashing guard share the disallowed_methods lint, so an
+# allow silences both. An allow for a disk call must not be used to reach a
+# hash, and an allow for a hash must not be used to reach the disk.
+#
+# Entries with `allow-invalid = true` name platform-specific or optional
+# dependency paths that do not resolve in every crate or on every lint target
+# (Linux musl and Windows).
+
 disallowed-methods = [
     { path = "aws_lc_rs::digest::digest", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-* is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
     { path = "aws_lc_rs::digest::Context::new", reason = "first-party hashing goes through scryer_application::blake3_identity_hex; SHA-* is allowed only where an external contract fixes the algorithm (see helpers.rs)" },
     { path = "aws_lc_rs::hmac::Key::new", reason = "HMAC is allowed only for the documented signing contracts (JWT, sessions, API keys, OAuth, SMG enrollment, TOTP); first-party fingerprints use scryer_application::blake3_identity_hex" },
+    # Disk operations guard (see the comment above).
+    { path = "std::fs::read", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::read_to_string", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::write", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::copy", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::rename", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::remove_file", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::remove_dir", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::remove_dir_all", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::create_dir", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::create_dir_all", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::hard_link", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::metadata", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::symlink_metadata", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::read_dir", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::canonicalize", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::read_link", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::set_permissions", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::exists", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::soft_link", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::File::open", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::File::create", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::File::create_new", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::OpenOptions::open", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::DirBuilder::create", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::DirEntry::metadata", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::fs::DirEntry::file_type", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::exists", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::try_exists", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::is_file", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::is_dir", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::is_symlink", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::metadata", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::symlink_metadata", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::canonicalize", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::read_dir", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::path::Path::read_link", reason = "disk operations go through scryer_application::disk" },
+    { path = "std::os::unix::fs::symlink", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "std::os::unix::fs::chown", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "std::os::unix::fs::lchown", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "std::os::unix::fs::fchown", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "std::os::windows::fs::symlink_file", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "std::os::windows::fs::symlink_dir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::read", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::read_to_string", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::write", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::copy", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::rename", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::remove_file", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::remove_dir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::remove_dir_all", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::create_dir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::create_dir_all", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::hard_link", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::metadata", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::symlink_metadata", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::read_dir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::canonicalize", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::read_link", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::set_permissions", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::try_exists", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::symlink", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::symlink_file", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::symlink_dir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::File::open", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::File::create", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::File::create_new", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::OpenOptions::open", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::DirBuilder::create", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::DirEntry::metadata", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tokio::fs::DirEntry::file_type", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::statfs", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::statvfs", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::fsync", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::flock", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::chown", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::lchown", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::posix_fadvise", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::fcntl", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::openat", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::syscall", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::renamex_np", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "libc::mkfifo", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::CreateFileW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::SetFileAttributesW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::GetFileAttributesW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::MoveFileExW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::ReplaceFileW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::CreateHardLinkW", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "windows_sys::Win32::Storage::FileSystem::FlushFileBuffers", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::tempdir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::tempdir_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::tempfile", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::tempfile_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::new", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::new_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::persist", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::persist_noclobber", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::TempDir::new", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::TempDir::new_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::Builder::tempfile", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::Builder::tempfile_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::Builder::tempdir", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tempfile::Builder::tempdir_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tar::Archive::unpack", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tar::Entry::unpack", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "tar::Entry::unpack_in", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "filetime::set_file_mtime", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "filetime::set_file_atime", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "filetime::set_file_times", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "filetime::set_symlink_file_times", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "glob::glob", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "glob::glob_with", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "scryer_disk::capacity::probe", reason = "free space goes through StorageCapacity", allow-invalid = true },
 ]
 
 disallowed-types = [

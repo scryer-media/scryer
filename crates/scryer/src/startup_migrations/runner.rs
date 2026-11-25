@@ -160,6 +160,24 @@ const MIGRATIONS: &[MigrationSpec] = &[
         phase: MigrationPhase::ApplicationReady,
         legacy_state_key: None,
     },
+    MigrationSpec {
+        id: super::_0021_title_content_ratings_refresh::ID,
+        description: super::_0021_title_content_ratings_refresh::DESCRIPTION,
+        phase: MigrationPhase::ApplicationReady,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: super::_0022_title_awards_refresh::ID,
+        description: super::_0022_title_awards_refresh::DESCRIPTION,
+        phase: MigrationPhase::ApplicationReady,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: super::_0023_empty_failed_import_files::ID,
+        description: super::_0023_empty_failed_import_files::DESCRIPTION,
+        phase: MigrationPhase::ApplicationReady,
+        legacy_state_key: None,
+    },
 ];
 
 #[derive(Clone)]
@@ -491,6 +509,27 @@ impl ApplicationMigrator {
                     let restore = app.restore_coordinator().clone();
                     std::mem::drop(self.spawn_retryable(restore, spec, async move {
                         super::_0019_show_tmdb_refresh::migrate(&datastore).await
+                    }));
+                }
+                super::_0021_title_content_ratings_refresh::ID => {
+                    let datastore = datastore.clone();
+                    let restore = app.restore_coordinator().clone();
+                    std::mem::drop(self.spawn_retryable(restore, spec, async move {
+                        super::_0021_title_content_ratings_refresh::migrate(&datastore).await
+                    }));
+                }
+                super::_0022_title_awards_refresh::ID => {
+                    let datastore = datastore.clone();
+                    let restore = app.restore_coordinator().clone();
+                    std::mem::drop(self.spawn_retryable(restore, spec, async move {
+                        super::_0022_title_awards_refresh::migrate(&datastore).await
+                    }));
+                }
+                super::_0023_empty_failed_import_files::ID => {
+                    let datastore = datastore.clone();
+                    let restore = app.restore_coordinator().clone();
+                    std::mem::drop(self.spawn_retryable(restore, spec, async move {
+                        super::_0023_empty_failed_import_files::migrate(&datastore).await
                     }));
                 }
                 super::_0020_payload_blob_compression::ID => {

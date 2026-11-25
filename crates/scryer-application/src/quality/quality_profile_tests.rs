@@ -2640,6 +2640,96 @@ fn a_spelled_season_without_a_number_keeps_the_title_text() {
     }
 }
 
+/// A bare number inside a show's name read as an absolute episode and cut the
+/// neutral title at it, so `The.140.Lanterns...S02E01` named only "THE" and
+/// every such release failed title matching.
+#[test]
+fn a_number_in_the_show_name_stays_in_the_neutral_title() {
+    for (release, title, season, episode) in [
+        (
+            "The.140.Lanterns.Who.Really.Really.Really.Really.REALLY.Glow.S02E01.1080p.BluRay.Dual-Audio.Opus.2.0.x265-GroupTag",
+            "THE 140 LANTERNS WHO REALLY REALLY REALLY REALLY REALLY GLOW",
+            2,
+            1,
+        ),
+        ("The.140.S02E01.1080p.BluRay.x265-GroupTag", "THE 140", 2, 1),
+        (
+            "Quiet.Meridian.4400.S01E05.1080p.WEB.h264-GroupTag",
+            "QUIET MERIDIAN 4400",
+            1,
+            5,
+        ),
+        (
+            "[GroupTag] Quiet Meridian 140-nin no Lantern S2 - 01 (1080p) [ABCDEF12].mkv",
+            "QUIET MERIDIAN 140 NIN NO LANTERN",
+            2,
+            1,
+        ),
+    ] {
+        let parsed = parse_release_metadata(release);
+        assert_eq!(parsed.normalized_title, title, "{release}");
+        let numbering = parsed.episode.as_ref().expect(release);
+        assert_eq!(numbering.season, Some(season), "{release}");
+        assert_eq!(numbering.episode_numbers, vec![episode], "{release}");
+    }
+
+    let sequel =
+        parse_release_metadata("[GroupTag] Quiet Meridian 140 III - 01 (1080p) [ABCDEF12].mkv");
+    assert_eq!(sequel.normalized_title, "QUIET MERIDIAN 140 III");
+    assert_eq!(
+        sequel
+            .episode
+            .as_ref()
+            .map(|numbering| numbering.absolute_episode_numbers.clone()),
+        Some(vec![1])
+    );
+}
+
+/// The number stays this release's episode when nothing later numbers it: a
+/// dash-led number, a batch range, a bracketed alternate `SxxEyy`, or a name
+/// whose only later numbers are a frame size.
+#[test]
+fn a_number_that_numbers_the_release_still_bounds_the_neutral_title() {
+    for (release, absolute) in [
+        (
+            "[GroupTag] Quiet Meridian - 140 (1080p) [ABCDEF12].mkv",
+            vec![140],
+        ),
+        ("[GroupTag] Quiet Meridian 140 [1080p]", vec![140]),
+        (
+            "[GroupTag] Quiet Meridian - 01 ~ 12 (1080p) [Batch]",
+            (1..=12).collect(),
+        ),
+        (
+            "[GroupTag] Quiet Meridian 01-12 (1080p) [Batch]",
+            (1..=12).collect(),
+        ),
+    ] {
+        let parsed = parse_release_metadata(release);
+        assert_eq!(parsed.normalized_title, "QUIET MERIDIAN", "{release}");
+        assert_eq!(
+            parsed
+                .episode
+                .as_ref()
+                .map(|numbering| numbering.absolute_episode_numbers.clone()),
+            Some(absolute),
+            "{release}"
+        );
+    }
+
+    let alternate = parse_release_metadata("[GroupTag] Quiet Meridian 25 (S02E01) [1080p]");
+    assert_eq!(alternate.normalized_title, "QUIET MERIDIAN");
+
+    let frame_size = parse_release_metadata(
+        "[GroupTag] Quiet Meridian 140 no Lantern (BD 1920x1080 x265 10bit FLAC)",
+    );
+    assert!(
+        !frame_size.normalized_title.contains("BD"),
+        "frame size pulled metadata into {}",
+        frame_size.normalized_title
+    );
+}
+
 // ── quality_cutoff_met per ranking mode ───────────────────────────────────
 
 #[test]

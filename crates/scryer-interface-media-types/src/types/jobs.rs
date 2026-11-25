@@ -44,10 +44,8 @@ pub enum JobKeyValue {
     TitleImageCacheRefresh,
     /// Scheduled background AVIF artwork encoding.
     ArtworkEncoding,
-    /// Scheduled maintenance rule evaluation.
-    MaintenanceRuleEvaluation,
-    /// Scheduled maintenance lifecycle action handling.
-    LifecycleActionHandling,
+    /// Scheduled lifecycle rule evaluation.
+    LifecycleRuleEvaluation,
     /// Scheduled media-server watch-signal synchronization.
     MediaServerSignalSync,
     /// Scheduled list-subscription synchronization.
@@ -68,12 +66,16 @@ pub enum JobKeyValue {
     RecycleBinPurge,
     /// Acquisition search.
     AcquisitionSearch,
+    /// One operator-chosen release handed to a download client.
+    ReleaseGrab,
     /// Application upgrade.
     ApplicationUpgrade,
     /// Location operation: a root move, transfer, or other placement change.
     LocationOperation,
     /// Background import of selected indexers and download clients.
     SourceImport,
+    /// Background import of rules from Sonarr, Radarr, or Maintainerr.
+    ExternalRuleImport,
     /// A user-defined scheduled script; each script is told apart by its
     /// `customJobId`.
     CustomJob,

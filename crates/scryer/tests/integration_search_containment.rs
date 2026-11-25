@@ -7,6 +7,9 @@
 //! reported complete and is not held as contained. Operator searches still
 //! ask, and do not reset the background read.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::HashMap;
@@ -118,6 +121,8 @@ fn indexer_config(server: &MockServer) -> IndexerConfig {
         rate_limit_seconds: Some(0),
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         last_health_status: None,
         last_error_message: None,

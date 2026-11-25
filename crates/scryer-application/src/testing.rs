@@ -15,6 +15,9 @@ pub struct UpgradeForTestInput<'a> {
     pub recycle_config: &'a crate::recycle_bin::RecycleBinConfig,
 }
 
+// disk-guard: test support; the snapshot records the raw device and inode
+// numbers, which the owner's readings keep opaque.
+#[allow(clippy::disallowed_methods)]
 fn import_source_snapshot_for_test(
     path: &Path,
 ) -> crate::AppResult<scryer_domain::ImportSourceSnapshot> {

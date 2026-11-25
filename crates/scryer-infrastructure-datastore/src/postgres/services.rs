@@ -127,6 +127,8 @@ impl PostgresServices {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
@@ -302,6 +304,8 @@ mod tests {
                         movie_release_dates: None,
                         ratings: None,
                         credits: None,
+                        content_ratings: None,
+                        awards: None,
                         extra_external_ids: Vec::new(),
                         extra_tags: Vec::new(),
                     },
@@ -1280,37 +1284,23 @@ mod tests {
                     .map(str::to_string)
             })
             .collect();
-        // 0278 replaces folded-term uniqueness with native spelling/language
-        // uniqueness.
-        assert!(indexes.remove("idx_title_search_terms_title_kind_normalized"));
-        assert!(indexes.insert("idx_title_search_terms_title_kind_language".to_string()));
-        // 0327 replaces the incomplete title index with both complete orders.
-        assert!(indexes.remove("idx_titles_catalog_sort_key"));
-        assert!(indexes.insert("idx_titles_catalog_order_asc".to_string()));
-        assert!(indexes.insert("idx_titles_catalog_order_desc".to_string()));
-        // 0336 drops duplicates and indexes a key or longer index covers, and
-        // adds indexes for statements that scanned their table.
+        // The baseline already carries every index change through 0341. Only
+        // later migrations are applied on top of its names here.
+        // 0353 lets a client item id find its submissions.
+        assert!(indexes.insert("idx_download_submissions_client_item_id".to_string()));
+        // 0354 drops indexes no query uses and duplicates of a wider key, and
+        // adds the ones hot lookups were missing.
         for dropped in [
-            "idx_discovery_item_rank_components_item",
-            "idx_discovery_items_run",
-            "idx_discovery_title_source_tags_title",
-            "idx_discovery_titles_key_language",
-            "idx_domain_events_occurred_at",
-            "idx_download_identity_states_canonical_download_id",
-            "idx_external_subtitle_probe_cache_media_file",
-            "idx_history_title_time",
-            "idx_history_type_time",
-            "idx_indexer_search_learning_title",
-            "idx_indexer_search_run_sources_run",
-            "idx_maintenance_action_steps_candidate",
-            "idx_manual_import_selection_candidates_selection",
-            "idx_media_files_title",
-            "idx_monitor_selections_owner",
-            "idx_subtitle_blocklist_media_file",
-            "idx_title_image_variants_image_variant",
-            "idx_title_images_title_kind",
-            "idx_title_search_terms_title_id",
-            "idx_wanted_items_title",
+            "idx_download_identity_states_download_id",
+            "idx_download_submission_episode_links_episode",
+            "idx_history_events_type_time",
+            "idx_media_files_full_blake3",
+            "idx_notification_subscriptions_target",
+            "idx_pending_releases_indexer_id",
+            "idx_release_download_attempts_source_hint",
+            "idx_release_download_attempts_source_title",
+            "idx_series_movie_links_legacy_collection",
+            "idx_subtitle_downloads_language",
         ] {
             assert!(
                 indexes.remove(dropped),
@@ -1318,31 +1308,28 @@ mod tests {
             );
         }
         for added in [
-            "idx_discovery_items_discovery_title",
-            "idx_discovery_items_tombstoned_by_run",
-            "idx_discovery_section_items_item",
-            "idx_domain_events_event_type_occurred_at",
-            "idx_download_identity_states_reason_canonical",
-            "idx_history_events_actor_user",
-            "idx_imports_canonical_download_id",
-            "idx_imports_source_identity",
-            "idx_imports_type_status_updated_at",
-            "idx_indexer_search_runs_session",
-            "idx_maintenance_evaluation_runs_started",
-            "idx_media_files_title_attention",
-            "idx_media_requests_fingerprint_created",
-            "idx_media_requests_requester_created",
-            "idx_pending_releases_title_added",
-            "idx_release_decisions_title_created_at",
-            "idx_request_rule_decisions_evaluated",
-            "idx_request_rule_decisions_outcome_evaluated",
-            "idx_titles_library_catalog_order_asc",
-            "idx_titles_library_catalog_order_desc",
-            "idx_wanted_items_status_updated_at",
+            "idx_download_client_bindings_active_native_item",
+            "idx_download_submissions_password_retry",
+            "idx_release_decisions_identity",
+            "idx_wanted_items_title_id_id",
         ] {
-            assert!(indexes.insert(added.to_string()), "{added} is new in 0336");
+            assert!(indexes.insert(added.to_string()), "{added} is new in 0354");
         }
+        // 0357 lets import history read the newest imports first.
+        assert!(indexes.insert("idx_imports_created_at".to_string()));
+        // 0360 replaces the title-only index with the title and release-name index.
+        assert!(indexes.remove("idx_blocklist_title_id"));
+        assert!(indexes.insert("idx_blocklist_title_release_name".to_string()));
+        // 0348 drops the operator-keep claim index, which nothing writes, and
+        // renames the lifecycle rule tables' indexes.
+        assert!(indexes.remove("idx_lifecycle_claims_live_operator_keep"));
         indexes
+            .into_iter()
+            .map(|name| match name.strip_prefix("idx_maintenance_") {
+                Some(rest) => format!("idx_lifecycle_{rest}"),
+                None => name,
+            })
+            .collect()
     }
 
     fn postgres_0341_baseline_path() -> PathBuf {

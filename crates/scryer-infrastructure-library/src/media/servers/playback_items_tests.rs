@@ -205,3 +205,52 @@ async fn the_batched_read_is_served_by_the_entity_index() {
         "{plan:?}"
     );
 }
+
+#[tokio::test]
+async fn provider_items_read_back_to_their_mapped_entities_on_their_own_connection() {
+    let store = store().await;
+    seed(&store).await;
+
+    // Index 1 is mapped on connections a and b; index 7 on none. A provider
+    // id asked on the wrong connection finds nothing.
+    let request = vec![
+        (
+            "connection-a".to_string(),
+            "connection-a-item-1".to_string(),
+        ),
+        (
+            "connection-b".to_string(),
+            "connection-b-item-1".to_string(),
+        ),
+        (
+            "connection-a".to_string(),
+            "connection-b-item-1".to_string(),
+        ),
+        (
+            "connection-a".to_string(),
+            "connection-a-item-7".to_string(),
+        ),
+        (
+            "connection-a".to_string(),
+            "connection-a-item-1".to_string(),
+        ),
+    ];
+    let mut found = store
+        .list_playback_items_for_provider_items(&request)
+        .await
+        .expect("provider item read");
+    found.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
+
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(found[0].connection_id, "connection-a");
+    assert_eq!(found[0].entity_id, "episode-00001");
+    assert_eq!(found[1].connection_id, "connection-b");
+    assert_eq!(found[1].entity_id, "episode-00001");
+    assert!(
+        store
+            .list_playback_items_for_provider_items(&[])
+            .await
+            .expect("empty read")
+            .is_empty()
+    );
+}

@@ -36,9 +36,13 @@ pub(crate) enum PendingGrabOutcome {
     SourceGone,
     Rejected,
     /// Admission refused the release because a release already queued or
-    /// grabbed for the same scope is equal or better. Nothing is wrong with the
-    /// release itself: the standby walk keeps it for the queued release's
-    /// failure, while the delay-expiry promoter treats it as `Rejected`.
+    /// grabbed for the same scope is equal or better, or is a worse one the
+    /// client is still downloading, which no automatic grab is sent beside.
+    /// Nothing is wrong with the release itself: the standby walk keeps it for
+    /// the queued release's failure. The delay-expiry promoter keeps it
+    /// untouched while a worse release is still downloading
+    /// (`QueuedItemBlocksUpgrade`), and treats an equal or better queued
+    /// release (`QueuedEqualOrBetter`, `QueuedSameRelease`) as `Rejected`.
     QueueCovered {
         queued_release: String,
         reason: crate::admission::AdmissionRejectionReason,
@@ -52,6 +56,11 @@ pub(crate) enum PendingGrabOutcome {
     /// deferral that never reached a download client, it is a failed
     /// submission that an acquisition job's accounting has to count.
     SubmitRefused(RefusedSubmission),
+    /// The indexer's monthly limit refused the grab before anything was sent.
+    /// That is no verdict on the release and no failed submission: the row is
+    /// kept as it was, and the caller moves on to a release from another
+    /// indexer, leaving this indexer's rows alone for the rest of its pass.
+    IndexerLimitRefused,
 }
 
 /// The read-only half of promoting a pending release: every check up to and
@@ -598,6 +607,9 @@ impl AppUseCase {
         }
 
         let mut grabbed_count = 0u32;
+        // Indexers whose monthly limit refused a grab in this pass. Their
+        // remaining rows are left pending and untried until a later pass.
+        let mut limit_refused_indexers: HashSet<String> = HashSet::new();
 
         for (wanted_item_id, mut releases) in by_wanted {
             let Some(wanted) = self
@@ -646,6 +658,21 @@ impl AppUseCase {
             // Try to grab the best release
             let mut grabbed = false;
             for pr in &releases {
+                if pr
+                    .indexer_id
+                    .as_deref()
+                    .is_some_and(|id| limit_refused_indexers.contains(id))
+                {
+                    continue;
+                }
+                // Already known to be at its limit: left pending with no
+                // attempt and no status write.
+                if let Some(indexer_id) = pr.indexer_id.as_ref()
+                    && self.indexer_monthly_grab_refused_now(Some(indexer_id))
+                {
+                    limit_refused_indexers.insert(indexer_id.clone());
+                    continue;
+                }
                 match self
                     .try_grab_pending_release(
                         &wanted,
@@ -656,6 +683,13 @@ impl AppUseCase {
                     )
                     .await
                 {
+                    Ok(PendingGrabOutcome::IndexerLimitRefused) => {
+                        // Kept pending, untouched; a release from another
+                        // indexer may still be grabbed below.
+                        if let Some(indexer_id) = pr.indexer_id.as_ref() {
+                            limit_refused_indexers.insert(indexer_id.clone());
+                        }
+                    }
                     Ok(PendingGrabOutcome::Grabbed { .. }) => {
                         // Mark this one as grabbed
                         let _ = self
@@ -670,6 +704,22 @@ impl AppUseCase {
                             .await;
                         grabbed = true;
                         grabbed_count += 1;
+                        break;
+                    }
+                    Ok(PendingGrabOutcome::QueueCovered {
+                        reason:
+                            crate::admission::AdmissionRejectionReason::QueuedItemBlocksUpgrade {
+                                ..
+                            },
+                        ..
+                    }) => {
+                        // A worse release is still downloading for the scope.
+                        // That is no verdict on this one: it waits for the
+                        // download to settle, untouched, like a deferral.
+                        info!(
+                            release = pr.release_title.as_str(),
+                            "pending release: a queued download still blocks the upgrade, keeping release pending"
+                        );
                         break;
                     }
                     Ok(PendingGrabOutcome::Rejected | PendingGrabOutcome::QueueCovered { .. }) => {
@@ -1166,7 +1216,10 @@ impl AppUseCase {
 
         // Check the per-title blocklist (the single, removable exclusion source).
         let db_blocklist = self
-            .load_title_release_blocklist_signatures(&title.id)
+            .load_title_release_blocklist_signatures(
+                &title.id,
+                [(pr.release_title.as_str(), pr.info_hash.as_deref())],
+            )
             .await;
 
         // An operator override still honours the blocklist, like Sonarr's
@@ -1378,6 +1431,26 @@ impl AppUseCase {
             }
             Err(_) => Vec::new(),
         };
+        let cutoff_scope = self.cutoff_scope_for(&pending_scope).await;
+        // A resolution failure defers rather than errors: the callers expire
+        // parked releases on Err, and a possibly transient settings problem
+        // must not permanently burn delayed or standby candidates. The profile
+        // is resolved before the series-pack check so that check reads its
+        // missing-share threshold from the same profile the grab scores under.
+        let upgrade_context = match self
+            .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
+            .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = title.id.as_str(),
+                    "pending release: failed to resolve quality profile; keeping release pending"
+                );
+                return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
+            }
+        };
         if is_series_pack && trigger != PendingGrabTrigger::StandbyOperator {
             let mut owned_episode_ids = existing_files
                 .iter()
@@ -1439,28 +1512,13 @@ impl AppUseCase {
                 &pending_parsed,
                 &catalog_episodes,
                 &owned_episode_ids,
+                upgrade_context
+                    .thresholds
+                    .min_missing_percent_for_series_pack,
             ) {
                 return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
             }
         }
-        let cutoff_scope = self.cutoff_scope_for(&pending_scope).await;
-        // A resolution failure defers rather than errors: the callers expire
-        // parked releases on Err, and a possibly transient settings problem
-        // must not permanently burn delayed or standby candidates.
-        let upgrade_context = match self
-            .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
-            .await
-        {
-            Ok(context) => context,
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    title_id = title.id.as_str(),
-                    "pending release: failed to resolve quality profile; keeping release pending"
-                );
-                return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
-            }
-        };
 
         // A delayed release faces the same gate as an immediate one, against what
         // is on disk now rather than what the ledger remembered when it was
@@ -1613,13 +1671,14 @@ impl AppUseCase {
                     queued_title,
                     ..
                 }
-                | crate::admission::AdmissionRejectionReason::QueuedSameRelease { queued_title } => {
-                    PendingGrabOutcome::QueueCovered {
-                        queued_release: queued_title.clone(),
-                        reason: rejection.reason.clone(),
-                        message: rejection.message.clone(),
-                    }
-                }
+                | crate::admission::AdmissionRejectionReason::QueuedSameRelease { queued_title }
+                | crate::admission::AdmissionRejectionReason::QueuedItemBlocksUpgrade {
+                    queued_title,
+                } => PendingGrabOutcome::QueueCovered {
+                    queued_release: queued_title.clone(),
+                    reason: rejection.reason.clone(),
+                    message: rejection.message.clone(),
+                },
                 _ => PendingGrabOutcome::Rejected,
             }));
         }
@@ -1741,19 +1800,21 @@ impl AppUseCase {
         );
         let source_password = crate::normalize_release_password(pr.source_password.as_deref());
 
-        let _ = self
+        // The row stands for this submission until it resolves; its outcome
+        // is written onto it below instead of beside it.
+        let attempt_id = self
             .services
             .workflow
             .release_attempts
-            .record_release_attempt(
+            .begin_release_attempt(
                 Some(title.id.clone()),
                 source_hint.clone(),
                 source_title.clone(),
-                ReleaseDownloadAttemptOutcome::Pending,
-                None,
                 source_password.clone(),
             )
-            .await;
+            .await
+            .ok()
+            .flatten();
 
         let download_cat = self.derive_download_category(&title.facet).await;
         let is_recent = self.is_recent_for_queue_priority(
@@ -1904,19 +1965,17 @@ impl AppUseCase {
                     }
                 }
 
-                let _ = self
-                    .services
-                    .workflow
-                    .release_attempts
-                    .record_release_attempt(
-                        Some(title.id.clone()),
-                        source_hint,
-                        source_title.clone(),
-                        ReleaseDownloadAttemptOutcome::Success,
-                        None,
-                        source_password.clone(),
-                    )
-                    .await;
+                settle_or_record_release_attempt(
+                    self.services.workflow.release_attempts.as_ref(),
+                    attempt_id.as_deref(),
+                    Some(title.id.clone()),
+                    source_hint,
+                    source_title.clone(),
+                    ReleaseDownloadAttemptOutcome::Success,
+                    None,
+                    source_password.clone(),
+                )
+                .await;
 
                 // **The scope that was gated is the scope that is submitted**
                 // (MA3). This block used to resolve coverage a second time,
@@ -1986,6 +2045,26 @@ impl AppUseCase {
                     job: grabbed_job,
                 })
             }
+            Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                // Nothing was sent, so this says nothing about the release:
+                // no failed attempt, no blocklist entry, no status change. An
+                // operator's own grab gets the coded refusal back; an
+                // automatic walk moves on to another indexer.
+                info!(
+                    title = title.name.as_str(),
+                    release = pr.release_title.as_str(),
+                    indexer_id = ?pr.indexer_id,
+                    reason = err.reason().unwrap_or_default(),
+                    "pending release: grab refused by the indexer's monthly limit"
+                );
+                if matches!(
+                    trigger,
+                    PendingGrabTrigger::Operator | PendingGrabTrigger::StandbyOperator
+                ) {
+                    return Err(err);
+                }
+                Ok(PendingGrabOutcome::IndexerLimitRefused)
+            }
             Err(err) => {
                 // An ambiguous submit (the request may have been accepted but
                 // the response was lost) is deferred exactly like an
@@ -2015,23 +2094,21 @@ impl AppUseCase {
                     );
                 }
 
-                let _ = self
-                    .services
-                    .workflow
-                    .release_attempts
-                    .record_release_attempt(
-                        Some(title.id.clone()),
-                        source_hint.clone(),
-                        source_title.clone(),
-                        if defer || source_gone {
-                            ReleaseDownloadAttemptOutcome::Pending
-                        } else {
-                            ReleaseDownloadAttemptOutcome::Failed
-                        },
-                        Some(err.to_string()),
-                        source_password.clone(),
-                    )
-                    .await;
+                settle_or_record_release_attempt(
+                    self.services.workflow.release_attempts.as_ref(),
+                    attempt_id.as_deref(),
+                    Some(title.id.clone()),
+                    source_hint.clone(),
+                    source_title.clone(),
+                    if defer || source_gone {
+                        ReleaseDownloadAttemptOutcome::Pending
+                    } else {
+                        ReleaseDownloadAttemptOutcome::Failed
+                    },
+                    Some(err.to_string()),
+                    source_password.clone(),
+                )
+                .await;
 
                 if trigger == PendingGrabTrigger::StandbyOperator {
                     return Err(err);
@@ -2079,5 +2156,44 @@ impl AppUseCase {
                 Ok(PendingGrabOutcome::Rejected)
             }
         }
+    }
+}
+
+/// Writes a submission's outcome onto the attempt row recorded before it, or,
+/// when no such row was kept, records the outcome as a row of its own.
+/// Attempts are history only, so a failed write is logged and never fails the
+/// grab.
+#[allow(clippy::too_many_arguments)]
+async fn settle_or_record_release_attempt(
+    attempts: &dyn ReleaseAttemptRepository,
+    attempt_id: Option<&str>,
+    title_id: Option<String>,
+    source_hint: Option<String>,
+    source_title: Option<String>,
+    outcome: ReleaseDownloadAttemptOutcome,
+    error_message: Option<String>,
+    source_password: Option<String>,
+) {
+    let result = match attempt_id {
+        Some(attempt_id) => {
+            attempts
+                .settle_release_attempt(attempt_id, outcome, error_message)
+                .await
+        }
+        None => {
+            attempts
+                .record_release_attempt(
+                    title_id,
+                    source_hint,
+                    source_title,
+                    outcome,
+                    error_message,
+                    source_password,
+                )
+                .await
+        }
+    };
+    if let Err(error) = result {
+        tracing::debug!(error = %error, "pending release: failed to record the attempt outcome");
     }
 }

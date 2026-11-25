@@ -16,7 +16,7 @@ use tracing::warn;
 
 use super::PolicyFamily;
 use super::PolicyRecord;
-use super::observation::{held_reason_codes, unobservable_facts};
+use super::observation::{held_reason_codes, unobservable_facts_in};
 use super::telemetry::{PolicyObserver, PolicyTimer};
 use crate::RulesError;
 use crate::runtime::{self, RuntimeLimits};
@@ -32,8 +32,46 @@ pub struct RuleHandle<X> {
     /// build time. Empty for families that do not track fact references, and
     /// for a policy that reads only always-known sections of the input.
     pub referenced_facts: BTreeSet<String>,
+    /// Why the family refuses to evaluate this policy's current source, read
+    /// off its parsed module at load. A refused policy is an error for every
+    /// run and never yields a decision.
+    pub load_refusal: Option<PolicyRefusal>,
     /// Per-family rule metadata (facets, origin, …).
     pub extra: X,
+    /// The family's wrapper rule path for this policy, built once at load.
+    pub(crate) wrapper_path: String,
+}
+
+/// A family's reason not to evaluate a loaded policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRefusal {
+    /// One of the codes in [`crate::diagnostic_codes`].
+    pub code: &'static str,
+    /// Display text; code never reads it.
+    pub message: String,
+}
+
+/// What went wrong with one policy in one run, as a stable kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyErrorKind {
+    /// Regorus failed to evaluate the policy.
+    Evaluation,
+    /// The policy's value is not the family's decision shape, or the family
+    /// rejected the decoded decision.
+    MalformedDecision,
+    /// The family refused the policy at load, with this code.
+    Refused(&'static str),
+}
+
+impl PolicyErrorKind {
+    /// The diagnostic code for this kind.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Evaluation => crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+            Self::MalformedDecision => crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+            Self::Refused(code) => code,
+        }
+    }
 }
 
 /// One policy's decision, attributed to the exact policy revision that produced
@@ -111,6 +149,26 @@ impl<F: PolicyFamily> PolicyEngine<F> {
         limits: RuntimeLimits,
         observer: Option<Arc<dyn PolicyObserver>>,
     ) -> Result<Self, RulesError> {
+        Self::build_engine(policies, limits, observer, true)
+    }
+
+    /// [`Self::build_with_limits`] without preparing the template, as every
+    /// build did before: each evaluator then prepares its own clone on its
+    /// first rule. Exists so a test can compare the two.
+    #[cfg(test)]
+    pub(crate) fn build_unprepared_for_test(
+        policies: &[F::Policy],
+        limits: RuntimeLimits,
+    ) -> Result<Self, RulesError> {
+        Self::build_engine(policies, limits, None, false)
+    }
+
+    fn build_engine(
+        policies: &[F::Policy],
+        limits: RuntimeLimits,
+        observer: Option<Arc<dyn PolicyObserver>>,
+        prepare: bool,
+    ) -> Result<Self, RulesError> {
         let mut engine = runtime::configured_engine(&limits);
         let mut rules = Vec::with_capacity(policies.len());
         let mut reads_clock = false;
@@ -131,6 +189,12 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 .add_policy(policy_path.clone(), policy.rego_source().to_string())
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
             let policy_module_index = engine.get_modules().len() - 1;
+            let policy_module = engine.get_modules()[policy_module_index].clone();
+            for (path, source) in F::support_modules(policy, &policy_module) {
+                engine
+                    .add_policy(path, source)
+                    .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            }
             engine
                 .add_policy(
                     F::wrapper_policy_path(policy.id()),
@@ -147,6 +211,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 &engine.get_modules()[policy_module_index],
             )
             .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            let load_refusal = F::load_refusal(policy, &engine.get_modules()[policy_module_index]);
             reads_clock |=
                 crate::validation::module_reads_clock(&engine.get_modules()[policy_module_index]);
 
@@ -155,11 +220,16 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 name: policy.name().to_string(),
                 content_hash: runtime::content_hash(policy.rego_source()),
                 referenced_facts,
+                load_refusal,
                 extra: F::rule_extra(policy),
+                wrapper_path: F::wrapper_rule_path(policy.id()),
             });
             timer.finish("ok");
         }
 
+        if prepare {
+            prepare_template(&mut engine);
+        }
         Ok(Self {
             observer,
             template: Arc::new(engine),
@@ -173,9 +243,11 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     /// Build an empty engine (no policies loaded).
     pub fn empty() -> Self {
         let limits = F::limits();
+        let mut engine = runtime::configured_engine(&limits);
+        prepare_template(&mut engine);
         Self {
             observer: None,
-            template: Arc::new(runtime::configured_engine(&limits)),
+            template: Arc::new(engine),
             rules: Vec::new(),
             limits,
             reads_clock: false,
@@ -244,6 +316,23 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     }
 }
 
+/// Run regorus's one-time analysis of the loaded modules on the template, so
+/// every evaluator cloned from it starts prepared instead of repeating the
+/// analysis on its first rule.
+///
+/// regorus has no public call that only prepares, so this evaluates the
+/// constant query `true`, which reads no input, data or rule. Every rule
+/// evaluation resets the interpreter's per-evaluation state before it runs,
+/// and nothing an evaluator does afterwards (`set_input`, `eval_rule`) clears
+/// the prepared flag; only adding policies or data would, and no evaluator
+/// does. A failure leaves the template unprepared, so each evaluation reports
+/// it per rule exactly as before.
+fn prepare_template(engine: &mut Engine) {
+    if let Err(error) = engine.eval_bool_query("true".to_string(), false) {
+        tracing::debug!(%error, "policy template could not be prepared at build");
+    }
+}
+
 /// Evaluates every loaded policy against one input document at a time.
 pub struct PolicyEvaluator<F: PolicyFamily> {
     pub(crate) observer: Option<Arc<dyn PolicyObserver>>,
@@ -290,7 +379,65 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input: &F::Input,
         ctx: &F::EvalContext,
         phase: &'static str,
-        selected: impl Fn(&F::RuleExtra) -> bool,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
+    ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
+        self.evaluate_document_where(
+            |limits| {
+                if F::BOUND_INPUT {
+                    runtime::bounded_input_document(input, limits)
+                } else {
+                    Ok(serde_json::to_value(input)?)
+                }
+            },
+            ctx,
+            phase,
+            selected,
+        )
+    }
+
+    /// [`Self::evaluate_policies_where`] over an input document the caller
+    /// builds, so a caller that evaluates one input in several phases can
+    /// serialize it once and patch the document between them. `document` is
+    /// not called when no rule is loaded, and the family's input bound is the
+    /// caller's to apply.
+    pub(crate) fn evaluate_document_where(
+        &mut self,
+        document: impl FnOnce(&RuntimeLimits) -> Result<serde_json::Value, RulesError>,
+        ctx: &F::EvalContext,
+        phase: &'static str,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
+    ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
+        self.evaluate_prepared_where(
+            |limits| {
+                let document = document(limits)?;
+                let unobservable = if F::TRACKS_REFERENCED_FACTS {
+                    unobservable_facts_in(&document, F::NESTED_FACT_SECTIONS)
+                } else {
+                    BTreeMap::new()
+                };
+                Ok((document.into(), unobservable))
+            },
+            ctx,
+            phase,
+            selected,
+        )
+    }
+
+    /// [`Self::evaluate_document_where`] over an input the caller hands over
+    /// in the engine's own value type, with the facts it could not observe
+    /// (as [`unobservable_facts_in`] would read them off the same document).
+    /// A caller that evaluates many inputs sharing one large part builds that
+    /// part once and composes each input from it. `prepare` is not called
+    /// when no rule is loaded, and the family's input bound is the caller's
+    /// to apply.
+    pub(crate) fn evaluate_prepared_where(
+        &mut self,
+        prepare: impl FnOnce(
+            &RuntimeLimits,
+        ) -> Result<(regorus::Value, BTreeMap<String, String>), RulesError>,
+        ctx: &F::EvalContext,
+        phase: &'static str,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
 
@@ -300,21 +447,12 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
 
         let input_timer =
             PolicyTimer::new(&self.observer, F::NAME, "input_prepare", phase, "", "none");
-        let document = if F::BOUND_INPUT {
-            runtime::bounded_input_document(input, &self.limits)?
-        } else {
-            serde_json::to_value(input)?
-        };
-        let unobservable = if F::TRACKS_REFERENCED_FACTS {
-            unobservable_facts(&document)
-        } else {
-            BTreeMap::new()
-        };
-        self.engine.set_input(document.into());
+        let (input, unobservable) = prepare(&self.limits)?;
+        self.engine.set_input(input);
         input_timer.finish("ok");
 
         for (index, rule) in self.rules.iter().enumerate() {
-            if !selected(&rule.extra) {
+            if !selected(rule) {
                 continue;
             }
             let temperature = if self.observed_rules.get(index).copied().unwrap_or(false) {
@@ -332,6 +470,15 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
             );
             if !F::applies(&rule.extra, ctx) {
                 timer.finish("skipped");
+                continue;
+            }
+            if let Some(refusal) = &rule.load_refusal {
+                outcome.errors.push(F::eval_error(
+                    rule,
+                    PolicyErrorKind::Refused(refusal.code),
+                    refusal.message.clone(),
+                ));
+                timer.finish("error");
                 continue;
             }
 
@@ -353,13 +500,13 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                 *seen = true;
             }
             let errors_before = outcome.errors.len();
-            let result = self.engine.eval_rule(F::wrapper_rule_path(&rule.id));
+            let result = self.engine.eval_rule(rule.wrapper_path.clone());
             let no_match = result.as_ref().is_ok_and(|value| {
                 *value == regorus::Value::Undefined
                     || value.as_object().is_ok_and(|object| object.is_empty())
             });
             match result {
-                Ok(value) => match F::decode(&value, &rule.id, &rule.name, &rule.extra) {
+                Ok(value) => match F::decode(&value, &rule.id, &rule.name, &rule.extra, ctx) {
                     Ok(decision) => match F::post_decode(&decision, &rule.extra) {
                         Ok(()) => outcome.records.push(EvalRecord {
                             rule_set_id: rule.id.clone(),
@@ -374,7 +521,11 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                                 %message,
                                 "policy rule output rejected"
                             );
-                            outcome.errors.push(F::eval_error(rule, message));
+                            outcome.errors.push(F::eval_error(
+                                rule,
+                                PolicyErrorKind::MalformedDecision,
+                                message,
+                            ));
                         }
                     },
                     Err(message) => {
@@ -384,7 +535,11 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                             %message,
                             "policy rule produced a malformed decision"
                         );
-                        outcome.errors.push(F::eval_error(rule, message));
+                        outcome.errors.push(F::eval_error(
+                            rule,
+                            PolicyErrorKind::MalformedDecision,
+                            message,
+                        ));
                     }
                 },
                 Err(e) => {
@@ -394,7 +549,11 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                         error = %e,
                         "policy rule evaluation failed, skipping"
                     );
-                    outcome.errors.push(F::eval_error(rule, e.to_string()));
+                    outcome.errors.push(F::eval_error(
+                        rule,
+                        PolicyErrorKind::Evaluation,
+                        e.to_string(),
+                    ));
                 }
             }
             timer.finish(if outcome.errors.len() != errors_before {

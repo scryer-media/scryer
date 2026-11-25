@@ -387,10 +387,9 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::DiscoverySync => AppJobKey::DiscoverySync,
             Self::TitleImageCacheRefresh => AppJobKey::TitleImageCacheRefresh,
             Self::ArtworkEncoding => AppJobKey::ArtworkEncoding,
-            Self::MaintenanceRuleEvaluation => AppJobKey::MaintenanceRuleEvaluation,
+            Self::LifecycleRuleEvaluation => AppJobKey::LifecycleRuleEvaluation,
             Self::MediaServerSignalSync => AppJobKey::MediaServerSignalSync,
             Self::ListSync => AppJobKey::ListSync,
-            Self::LifecycleActionHandling => AppJobKey::LifecycleActionHandling,
             Self::TitleDeletion => AppJobKey::TitleDeletion,
             Self::LibraryDeletion => AppJobKey::LibraryDeletion,
             Self::TitleRename => AppJobKey::TitleRename,
@@ -399,10 +398,12 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::RecycleBinRestore => AppJobKey::RecycleBinRestore,
             Self::RecycleBinPurge => AppJobKey::RecycleBinPurge,
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
+            Self::ReleaseGrab => AppJobKey::ReleaseGrab,
             Self::ApplicationUpgrade => AppJobKey::ApplicationUpgrade,
             Self::LocationOperation => AppJobKey::LocationOperation,
             Self::CustomJob => AppJobKey::CustomJob,
             Self::SourceImport => AppJobKey::SourceImport,
+            Self::ExternalRuleImport => AppJobKey::ExternalRuleImport,
         }
     }
 }
@@ -429,10 +430,9 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::DiscoverySync => Self::DiscoverySync,
             AppJobKey::TitleImageCacheRefresh => Self::TitleImageCacheRefresh,
             AppJobKey::ArtworkEncoding => Self::ArtworkEncoding,
-            AppJobKey::MaintenanceRuleEvaluation => Self::MaintenanceRuleEvaluation,
+            AppJobKey::LifecycleRuleEvaluation => Self::LifecycleRuleEvaluation,
             AppJobKey::MediaServerSignalSync => Self::MediaServerSignalSync,
             AppJobKey::ListSync => Self::ListSync,
-            AppJobKey::LifecycleActionHandling => Self::LifecycleActionHandling,
             AppJobKey::TitleDeletion => Self::TitleDeletion,
             AppJobKey::LibraryDeletion => Self::LibraryDeletion,
             AppJobKey::TitleRename => Self::TitleRename,
@@ -441,10 +441,12 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::RecycleBinRestore => Self::RecycleBinRestore,
             AppJobKey::RecycleBinPurge => Self::RecycleBinPurge,
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
+            AppJobKey::ReleaseGrab => Self::ReleaseGrab,
             AppJobKey::ApplicationUpgrade => Self::ApplicationUpgrade,
             AppJobKey::LocationOperation => Self::LocationOperation,
             AppJobKey::CustomJob => Self::CustomJob,
             AppJobKey::SourceImport => Self::SourceImport,
+            AppJobKey::ExternalRuleImport => Self::ExternalRuleImport,
         }
     }
 }

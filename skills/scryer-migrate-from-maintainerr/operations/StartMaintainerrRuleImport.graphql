@@ -1,0 +1,11 @@
+# Start reading one Maintainerr instance's rule groups; each group is saved as its own DISABLED lifecycle rule.
+# Variables: {"requestKey": "<uuid you keep>", "input": {"source": "MAINTAINERR",
+#   "baseUrl": "...", "apiKey": null}}. Maintainerr has no API key. Resending
+# the same requestKey with the same input returns the run it already started.
+mutation StartMaintainerrRuleImport($requestKey: String!, $input: ExternalRuleImportInput!) {
+  startExternalRuleImport(requestKey: $requestKey, input: $input) {
+    id
+    jobKey
+    status
+  }
+}

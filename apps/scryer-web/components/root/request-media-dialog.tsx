@@ -21,6 +21,8 @@ import {
 } from "@/lib/utils/default-monitor-type";
 import { requestDialogLibraryId } from "@/lib/utils/request-dialog-library";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
+import { stageMyRequestMetadataMutation } from "@/lib/graphql/mutations";
+import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
 import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
 import {
   catalogAudioLanguagesForSubmit,
@@ -65,6 +67,8 @@ import {
   sanitizeDigits,
 } from "@/components/ui/input";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { RequestShapingSummary } from "@/components/views/settings/lifecycle-action-summary";
+import { InfoHelp } from "@/components/common/info-help";
 
 /// How long the dialog waits after the requester stops changing the request
 /// before asking what would happen to it. Short enough to feel live, long
@@ -80,8 +84,7 @@ type LeaseChoice = "forever" | "custom" | `${number}`;
 ///
 /// It is a courtesy, not a gate: a "would be denied" answer still leaves submit
 /// enabled, because the server denying it for real is what writes the decision
-/// trace the requester can then read. A rule in shadow says so out loud, since
-/// its verdict is recorded rather than acted on.
+/// trace the requester can then read.
 ///
 /// Renders nothing at all when the pre-flight has not answered or failed, so a
 /// broken evaluation never blocks a request.
@@ -97,10 +100,7 @@ function RequestPreflightBanner({
 
   const reasonCodes = preflight.reasons.map((reason) => reason.code).join(", ");
   // The server's own word for why the verdict fell back to needing approval.
-  // The first reason code is only an approximation of it, kept for a server
-  // that predates `fallbackReason`.
-  const fallbackReason =
-    preflight.fallbackReason ?? preflight.reasons[0]?.code ?? null;
+  const fallbackReason = preflight.fallbackReason;
   const fallbackLabelKey = fallbackReason
     ? requestFallbackReasonLabelKey(fallbackReason)
     : null;
@@ -148,13 +148,19 @@ function RequestPreflightBanner({
     <div
       id={REQUEST_PREFLIGHT_BANNER_ID}
       data-preflight-outcome={preflight.outcome}
-      data-preflight-mode={preflight.evaluationMode}
       className={`flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-sm ${className}`}
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="space-y-1">
         <p className="font-semibold">{title}</p>
         {body ? <p className="text-[13px] leading-5">{body}</p> : null}
+        {/* What an approval would change. A denial applies none of it. */}
+        {preflight.outcome !== "DENY" ? (
+          <RequestShapingSummary
+            shaping={preflight.shaping}
+            idPrefix={selectorId(REQUEST_PREFLIGHT_BANNER_ID, "shaping")}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -312,6 +318,53 @@ export function RequestMediaDialog({
     );
   }, [open, requestProfileOptions, selectedLibrary]);
 
+  /// Have the server read this item's metadata once, when the dialog opens on
+  /// it. Every preview below and the submit then read that one record, so the
+  /// preview waits for this to settle and never fetches metadata itself.
+  ///
+  /// The staged record belongs to the item, not the library: the library only
+  /// says where the requester may ask, so switching library does not stage
+  /// again. A failure settles too. The preview then reports the metadata as
+  /// unavailable, which is the answer the submit would reach.
+  const stagingForRef = React.useRef<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
+  const [stagedFor, setStagedFor] = React.useState<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
+  const stagingLibraryId = selectedLibrary?.id ?? "";
+  React.useEffect(() => {
+    if (!open) {
+      stagingForRef.current = null;
+      setStagedFor(null);
+      return;
+    }
+    if (!stagingLibraryId) return;
+    const staging = stagingForRef.current;
+    if (staging && staging.facet === facet && staging.result === result) return;
+    const subject = { facet, result };
+    stagingForRef.current = subject;
+    const settle = () => {
+      if (stagingForRef.current === subject) setStagedFor(subject);
+    };
+    void client
+      .mutation(stageMyRequestMetadataMutation, {
+        input: {
+          libraryId: stagingLibraryId,
+          facet,
+          externalIds: metadataResultExternalIds(result, facet),
+        },
+      })
+      .toPromise()
+      .then(settle, settle);
+  }, [client, facet, open, result, stagingLibraryId]);
+  const metadataStaged =
+    stagedFor !== null &&
+    stagedFor.facet === facet &&
+    stagedFor.result === result;
+
   /// Ask the server what would happen to this request, debounced on every
   /// choice that can change the answer. The query is the requester's own
   /// pre-flight: it never returns rule internals, and it never errors for an
@@ -320,7 +373,7 @@ export function RequestMediaDialog({
   /// A failure hides the banner entirely rather than blocking the dialog. The
   /// answer is a courtesy; the submit is the thing that matters.
   React.useEffect(() => {
-    if (!open || !selectedLibrary || !qualityProfileId) {
+    if (!open || !selectedLibrary || !qualityProfileId || !metadataStaged) {
       setPreflight(null);
       return;
     }
@@ -370,6 +423,7 @@ export function RequestMediaDialog({
     canRequestMonitorType,
     client,
     facet,
+    metadataStaged,
     monitorSelection,
     monitorType,
     open,
@@ -544,9 +598,15 @@ export function RequestMediaDialog({
               </label>
             ) : null}
 
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.keepFor")}
+            <div className="space-y-1">
+              <span className="flex items-center gap-1 text-xs font-medium text-card-foreground">
+                <label htmlFor={REQUEST_MEDIA_LEASE_ID}>
+                  {t("search.keepFor")}
+                </label>
+                <InfoHelp
+                  text={t("search.keepForHelp")}
+                  ariaLabel={t("search.keepFor")}
+                />
               </span>
               <Select
                 value={leaseChoice}
@@ -583,10 +643,7 @@ export function RequestMediaDialog({
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <span className="block text-[11px] text-muted-foreground">
-                {t("search.keepForHelp")}
-              </span>
-            </label>
+            </div>
 
             {leaseChoice === "custom" ? (
               <label className="space-y-1">

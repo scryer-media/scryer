@@ -11,6 +11,7 @@ import {
   AudioLines,
   CalendarClock,
   FileText,
+  Fingerprint,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -35,6 +36,7 @@ import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { LibraryFullHashBackfillToggle } from "@/components/views/media-content/library-full-hash-backfill-toggle";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -2556,6 +2558,19 @@ export const MediaLibrarySettingsPanel = React.memo(
                   </div>
                 </div>
               </LibrarySettingsSection>
+
+              {mode === "existing" && activeLibrary ? (
+                <LibrarySettingsSection
+                  icon={Fingerprint}
+                  title={t("settings.libraryFullHashBackfillTitle")}
+                >
+                  <LibraryFullHashBackfillToggle
+                    key={activeLibrary.id}
+                    libraryId={activeLibrary.id}
+                    disabled={settingsBusy}
+                  />
+                </LibrarySettingsSection>
+              ) : null}
 
               {isAnimeFacet ? (
                 <LibrarySettingsSection

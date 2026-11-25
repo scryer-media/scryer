@@ -11,29 +11,67 @@ import {
   regoCompletionContext,
   regoFieldCompletions,
   regoFields,
+  regoHelpers,
   normalizeRegoPath,
   REGO_INDEX_SOURCE,
   type RegoFamily,
+  type RegoHeadAssist,
 } from "@/lib/utils/rego-assistance";
 
 type Translate = (key: string) => string;
 
+/// `heads` are the rule heads the family's served descriptors offer for the
+/// rule's variant; an empty list leaves the editor without head assistance.
 export function regoAssistance(
   family: RegoFamily,
   t: Translate,
   readOnly: boolean,
+  heads: readonly RegoHeadAssist[] = [],
 ): Extension {
   const fields = regoFields(family);
   const describe = (field: (typeof fields)[number]) =>
     [t(field.descKey), field.availabilityKey ? t(field.availabilityKey) : ""]
       .filter(Boolean)
       .join("\n\n");
-  const helpers = regoCatalog.helpers;
+  const helpers = regoHelpers(family);
+  /// A head is only explained where it is defined: as the first word of a
+  /// line, the way every rule head starts.
+  const headAt = (source: string, position: number) => {
+    const lineStart = source.lastIndexOf("\n", position - 1) + 1;
+    const match = /^[A-Za-z_]\w*/.exec(source.slice(lineStart));
+    if (!match) return null;
+    const from = lineStart;
+    const to = lineStart + match[0].length;
+    if (position < from || position > to) return null;
+    const assist = heads.find((item) => item.head === match[0]);
+    return assist ? { from, to, assist } : null;
+  };
   const hover = hoverTooltip((view, position) => {
     const source = view.state.doc.toString();
     if (!regoCodeAt(source, position)) return null;
+    const head = headAt(source, position);
+    if (head) {
+      return {
+        pos: head.from,
+        end: head.to,
+        above: true,
+        create() {
+          const dom = document.createElement("div");
+          dom.className = "rego-documentation";
+          const heading = document.createElement("strong");
+          heading.textContent = `${head.assist.head}: ${head.assist.detail}`;
+          dom.append(heading);
+          if (head.assist.documentation) {
+            const body = document.createElement("p");
+            body.textContent = head.assist.documentation;
+            dom.append(body);
+          }
+          return { dom };
+        },
+      };
+    }
     const pattern = new RegExp(
-      String.raw`\b(?:input|scryer|object|lower|upper|count|startswith)\b(?:\.[A-Za-z_]\w*|${REGO_INDEX_SOURCE})*`,
+      String.raw`\b(?:input|scryer|object|lower|upper|count|startswith|days_since)\b(?:\.[A-Za-z_]\w*|${REGO_INDEX_SOURCE})*`,
       "g",
     );
     for (const match of source.matchAll(pattern)) {
@@ -145,6 +183,16 @@ export function regoAssistance(
               "null",
             ])
               options.push({ label, type: "keyword" });
+            for (const head of heads) {
+              options.push(
+                snippetCompletion(head.snippet, {
+                  label: head.head,
+                  type: "variable",
+                  detail: head.detail,
+                  ...(head.documentation ? { info: head.documentation } : {}),
+                }),
+              );
+            }
             for (const item of regoCatalog.snippets.filter(
               (item) => item.family === family,
             )) {

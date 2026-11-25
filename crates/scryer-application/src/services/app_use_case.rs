@@ -376,12 +376,12 @@ impl AppUseCase {
                 return;
             }
         };
-        let (error_code, error_message) =
+        let (error_code, error_message, reason_code) =
             crate::integration::workflow::import_record_error_overlay(&record);
         self.runtime
             .acquisition
             .download_queue_snapshot
-            .stage_import_record(&record, error_code, error_message)
+            .stage_import_record(&record, error_code, error_message, reason_code)
             .await;
     }
 
@@ -664,6 +664,40 @@ impl AppUseCase {
             .record_grab(indexer_id, indexer_name);
     }
 
+    pub(crate) async fn admit_indexer_monthly_grab(
+        &self,
+        indexer_id: Option<&str>,
+    ) -> AppResult<()> {
+        let Some(indexer_id) = indexer_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && crate::indexer_error_history_is_persistable(id))
+        else {
+            return Ok(());
+        };
+        self.services
+            .integrations
+            .indexer_stats
+            .admit_monthly_grab(indexer_id, self.runtime.environment.now())
+            .await
+    }
+
+    /// Whether an automatic grab from this indexer is already known to be
+    /// refused by a monthly limit. A memory read: automatic passes use it to
+    /// pass a capped indexer's release over before writing anything for it.
+    /// Operator grabs do not; they go through admission and get the refusal.
+    pub(crate) fn indexer_monthly_grab_refused_now(&self, indexer_id: Option<&str>) -> bool {
+        let Some(indexer_id) = indexer_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && crate::indexer_error_history_is_persistable(id))
+        else {
+            return false;
+        };
+        self.services
+            .integrations
+            .indexer_stats
+            .monthly_grab_refusal_remembered(indexer_id, self.runtime.environment.now())
+    }
+
     pub async fn cached_health_check_results(
         &self,
         actor: &User,
@@ -684,44 +718,37 @@ impl AppUseCase {
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
         let records = self.services.workflow.imports.list_imports(limit).await?;
-        let mut title_library_cache = std::collections::HashMap::<String, Option<String>>::new();
-        let mut visible = Vec::new();
-        for record in records {
-            let title_id = record
-                .result_json
-                .as_deref()
-                .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
-                .and_then(|result| result.title_id)
-                .or_else(|| {
-                    serde_json::from_str::<crate::ManualImportRequestPayload>(&record.payload_json)
-                        .ok()
-                        .and_then(|payload| payload.title_id)
-                });
-            let allowed = if let Some(title_id) = title_id {
-                let library_id = if let Some(cached) = title_library_cache.get(&title_id) {
-                    cached.clone()
-                } else {
-                    let library_id = self
-                        .services
-                        .catalog
-                        .titles
-                        .get_by_id(&title_id)
-                        .await?
-                        .map(|title| title.library_id);
-                    title_library_cache.insert(title_id.clone(), library_id.clone());
-                    library_id
-                };
-                library_id
+        let title_ids = records
+            .iter()
+            .map(import_record_title_id)
+            .collect::<Vec<_>>();
+        let mut distinct = title_ids.iter().flatten().cloned().collect::<Vec<_>>();
+        distinct.sort();
+        distinct.dedup();
+        // One read for every title the page names; a title that no longer
+        // exists has no library and its imports stay hidden.
+        let library_by_title = if distinct.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            self.services
+                .catalog
+                .titles
+                .list_library_ids_for_titles(&distinct)
+                .await?
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        Ok(records
+            .into_iter()
+            .zip(title_ids)
+            .filter(|(_, title_id)| {
+                title_id
                     .as_ref()
+                    .and_then(|title_id| library_by_title.get(title_id))
                     .is_some_and(|library_id| allowed_library_ids.contains(library_id))
-            } else {
-                false
-            };
-            if allowed {
-                visible.push(record);
-            }
-        }
-        Ok(visible)
+            })
+            .map(|(record, _)| record)
+            .collect())
     }
 
     async fn require_privileged_access_for_title(
@@ -1667,6 +1694,21 @@ impl AppUseCase {
     }
 }
 
+/// The title an import belongs to: the one its result names, else the one a
+/// manual import request named.
+pub(crate) fn import_record_title_id(record: &ImportRecord) -> Option<String> {
+    record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
+        .and_then(|result| result.title_id)
+        .or_else(|| {
+            serde_json::from_str::<crate::ManualImportRequestPayload>(&record.payload_json)
+                .ok()
+                .and_then(|payload| payload.title_id)
+        })
+}
+
 fn should_invalidate_wanted_projection(payload: &scryer_domain::DomainEventPayload) -> bool {
     use scryer_domain::DomainEventPayload;
 
@@ -1823,12 +1865,16 @@ pub(super) fn probe_config_io_performance(
     const CHUNK_BYTES: usize = 1024 * 1024;
     const SLOW_CAP: std::time::Duration = std::time::Duration::from_millis(500);
 
-    if !config_dir.is_dir() && std::fs::create_dir_all(config_dir).is_err() {
+    let disk = crate::disk::Disk::process();
+    if disk
+        .create_dir_blocking(config_dir, crate::disk::Parents::Create)
+        .is_err()
+    {
         return (RuntimePerformanceClass::Slow, None);
     }
 
     let probe_name = format!(
-        ".scryer-runtime-probe-{}-{}.tmp",
+        ".scry-rp-{}-{}.tmp",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1840,7 +1886,7 @@ pub(super) fn probe_config_io_performance(
     let start = std::time::Instant::now();
 
     let result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&probe_path)?;
+        let mut file = disk.open_blocking(&probe_path, crate::disk::Open::create())?;
         let mut written = 0;
         while written < PAYLOAD_BYTES {
             let to_write = std::cmp::min(CHUNK_BYTES, PAYLOAD_BYTES - written);
@@ -1853,7 +1899,7 @@ pub(super) fn probe_config_io_performance(
         file.flush()?;
         file.sync_all()?;
 
-        let mut file = std::fs::File::open(&probe_path)?;
+        let mut file = disk.open_blocking(&probe_path, crate::disk::Open::read())?;
         let mut read_buffer = vec![0_u8; CHUNK_BYTES];
         loop {
             let bytes_read = file.read(&mut read_buffer)?;
@@ -1869,7 +1915,7 @@ pub(super) fn probe_config_io_performance(
         Ok(())
     })();
 
-    let cleanup_result = std::fs::remove_file(&probe_path);
+    let cleanup_result = disk.remove_blocking(&probe_path, crate::disk::Remove::File);
 
     if result.is_err() || cleanup_result.is_err() {
         let elapsed_ms = u64::try_from(start.elapsed().as_millis()).ok();

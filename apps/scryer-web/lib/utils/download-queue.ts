@@ -480,9 +480,27 @@ export function mergeAuthoritativeQueueItems(
   return sortDownloadQueueItems(merged);
 }
 
+/** Import refusals that block a download for reconciliation. */
+const IMPORT_ATTENTION_REFUSAL_KEYS: Readonly<Record<string, string>> = {
+  IMPORT_DESTINATION_IS_SOURCE: "error.reason.IMPORT_DESTINATION_IS_SOURCE",
+  IMPORT_DESTINATION_ALIAS_UNKNOWN:
+    "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN",
+  IMPORT_RETRY_LIMIT_REACHED: "error.reason.IMPORT_RETRY_LIMIT_REACHED",
+  IMPORT_UPGRADE_PREPARATION_FAILED:
+    "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED",
+  ARCHIVE_EXTRACTION_IN_PROGRESS: "error.reason.ARCHIVE_EXTRACTION_IN_PROGRESS",
+  ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED:
+    "error.reason.ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED",
+  ARCHIVE_EXTRACTION_WAITING: "error.reason.ARCHIVE_EXTRACTION_WAITING",
+  ARCHIVE_EXTRACTION_BLOCKED: "error.reason.ARCHIVE_EXTRACTION_BLOCKED",
+  ARCHIVE_EXTRACTION_FAILED: "error.reason.ARCHIVE_EXTRACTION_FAILED",
+  ARCHIVE_EXTRACTION_TIMED_OUT: "error.reason.ARCHIVE_EXTRACTION_TIMED_OUT",
+};
+
 const QUEUE_ATTENTION_REASON_KEYS: Readonly<Record<string, string>> = {
   ...HTTP_RELEASE_REFUSAL_KEYS,
   ...MEDIA_REFUSAL_KEYS,
+  ...IMPORT_ATTENTION_REFUSAL_KEYS,
   download_password_retry: "queue.attention.downloadPasswordRetry",
 };
 
@@ -502,12 +520,16 @@ export function buildQueueStatusDetail(
     ...(code &&
     t &&
     (Object.hasOwn(HTTP_RELEASE_REFUSAL_KEYS, code) ||
-      Object.hasOwn(MEDIA_REFUSAL_KEYS, code))
+      Object.hasOwn(MEDIA_REFUSAL_KEYS, code) ||
+      Object.hasOwn(IMPORT_ATTENTION_REFUSAL_KEYS, code))
       ? []
       : (queueItem.trackedStatusMessages ?? [])),
     key && t ? t(key) : reason,
     queueItem.deleteErrorMessage,
-    code && t && Object.hasOwn(MEDIA_REFUSAL_KEYS, code)
+    code &&
+    t &&
+    (Object.hasOwn(MEDIA_REFUSAL_KEYS, code) ||
+      Object.hasOwn(IMPORT_ATTENTION_REFUSAL_KEYS, code))
       ? null
       : queueItem.importErrorMessage,
   ]

@@ -148,57 +148,17 @@ test("scripts is grouped with Settings for system-settings managers only", () =>
   assert.equal(find([APP_PERMISSIONS.manageCatalogSettings]), undefined);
 });
 
-test("maintenance-rules command appears only when experimental features are on", () => {
-  const catalogManager = user({
-    appPermissions: [APP_PERMISSIONS.manageCatalogSettings],
-  });
-
-  assert.ok(
+test("lifecycle-rules command is offered to system-settings managers only", () => {
+  const offered = (appPermissions: AuthUser["appPermissions"]) =>
     buildRouteCommands({
       t,
-      user: catalogManager,
-      experimentalFeaturesEnabled: true,
+      user: user({ appPermissions }),
       onNavigate: () => {},
-    }).some((command) => command.id === "settings-maintenance-rules"),
-  );
-  assert.equal(
-    buildRouteCommands({
-      t,
-      user: catalogManager,
-      experimentalFeaturesEnabled: false,
-      onNavigate: () => {},
-    }).some((command) => command.id === "settings-maintenance-rules"),
-    false,
-  );
-  // A caller that has not read the switch yet must not surface the page.
-  assert.equal(
-    buildRouteCommands({
-      t,
-      user: catalogManager,
-      onNavigate: () => {},
-    }).some((command) => command.id === "settings-maintenance-rules"),
-    false,
-  );
-});
+    }).some((command) => command.id === "settings-lifecycle-rules");
 
-test("hiding maintenance rules leaves the rest of the catalog settings commands", () => {
-  const commands = buildRouteCommands({
-    t,
-    user: user({ appPermissions: [APP_PERMISSIONS.manageCatalogSettings] }),
-    experimentalFeaturesEnabled: false,
-    onNavigate: () => {},
-  });
-
-  for (const id of [
-    "settings-quality-profiles",
-    "settings-rules",
-    "settings-post-processing",
-  ]) {
-    assert.ok(
-      commands.some((command) => command.id === id),
-      `expected ${id} to survive the maintenance-rules gate`,
-    );
-  }
+  assert.ok(offered([APP_PERMISSIONS.manageSystemSettings]));
+  assert.equal(offered([APP_PERMISSIONS.manageCatalogSettings]), false);
+  assert.equal(offered([]), false);
 });
 
 test("lists command reaches catalog viewers and list managers", () => {
@@ -216,7 +176,6 @@ test("lists command reaches catalog viewers and list managers", () => {
     const commands = buildRouteCommands({
       t,
       user: authorizedUser,
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     });
     const command = commands.find((candidate) => candidate.id === "lists");
@@ -227,18 +186,38 @@ test("lists command reaches catalog viewers and list managers", () => {
     buildRouteCommands({
       t,
       user: user(),
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     }).some((command) => command.id === "lists"),
     false,
   );
-  // Lists remain available without the experimental switch.
   assert.equal(
     buildRouteCommands({ t, user: listManager, onNavigate: () => {} }).some(
       (command) => command.id === "lists" || command.id === "lists-exclusions",
     ),
     true,
   );
+});
+
+test("lists command is hidden from a viewer whose lists are not allowed", () => {
+  const viewer = user({
+    libraryPermissions: [
+      {
+        libraryId: "library-id",
+        permissions: [LIBRARY_PERMISSIONS.view],
+      },
+    ],
+  });
+  const listManager = user({ appPermissions: [APP_PERMISSIONS.manageLists] });
+  const hasLists = (authorizedUser: typeof viewer) =>
+    buildRouteCommands({
+      t,
+      user: authorizedUser,
+      personalListsRefused: true,
+      onNavigate: () => {},
+    }).some((command) => command.id === "lists");
+
+  assert.equal(hasLists(viewer), false);
+  assert.equal(hasLists(listManager), true);
 });
 
 test("list exclusions command is limited to list managers and opens its pane", () => {
@@ -254,7 +233,6 @@ test("list exclusions command is limited to list managers and opens its pane", (
     buildRouteCommands({
       t,
       user: viewer,
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     }).some((command) => command.id === "lists-exclusions"),
     false,
@@ -264,7 +242,6 @@ test("list exclusions command is limited to list managers and opens its pane", (
   const command = buildRouteCommands({
     t,
     user: user({ appPermissions: [APP_PERMISSIONS.manageLists] }),
-    experimentalFeaturesEnabled: true,
     onNavigate: () => {},
     onNavigatePath: (path) => paths.push(path),
   }).find((candidate) => candidate.id === "lists-exclusions");

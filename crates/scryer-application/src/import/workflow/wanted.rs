@@ -97,11 +97,12 @@ async fn execute_resolved_episode_import(
     release_listing_json: Option<&str>,
     additional_import: bool,
     disc_selection: Option<&scryer_media_types::DiscSelection>,
+    // Library files earlier passes of this same download placed; never
+    // replaced by this pass.
+    placed_files: &DownloadPlacedFiles,
 ) -> AppResult<EpisodeImportOutcome> {
     let use_season_folders = app.resolve_use_season_folders(title).await?;
-    let source_size = std::fs::metadata(source_video)
-        .map(|metadata| metadata.len() as i64)
-        .unwrap_or(0);
+    let source_size = import_source_size(source_video).await?;
     let target_episode_ids = target_episodes
         .iter()
         .map(|episode| episode.id.clone())
@@ -123,8 +124,7 @@ async fn execute_resolved_episode_import(
         .library
         .media_files
         .list_live_media_files_for_episode_ids(&title.id, &target_episode_ids)
-        .await
-        .unwrap_or_default();
+        .await?;
     let existing_files = existing_incumbents
         .iter()
         .map(|incumbent| incumbent.media_file.clone())
@@ -132,6 +132,7 @@ async fn execute_resolved_episode_import(
     if additional_import {
         if target_episode_ids.len() != 1 {
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection: crate::post_download_gate::ImportedFileRejection {
                     message: "additional-file episode imports support exactly one episode"
                         .to_string(),
@@ -174,6 +175,7 @@ async fn execute_resolved_episode_import(
                 Ok(prepared) => prepared,
                 Err(rejection) => {
                     return Ok(EpisodeImportOutcome::Rejected {
+                        blocklist: None,
                         reason_code: Some(rejection.recycle_reason.to_string()),
                         rejection,
                         disposition: crate::import_decide::RejectionDisposition::Hold,
@@ -209,8 +211,35 @@ async fn execute_resolved_episode_import(
         // source this title already holds as an additional copy must resolve
         // that copy as its destination so the duplicate check refuses it,
         // instead of minting the next " (N)" name and copying again.
-        let prior_additional_file =
-            existing_additional_import_media_file(app, title, source_video, source_size).await?;
+        let prior_additional_file = existing_additional_import_media_file(
+            app,
+            title,
+            source_video,
+            source_size,
+            placed_files.placed_from_source(completed, source_video),
+        )
+        .await?;
+        if let Some(prior) = prior_additional_file
+            .as_ref()
+            .filter(|prior| prior.placed_by_this_download)
+        {
+            let rejection = crate::import_decide::placed_by_this_download_rejection(
+                "this episode",
+                &prior.file.file_path,
+            );
+            return Ok(EpisodeImportOutcome::Skipped {
+                blocklist: None,
+                message: rejection.message,
+                reason_code: Some(rejection.recycle_reason.to_string()),
+                skip_reason: rejection.skip_reason,
+                episode_ids: target_episode_ids.clone(),
+                already_present_destination: Some((
+                    prior.file.file_path.clone(),
+                    prior.file.id.clone(),
+                )),
+            });
+        }
+        let prior_additional_file = prior_additional_file.map(|prior| prior.file);
         let dest_path = match prior_additional_file.as_ref() {
             Some(prior) => PathBuf::from(&prior.file_path),
             None => additional_import_dest_path(&canonical_dest_path, &effective_parsed),
@@ -244,10 +273,19 @@ async fn execute_resolved_episode_import(
                 .await
         {
             return Ok(EpisodeImportOutcome::Skipped {
+                blocklist: None,
                 message: reason,
                 reason_code: Some(code.as_str().to_string()),
                 skip_reason: Some(
-                    skip_reason_for_import_check_rejection(app, code, &dest_path).await?,
+                    skip_reason_for_import_check_rejection(
+                        app,
+                        import_id,
+                        completed,
+                        code,
+                        source_video,
+                        &dest_path,
+                    )
+                    .await?,
                 ),
                 episode_ids: target_episode_ids.clone(),
                 already_present_destination: reused_episode_destination(
@@ -411,10 +449,19 @@ async fn execute_resolved_episode_import(
     {
         tracing::debug!(file = %precheck_dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped {
+            blocklist: None,
             message: reason,
             reason_code: Some(code.as_str().to_string()),
             skip_reason: Some(
-                skip_reason_for_import_check_rejection(app, code, &precheck_dest_path).await?,
+                skip_reason_for_import_check_rejection(
+                    app,
+                    import_id,
+                    completed,
+                    code,
+                    source_video,
+                    &precheck_dest_path,
+                )
+                .await?,
             ),
             episode_ids: target_episode_ids.clone(),
             already_present_destination: reused_episode_destination(
@@ -477,6 +524,7 @@ async fn execute_resolved_episode_import(
             // must stay grabbable after review.
             if rejection.requires_review() {
                 return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist: None,
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
                     skip_reason: Some(rejection.review_hold_skip_reason()),
@@ -492,6 +540,7 @@ async fn execute_resolved_episode_import(
             let disposition =
                 crate::import_decide::prepare_rejection_disposition_for_origin(&rejection, origin);
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection,
                 disposition,
                 reason_code: None,
@@ -525,6 +574,7 @@ async fn execute_resolved_episode_import(
         };
         let rejection = origin.held_rejection(rejection);
         return Ok(EpisodeImportOutcome::Rejected {
+            blocklist: None,
             disposition: crate::import_decide::prepare_rejection_disposition_for_origin(
                 &rejection, origin,
             ),
@@ -558,6 +608,7 @@ async fn execute_resolved_episode_import(
             "holding episode replacement for manual resolution"
         );
         return Ok(EpisodeImportOutcome::Skipped {
+            blocklist: None,
             message,
             reason_code: Some(
                 crate::post_download_gate::REPLACE_BLOCKED_RUNTIME_MISMATCH_CODE.to_string(),
@@ -637,7 +688,46 @@ async fn execute_resolved_episode_import(
             rejection,
             disposition,
             better_library_copy,
+            blocklist,
         } => {
+            // Losing to a file an earlier pass of this same download placed
+            // says nothing against the release: it already imported. Settle it
+            // the way the admitted path does, never with a block on the name.
+            if blocklist.is_some()
+                && let Some(own) = better_library_copy.as_ref().and_then(|copy| {
+                    existing_incumbents.iter().find(|incumbent| {
+                        incumbent.media_file.id == copy.file_id
+                            && placed_files.placed_incumbent(
+                                completed,
+                                source_video,
+                                &incumbent.media_file.id,
+                            )
+                    })
+                })
+            {
+                let rejection = crate::import_decide::placed_by_this_download_rejection(
+                    "this episode",
+                    &own.media_file.file_path,
+                );
+                tracing::info!(
+                    title_id = %title.id,
+                    file_id = %own.media_file.id,
+                    source = %source_video.display(),
+                    "import source lost to a library file this download placed; leaving the library file in place"
+                );
+                let covers_every_target = target_episode_ids
+                    .iter()
+                    .all(|episode_id| own.episode_ids.contains(episode_id));
+                return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist: None,
+                    message: rejection.message,
+                    reason_code: Some(rejection.recycle_reason.to_string()),
+                    skip_reason: rejection.skip_reason,
+                    episode_ids: target_episode_ids.clone(),
+                    already_present_destination: covers_every_target
+                        .then(|| (own.media_file.file_path.clone(), own.media_file.id.clone())),
+                });
+            }
             tracing::info!(
                 title_id = %title.id,
                 code = rejection.recycle_reason,
@@ -655,6 +745,7 @@ async fn execute_resolved_episode_import(
                 // least as well, so the episodes are in place and the file has
                 // nothing to add. The existing file is left exactly as it is.
                 return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist,
                     message: rejection.message,
                     reason_code,
                     skip_reason: rejection.skip_reason,
@@ -663,6 +754,7 @@ async fn execute_resolved_episode_import(
                 });
             }
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist,
                 rejection,
                 disposition,
                 reason_code,
@@ -680,36 +772,86 @@ async fn execute_resolved_episode_import(
     {
         // A source that ties with its own earlier import is not an upgrade.
         // Replacing it would recycle the library copy and write the same bytes
-        // again on every retried pass.
-        for incumbent in superseded {
-            if target_episode_ids
+        // again on every retried pass. Every superseded file is compared, and
+        // one that could not be compared is never replaced. Only an identical
+        // file holding every target episode settles the source; one holding
+        // only some of them leaves the others to the upgrade.
+        let covers_every_target: std::collections::HashSet<&str> = superseded
+            .iter()
+            .filter(|incumbent| {
+                target_episode_ids
+                    .iter()
+                    .all(|episode_id| incumbent.episode_ids.contains(episode_id))
+            })
+            .map(|incumbent| incumbent.media_file.id.as_str())
+            .collect();
+        // A file an earlier pass of this same download placed is never an
+        // incumbent to replace, whatever its bytes are now.
+        if let Some(own) = superseded
+            .iter()
+            .find(|incumbent| {
+                placed_files.placed_incumbent(completed, source_video, &incumbent.media_file.id)
+            })
+        {
+            let rejection = crate::import_decide::placed_by_this_download_rejection(
+                "this episode",
+                &own.media_file.file_path,
+            );
+            tracing::info!(
+                title_id = %title.id,
+                file_id = %own.media_file.id,
+                source = %source_video.display(),
+                "import source would replace a library file this download placed; leaving the library file in place"
+            );
+            return Ok(EpisodeImportOutcome::Skipped {
+                blocklist: None,
+                message: rejection.message,
+                reason_code: Some(rejection.recycle_reason.to_string()),
+                skip_reason: rejection.skip_reason,
+                episode_ids: target_episode_ids.clone(),
+                already_present_destination: covers_every_target
+                    .contains(own.media_file.id.as_str())
+                    .then(|| (own.media_file.file_path.clone(), own.media_file.id.clone())),
+            });
+        }
+        match crate::upgrade::superseded_source_identity(
+            superseded
                 .iter()
-                .all(|episode_id| incumbent.episode_ids.contains(episode_id))
-                && crate::upgrade::incumbent_holds_identical_source(
-                    &incumbent.media_file,
+                .map(|incumbent| &incumbent.media_file)
+                .collect(),
+            source_video,
+            source_size,
+            |file| covers_every_target.contains(file.id.as_str()),
+        )
+        .await
+        {
+            crate::upgrade::SupersededSourceIdentity::NoneIdentical => {}
+            crate::upgrade::SupersededSourceIdentity::Undecided(existing_file) => {
+                return Err(crate::upgrade::incumbent_identity_undecided_error(
+                    existing_file,
                     source_video,
-                    source_size,
-                )
-                .await
-            {
+                ));
+            }
+            crate::upgrade::SupersededSourceIdentity::Identical(existing_file) => {
                 let rejection = crate::import_decide::identical_incumbent_rejection(
                     "this episode",
-                    &incumbent.media_file.file_path,
+                    &existing_file.file_path,
                 );
                 tracing::info!(
                     title_id = %title.id,
-                    file_id = %incumbent.media_file.id,
+                    file_id = %existing_file.id,
                     source = %source_video.display(),
                     "import source is identical to the library file it would replace; leaving the library file in place"
                 );
                 return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
                     skip_reason: rejection.skip_reason,
                     episode_ids: target_episode_ids.clone(),
                     already_present_destination: Some((
-                        incumbent.media_file.file_path.clone(),
-                        incumbent.media_file.id.clone(),
+                        existing_file.file_path.clone(),
+                        existing_file.id.clone(),
                     )),
                 });
             }
@@ -800,6 +942,7 @@ async fn execute_resolved_episode_import(
                 // The transfer itself failed a safety check; nothing was judged
                 // about the release, so it keeps its place in the search space.
                 return Ok(EpisodeImportOutcome::Rejected {
+                    blocklist: None,
                     rejection,
                     disposition: crate::import_decide::RejectionDisposition::Hold,
                     reason_code: None,
@@ -1071,7 +1214,9 @@ async fn library_copy_holds_episodes(
     {
         return false;
     }
-    tokio::fs::try_exists(crate::stored_paths::stored_path_to_path_buf(&copy.path))
+    Disk::process()
+        .follow(crate::stored_paths::stored_path_to_path_buf(&copy.path))
         .await
-        .unwrap_or(false)
+        .exists()
+        == Some(true)
 }

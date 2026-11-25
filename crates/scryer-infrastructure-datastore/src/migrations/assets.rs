@@ -301,6 +301,8 @@ pub fn source_manifest_path(db_root: &Path) -> PathBuf {
     db_root.join("migration_manifest.toml")
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 pub fn load_source_manifest(db_root: &Path) -> Result<SourceMigrationManifest, String> {
     let path = source_manifest_path(db_root);
     let contents = fs::read_to_string(&path)
@@ -309,6 +311,8 @@ pub fn load_source_manifest(db_root: &Path) -> Result<SourceMigrationManifest, S
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 pub fn write_source_manifest(
     db_root: &Path,
     manifest: &SourceMigrationManifest,
@@ -320,6 +324,8 @@ pub fn write_source_manifest(
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 pub fn compile_source_bundle(db_root: &Path) -> Result<CompiledMigrationBundle, String> {
     let manifest = load_source_manifest(db_root)?;
     if manifest.format_version != DEFAULT_MANIFEST_VERSION {
@@ -415,6 +421,8 @@ pub fn migration_key_from_version_and_desc(version: i64, description: &str) -> S
     format!("{version:04}_{}", description.replace(' ', "_"))
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 fn compile_legacy_migrations(
     db_root: &Path,
     legacy: &LegacySqlBlock,
@@ -472,6 +480,8 @@ fn compile_legacy_migrations(
     Ok(entries)
 }
 
+// disk-guard: this file is also compiled into the build script, which cannot depend on scryer-application.
+#[allow(clippy::disallowed_methods)]
 fn compile_explicit_migration(
     db_root: &Path,
     migration: &SourceExplicitMigration,
@@ -603,6 +613,8 @@ fn validate_contiguous_versions(migrations: &[CompiledMigration]) -> Result<(), 
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -698,6 +710,35 @@ mod tests {
                 )),
                 "both fresh installs and upgrades must add the listing snapshot columns"
             );
+        }
+    }
+
+    #[test]
+    fn indexer_monthly_quota_migration_is_registered_for_both_engines() {
+        let bundle = compile_source_bundle(&source_db_root()).expect("compile migration catalog");
+        for (version, name) in [(347, "0347_indexer_monthly_quotas.sql")] {
+            let migration = bundle
+                .catalog
+                .find_migration(version)
+                .expect("monthly quota migration must be registered");
+            for (engine, prefix) in [
+                (EngineScope::Sqlite, "migrations"),
+                (EngineScope::Postgres, "postgres/migrations"),
+            ] {
+                let expected_file = format!("{prefix}/{name}");
+                assert!(
+                    migration.steps.iter().any(|step| matches!(
+                        step,
+                        CompiledMigrationStep::Sql {
+                            engine: step_engine,
+                            file,
+                            scope: StepScope::All,
+                            ..
+                        } if *step_engine == engine && *file == expected_file
+                    )),
+                    "migration {version} must run on both fresh installs and upgrades for {engine:?}"
+                );
+            }
         }
     }
 

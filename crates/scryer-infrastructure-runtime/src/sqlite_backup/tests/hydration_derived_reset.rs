@@ -90,7 +90,7 @@ async fn backup_of_hydrated_anime_and_series() -> (tempfile::TempDir, std::path:
             source_engine: "sqlite".into(),
             secrets: scryer_application::BackupExportSecrets {
                 encryption_master_key: "fixture-master-key".into(),
-                jwt_signing_secret: "fixture-jwt-key".into(),
+                jwt_signing_secret: Some("fixture-jwt-key".into()),
                 smg_registration_secret: None,
                 smg_gateway_url: None,
             },

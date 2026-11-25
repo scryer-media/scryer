@@ -86,6 +86,7 @@ use super::shared::{
     SMOKE_TIMEOUT, ServerSupervisor,
 };
 use application_updater::windows_process::{StopPolicy, stop_product_processes};
+use scryer_application::disk::{Disk, Parents};
 // The "start Scryer when I sign in" registration is shared verbatim with the
 // MSI upgrade helper, which has to observe and restore it around a major
 // upgrade. The tray owns the preference; it does not own a second copy of the
@@ -566,7 +567,12 @@ fn uninstall_cleanup() {
     // that could not be removed would otherwise be unreadable after a
     // reinstall, and the server refuses to start rather than replace a lost
     // key.
-    if profile_dir.join("scryer.db").exists() {
+    // A database that cannot be read counts as present, so the key stays.
+    if Disk::process()
+        .follow_blocking(&profile_dir.join("scryer.db"))
+        .exists()
+        != Some(false)
+    {
         eprintln!("Scryer: the database is still present, keeping its Credential Manager key");
         return;
     }
@@ -794,12 +800,15 @@ impl TrayState {
     fn create_app_window(&mut self, tray_window: HWND) -> Result<(), String> {
         self.register_app_window_class()?;
         let user_data_folder = self.supervisor.profile_dir().join(WEBVIEW_USER_DATA_DIR);
-        std::fs::create_dir_all(&user_data_folder).map_err(|error| {
-            format!(
-                "failed to create the WebView2 profile at {}: {error}",
-                user_data_folder.display()
-            )
-        })?;
+        Disk::process()
+            .create_dir_blocking(&user_data_folder, Parents::Create)
+            .map_err(|error| {
+                format!(
+                    "failed to create the WebView2 profile at {}: {}",
+                    user_data_folder.display(),
+                    error.words()
+                )
+            })?;
 
         let window = create_app_window(APP_WINDOW_WIDTH, APP_WINDOW_HEIGHT, "Scryer")?;
         let url = shared::app_url(self.supervisor.port());
@@ -2503,12 +2512,15 @@ mod smoke {
         let url = shared::app_url(port);
 
         let user_data_folder = std::env::temp_dir().join("scryer-webview-smoke");
-        std::fs::create_dir_all(&user_data_folder).unwrap_or_else(|error| {
-            fail(&format!(
-                "failed to create the smoke user data folder at {}: {error}",
-                user_data_folder.display()
-            ))
-        });
+        Disk::process()
+            .create_dir_blocking(&user_data_folder, Parents::Create)
+            .unwrap_or_else(|error| {
+                fail(&format!(
+                    "failed to create the smoke user data folder at {}: {}",
+                    user_data_folder.display(),
+                    error.words()
+                ))
+            });
 
         // The smoke test owns its whole thread, so it may create the webview
         // with the pumping helper: there is no other state on this thread for

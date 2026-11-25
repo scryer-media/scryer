@@ -17,6 +17,7 @@ use scryer_domain::{
 };
 use scryer_outbound_http::{generic_reqwest_client, no_redirect_reqwest_client};
 
+use crate::catalog_paging::{CatalogPager, CatalogScanLimits, read_catalog_json};
 use crate::jellyfin::{self, JellyfinAuth};
 use serde::Deserialize;
 use serde_json::Value;
@@ -705,33 +706,20 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
                 )));
             }
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-        {
-            return Err(AppError::Repository(
-                "Jellyfin identity response is too large".into(),
-            ));
-        }
-        let body = tokio::time::timeout(TIMEOUT, async {
-            let mut response = response;
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to read Jellyfin identity response: {error}"
-                ))
-            })? {
-                if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                    return Err(AppError::Repository(
-                        "Jellyfin identity response is too large".into(),
-                    ));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Ok::<_, AppError>(body)
-        })
+        let body = tokio::time::timeout(
+            TIMEOUT,
+            scryer_outbound_http::read_body_bounded(response, MAX_RESPONSE_BYTES),
+        )
         .await
-        .map_err(|_| AppError::Repository("Jellyfin identity response timed out".into()))??;
+        .map_err(|_| AppError::Repository("Jellyfin identity response timed out".into()))?
+        .map_err(|error| match error {
+            scryer_outbound_http::BoundedBodyError::TooLarge { .. } => {
+                AppError::Repository("Jellyfin identity response is too large".into())
+            }
+            scryer_outbound_http::BoundedBodyError::Read(error) => AppError::Repository(format!(
+                "failed to read Jellyfin identity response: {error}"
+            )),
+        })?;
         let user = serde_json::from_slice::<JellyfinUser>(&body).map_err(|error| {
             AppError::Repository(format!("invalid Jellyfin identity response: {error}"))
         })?;
@@ -1401,6 +1389,7 @@ async fn refresh_plex_paths(
             .join("library/sections")
             .map_err(|error| AppError::Repository(error.to_string()))?,
         token,
+        CatalogScanLimits::STANDARD,
     )
     .await?;
     let locations = plex_section_locations(&sections);
@@ -1580,8 +1569,14 @@ async fn scan_media_server_catalog(
         })?;
     match connection.provider {
         MediaServerProvider::Jellyfin => {
-            jellyfin::scan_catalog(&verifier.client, &connection.base_url, api_key, recent_only)
-                .await
+            jellyfin::scan_catalog(
+                &verifier.client,
+                &connection.base_url,
+                api_key,
+                recent_only,
+                CatalogScanLimits::STANDARD,
+            )
+            .await
         }
         MediaServerProvider::Emby => {
             super::emby::scan_catalog(
@@ -1590,6 +1585,7 @@ async fn scan_media_server_catalog(
                 &connection.base_url,
                 api_key,
                 recent_only,
+                CatalogScanLimits::STANDARD,
             )
             .await
         }
@@ -1605,7 +1601,14 @@ async fn scan_media_server_catalog(
                         "Plex catalog scan requires a selected server",
                     )
                 })?;
-            scan_plex_catalog(verifier, machine_id, api_key, recent_only).await
+            scan_plex_catalog(
+                verifier,
+                machine_id,
+                api_key,
+                recent_only,
+                CatalogScanLimits::STANDARD,
+            )
+            .await
         }
     }
 }
@@ -1615,6 +1618,7 @@ async fn scan_plex_catalog(
     machine_id: &str,
     token: &str,
     recent_only: bool,
+    limits: CatalogScanLimits,
 ) -> AppResult<Vec<MediaServerCatalogItem>> {
     let server_url = plex_server_base_url(verifier, machine_id, token).await?;
     let sections = plex_json(
@@ -1623,6 +1627,7 @@ async fn scan_plex_catalog(
             .join("library/sections")
             .map_err(|error| AppError::Repository(error.to_string()))?,
         token,
+        limits,
     )
     .await?;
     let mut catalog = Vec::new();
@@ -1639,10 +1644,12 @@ async fn scan_plex_catalog(
         let endpoint = server_url
             .join(&format!("library/sections/{key}/{endpoint_name}"))
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        let values = plex_paginated_entries(&verifier.client, endpoint, token, recent_only).await?;
+        let values =
+            plex_paginated_entries(&verifier.client, endpoint, token, recent_only, limits).await?;
         for value in values {
             let Some(item) =
-                hydrate_plex_catalog_item(&verifier.client, &server_url, token, &value).await?
+                hydrate_plex_catalog_item(&verifier.client, &server_url, token, &value, limits)
+                    .await?
             else {
                 continue;
             };
@@ -1651,9 +1658,14 @@ async fn scan_plex_catalog(
             {
                 let series_key = (MediaServerCatalogItemKind::Series, series_id.to_string());
                 if !catalog_keys.contains(&series_key)
-                    && let Some(series) =
-                        plex_metadata_catalog_item(&verifier.client, &server_url, token, series_id)
-                            .await?
+                    && let Some(series) = plex_metadata_catalog_item(
+                        &verifier.client,
+                        &server_url,
+                        token,
+                        series_id,
+                        limits,
+                    )
+                    .await?
                 {
                     catalog_keys.insert(series_key);
                     catalog.push(series);
@@ -1668,10 +1680,11 @@ async fn scan_plex_catalog(
                 let endpoint = server_url
                     .join(&format!("library/metadata/{series_id}/allLeaves"))
                     .map_err(|error| AppError::Repository(error.to_string()))?;
-                for episode in plex_paginated_entries(&verifier.client, endpoint, token, false)
-                    .await?
-                    .iter()
-                    .filter_map(plex_catalog_item)
+                for episode in
+                    plex_paginated_entries(&verifier.client, endpoint, token, false, limits)
+                        .await?
+                        .iter()
+                        .filter_map(plex_catalog_item)
                 {
                     if catalog_keys.insert((episode.kind, episode.provider_item_id.clone())) {
                         catalog.push(episode);
@@ -1688,6 +1701,7 @@ async fn hydrate_plex_catalog_item(
     server_url: &Url,
     token: &str,
     value: &Value,
+    limits: CatalogScanLimits,
 ) -> AppResult<Option<MediaServerCatalogItem>> {
     let Some(item) = plex_catalog_item(value) else {
         return Ok(None);
@@ -1696,7 +1710,7 @@ async fn hydrate_plex_catalog_item(
         return Ok(Some(item));
     }
     Ok(
-        plex_metadata_catalog_item(client, server_url, token, &item.provider_item_id)
+        plex_metadata_catalog_item(client, server_url, token, &item.provider_item_id, limits)
             .await?
             .or(Some(item)),
     )
@@ -1707,11 +1721,12 @@ async fn plex_metadata_catalog_item(
     server_url: &Url,
     token: &str,
     provider_item_id: &str,
+    limits: CatalogScanLimits,
 ) -> AppResult<Option<MediaServerCatalogItem>> {
     let endpoint = server_url
         .join(&format!("library/metadata/{provider_item_id}"))
         .map_err(|error| AppError::Repository(error.to_string()))?;
-    let metadata = plex_json(client, endpoint, token).await?;
+    let metadata = plex_json(client, endpoint, token, limits).await?;
     Ok(plex_entries(&metadata, "Metadata")
         .first()
         .and_then(plex_catalog_item))
@@ -1722,10 +1737,12 @@ async fn plex_paginated_entries(
     url: Url,
     token: &str,
     single_page: bool,
+    limits: CatalogScanLimits,
 ) -> AppResult<Vec<Value>> {
     const PAGE_SIZE: usize = 500;
     let mut start = 0usize;
     let mut entries = Vec::new();
+    let mut pager = CatalogPager::new("Plex", limits);
     loop {
         let mut page_url = url.clone();
         page_url
@@ -1736,7 +1753,7 @@ async fn plex_paginated_entries(
             // Request them with each catalog page so full scans avoid one
             // metadata request per movie or series just to obtain GUIDs.
             .append_pair("includeGuids", "1");
-        let page = plex_json(client, page_url, token).await?;
+        let page = plex_json(client, page_url, token, limits).await?;
         let page_entries = plex_entries(&page, "Metadata");
         let page_len = page_entries.len();
         let container = page.get("MediaContainer");
@@ -1747,15 +1764,22 @@ async fn plex_paginated_entries(
         if start > 0 && offset < start {
             return Ok(entries);
         }
+        pager.record_page(
+            page_entries
+                .iter()
+                .map(|entry| json_value_string(entry.get("ratingKey"))),
+        )?;
         entries.extend(page_entries);
+        let next = offset.saturating_add(page_len);
         if single_page
             || page_len == 0
             || page_len < PAGE_SIZE
-            || total.is_some_and(|total| offset + page_len >= total)
+            || total.is_some_and(|total| next >= total)
         {
             return Ok(entries);
         }
-        start = offset + page_len;
+        pager.ensure_another_page_allowed()?;
+        start = next;
     }
 }
 
@@ -1771,7 +1795,12 @@ fn json_value_usize(value: Option<&Value>) -> Option<usize> {
         .ok()
 }
 
-async fn plex_json(client: &reqwest::Client, url: Url, token: &str) -> AppResult<Value> {
+async fn plex_json(
+    client: &reqwest::Client,
+    url: Url,
+    token: &str,
+    limits: CatalogScanLimits,
+) -> AppResult<Value> {
     let response = client
         .get(url)
         .header("Accept", "application/json")
@@ -1785,8 +1814,7 @@ async fn plex_json(client: &reqwest::Client, url: Url, token: &str) -> AppResult
             response.status()
         )));
     }
-    response
-        .json()
+    read_catalog_json(response, limits)
         .await
         .map_err(|error| AppError::Repository(format!("invalid Plex catalog response: {error}")))
 }
@@ -2090,6 +2118,7 @@ mod tests {
             Url::parse(&format!("{}/library", server.uri())).expect("mock URL"),
             "token",
             false,
+            CatalogScanLimits::STANDARD,
         )
         .await
         .expect("paginate Plex library");
@@ -2131,12 +2160,123 @@ mod tests {
                 "guid": "plex://movie/internal",
                 "Guid": [{ "id": "plex://movie/internal" }]
             }),
+            CatalogScanLimits::STANDARD,
         )
         .await
         .expect("hydrate metadata")
         .expect("movie should parse");
 
         assert_eq!(item.external_ids, vec![ExternalId::new("tmdb", "550")]);
+    }
+
+    /// A full Plex catalog page of synthetic movies, keyed from `first_key`.
+    fn plex_catalog_page(offset: Option<usize>, first_key: usize) -> Value {
+        let metadata = (first_key..first_key + 500)
+            .map(|key| json!({ "type": "movie", "ratingKey": key.to_string() }))
+            .collect::<Vec<_>>();
+        let mut container = json!({ "size": 500, "Metadata": metadata });
+        if let Some(offset) = offset {
+            container["offset"] = json!(offset);
+        }
+        json!({ "MediaContainer": container })
+    }
+
+    #[tokio::test]
+    async fn plex_catalog_that_ignores_the_start_fails_instead_of_looping() {
+        let server = MockServer::start().await;
+        // No offset and no total: only the repeated keys show the server is
+        // answering every page from the top.
+        Mock::given(method("GET"))
+            .and(path("/library"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(plex_catalog_page(None, 0)))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let error = plex_paginated_entries(
+            &generic_reqwest_client(),
+            Url::parse(&format!("{}/library", server.uri())).expect("mock URL"),
+            "token",
+            false,
+            CatalogScanLimits::STANDARD,
+        )
+        .await
+        .expect_err("a repeated page is not a complete catalog");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn plex_catalog_that_never_signals_its_end_fails_at_the_page_ceiling() {
+        struct EndlessPages;
+        impl wiremock::Respond for EndlessPages {
+            fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+                let start = request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "X-Plex-Container-Start")
+                    .and_then(|(_, value)| value.parse::<usize>().ok())
+                    .expect("start requested");
+                ResponseTemplate::new(200).set_body_json(plex_catalog_page(Some(start), start))
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/library"))
+            .respond_with(EndlessPages)
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let error = plex_paginated_entries(
+            &generic_reqwest_client(),
+            Url::parse(&format!("{}/library", server.uri())).expect("mock URL"),
+            "token",
+            false,
+            CatalogScanLimits {
+                page_ceiling: 3,
+                ..CatalogScanLimits::STANDARD
+            },
+        )
+        .await
+        .expect_err("a listing with no end is not a complete catalog");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn plex_catalog_answer_past_the_byte_limit_is_unreadable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/library/metadata/10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(plex_catalog_page(Some(0), 0)))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let server_url = media_server_url(&server.uri()).expect("server URL");
+
+        let item = plex_metadata_catalog_item(
+            &generic_reqwest_client(),
+            &server_url,
+            "token",
+            "10",
+            CatalogScanLimits::STANDARD,
+        )
+        .await
+        .expect("the same answer reads within the standard limit");
+        assert!(item.is_some());
+
+        let error = plex_metadata_catalog_item(
+            &generic_reqwest_client(),
+            &server_url,
+            "token",
+            "10",
+            CatalogScanLimits {
+                response_max_bytes: 1024,
+                ..CatalogScanLimits::STANDARD
+            },
+        )
+        .await
+        .expect_err("an answer past the limit is refused");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
     }
 
     #[tokio::test]

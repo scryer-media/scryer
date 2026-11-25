@@ -11,7 +11,6 @@ use std::sync::RwLock;
 use crate::EncryptionKey;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 use crate::settings::crypto::{current_encryption_key, decrypt_value, maybe_encrypt_value};
-use crate::workflow::stores::{opt_timestamp_string, timestamp_string};
 
 #[derive(Clone)]
 pub struct TotpStore {
@@ -778,9 +777,9 @@ fn row_to_credential(
         digits: row.i32("digits")?,
         period_seconds: row.i32("period_seconds")?,
         last_accepted_step: row.opt_i64("last_accepted_step")?,
-        created_at: timestamp_string(row, "created_at")?,
-        updated_at: timestamp_string(row, "updated_at")?,
-        last_used_at: opt_timestamp_string(row, "last_used_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
+        last_used_at: row.opt_timestamp_text("last_used_at")?,
     })
 }
 
@@ -801,8 +800,8 @@ fn row_to_enrollment_challenge(
         algorithm: row.text("algorithm")?,
         digits: row.i32("digits")?,
         period_seconds: row.i32("period_seconds")?,
-        created_at: timestamp_string(row, "created_at")?,
-        expires_at: timestamp_string(row, "expires_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        expires_at: row.timestamp_text("expires_at")?,
     })
 }
 
@@ -811,8 +810,8 @@ fn row_to_recovery_code(row: &SqlRow) -> AppResult<TotpRecoveryCodeRecord> {
         id: row.text("id")?,
         user_id: row.text("user_id")?,
         code_hash: row.text("code_hash")?,
-        created_at: timestamp_string(row, "created_at")?,
-        used_at: opt_timestamp_string(row, "used_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        used_at: row.opt_timestamp_text("used_at")?,
     })
 }
 

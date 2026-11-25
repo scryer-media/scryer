@@ -843,3 +843,58 @@ test("free titles take no ring spot and keep beside the titles they link to", ()
     );
   }
 });
+
+test("posters in a densely linked graph never overlap once it settles", () => {
+  // Poster half-heights from the smallest to the largest drawn size.
+  const nodes = DENSE_CLUSTERS.map((clusterId, index) => {
+    const halfHeight = 6 + (index % 8) * 2;
+    return {
+      key: `t:${index}`,
+      clusterId,
+      free: !DENSE_NAMED.has(clusterId),
+      halfWidth: (halfHeight * 2) / 3,
+      halfHeight,
+    };
+  });
+  const edges = DENSE_EDGES.map(([from, to, weight]) => ({
+    from: `t:${from}`,
+    to: `t:${to}`,
+    weight,
+  }));
+  const layout = createLayout(nodes, edges, new Map(), DENSE_NAMED);
+  settle(layout);
+  const positions = layoutPositions(layout);
+  const overlapping: string[] = [];
+  for (let a = 0; a < nodes.length; a += 1) {
+    for (let b = a + 1; b < nodes.length; b += 1) {
+      const first = positions.get(nodes[a].key)!;
+      const second = positions.get(nodes[b].key)!;
+      const apartX =
+        Math.abs(first.x - second.x) -
+        (nodes[a].halfWidth + nodes[b].halfWidth);
+      const apartY =
+        Math.abs(first.y - second.y) -
+        (nodes[a].halfHeight + nodes[b].halfHeight);
+      // A hair of overlap is rounding, not a pile.
+      if (apartX < -0.5 && apartY < -0.5) {
+        overlapping.push(`${nodes[a].key}/${nodes[b].key}`);
+      }
+    }
+  }
+  assert.deepEqual(overlapping, []);
+  // Making room does not push a title into another neighbourhood's outline.
+  for (const clusterId of DENSE_NAMED) {
+    const hull = convexHull(
+      nodes
+        .filter((node) => node.clusterId === clusterId)
+        .map((node) => positions.get(node.key)!),
+    );
+    for (const node of nodes) {
+      if (node.clusterId === clusterId) continue;
+      assert.ok(
+        !insideHull(hull, positions.get(node.key)!),
+        `${node.key} sits inside cluster ${clusterId}'s outline`,
+      );
+    }
+  }
+});

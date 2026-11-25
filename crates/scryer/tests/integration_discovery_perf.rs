@@ -34,6 +34,9 @@
 //! pages and a series detail read with and without seasons and episodes
 //! selected, so movie and series numbers are reported separately.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::BTreeMap;

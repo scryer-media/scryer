@@ -1412,6 +1412,15 @@ pub struct UpdateLibraryInput {
 }
 
 #[derive(InputObject, Clone)]
+/// Turns the background full-hash job on or off for one library.
+pub struct SetLibraryFullHashBackfillInput {
+    /// Library identity to change.
+    pub library_id: ID,
+    /// Whether the background full-hash job reads this library's files. Off, a file's full hash is read only when something needs it.
+    pub enabled: bool,
+}
+
+#[derive(InputObject, Clone)]
 /// Acquisition, import, routing, and filesystem settings for a library.
 pub struct LibrarySettingsInput {
     /// Ordered release-search languages, independent of metadata and audio.

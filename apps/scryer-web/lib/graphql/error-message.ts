@@ -7,7 +7,7 @@ const GRAPHQL_PREFIX_PATTERNS: RegExp[] = [
   /^\[GraphQL\]\s*/i,
   /^validation:\s*/i,
 ];
-type ErrorTranslate = (
+export type ErrorTranslate = (
   key: string,
   values?: Record<string, string | number | boolean | null | undefined>,
 ) => string;
@@ -250,8 +250,8 @@ export const ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
     "error.reason.INTERFACE_LOCATION_TARGET_INVALID",
   INTERFACE_LOGIN_MFA_CONFLICT: "error.reason.INTERFACE_LOGIN_MFA_CONFLICT",
   INTERFACE_LOGIN_MFA_REQUIRED: "error.reason.INTERFACE_LOGIN_MFA_REQUIRED",
-  INTERFACE_MAINTENANCE_RULE_NOT_FOUND:
-    "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND",
+  INTERFACE_LIFECYCLE_RULE_NOT_FOUND:
+    "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND",
   INTERFACE_METADATA_DATE_INVALID:
     "error.reason.INTERFACE_METADATA_DATE_INVALID",
   INTERFACE_METADATA_ID_INVALID: "error.reason.INTERFACE_METADATA_ID_INVALID",
@@ -269,6 +269,10 @@ export const ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
     "error.reason.INTERFACE_QUALITY_PROFILE_ID_REQUIRED",
   INTERFACE_QUALITY_PROFILE_NAME_REQUIRED:
     "error.reason.INTERFACE_QUALITY_PROFILE_NAME_REQUIRED",
+  INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID:
+    "error.reason.INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID",
+  INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID:
+    "error.reason.INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID",
   INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED:
     "error.reason.INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED",
   INTERFACE_QUALITY_PROFILE_VALUE_INVALID:
@@ -329,7 +333,7 @@ export const ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
   RULE_PACK_UP_TO_DATE: "error.rulePackUpToDate",
   TITLE_NOT_FOUND: "title.notFound",
   RELEASE_TOKEN_EXPIRED: "status.searchResultsExpired",
-  MAINTENANCE_ARM_COUNT_MISMATCH: "error.maintenanceArmCountMismatch",
+  LIFECYCLE_ARM_COUNT_MISMATCH: "error.lifecycleArmCountMismatch",
 };
 const ERROR_CODE_KEYS: Readonly<Record<string, string>> = {
   MFA_STEP_UP_REQUIRED: "error.mfaStepUpRequired",
@@ -524,6 +528,70 @@ export function normalizeGraphQlErrorMessage(message: string): string {
   return normalized;
 }
 
+/**
+ * The copy for a coded reason, filled with the facts that reason is known to
+ * carry. Facts arrive as a flat object keyed by fact name, the shape both a
+ * GraphQL error's extensions and a stored refusal give them. A reason whose
+ * facts are missing or malformed gets its base copy.
+ */
+export function refusalReasonMessage(
+  reason: string,
+  key: string,
+  facts: Readonly<Record<string, unknown>>,
+  translate: ErrorTranslate = defaultTranslate,
+): string {
+  if (reason === "SECURITY_PASSWORD_OUT_OF_RANGE") {
+    const value = facts.minLength;
+    const minLength =
+      typeof value === "number" ||
+      (typeof value === "string" && /^[0-9]+$/.test(value))
+        ? Number(value)
+        : NaN;
+    if (Number.isSafeInteger(minLength) && minLength > 0) {
+      return translate(key, { minLength });
+    }
+    return translate("error.passwordLengthRequirement");
+  }
+  if (reason === "FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR") {
+    const { titleFolder, missingDrive } = facts;
+    if (
+      typeof titleFolder === "string" &&
+      titleFolder !== "" &&
+      typeof missingDrive === "string" &&
+      missingDrive !== ""
+    ) {
+      return translate("error.missingDriveNamed", {
+        titleFolder,
+        missingDrive,
+      });
+    }
+    return translate(key);
+  }
+  if (reason === "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED") {
+    const { destructiveActions } = facts;
+    const actions = Array.isArray(destructiveActions)
+      ? destructiveActions.filter(
+          (action): action is string =>
+            typeof action === "string" && action !== "",
+        )
+      : [];
+    if (actions.length > 0) {
+      // The names are the served action heads, which the rule builder
+      // already labels; a head the client has no label for stays as sent.
+      const labels = actions.map((action) => {
+        const labelKey = `ruleOutput.lifecycle.${action}`;
+        const label = translate(labelKey);
+        return label === labelKey ? action : label;
+      });
+      return translate("error.lifecycleMaxTitlesPerRunRequiredNamed", {
+        actions: labels.join(", "),
+      });
+    }
+    return translate(key);
+  }
+  return translate(key);
+}
+
 export function userFacingGraphQlErrorMessage(
   error: unknown,
   fallback: string,
@@ -545,37 +613,15 @@ export function userFacingGraphQlErrorMessage(
         : undefined;
       const codeKey =
         typeof code === "string" ? ERROR_CODE_KEYS[code] : undefined;
-      if (key && reason === "SECURITY_PASSWORD_OUT_OF_RANGE") {
-        const value = entry.extensions.minLength;
-        const minLength =
-          typeof value === "number" ||
-          (typeof value === "string" && /^[0-9]+$/.test(value))
-            ? Number(value)
-            : NaN;
-        if (Number.isSafeInteger(minLength) && minLength > 0) {
-          return translate(key, { minLength });
-        }
-        return translate("error.passwordLengthRequirement");
+      if (key) {
+        return refusalReasonMessage(
+          reason as string,
+          key,
+          entry.extensions,
+          translate,
+        );
       }
-      if (
-        key &&
-        reason === "FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR"
-      ) {
-        const { titleFolder, missingDrive } = entry.extensions;
-        if (
-          typeof titleFolder === "string" &&
-          titleFolder !== "" &&
-          typeof missingDrive === "string" &&
-          missingDrive !== ""
-        ) {
-          return translate("error.missingDriveNamed", {
-            titleFolder,
-            missingDrive,
-          });
-        }
-        return translate(key);
-      }
-      if (key || codeKey) return translate(key ?? codeKey!);
+      if (codeKey) return translate(codeKey);
     }
   }
   const rawMessage =

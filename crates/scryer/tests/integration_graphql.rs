@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -28,6 +30,8 @@ mod external_import_finalize;
 mod external_import_secret_drafts;
 #[path = "integration_graphql/external_import_sources.rs"]
 mod external_import_sources;
+#[path = "integration_graphql/external_rule_import.rs"]
+mod external_rule_import;
 #[path = "integration_graphql/folder_match.rs"]
 mod folder_match;
 #[path = "integration_graphql/indexer_configs.rs"]
@@ -547,9 +551,10 @@ impl MediaFileRepository for FailingMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &scryer_application::MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<scryer_application::ClaimedMediaFile> {
         self.inner
-            .claim_import_destination(input, associations)
+            .claim_import_destination(input, associations, hashes)
             .await
     }
 
@@ -890,9 +895,10 @@ impl MediaFileRepository for CountingMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &scryer_application::MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<scryer_application::ClaimedMediaFile> {
         self.inner
-            .claim_import_destination(input, associations)
+            .claim_import_destination(input, associations, hashes)
             .await
     }
 
@@ -1732,6 +1738,24 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 category: "security".into(),
                 scope: "system".into(),
                 key_name: "auth.skip_login_for_local_ips".into(),
+                data_type: "boolean".into(),
+                default_value_json: "false".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "security".into(),
+                scope: "system".into(),
+                key_name: "auth.local_trust.allowed_hosts".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "security".into(),
+                scope: "system".into(),
+                key_name: "auth.local_trust.restrict_to_trusted_proxies".into(),
                 data_type: "boolean".into(),
                 default_value_json: "false".into(),
                 is_sensitive: false,

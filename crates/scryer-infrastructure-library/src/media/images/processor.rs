@@ -17,10 +17,17 @@ use scryer_outbound_http::{
 };
 
 const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
+/// Most pixels source artwork may declare before it is decoded. Provider
+/// artwork tops out around 3840x2160; this leaves an order of magnitude more
+/// while keeping one decode, its RGBA copy and its resize buffer bounded.
+const MAX_SOURCE_PIXELS: u64 = 100_000_000;
 const AVIF_SPEED: u8 = 4;
 const AVIF_QUALITY: u8 = 85;
 const PROXY_AVIF_SPEED: u8 = 10;
 const PROXY_AVIF_QUALITY: u8 = 60;
+/// Thread name prefix of the artwork workers; short enough that the index
+/// survives the 15-byte thread name limit some platforms impose.
+const ARTWORK_THREAD_PREFIX: &str = "scry-aw-";
 
 fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     if !matches!(workers, 2 | 4) {
@@ -32,7 +39,7 @@ fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     let (ready, results) = std::sync::mpsc::channel();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
-        .thread_name(|index| format!("scryer-artwork-{index}"))
+        .thread_name(|index| format!("{ARTWORK_THREAD_PREFIX}{index}"))
         .start_handler(move |index| {
             let result = scryer_application::background_worker_priority();
             match &result {
@@ -192,20 +199,9 @@ impl HttpTitleImageProcessor {
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
 
-        let bytes = response.bytes().await.map_err(|err| {
-            AppError::Repository(format!("failed to read title image bytes: {err}"))
-        })?;
-        if bytes.len() > self.max_source_bytes {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::MEDIA_TITLE_IMAGE_TOO_LARGE,
-                format!(
-                    "title image exceeds max size of {} bytes",
-                    self.max_source_bytes
-                ),
-            ));
-        }
+        let bytes = read_title_image_body(response, self.max_source_bytes).await?;
 
-        Ok((source_url, bytes.to_vec(), etag, last_modified))
+        Ok((source_url, bytes, etag, last_modified))
     }
 
     fn process_bytes(
@@ -230,6 +226,7 @@ impl HttpTitleImageProcessor {
                     "unsupported image format".to_string(),
                 )
             })?;
+        refuse_oversized_dimensions(bytes, guessed_format)?;
         let decoded =
             image::load_from_memory_with_format(bytes, guessed_format).map_err(|err| {
                 AppError::validation_refused(
@@ -278,6 +275,51 @@ impl HttpTitleImageProcessor {
         artwork_pool(2)?
             .install(|| self.process_bytes(kind, source_url, bytes, None, None, variant_specs))
     }
+}
+
+/// Reads a title image body, refusing it once it passes `max_source_bytes`
+/// whether or not the server declared its length.
+async fn read_title_image_body(
+    response: reqwest::Response,
+    max_source_bytes: usize,
+) -> AppResult<Vec<u8>> {
+    scryer_outbound_http::read_body_bounded(response, max_source_bytes)
+        .await
+        .map_err(|error| match error {
+            scryer_outbound_http::BoundedBodyError::TooLarge { .. } => {
+                AppError::validation_refused(
+                    crate::error_reasons::MEDIA_TITLE_IMAGE_TOO_LARGE,
+                    format!("title image exceeds max size of {max_source_bytes} bytes"),
+                )
+            }
+            scryer_outbound_http::BoundedBodyError::Read(err) => {
+                AppError::Repository(format!("failed to read title image bytes: {err}"))
+            }
+        })
+}
+
+/// Refuses artwork whose header declares more than [`MAX_SOURCE_PIXELS`]
+/// before any pixel buffer is allocated. A header the reader cannot parse is
+/// left to the full decode, which reports it the way it always has.
+fn refuse_oversized_dimensions(bytes: &[u8], format: ImageFormat) -> AppResult<()> {
+    let Ok((width, height)) =
+        image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions()
+    else {
+        return Ok(());
+    };
+    if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
+        return Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_TOO_LARGE,
+            format!(
+                "image is {width}x{height}, more than the {MAX_SOURCE_PIXELS} pixels artwork may have"
+            ),
+            vec![scryer_application::RefusalFact::new(
+                "maxPixels",
+                MAX_SOURCE_PIXELS.to_string(),
+            )],
+        ));
+    }
+    Ok(())
 }
 
 fn title_image_scope(source_url: &str) -> String {
@@ -510,7 +552,7 @@ fn linear_to_srgb_u8(value: f32) -> u8 {
 fn encode_avif(image: &RgbaImage, speed: u8, quality: u8) -> AppResult<Vec<u8>> {
     if !std::thread::current()
         .name()
-        .is_some_and(|name| name.starts_with("scryer-artwork-"))
+        .is_some_and(|name| name.starts_with(ARTWORK_THREAD_PREFIX))
     {
         return Err(AppError::Repository(
             "AVIF encoding requires an artwork worker".into(),
@@ -619,7 +661,11 @@ mod tests {
                     std::thread::current().name().unwrap().to_string()
                 });
                 assert_eq!(names.len(), workers);
-                assert!(names.iter().all(|name| name.starts_with("scryer-artwork-")));
+                assert!(
+                    names
+                        .iter()
+                        .all(|name| name.starts_with(ARTWORK_THREAD_PREFIX))
+                );
                 pool.install(|| {
                     for alpha in [255, 96] {
                         let mut pixels = RgbaImage::new(64, 96);
@@ -944,6 +990,149 @@ mod tests {
         )
         .await
         .expect("literal public IP should be allowed");
+    }
+
+    /// Serves one canned HTTP reply on a local port and returns its URL.
+    async fn serve_once(reply: Vec<u8>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture listener");
+        let address = listener.local_addr().expect("listener address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept fixture request");
+            let mut seen = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !seen.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream
+                    .read(&mut buffer)
+                    .await
+                    .expect("read fixture request");
+                if read == 0 {
+                    return;
+                }
+                seen.extend_from_slice(&buffer[..read]);
+            }
+            let _ = stream.write_all(&reply).await;
+            let _ = stream.shutdown().await;
+        });
+        format!("http://{address}/image")
+    }
+
+    fn chunked_reply(chunks: &[&[u8]]) -> Vec<u8> {
+        let mut reply = b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        for chunk in chunks {
+            reply.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+            reply.extend_from_slice(chunk);
+            reply.extend_from_slice(b"\r\n");
+        }
+        reply.extend_from_slice(b"0\r\n\r\n");
+        reply
+    }
+
+    async fn read_fixture_body(reply: Vec<u8>, limit: usize) -> AppResult<Vec<u8>> {
+        let url = serve_once(reply).await;
+        scryer_outbound_http::install_default_rustls_provider();
+        let response = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect("fixture response");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            read_title_image_body(response, limit),
+        )
+        .await
+        .expect("body read should finish")
+    }
+
+    #[tokio::test]
+    async fn title_image_body_without_a_length_is_refused_once_it_passes_the_limit() {
+        let chunk = [7_u8; 16];
+        let refused = read_fixture_body(chunked_reply(&[&chunk, &chunk, &chunk]), 40)
+            .await
+            .expect_err("a body past the limit is refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_TITLE_IMAGE_TOO_LARGE)
+        );
+
+        let read = read_fixture_body(chunked_reply(&[&chunk, &chunk]), 32)
+            .await
+            .expect("a body exactly at the limit is read");
+        assert_eq!(read, [7_u8; 32]);
+    }
+
+    #[tokio::test]
+    async fn title_image_body_declaring_a_length_past_the_limit_is_refused() {
+        let mut reply =
+            b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 64\r\nConnection: close\r\n\r\n"
+                .to_vec();
+        reply.extend_from_slice(&[9_u8; 64]);
+        let refused = read_fixture_body(reply, 63)
+            .await
+            .expect_err("a declared length past the limit is refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_TITLE_IMAGE_TOO_LARGE)
+        );
+    }
+
+    /// A real JPEG whose frame header is rewritten to claim other dimensions.
+    fn jpeg_claiming(width: u16, height: u16) -> Vec<u8> {
+        let rgb = image::RgbImage::from_pixel(8, 8, image::Rgb([45, 89, 120]));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .write_image(rgb.as_raw(), 8, 8, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let sof = jpeg
+            .windows(2)
+            .position(|marker| marker == [0xFF, 0xC0])
+            .expect("baseline JPEG has a frame header");
+        jpeg[sof + 5..sof + 7].copy_from_slice(&height.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&width.to_be_bytes());
+        jpeg
+    }
+
+    #[test]
+    fn artwork_past_the_pixel_limit_is_refused_before_it_is_decoded() {
+        let oversized = jpeg_claiming(20_000, 20_000);
+        assert_eq!(
+            image::ImageReader::with_format(Cursor::new(&oversized), ImageFormat::Jpeg)
+                .into_dimensions()
+                .expect("header parses"),
+            (20_000, 20_000)
+        );
+        let processor = HttpTitleImageProcessor::new_for_tests(false);
+        let refused = processor
+            .process_bytes_for_tests(
+                TitleImageKind::Fanart,
+                "https://example.com/fanart.jpg",
+                &oversized,
+                Vec::new(),
+            )
+            .expect_err("oversized artwork is refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_TOO_LARGE)
+        );
+        assert_eq!(
+            refused.refusal_facts(),
+            [scryer_application::RefusalFact::new(
+                "maxPixels",
+                MAX_SOURCE_PIXELS.to_string()
+            )]
+        );
+
+        // Exactly the limit passes the check; one more row does not.
+        assert!(
+            refuse_oversized_dimensions(&jpeg_claiming(10_000, 10_000), ImageFormat::Jpeg).is_ok()
+        );
+        assert!(
+            refuse_oversized_dimensions(&jpeg_claiming(10_000, 10_001), ImageFormat::Jpeg).is_err()
+        );
+        // A header the reader cannot parse is left to the decode, as before.
+        assert!(refuse_oversized_dimensions(b"not an image", ImageFormat::Jpeg).is_ok());
     }
 
     #[test]

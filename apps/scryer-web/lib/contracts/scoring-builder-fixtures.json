@@ -1,0 +1,805 @@
+[
+  {
+    "id": "adjust-bools-and-numbers",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.release.is_remux",
+          "operator": "IS_TRUE",
+          "value": ""
+        },
+        {
+          "field": "input.release.is_hardcoded_subs",
+          "operator": "IS_FALSE",
+          "value": ""
+        },
+        {
+          "field": "input.release.revision",
+          "operator": "GREATER_OR_EQUAL",
+          "value": "2"
+        },
+        {
+          "field": "input.builtin_score.total",
+          "operator": "LESS_OR_EQUAL",
+          "value": "500.5"
+        },
+        {
+          "field": "input.context.has_existing_file",
+          "operator": "IS_FALSE",
+          "value": ""
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_remux_bonus",
+          "points": "250"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.is_remux == true\n\tinput.release.is_hardcoded_subs == false\n\tinput.release.revision >= 2\n\tinput.builtin_score.total <= 500.5\n\tinput.context.has_existing_file == false\n}\n\nscore_entry[\"sample_remux_bonus\"] := 250 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "is_remux": true,
+            "is_hardcoded_subs": false,
+            "revision": 2
+          },
+          "builtin_score": {
+            "total": 500.5
+          },
+          "context": {
+            "has_existing_file": false
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "is_remux": true,
+            "is_hardcoded_subs": null,
+            "revision": 2
+          },
+          "builtin_score": {
+            "total": 500.5
+          },
+          "context": {
+            "has_existing_file": false
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "is_remux": true,
+            "is_hardcoded_subs": false,
+            "revision": 1
+          },
+          "builtin_score": {
+            "total": 500.5
+          },
+          "context": {
+            "has_existing_file": false
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "block-any-nullable-values",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ANY",
+      "conditions": [
+        {
+          "field": "input.release.size_bytes",
+          "operator": "GREATER_THAN",
+          "value": "100000000000"
+        },
+        {
+          "field": "input.release.year",
+          "operator": "LESS_THAN",
+          "value": "1950"
+        },
+        {
+          "field": "input.release.age_days",
+          "operator": "NOT_EQUALS",
+          "value": "0"
+        },
+        {
+          "field": "input.file.video_height",
+          "operator": "EQUALS",
+          "value": "480"
+        },
+        {
+          "field": "input.release.thumbs_down",
+          "operator": "GREATER_OR_EQUAL",
+          "value": "5"
+        },
+        {
+          "field": "input.release.thumbs_up",
+          "operator": "LESS_OR_EQUAL",
+          "value": "1"
+        },
+        {
+          "field": "input.context.existing_score",
+          "operator": "HAS_VALUE",
+          "value": ""
+        },
+        {
+          "field": "input.file.duration_seconds",
+          "operator": "HAS_NO_VALUE",
+          "value": ""
+        }
+      ],
+      "outputs": {
+        "BLOCK": {
+          "code": "sample_size_guard"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.release.size_bytes)\n\tinput.release.size_bytes > 100000000000\n}\n\nrule_applies if {\n\tis_number(input.release.year)\n\tinput.release.year < 1950\n}\n\nrule_applies if {\n\tis_number(input.release.age_days)\n\tinput.release.age_days != 0\n}\n\nrule_applies if {\n\tinput.file.video_height == 480\n}\n\nrule_applies if {\n\tis_number(input.release.thumbs_down)\n\tinput.release.thumbs_down >= 5\n}\n\nrule_applies if {\n\tis_number(input.release.thumbs_up)\n\tinput.release.thumbs_up <= 1\n}\n\nrule_applies if {\n\tinput.context.existing_score != null\n}\n\nrule_applies if {\n\tnot input.file.duration_seconds != null\n}\n\nscore_entry[\"sample_size_guard\"] := scryer.block_score() if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": null,
+            "year": null,
+            "age_days": null,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": null,
+            "thumbs_up": null
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 1949,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": null
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": 0
+          }
+        },
+        "expected": true
+      }
+    ]
+  },
+  {
+    "id": "adjust-strings-and-lists",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.release.release_group",
+          "operator": "EQUALS",
+          "value": "SampleGroup"
+        },
+        {
+          "field": "input.release.streaming_service",
+          "operator": "NOT_EQUALS",
+          "value": "sample-service"
+        },
+        {
+          "field": "input.release.edition",
+          "operator": "HAS_VALUE",
+          "value": ""
+        },
+        {
+          "field": "input.release.protocol",
+          "operator": "HAS_NO_VALUE",
+          "value": ""
+        },
+        {
+          "field": "input.context.media_type",
+          "operator": "EQUALS",
+          "value": "movie"
+        },
+        {
+          "field": "input.profile.name",
+          "operator": "NOT_EQUALS",
+          "value": "Sample Profile"
+        },
+        {
+          "field": "input.release.languages_audio",
+          "operator": "CONTAINS",
+          "value": "en"
+        },
+        {
+          "field": "input.context.tags",
+          "operator": "NOT_CONTAINS",
+          "value": "sample-keep"
+        },
+        {
+          "field": "input.release.languages_subtitles",
+          "operator": "IS_EMPTY",
+          "value": ""
+        },
+        {
+          "field": "input.builtin_score.codes",
+          "operator": "IS_NOT_EMPTY",
+          "value": ""
+        },
+        {
+          "field": "input.release.parse_confidence",
+          "operator": "EQUALS",
+          "value": "0.75"
+        },
+        {
+          "field": "input.release.parse_confidence",
+          "operator": "NOT_EQUALS",
+          "value": "-1"
+        },
+        {
+          "field": "input.context.coverage_member_count",
+          "operator": "GREATER_THAN",
+          "value": "1"
+        },
+        {
+          "field": "input.release.anime_version",
+          "operator": "LESS_THAN",
+          "value": "3"
+        },
+        {
+          "field": "input.release.revision",
+          "operator": "GREATER_THAN",
+          "value": "0"
+        },
+        {
+          "field": "input.builtin_score.total",
+          "operator": "LESS_THAN",
+          "value": "1000"
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_penalty",
+          "points": "-75"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.release_group == \"SampleGroup\"\n\tis_string(input.release.streaming_service)\n\tinput.release.streaming_service != \"sample-service\"\n\tinput.release.edition != null\n\tnot input.release.protocol != null\n\tinput.context.media_type == \"movie\"\n\tinput.profile.name != \"Sample Profile\"\n\t\"en\" in input.release.languages_audio\n\tis_array(input.context.tags)\n\tnot \"sample-keep\" in input.context.tags\n\tcount(input.release.languages_subtitles) == 0\n\tcount(input.builtin_score.codes) > 0\n\tinput.release.parse_confidence == 0.75\n\tinput.release.parse_confidence != -1\n\tis_number(input.context.coverage_member_count)\n\tinput.context.coverage_member_count > 1\n\tis_number(input.release.anime_version)\n\tinput.release.anime_version < 3\n\tinput.release.revision > 0\n\tinput.builtin_score.total < 1000\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": ["en"],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": ["sample-other"],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": ["sample_code"],
+            "total": 999
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": ["en"],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": ["sample-keep"],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": ["sample_code"],
+            "total": 999
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": null,
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": ["en"],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": ["sample-other"],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": ["sample_code"],
+            "total": 999
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": ["en"],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": null,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": ["sample-other"],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": ["sample_code"],
+            "total": 999
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": ["en"],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": ["sample-other"],
+            "coverage_member_count": null
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": ["sample_code"],
+            "total": 999
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "escaping",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ANY",
+      "conditions": [
+        {
+          "field": "input.release.raw_title",
+          "operator": "EQUALS",
+          "value": "Sample \"quoted\" \\ title"
+        },
+        {
+          "field": "input.release.normalized_tokens",
+          "operator": "CONTAINS",
+          "value": "Ünïcødé 標籤 😀"
+        }
+      ],
+      "outputs": {
+        "BLOCK": {
+          "code": "sample_escape_check"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.raw_title == \"Sample \\\"quoted\\\" \\\\ title\"\n}\n\nrule_applies if {\n\t\"Ünïcødé 標籤 😀\" in input.release.normalized_tokens\n}\n\nscore_entry[\"sample_escape_check\"] := scryer.block_score() if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample Other Title",
+            "normalized_tokens": []
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample \"quoted\" \\ title",
+            "normalized_tokens": []
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample Other Title",
+            "normalized_tokens": ["Ünïcødé 標籤 😀"]
+          }
+        },
+        "expected": true
+      }
+    ]
+  },
+  {
+    "id": "extreme-points",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.profile.scoring_overrides.block_upscaled",
+          "operator": "IS_TRUE",
+          "value": ""
+        },
+        {
+          "field": "input.release.stereoscopy.presentation",
+          "operator": "EQUALS",
+          "value": "full"
+        },
+        {
+          "field": "input.release.stereoscopy.layout",
+          "operator": "NOT_EQUALS",
+          "value": "sample"
+        },
+        {
+          "field": "input.release.stereoscopy.sampling",
+          "operator": "HAS_VALUE",
+          "value": ""
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_floor",
+          "points": "-2147483648"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.profile.scoring_overrides.block_upscaled == true\n\tinput.release.stereoscopy.presentation == \"full\"\n\tis_string(input.release.stereoscopy.layout)\n\tinput.release.stereoscopy.layout != \"sample\"\n\tinput.release.stereoscopy.sampling != null\n}\n\nscore_entry[\"sample_floor\"] := -2147483648 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "profile": {
+            "scoring_overrides": {
+              "block_upscaled": true
+            }
+          },
+          "release": {
+            "stereoscopy": {
+              "presentation": "full",
+              "layout": "sample-other",
+              "sampling": "half"
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "profile": {
+            "scoring_overrides": {
+              "block_upscaled": true
+            }
+          },
+          "release": {
+            "stereoscopy": {
+              "presentation": "full",
+              "layout": "sample-other",
+              "sampling": null
+            }
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "profile": {
+            "scoring_overrides": {
+              "block_upscaled": true
+            }
+          },
+          "release": {
+            "stereoscopy": {
+              "presentation": "full",
+              "layout": "sample",
+              "sampling": "half"
+            }
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "all-set-matches",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.release.raw_title",
+          "operator": "IS_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.edition",
+          "operator": "IS_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.languages_audio",
+          "operator": "CONTAINS_ANY",
+          "value": "en\nExtra"
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_penalty",
+          "points": "-75"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.raw_title in {\"Sample\", \"Extra\"}\n\tinput.release.edition in {\"Sample\", \"Extra\"}\n\tcount([item | some item in input.release.languages_audio; item in {\"en\", \"Extra\"}]) > 0\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Sample",
+            "languages_audio": ["en"]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Sample",
+            "languages_audio": ["en"]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Elsewhere",
+            "languages_audio": ["en"]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Sample",
+            "languages_audio": ["Elsewhere"]
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "all-set-exclusions",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.release.raw_title",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.edition",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.languages_audio",
+          "operator": "CONTAINS_NONE",
+          "value": "en\nExtra"
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_penalty",
+          "points": "-75"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_string(input.release.raw_title)\n\tnot input.release.raw_title in {\"Sample\", \"Extra\"}\n\tis_string(input.release.edition)\n\tnot input.release.edition in {\"Sample\", \"Extra\"}\n\tis_array(input.release.languages_audio)\n\tcount([item | some item in input.release.languages_audio; item in {\"en\", \"Extra\"}]) == 0\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Elsewhere",
+            "languages_audio": ["Elsewhere"]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Elsewhere",
+            "languages_audio": ["Elsewhere"]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Sample",
+            "languages_audio": ["Elsewhere"]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Elsewhere",
+            "languages_audio": ["en"]
+          }
+        },
+        "expected": false
+      }
+    ]
+  }
+]

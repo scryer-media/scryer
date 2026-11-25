@@ -138,6 +138,7 @@ fn removal_manifest(source: &Path) -> crate::recycle_bin::RecycleManifest {
         status: None,
         replacement_file_id: None,
         replacement_path: None,
+        episode_ids: None,
         media_row: None,
     }
 }
@@ -190,9 +191,14 @@ async fn unreadable_library_roots_refuse_a_custom_bin_and_keep_the_file() {
         assert!(!config.cleanup_enabled);
         assert_eq!(config.source_roots, vec![root_a.clone()]);
 
-        crate::recycle_bin::recycle_file(config, &media, removal_manifest(&media))
-            .await
-            .expect_err("the recycle is refused");
+        crate::recycle_bin::recycle_file(
+            config,
+            &media,
+            removal_manifest(&media),
+            crate::location::model::VerificationDepth::Full,
+        )
+        .await
+        .expect_err("the recycle is refused");
         assert_untouched(&media, "Synthetic Feature media");
         assert_untouched(&neighbour, "Synthetic Feature neighbour");
     }
@@ -217,10 +223,15 @@ async fn unreadable_library_roots_leave_the_default_bin_working() {
     assert_eq!(config.validation_error, None);
     assert_eq!(config.base_path, root_a.join(".scryer-recycle"));
 
-    let result = crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
-        .await
-        .expect("the default bin needs no library roots")
-        .expect("file recycled");
+    let result = crate::recycle_bin::recycle_file(
+        &config,
+        &media,
+        removal_manifest(&media),
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .expect("the default bin needs no library roots")
+    .expect("file recycled");
     assert!(!media.exists());
     assert_untouched(&result.recycled_path, "Synthetic Feature media");
     assert_untouched(&neighbour, "Synthetic Feature neighbour");
@@ -331,8 +342,10 @@ async fn upgrade_refuses_a_custom_bin_inside_another_library_root_and_keeps_the_
             title_id: &title.id,
             media_root: Some(context.media_root.as_str()),
             media_row: None,
+            episode_ids: Vec::new(),
         },
         true,
+        crate::location::model::VerificationDepth::Full,
     )
     .await;
     assert!(refused.is_err(), "the recycle is refused");
@@ -485,10 +498,15 @@ impl TitleDeleteFixture {
             std::fs::write(&source, format!("{name} content")).expect("write source file");
             let mut manifest = removal_manifest(&source);
             manifest.title_id = Some(title.id.clone());
-            let recycled = crate::recycle_bin::recycle_file(&config, &source, manifest)
-                .await
-                .expect("seed recycle entry")
-                .expect("file recycled");
+            let recycled = crate::recycle_bin::recycle_file(
+                &config,
+                &source,
+                manifest,
+                crate::location::model::VerificationDepth::Full,
+            )
+            .await
+            .expect("seed recycle entry")
+            .expect("file recycled");
             entries.push(
                 recycled
                     .recycled_path
@@ -830,10 +848,15 @@ async fn housekeeping_purges_recycle_entry_created_during_a_deletion_job() {
         std::fs::write(&source, b"late recycle bytes").unwrap();
         let mut manifest = removal_manifest(&source);
         manifest.title_id = Some(fixture.kept.id.clone());
-        let recycled = crate::recycle_bin::recycle_file(&config, &source, manifest)
-            .await
-            .unwrap()
-            .unwrap();
+        let recycled = crate::recycle_bin::recycle_file(
+            &config,
+            &source,
+            manifest,
+            crate::location::model::VerificationDepth::Full,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let unrelated = config.base_path.join("unrelated.txt");
         std::fs::write(&unrelated, b"keep unrelated bytes").unwrap();
         drop(barrier);
@@ -1265,9 +1288,14 @@ async fn a_custom_bin_that_links_into_a_library_root_is_refused_and_keeps_the_fi
         "unexpected refusal: {error}"
     );
     assert!(!config.cleanup_enabled);
-    crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
-        .await
-        .expect_err("the recycle is refused");
+    crate::recycle_bin::recycle_file(
+        &config,
+        &media,
+        removal_manifest(&media),
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .expect_err("the recycle is refused");
     assert_untouched(&media, "Synthetic Feature media");
     assert_untouched(&neighbour, "Synthetic Feature neighbour");
     assert_eq!(
@@ -1332,9 +1360,14 @@ async fn a_custom_bin_under_a_link_that_leads_nowhere_is_refused_and_creates_not
         error.contains("could not be resolved"),
         "unexpected refusal: {error}"
     );
-    crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
-        .await
-        .expect_err("the recycle is refused");
+    crate::recycle_bin::recycle_file(
+        &config,
+        &media,
+        removal_manifest(&media),
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .expect_err("the recycle is refused");
     assert_untouched(&media, "Synthetic Feature media");
     assert_untouched(&neighbour, "Synthetic Feature neighbour");
     assert!(!missing.exists(), "nothing was created behind the link");
@@ -1358,10 +1391,15 @@ async fn a_custom_bin_that_links_outside_every_root_still_recycles() {
         .recycle_bin_config_for_media_root(Some(root_a.to_string_lossy().as_ref()))
         .await;
     assert_eq!(config.validation_error, None);
-    let result = crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
-        .await
-        .expect("the bin is usable")
-        .expect("file recycled");
+    let result = crate::recycle_bin::recycle_file(
+        &config,
+        &media,
+        removal_manifest(&media),
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .expect("the bin is usable")
+    .expect("file recycled");
     assert_untouched(&result.recycled_path, "Synthetic Feature media");
     assert_untouched(&neighbour, "Synthetic Feature neighbour");
 }
@@ -1428,10 +1466,15 @@ async fn title_delete_bulk_matches_one_title_at_a_time() {
         std::fs::write(&source, "synthetic middle content").unwrap();
         let mut manifest = removal_manifest(&source);
         manifest.title_id = Some(middle.id.clone());
-        crate::recycle_bin::recycle_file(&config, &source, manifest)
-            .await
-            .unwrap()
-            .unwrap();
+        crate::recycle_bin::recycle_file(
+            &config,
+            &source,
+            manifest,
+            crate::location::model::VerificationDepth::Full,
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
         let jobs = Arc::new(RecordingJobRunRepo::default());
         let app = fixture
@@ -1650,11 +1693,16 @@ async fn housekeeping_lists_each_bin_once_for_entries_of_deleted_titles() {
             let mut manifest = removal_manifest(&source);
             manifest.title_id = Some(title.id.clone());
             recycled.push(
-                crate::recycle_bin::recycle_file(&config, &source, manifest)
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .recycled_path,
+                crate::recycle_bin::recycle_file(
+                    &config,
+                    &source,
+                    manifest,
+                    crate::location::model::VerificationDepth::Full,
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .recycled_path,
             );
         }
         drop(barrier);
@@ -1722,14 +1770,19 @@ async fn seed_entry(
     let mut manifest = removal_manifest(&source);
     manifest.title_id = Some(title_id.to_string());
     adjust(&mut manifest);
-    crate::recycle_bin::recycle_file(&config, &source, manifest)
-        .await
-        .unwrap()
-        .unwrap()
-        .recycled_path
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    crate::recycle_bin::recycle_file(
+        &config,
+        &source,
+        manifest,
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .recycled_path
+    .parent()
+    .unwrap()
+    .to_path_buf()
 }
 
 /// What each bin holds, by payload rather than by generated entry name: the

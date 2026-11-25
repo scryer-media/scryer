@@ -13,7 +13,11 @@ import type {
   PluginInstallProgressRecord,
   RegistryPluginRecord,
 } from "@/components/views/settings/settings-plugins-section";
-import { claimPluginTerminalOperation } from "@/lib/utils/plugin-install-state";
+import { useBackoffPoller } from "@/lib/hooks/use-backoff-poller";
+import {
+  createPluginOperations,
+  PLUGIN_OPERATION_RECONCILE_DELAYS_MS,
+} from "@/lib/utils/plugin-install-state";
 import {
   pluginInstallProgressSubscription,
   pluginsQuery,
@@ -265,9 +269,9 @@ export function SettingsSubtitlesContainer({
   const syncPluginProgressSubscriptionRef = React.useRef<(() => void) | null>(
     null,
   );
-  // Whichever of `next`, `error` and `complete` reaches the plugin first owns
-  // winding the install down; the others must not undo that work.
-  const syncPluginTerminalRef = React.useRef(new Set<string>());
+  // The sync plugin install this page follows. Its progress stream reports
+  // it; the plugin list settles it when the stream leaves it unfinished.
+  const [syncPluginOperations] = React.useState(createPluginOperations);
 
   React.useEffect(() => {
     setPluginsTarget(document.getElementById(SETTINGS_REFERENCE_SLOT_ID));
@@ -311,6 +315,42 @@ export function SettingsSubtitlesContainer({
       syncPluginProgressSubscriptionRef.current = null;
     }
   }, []);
+
+  // End the install once a plugin list loaded after `mark` shows it finished.
+  const settleSyncPluginInstall = React.useCallback(
+    (nextPlugins: RegistryPluginRecord[], mark: number) => {
+      for (const { pluginId, operation } of syncPluginOperations.settledBy(
+        nextPlugins,
+        mark,
+      )) {
+        if (!syncPluginOperations.end(pluginId, operation)) continue;
+        stopSyncPluginProgressSubscription();
+        setInstallingSyncPlugin(false);
+        setSyncPluginProgress(null);
+      }
+    },
+    [stopSyncPluginProgressSubscription, syncPluginOperations],
+  );
+
+  const reloadPluginsAndSettle = React.useCallback(async () => {
+    const mark = syncPluginOperations.mark();
+    const nextPlugins = await loadPlugins();
+    setPlugins(nextPlugins);
+    settleSyncPluginInstall(nextPlugins, mark);
+  }, [loadPlugins, settleSyncPluginInstall, syncPluginOperations]);
+
+  // While the install is followed, the plugin list is loaded now and then,
+  // so progress ends even when its stream never connects, drops, or misses
+  // the last step. Stops once nothing is followed and while the tab is hidden.
+  const pollSyncPluginInstall = React.useCallback(async () => {
+    if (syncPluginOperations.size() === 0) return false;
+    await reloadPluginsAndSettle();
+    return syncPluginOperations.size() > 0;
+  }, [reloadPluginsAndSettle, syncPluginOperations]);
+  const syncPluginInstallPoller = useBackoffPoller(
+    PLUGIN_OPERATION_RECONCILE_DELAYS_MS,
+    pollSyncPluginInstall,
+  );
 
   const refreshProviderConfigs = React.useCallback(async () => {
     const { data, error } = await client
@@ -517,8 +557,11 @@ export function SettingsSubtitlesContainer({
       initialSnapshot: PluginInstallProgressRecord,
     ) => {
       stopSyncPluginProgressSubscription();
-      syncPluginTerminalRef.current.delete(plugin.id);
+      const operation = syncPluginOperations.begin(plugin.id);
+      const isCurrent = () =>
+        syncPluginOperations.isCurrent(plugin.id, operation);
       setSyncPluginProgress(initialSnapshot);
+      syncPluginInstallPoller.restart();
       const unsubscribe = wsClient.subscribe(
         {
           query: pluginInstallProgressSubscription,
@@ -527,20 +570,16 @@ export function SettingsSubtitlesContainer({
         {
           next: (result: PluginInstallProgressSubscriptionResult) => {
             const snapshot = result.data?.pluginInstallProgress;
-            if (!snapshot) {
+            if (!snapshot || !isCurrent()) {
               return;
             }
             setSyncPluginProgress(snapshot);
 
             if (snapshot.state === "SUCCEEDED" || snapshot.state === "FAILED") {
-              if (
-                !claimPluginTerminalOperation(
-                  syncPluginTerminalRef.current,
-                  plugin.id,
-                )
-              ) {
+              if (!syncPluginOperations.end(plugin.id, operation)) {
                 return;
               }
+              syncPluginInstallPoller.stop();
               stopSyncPluginProgressSubscription();
               void (async () => {
                 try {
@@ -582,60 +621,41 @@ export function SettingsSubtitlesContainer({
               })();
             }
           },
+          // A stream that fails or ends before the last step (it could not
+          // connect, the finished snapshot aged out before it attached, an
+          // auth change closed the socket) says nothing about the install
+          // itself: the plugin list says whether it is still running.
           error: (error) => {
-            if (
-              !claimPluginTerminalOperation(
-                syncPluginTerminalRef.current,
-                plugin.id,
-              )
-            ) {
+            if (!isCurrent()) {
               return;
             }
-            stopSyncPluginProgressSubscription();
-            setInstallingSyncPlugin(false);
-            setSyncPluginProgress(null);
-            const detail = userFacingGraphQlErrorMessage(
-              error,
-              String(error),
-              t,
-            );
-            const message = t("settings.sub.syncPluginInstallFailed", {
-              plugin: plugin.name,
-              error: detail,
-            });
-            setSyncPluginInstallError(message);
-            setGlobalStatus(message, { level: "ERROR" });
+            console.error("[plugins] install progress stream failed:", error);
+            syncPluginProgressSubscriptionRef.current = null;
+            void reloadPluginsAndSettle().catch(() => undefined);
           },
           complete: () => {
-            syncPluginProgressSubscriptionRef.current = null;
-            // A stream that ends without a terminal snapshot — the finished
-            // snapshot aged out before this connection attached, a reconnect
-            // resubscribed too late, an auth epoch bumped the socket — used to
-            // leave the button pinned on "Installing" with nothing left to
-            // correct it. Reconcile the way reloading the page did.
-            if (
-              !claimPluginTerminalOperation(
-                syncPluginTerminalRef.current,
-                plugin.id,
-              )
-            ) {
+            if (!isCurrent()) {
               return;
             }
-            setInstallingSyncPlugin(false);
-            setSyncPluginProgress(null);
-            void loadPlugins()
-              .then((nextPlugins) => setPlugins(nextPlugins))
-              .catch(() => undefined);
+            syncPluginProgressSubscriptionRef.current = null;
+            void reloadPluginsAndSettle().catch(() => undefined);
           },
         },
       );
-      syncPluginProgressSubscriptionRef.current = unsubscribe;
+      if (isCurrent()) {
+        syncPluginProgressSubscriptionRef.current = unsubscribe;
+      } else {
+        unsubscribe();
+      }
     },
     [
       loadPlugins,
       refreshProviderTypes,
+      reloadPluginsAndSettle,
       setGlobalStatus,
       stopSyncPluginProgressSubscription,
+      syncPluginInstallPoller,
+      syncPluginOperations,
       t,
     ],
   );

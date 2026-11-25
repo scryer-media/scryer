@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use scryer_application::disk::{Disk, Parents};
 use scryer_application::{AppError, AppResult};
 use tokio::sync::{Mutex, OnceCell, watch};
 use tokio_util::sync::CancellationToken;
@@ -314,6 +315,9 @@ impl HttpEngine {
                 if let Some(predecessor) = predecessor {
                     predecessor.wait().await;
                 }
+                // Once per start, before anything writes: no current writer
+                // uses these names, so this cannot race a save.
+                self.store.remove_legacy_staging().await;
                 let mut document = self.store.load().await?;
                 let mut changed = false;
                 for job in &mut document.jobs {
@@ -674,12 +678,14 @@ impl HttpEngine {
         };
         // A slow or hung filesystem must not hold every other caller of the
         // engine behind the lock.
-        tokio::fs::create_dir_all(&output_dir)
+        Disk::process()
+            .create_dir(&output_dir, Parents::Create)
             .await
             .map_err(|error| {
                 TransferError::Permanent(format!(
-                    "could not create {}: {error}",
-                    output_dir.display()
+                    "could not create {}: {}",
+                    output_dir.display(),
+                    error.words()
                 ))
             })?;
         let mut index = 0;
@@ -942,6 +948,9 @@ impl HttpEngine {
 
     /// Prove the download directory can hold this client's queue.
     pub(crate) async fn check_writable(&self) -> AppResult<()> {
+        // The queue's writer lock: a first document written here must not
+        // race a persist, and both stage under the same sibling name.
+        let _writer = self.save_lock.lock().await;
         self.store.initialize().await
     }
 }

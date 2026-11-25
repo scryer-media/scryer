@@ -6,7 +6,6 @@ use scryer_application::{
 use scryer_domain::MediaFacet;
 
 use crate::media::id_list_statements::{id_list_statements, max_binds};
-use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
 use crate::storage::sql::json::{canonical_json_arg, json_text_or};
 
@@ -14,47 +13,7 @@ const UNMATCHED_COLUMNS: &str = "id, library_id, facet, title_id, scan_session_i
     item_path, display_name, query, year_hint, reason_code, error_message,
     search_attempts_json, status, size_bytes, created_at, updated_at";
 
-#[derive(Clone)]
-pub struct LibraryScanUnmatchedStore {
-    datastore: StoreDatastore,
-}
-
-impl LibraryScanUnmatchedStore {
-    pub fn new(datastore: StoreDatastore) -> Self {
-        Self { datastore }
-    }
-}
-
-#[async_trait]
-impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
-    async fn upsert_library_scan_unmatched_item(
-        &self,
-        item: &LibraryScanUnmatchedItem,
-    ) -> AppResult<String> {
-        let args = vec![
-            SqlArg::Text(item.id.clone()),
-            SqlArg::Text(item.library_id.clone()),
-            SqlArg::Text(item.facet.as_str().to_string()),
-            SqlArg::OptText(item.title_id.clone()),
-            SqlArg::Text(item.scan_session_id.clone()),
-            SqlArg::Text(item.scan_root.clone()),
-            SqlArg::Text(item.item_path.clone()),
-            SqlArg::Text(item.display_name.clone()),
-            SqlArg::Text(item.query.clone()),
-            SqlArg::OptI32(item.year_hint),
-            SqlArg::Text(item.reason_code.clone()),
-            SqlArg::OptText(item.error_message.clone()),
-            canonical_json_arg(&item.search_attempts)?,
-            SqlArg::Text(item.status.as_str().to_string()),
-            SqlArg::OptI64(item.size_bytes),
-            timestamp_arg_for_datastore(&self.datastore, &item.created_at)?,
-            timestamp_arg_for_datastore(&self.datastore, &item.updated_at)?,
-        ];
-
-        execute_write(
-            &self.datastore,
-            "upsert_library_scan_unmatched_item",
-            "INSERT INTO library_scan_unmatched_items
+const UPSERT_UNMATCHED_ITEM_SQL: &str = "INSERT INTO library_scan_unmatched_items
              (id, library_id, facet, title_id, scan_session_id, scan_root, item_path, display_name,
               query, year_hint, reason_code, error_message, search_attempts_json, status,
               size_bytes, created_at, updated_at)
@@ -81,12 +40,87 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
                         THEN library_scan_unmatched_items.status
                     ELSE excluded.status
                 END,
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at";
+
+#[derive(Clone)]
+pub struct LibraryScanUnmatchedStore {
+    datastore: StoreDatastore,
+}
+
+impl LibraryScanUnmatchedStore {
+    pub fn new(datastore: StoreDatastore) -> Self {
+        Self { datastore }
+    }
+
+    fn upsert_args(&self, item: &LibraryScanUnmatchedItem) -> AppResult<Vec<SqlArg>> {
+        Ok(vec![
+            SqlArg::Text(item.id.clone()),
+            SqlArg::Text(item.library_id.clone()),
+            SqlArg::Text(item.facet.as_str().to_string()),
+            SqlArg::OptText(item.title_id.clone()),
+            SqlArg::Text(item.scan_session_id.clone()),
+            SqlArg::Text(item.scan_root.clone()),
+            SqlArg::Text(item.item_path.clone()),
+            SqlArg::Text(item.display_name.clone()),
+            SqlArg::Text(item.query.clone()),
+            SqlArg::OptI32(item.year_hint),
+            SqlArg::Text(item.reason_code.clone()),
+            SqlArg::OptText(item.error_message.clone()),
+            canonical_json_arg(&item.search_attempts)?,
+            SqlArg::Text(item.status.as_str().to_string()),
+            SqlArg::OptI64(item.size_bytes),
+            self.datastore.timestamp_text_arg(&item.created_at)?,
+            self.datastore.timestamp_text_arg(&item.updated_at)?,
+        ])
+    }
+}
+
+#[async_trait]
+impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
+    async fn upsert_library_scan_unmatched_item(
+        &self,
+        item: &LibraryScanUnmatchedItem,
+    ) -> AppResult<String> {
+        let args = self.upsert_args(item)?;
+        execute_write(
+            &self.datastore,
+            "upsert_library_scan_unmatched_item",
+            UPSERT_UNMATCHED_ITEM_SQL,
             args,
         )
         .await?;
 
         Ok(item.id.clone())
+    }
+
+    async fn upsert_library_scan_unmatched_items(
+        &self,
+        items: &[LibraryScanUnmatchedItem],
+    ) -> AppResult<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        // The statement `upsert_library_scan_unmatched_item` runs, once per
+        // row, in one transaction: a fixed bind count per statement.
+        let statements = items
+            .iter()
+            .map(|item| self.upsert_args(item))
+            .collect::<AppResult<Vec<_>>>()?;
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "upsert_library_scan_unmatched_items",
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    for args in &statements {
+                        SqlRuntime::execute(SqlExec::Tx(&mut *tx), UPSERT_UNMATCHED_ITEM_SQL, args)
+                            .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn get_library_scan_unmatched_item(
@@ -369,10 +403,7 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
         const ROWS_PER_STATEMENT: usize = 1_000;
         let mut bound = Vec::with_capacity(rows.len());
         for (id, updated_at) in rows {
-            bound.push((
-                id.clone(),
-                timestamp_arg_for_datastore(&self.datastore, updated_at)?,
-            ));
+            bound.push((id.clone(), self.datastore.timestamp_text_arg(updated_at)?));
         }
         SqlRuntime::run_in_transaction(
             &self.datastore,
@@ -587,23 +618,9 @@ fn row_to_library_scan_unmatched_item(row: &SqlRow) -> AppResult<LibraryScanUnma
         error_message: row.opt_text("error_message")?,
         search_attempts,
         size_bytes: row.opt_i64("size_bytes")?,
-        created_at: timestamp_text(row, "created_at")?,
-        updated_at: timestamp_text(row, "updated_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
     })
-}
-
-fn timestamp_arg_for_datastore(datastore: &StoreDatastore, value: &str) -> AppResult<SqlArg> {
-    match datastore {
-        StoreDatastore::Sqlite { .. } => Ok(SqlArg::Text(value.to_string())),
-        StoreDatastore::Postgres { .. } => parse_utc_datetime(value).map(SqlArg::Timestamp),
-    }
-}
-
-fn timestamp_text(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(_) => row.text(column),
-        SqlRow::Postgres(_) => row.timestamp(column).map(|value| value.to_rfc3339()),
-    }
 }
 
 async fn execute_write(
@@ -1010,5 +1027,53 @@ mod tests {
                 .filter(|item| item.status == PendingImportStatus::Ignored)
                 .count()
         );
+    }
+
+    /// Rows upserted together land exactly as upserting them one at a time
+    /// does: new rows, rewritten rows, an ignored row offered as pending, and
+    /// a row without a size over one that has one.
+    #[tokio::test]
+    async fn batched_upsert_writes_the_rows_a_serial_upsert_writes() {
+        let batched = test_store().await;
+        let serial = test_store().await;
+        seed_page_matrix(&batched).await;
+        seed_page_matrix(&serial).await;
+
+        let mut items = all_rows(&serial)
+            .await
+            .into_iter()
+            .take(30)
+            .enumerate()
+            .map(|(k, mut item)| {
+                item.status = PendingImportStatus::Pending;
+                item.reason_code = format!("reason-{}", k % 3);
+                item.size_bytes = (k % 2 == 0).then_some(k as i64);
+                item.scan_session_id = "session-batch".to_string();
+                item.updated_at = format!("2026-03-01T00:00:{k:02}+00:00");
+                item
+            })
+            .collect::<Vec<_>>();
+        let template = items[0].clone();
+        items.extend((0..5).map(|k| LibraryScanUnmatchedItem {
+            id: format!("new-row-{k}"),
+            item_path: format!("/library/Harbor Lights {k}"),
+            ..template.clone()
+        }));
+
+        for item in &items {
+            serial
+                .upsert_library_scan_unmatched_item(item)
+                .await
+                .expect("serial upsert");
+        }
+        batched
+            .upsert_library_scan_unmatched_items(&items)
+            .await
+            .expect("batched upsert");
+
+        let after_batched = all_rows(&batched).await;
+        let after_serial = all_rows(&serial).await;
+        assert_eq!(after_serial.len(), after_batched.len());
+        assert_eq!(format!("{after_batched:?}"), format!("{after_serial:?}"));
     }
 }

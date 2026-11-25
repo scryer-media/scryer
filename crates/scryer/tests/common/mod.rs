@@ -40,8 +40,8 @@ use scryer_infrastructure_acquisition::{
 };
 use scryer_infrastructure_configuration::{
     customization::{
-        maintenance_evaluation_store::MaintenanceEvaluationStore,
-        maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+        lifecycle_evaluation_store::LifecycleEvaluationStore,
+        lifecycle_rule_set_store::LifecycleRuleSetStore, plugin_store::PluginStore,
         post_processing_script_store::PostProcessingScriptStore,
         request_rule_decision_store::RequestRuleDecisionStore,
         request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,
@@ -213,6 +213,16 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
             .await
     }
 
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: scryer_application::AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .get_acquisition_scope_state_for_scope(title_id, scope)
+            .await
+    }
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()> {
         self.wanted
             .delete_acquisition_scope_states_for_title(title_id)
@@ -271,6 +281,81 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
         self.wanted.count_acquisition_scope_states(query).await
     }
 
+    async fn list_acquisition_scope_states_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted.list_acquisition_scope_states_by_ids(ids).await
+    }
+
+    async fn list_acquisition_scope_states_for_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_acquisition_scope_states_for_title_ids(title_ids)
+            .await
+    }
+
+    async fn list_acquisition_scope_states_for_title_ids_without_decisions(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_acquisition_scope_states_for_title_ids_without_decisions(title_ids)
+            .await
+    }
+
+    async fn list_mismatch_recovery_scopes_for_title(
+        &self,
+        title_id: &str,
+        after_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_mismatch_recovery_scopes_for_title(title_id, after_id, limit)
+            .await
+    }
+
+    async fn complete_acquisition_scope_for_key(
+        &self,
+        title_id: &str,
+        scope: scryer_application::AcquisitionScopeKey<'_>,
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<bool> {
+        self.wanted
+            .complete_acquisition_scope_for_key(title_id, scope, last_search_at, landed_import)
+            .await
+    }
+
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_grabbed_acquisition_scopes_for_titles(title_ids)
+            .await
+    }
+
+    async fn list_latest_release_decisions_for_acquisition_scope_states(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_application::ReleaseDecision>> {
+        self.wanted
+            .list_latest_release_decisions_for_acquisition_scope_states(ids)
+            .await
+    }
+
+    async fn tally_acquisition_scope_states_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeStatusTally>> {
+        self.wanted
+            .tally_acquisition_scope_states_for_title(title_id)
+            .await
+    }
+
     async fn list_release_decisions_for_title(
         &self,
         title_id: &str,
@@ -305,6 +390,15 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
     ) -> AppResult<i64> {
         self.wanted
             .count_release_decisions_for_acquisition_scope_state(wanted_item_id)
+            .await
+    }
+
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<scryer_application::ReleaseDecisionCodeTally> {
+        self.wanted
+            .tally_recent_release_decision_codes(sample)
             .await
     }
 }
@@ -522,6 +616,17 @@ impl BlocklistRepository for TestLibraryStateStore {
         self.blocklist.list_for_title(title_id, limit).await
     }
 
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<scryer_application::BlocklistMatch>> {
+        self.blocklist
+            .list_matching_for_title(title_id, normalized_release_names, info_hashes)
+            .await
+    }
+
     async fn list_all(
         &self,
         limit: usize,
@@ -632,9 +737,9 @@ impl HousekeepingRepository for TestLibraryStateStore {
             .await
     }
 
-    async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
+    async fn delete_lifecycle_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
         self.housekeeping
-            .delete_maintenance_evaluation_runs_older_than(days)
+            .delete_lifecycle_evaluation_runs_older_than(days)
             .await
     }
 
@@ -897,6 +1002,8 @@ impl TestContext {
         .await
     }
 
+    // disk-guard: this harness owns the temporary directories it creates.
+    #[expect(clippy::disallowed_methods, reason = "Creates isolated test fixtures")]
     async fn new_with_database(
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
         indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
@@ -1043,8 +1150,8 @@ impl TestContext {
         let title_image_store = TitleImageStore::new(datastore.clone());
         let image_proxy_store = ImageProxyStore::new(datastore.clone());
         let rule_set_store = RuleSetStore::new(datastore.clone());
-        let maintenance_rule_set_store = MaintenanceRuleSetStore::new(datastore.clone());
-        let maintenance_evaluation_store = MaintenanceEvaluationStore::new(datastore.clone());
+        let lifecycle_rule_set_store = LifecycleRuleSetStore::new(datastore.clone());
+        let lifecycle_evaluation_store = LifecycleEvaluationStore::new(datastore.clone());
         let request_rule_set_store = RequestRuleSetStore::new(datastore.clone());
         let request_rule_decision_store = RequestRuleDecisionStore::new(datastore.clone());
         let lifecycle_claim_store = LifecycleClaimStore::new(datastore.clone());
@@ -1116,8 +1223,8 @@ impl TestContext {
         .with_totp_store(Arc::new(totp_store))
         .with_oauth_store(Arc::new(oauth_store))
         .with_rule_set_store(Arc::new(rule_set_store))
-        .with_maintenance_rule_set_store(Arc::new(maintenance_rule_set_store))
-        .with_maintenance_evaluation_store(Arc::new(maintenance_evaluation_store))
+        .with_lifecycle_rule_set_store(Arc::new(lifecycle_rule_set_store))
+        .with_lifecycle_evaluation_store(Arc::new(lifecycle_evaluation_store))
         .with_request_rule_set_store(Arc::new(request_rule_set_store))
         .with_request_rule_decision_store(Arc::new(request_rule_decision_store))
         .with_lifecycle_claim_store(Arc::new(lifecycle_claim_store))
@@ -1178,6 +1285,7 @@ impl TestContext {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             facet_registry,
         );
@@ -1694,6 +1802,8 @@ fn json_i64(value: &Value) -> Option<i64> {
 }
 
 /// Load a fixture file relative to the workspace `tests/fixtures/` directory.
+// disk-guard: this harness reads checked-in fixtures directly.
+#[expect(clippy::disallowed_methods, reason = "Reads checked-in test fixtures")]
 pub fn load_fixture(path: &str) -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let fixture_path = std::path::Path::new(manifest_dir)

@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use reqwest::header::{
     ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
 };
+use scryer_application::disk::{Access, Disk, DiskError, Parents, Remove, Replace, reason};
 use scryer_application::{
     AppError, AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage,
     ImageProxyRepository, ImageProxySourceRecord, TitleImageKind, TitleImageProcessor,
@@ -73,6 +74,8 @@ pub struct ImageProxyRuntime {
     conversions: Arc<ActiveConversions>,
     #[cfg(test)]
     jpeg_source_reads: Arc<AtomicU64>,
+    #[cfg(test)]
+    stale_refreshes_started: Arc<AtomicU64>,
 }
 
 /// Only in-flight conversions are tracked; no permanent per-cache-entry state.
@@ -161,6 +164,8 @@ impl ImageProxyRuntime {
             conversions: Arc::new(ActiveConversions::default()),
             #[cfg(test)]
             jpeg_source_reads: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            stale_refreshes_started: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -204,21 +209,33 @@ impl ImageProxyRuntime {
                 return Some(cached_blob(&entry, bytes));
             }
             if freshness == CacheFreshness::Stale {
-                let runtime = Arc::clone(self);
-                let source_for_refresh = source.clone();
-                let token = token.to_string();
-                let variant = variant.to_string();
-                let observed_fetched_at = entry.fetched_at;
-                tokio::spawn(async move {
-                    let _ = runtime
-                        .refresh_stale_singleflight(
-                            &source_for_refresh,
-                            &token,
-                            &variant,
-                            observed_fetched_at,
-                        )
-                        .await;
-                });
+                // One refresh per image at a time: a stale hit while one is
+                // already running serves the cached bytes and starts nothing.
+                if let Some(fetch) = self
+                    .reserve_stale_refresh(format!("{token}:{variant}"))
+                    .await
+                {
+                    #[cfg(test)]
+                    self.stale_refreshes_started.fetch_add(1, Ordering::Relaxed);
+                    let runtime = Arc::clone(self);
+                    let source_for_refresh = source.clone();
+                    let token = token.to_string();
+                    let variant = variant.to_string();
+                    let observed_fetched_at = entry.fetched_at;
+                    // The task owns the reservation, so it is released however
+                    // the task ends: finished, panicked or dropped.
+                    tokio::spawn(async move {
+                        let _ = runtime
+                            .refresh_stale_singleflight(
+                                fetch,
+                                &source_for_refresh,
+                                &token,
+                                &variant,
+                                observed_fetched_at,
+                            )
+                            .await;
+                    });
+                }
                 return Some(cached_blob(&entry, bytes));
             }
         }
@@ -241,21 +258,13 @@ impl ImageProxyRuntime {
     pub async fn clear_cache(&self) -> AppResult<()> {
         let _lifecycle_guard = self.cache_lifecycle.write().await;
         self.conversions.invalidate(None);
-        if tokio::fs::try_exists(&self.cache_dir)
-            .await
-            .unwrap_or(false)
-        {
-            tokio::fs::remove_dir_all(&self.cache_dir)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!("failed to clear image cache: {error}"))
-                })?;
+        let disk = Disk::process();
+        if disk.follow(&self.cache_dir).await.exists() == Some(true) {
+            let cleared = disk.remove(&self.cache_dir, Remove::Tree).await;
+            cleared.map_err(cache_failure("clear image cache"))?;
         }
-        tokio::fs::create_dir_all(&self.cache_dir)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to recreate image cache: {error}"))
-            })?;
+        let created = disk.create_dir(&self.cache_dir, Parents::Create).await;
+        created.map_err(cache_failure("recreate image cache"))?;
         self.repository.clear_image_proxy_cache_entries().await?;
         self.repository.clear_image_proxy_memory();
         self.inflight.lock().await.clear();
@@ -322,7 +331,7 @@ impl ImageProxyRuntime {
             .await
             .ok()??;
         let path = self.existing_cache_path(&entry).await;
-        let bytes = match tokio::fs::read(&path).await {
+        let bytes = match Disk::process().read(&path).await {
             Ok(bytes) if bytes.len() as i64 == entry.byte_size => bytes,
             _ => {
                 let _ = self
@@ -386,13 +395,13 @@ impl ImageProxyRuntime {
 
     async fn refresh_stale_singleflight(
         self: &Arc<Self>,
+        fetch: Arc<InflightFetch>,
         source: &ImageProxySourceRecord,
         token: &str,
         variant: &str,
         observed_fetched_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let lifecycle_guard = self.cache_lifecycle.clone().read_owned().await;
-        let fetch = self.inflight_fetch(format!("{token}:{variant}")).await;
         let result = fetch
             .get_or_init(move || async move {
                 let existing = self
@@ -412,6 +421,20 @@ impl ImageProxyRuntime {
             })
             .await;
         clone_shared_fetch_result(result).map(|_| ())
+    }
+
+    /// Claims the fetch slot for `key` for a stale refresh, or returns `None`
+    /// when a fetch for that image is already in flight. The slot is held by
+    /// the returned `Arc` and frees itself when the last holder drops it.
+    async fn reserve_stale_refresh(&self, key: String) -> Option<Arc<InflightFetch>> {
+        let mut inflight = self.inflight.lock().await;
+        inflight.retain(|_, fetch| fetch.strong_count() > 0);
+        if inflight.get(&key).and_then(Weak::upgrade).is_some() {
+            return None;
+        }
+        let created = Arc::new(OnceCell::new());
+        inflight.insert(key, Arc::downgrade(&created));
+        Some(created)
     }
 
     async fn inflight_fetch(&self, key: String) -> Arc<InflightFetch> {
@@ -470,11 +493,9 @@ impl ImageProxyRuntime {
             let Some(mut entry) = existing else {
                 return Ok(None);
             };
-            let bytes = tokio::fs::read(self.existing_cache_path(&entry).await)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!("failed to read image cache: {error}"))
-                })?;
+            let path = self.existing_cache_path(&entry).await;
+            let read = Disk::process().read(path).await;
+            let bytes = read.map_err(cache_failure("read image cache"))?;
             entry.fetched_at = Utc::now();
             entry.last_accessed_at = entry.fetched_at;
             self.update_cache_metadata_in_background(entry.clone(), lifecycle_guard);
@@ -708,30 +729,30 @@ impl ImageProxyRuntime {
 
     async fn write_cache_file_at(&self, path: &Path, bytes: &[u8]) -> AppResult<()> {
         self.conversions.invalidate(Some(path));
-        tokio::fs::create_dir_all(&self.cache_dir)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to create image cache: {error}"))
-            })?;
+        self.create_cache_dir().await?;
+        let disk = Disk::process();
         let temp = path.with_extension(format!("{}.part", uuid::Uuid::new_v4()));
-        tokio::fs::write(&temp, bytes).await.map_err(|error| {
-            AppError::Repository(format!("failed to write image cache: {error}"))
-        })?;
-        if let Err(error) = tokio::fs::rename(&temp, path).await {
-            let _ = tokio::fs::remove_file(&temp).await;
-            return Err(AppError::Repository(format!(
-                "failed to atomically commit image cache: {error}"
-            )));
+        let written = disk.write(&temp, bytes.to_vec(), Replace::Allowed, Access::Default);
+        written.await.map_err(cache_failure("write image cache"))?;
+        if let Err(error) = disk.move_replacing(&temp, path).await {
+            let _ = disk.remove(&temp, Remove::File).await;
+            return Err(cache_failure("atomically commit image cache")(error));
         }
         Ok(())
     }
 
+    async fn create_cache_dir(&self) -> AppResult<()> {
+        let disk = Disk::process();
+        let created = disk.create_dir(&self.cache_dir, Parents::Create).await;
+        created.map_err(cache_failure("create image cache"))
+    }
+
+    // disk-guard: each entry's size comes from its own directory entry, which
+    // costs no call on Windows and one lstat on unix; the owner's listing
+    // either leaves the size out or reads every entry's kind first.
+    #[allow(clippy::disallowed_methods)]
     async fn reconcile_cache_state(&self) -> AppResult<()> {
-        tokio::fs::create_dir_all(&self.cache_dir)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to create image cache: {error}"))
-            })?;
+        self.create_cache_dir().await?;
         let entries = self.repository.list_image_proxy_cache_entries_lru().await?;
         let mut expected = HashMap::new();
         for entry in entries {
@@ -835,12 +856,12 @@ impl ImageProxyRuntime {
 
     async fn remove_cache_file(&self, path: &Path) -> AppResult<()> {
         self.conversions.invalidate(Some(path));
-        match tokio::fs::remove_file(path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        match Disk::process().remove(path, Remove::File).await {
+            Ok(_) => Ok(()),
             Err(error) => Err(AppError::Repository(format!(
-                "failed to remove image cache file {}: {error}",
-                path.display()
+                "failed to remove image cache file {}: {}",
+                path.display(),
+                error.words()
             ))),
         }
     }
@@ -858,7 +879,7 @@ impl ImageProxyRuntime {
         let path = self.entry_cache_path(entry);
         // Older upstream AVIF responses used the format-independent filename.
         if entry.content_type == "image/avif"
-            && !tokio::fs::try_exists(&path).await.unwrap_or(false)
+            && Disk::process().follow(&path).await.exists() != Some(true)
         {
             self.cache_path(&entry.token, &entry.variant)
         } else {
@@ -948,14 +969,10 @@ impl ImageProxyCacheControl for ImageProxyRuntime {
             let conversion = self.conversions.watch(source_path.clone());
             #[cfg(test)]
             self.jpeg_source_reads.fetch_add(1, Ordering::Relaxed);
-            let bytes = match tokio::fs::read(source_path).await {
+            let bytes = match Disk::process().read(source_path).await {
                 Ok(bytes) => bytes,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to read cached JPEG: {error}"
-                    )));
-                }
+                Err(error) if error.reason() == reason::DISK_PATH_MISSING => return Ok(false),
+                Err(error) => return Err(cache_failure("read cached JPEG")(error)),
             };
             if bytes.len() as i64 != entry.byte_size {
                 return Ok(false);
@@ -1189,10 +1206,15 @@ fn outbound_error(error: OutboundHttpError) -> AppError {
     }
 }
 
+/// The repository error the image cache raises for a failed disk call.
+fn cache_failure(action: &'static str) -> impl FnOnce(DiskError) -> AppError {
+    move |error| AppError::Repository(format!("failed to {action}: {}", error.words()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Weak};
     use std::time::Duration;
 
     /// Polls `condition` until it holds, panicking after a 30 s hang guard.
@@ -2166,8 +2188,145 @@ mod tests {
         assert!(image_repository.cache_deletes.load(Ordering::Relaxed) >= 1);
     }
 
+    async fn stale_cache_fixture(
+        token: &str,
+        bytes: &[u8],
+    ) -> (tempfile::TempDir, Arc<ImageProxyRuntime>) {
+        let stale_at = Utc::now() - chrono::Duration::days(8);
+        let image_repository = Arc::new(TestImageRepository {
+            source: ImageProxySourceRecord {
+                token: token.to_string(),
+                upstream_url: None,
+                owner_type: Some("episode".to_string()),
+                owner_id: Some("episode-1".to_string()),
+                image_kind: "episode_still".to_string(),
+                fallback_class: "landscape".to_string(),
+                last_seen_at: Utc::now(),
+            },
+            cache_entries: Mutex::new(vec![ImageProxyCacheEntryRecord {
+                token: token.to_string(),
+                variant: "original".to_string(),
+                content_type: "image/png".to_string(),
+                byte_size: bytes.len() as i64,
+                upstream_etag: None,
+                upstream_last_modified: None,
+                fetched_at: stale_at,
+                last_accessed_at: Utc::now(),
+            }]),
+            cache_reads: AtomicUsize::new(0),
+            cache_read_gate: None,
+            cache_write_started: None,
+            cache_write_release: None,
+            cache_deletes: AtomicUsize::new(0),
+            cache_clears: AtomicUsize::new(0),
+            memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
+            orphan_sweeps: AtomicUsize::new(0),
+        });
+        let title_images = Arc::new(TestTitleImageRepository {
+            blob: TitleImageBlob {
+                content_type: "image/avif".to_string(),
+                etag: "\"unused\"".to_string(),
+                bytes: Vec::new(),
+            },
+            reads: AtomicUsize::new(0),
+        });
+        let temp = tempfile::tempdir().expect("temporary image cache");
+        let mut runtime = ImageProxyRuntime::new(image_repository, title_images, temp.path());
+        runtime.environment_override_bytes = None;
+        let runtime = Arc::new(runtime);
+        tokio::fs::create_dir_all(&runtime.cache_dir)
+            .await
+            .expect("create image cache");
+        tokio::fs::write(runtime.cache_path(token, "original"), bytes)
+            .await
+            .expect("write cached image");
+        (temp, runtime)
+    }
+
     #[tokio::test]
-    async fn maintenance_reconciles_files_and_evicts_the_least_recently_used_entries() {
+    async fn a_stale_image_starts_one_refresh_at_a_time_and_serves_stale_bytes() {
+        let token = "d".repeat(64);
+        let bytes = b"stale-bytes".to_vec();
+        let (_temp, runtime) = stale_cache_fixture(&token, &bytes).await;
+        let key = format!("{token}:original");
+        let refreshes = || runtime.stale_refreshes_started.load(Ordering::Relaxed);
+
+        // A fetch for this image is already in flight.
+        let held = runtime.inflight_fetch(key.clone()).await;
+        for _ in 0..8 {
+            let blob = runtime
+                .resolve(&token, "original")
+                .await
+                .expect("stale bytes are served while a refresh runs");
+            assert_eq!(blob.bytes, bytes);
+        }
+        assert_eq!(refreshes(), 0);
+
+        drop(held);
+        let blob = runtime
+            .resolve(&token, "original")
+            .await
+            .expect("stale bytes are served");
+        assert_eq!(blob.bytes, bytes);
+        assert_eq!(refreshes(), 1);
+
+        // The refresh has no upstream to reach, finishes, and frees its slot,
+        // so the next stale hit may refresh again.
+        wait_until("the refresh slot is released", || {
+            runtime
+                .inflight
+                .try_lock()
+                .is_ok_and(|inflight| inflight.get(&key).and_then(Weak::upgrade).is_none())
+        })
+        .await;
+        let blob = runtime
+            .resolve(&token, "original")
+            .await
+            .expect("stale bytes are served");
+        assert_eq!(blob.bytes, bytes);
+        assert_eq!(refreshes(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_stale_refresh_slot_frees_itself_when_its_task_panics_or_is_dropped() {
+        let token = "d".repeat(64);
+        let (_temp, runtime) = stale_cache_fixture(&token, b"stale-bytes").await;
+        let key = "fixture-token:original".to_string();
+
+        let slot = runtime
+            .reserve_stale_refresh(key.clone())
+            .await
+            .expect("slot is free");
+        assert!(runtime.reserve_stale_refresh(key.clone()).await.is_none());
+        let panicked = tokio::spawn(async move {
+            let _slot = slot;
+            panic!("synthetic refresh failure");
+        })
+        .await
+        .expect_err("task should panic");
+        assert!(panicked.is_panic());
+
+        let slot = runtime
+            .reserve_stale_refresh(key.clone())
+            .await
+            .expect("a panicked refresh frees its slot");
+        let cancelled = tokio::spawn(async move {
+            let _slot = slot;
+            std::future::pending::<()>().await;
+        });
+        cancelled.abort();
+        assert!(cancelled.await.expect_err("task is aborted").is_cancelled());
+        assert!(
+            runtime.reserve_stale_refresh(key).await.is_some(),
+            "a dropped refresh frees its slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_reconciles_files_and_evicts_the_least_recently_used_entries() {
         let tokens = ["e".repeat(64), "f".repeat(64), "1".repeat(64)];
         let now = Utc::now();
         let entry = |token: &str, age_minutes: i64| ImageProxyCacheEntryRecord {

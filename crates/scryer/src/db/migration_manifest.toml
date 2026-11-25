@@ -4092,6 +4092,380 @@ hook_id = "backfill_media_request_id_projection"
 engine = "all"
 scope = "all"
 
+[[migration]]
+version = 345
+description = "proxy reach through"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0345_proxy_reach_through.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0345_proxy_reach_through.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 346
+description = "user ui tours"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0346_user_ui_tours.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0346_user_ui_tours.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 347
+description = "monthly indexer request and grab limits"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0347_indexer_monthly_quotas.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0347_indexer_monthly_quotas.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 348
+description = "lifecycle rules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0348_lifecycle_rules.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0348_lifecycle_rules.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 349
+description = "request rules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0349_request_rules.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0349_request_rules.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 350
+description = "media server signal series favorites"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0350_media_server_signal_series_favorites.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0350_media_server_signal_series_favorites.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 351
+description = "media server audience favorites"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0351_media_server_audience_favorites.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0351_media_server_audience_favorites.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 352
+description = "title content ratings"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0352_title_content_ratings.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0352_title_content_ratings.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 353
+description = "download submissions client item id index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0353_download_submissions_client_item_id_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0353_download_submissions_client_item_id_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 354
+description = "index audit"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0354_index_audit.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0354_index_audit.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 355
+description = "media file full hash mark"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0355_media_file_full_hash_mark.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0355_media_file_full_hash_mark.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 356
+description = "location verification content matched"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0356_location_verification_content_matched.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0356_location_verification_content_matched.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 357
+description = "imports created at index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0357_imports_created_at_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0357_imports_created_at_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 358
+description = "archive extractions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0358_archive_extractions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0358_archive_extractions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 359
+description = "title awards"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0359_title_awards.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0359_title_awards.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 360
+description = "blocklist title release name index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0360_blocklist_title_release_name_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0360_blocklist_title_release_name_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 361
+description = "library full hash backfill toggle"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0361_library_full_hash_backfill_toggle.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0361_library_full_hash_backfill_toggle.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 362
+description = "media server playback items provider item index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0362_media_server_playback_items_provider_item_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0362_media_server_playback_items_provider_item_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 363
+description = "dashboard panel settings and lifecycle candidates state due index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0363_dashboard_panel_settings_and_lifecycle_due_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0363_dashboard_panel_settings_and_lifecycle_due_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 364
+description = "lifecycle cause codes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0364_lifecycle_cause_codes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0364_lifecycle_cause_codes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 365
+description = "request rule preflight trace index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0365_request_rule_preflight_trace_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0365_request_rule_preflight_trace_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 366
+description = "media request staged metadata"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0366_media_request_staged_metadata.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0366_media_request_staged_metadata.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"
@@ -4101,4 +4475,3 @@ engine = "sqlite"
 through_version = 341
 file = "postgres/baselines/0341_baseline.sql"
 engine = "postgres"
-

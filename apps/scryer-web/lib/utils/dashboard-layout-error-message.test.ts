@@ -31,6 +31,24 @@ test("a named layout refusal is shown in translation, whatever the sentence says
   );
 });
 
+test("refused panel settings are named in translation", () => {
+  const error = refusal("validation: settings must be an object", {
+    code: "VALIDATION_ERROR",
+    reason: "SETTINGS_DASHBOARD_PANEL_SETTINGS_INVALID",
+    panelId: "lifecycle-upcoming--a1b2c3",
+    maxBytes: "2048",
+  });
+
+  assert.equal(
+    dashboardLayoutRefusalKey(error),
+    "dashboard.layout.refusal.panelSettingsInvalid",
+  );
+  assert.equal(
+    dashboardLayoutErrorMessage(error, t, "Save failed"),
+    dictionary["dashboard.layout.refusal.panelSettingsInvalid"],
+  );
+});
+
 test("an unknown reason falls back to the server's sentence", () => {
   const error = refusal("validation: the layout could not be stored", {
     code: "VALIDATION_ERROR",

@@ -546,3 +546,31 @@ async fn download_enrichment_canonical_fallback_hits_keep_observation_resolution
     assert_eq!(repo.enrichment_canonical_reads.load(Ordering::SeqCst), 2);
     assert_eq!(registry.resolutions.load(Ordering::SeqCst), 2);
 }
+
+/// A failed submission read leaves the row's origin as the client reported
+/// it and flags it as unknown, so the tracker keeps the origin it last knew;
+/// a read that answers clears the flag and supplies the origin.
+#[tokio::test]
+async fn download_enrichment_failed_submission_read_marks_the_origin_unknown() {
+    let (app, repo) = fixture();
+    let row = submission(0);
+    let key = ClientJobLocator::from_submission(&row);
+    repo.record_submission(row.clone()).await.unwrap();
+    let mut item = queue_history_fixture_item(&key.item_id, DownloadQueueState::Downloading, 0);
+    item.client_id = key.client_id.clone().unwrap();
+    item.client_type = key.client_type.clone();
+    item.download_id = None;
+    item.is_scryer_origin = false;
+    let mut items = vec![item];
+    let mut pass = DownloadEnrichmentPass::default();
+
+    repo.enrichment_failures.lock().await.insert("submission");
+    crate::integration::workflow::enrich_download_queue_items_from_submissions_with_original_identities(&app,&mut items,None,&mut pass).await;
+    assert!(!items[0].is_scryer_origin);
+    assert!(pass.origin_is_unknown(&items[0]));
+
+    repo.enrichment_failures.lock().await.clear();
+    crate::integration::workflow::enrich_download_queue_items_from_submissions_with_original_identities(&app,&mut items,None,&mut pass).await;
+    assert!(items[0].is_scryer_origin);
+    assert!(!pass.origin_is_unknown(&items[0]));
+}

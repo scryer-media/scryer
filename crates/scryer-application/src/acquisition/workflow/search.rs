@@ -241,41 +241,9 @@ async fn load_recent_failed_season_pack_seasons_for_title(
         }
     }
 }
-impl AppUseCase {
-    async fn wanted_item_is_mismatch_recovery_candidate(
-        &self,
-        item: &AcquisitionScopeState,
-    ) -> AppResult<bool> {
-        let decisions = self
-            .services
-            .workflow
-            .acquisition_scope_states
-            .list_release_decisions_for_acquisition_scope_state(&item.id, 10, 0)
-            .await?;
-        Ok(!decisions.is_empty()
-            && decisions
-                .iter()
-                .all(|decision| decision.decision_code == "title_mismatch"))
-    }
-}
-impl AppUseCase {
-    pub async fn wanted_item_mismatch_recovery_eligible(
-        &self,
-        wanted_item_id: &str,
-    ) -> AppResult<bool> {
-        let Some(item) = self
-            .services
-            .workflow
-            .acquisition_scope_states
-            .get_acquisition_scope_state_by_id(wanted_item_id)
-            .await?
-        else {
-            return Ok(false);
-        };
+/// Scopes read per page while collecting a title's mismatch-recovery scopes.
+const MISMATCH_RECOVERY_PAGE_SIZE: i64 = 200;
 
-        self.wanted_item_is_mismatch_recovery_candidate(&item).await
-    }
-}
 impl AppUseCase {
     pub async fn trigger_title_mismatch_recovery_search(
         &self,
@@ -295,36 +263,38 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
-        let items = self
-            .services
-            .workflow
-            .acquisition_scope_states
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                statuses: vec!["wanted".into()],
-                title_id: Some(title_id.to_string()),
-                limit: 500,
-                ..AcquisitionScopeStatesQuery::default()
-            })
-            .await?;
-
-        let mut queued = 0usize;
-        for item in &items {
-            if !self
-                .wanted_item_is_mismatch_recovery_candidate(item)
-                .await?
-            {
-                continue;
+        // Every eligible scope is read, a page at a time in id order, before
+        // any is re-opened. Each page starts after the last id of the one
+        // before, so an update to a row between pages neither skips nor
+        // repeats it.
+        let mut items: Vec<AcquisitionScopeState> = Vec::new();
+        loop {
+            let page = self
+                .services
+                .workflow
+                .acquisition_scope_states
+                .list_mismatch_recovery_scopes_for_title(
+                    title_id,
+                    items.last().map(|item| item.id.as_str()),
+                    MISMATCH_RECOVERY_PAGE_SIZE,
+                )
+                .await?;
+            let last_page = (page.len() as i64) < MISMATCH_RECOVERY_PAGE_SIZE;
+            items.extend(page);
+            if last_page {
+                break;
             }
+        }
 
+        for item in &items {
             // This operator-authorized recovery can change a title or alias
             // without changing the search fingerprint, so it must override
             // convergence and search every routed indexer again.
             self.reopen_wanted_scope_for_acquisition(item, CoverageReopen::All)
                 .await;
-            queued += 1;
         }
 
-        Ok(queued)
+        Ok(items.len())
     }
 }
 impl AppUseCase {

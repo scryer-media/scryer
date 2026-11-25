@@ -1,5 +1,5 @@
-use super::{LibraryScanPhaseProgressPayload, MediaFacetValue};
-use async_graphql::{Enum, ID, InputObject, SimpleObject};
+use super::{JobRunStatusValue, LibraryScanPhaseProgressPayload, MediaFacetValue};
+use async_graphql::{Enum, ID, InputObject, Json, SimpleObject};
 use chrono::{DateTime, Utc};
 
 // ── External Import (Sonarr/Radarr) ────────────────────────────────────────
@@ -650,4 +650,145 @@ pub struct ExternalImportSourceJobPayload {
     pub ready: bool,
     /// Receipts for the fixed submitted selections, without credentials.
     pub items: Vec<ExternalImportSourceItemPayload>,
+}
+
+// ── External rule import (Sonarr/Radarr custom formats, Maintainerr rule groups) ──
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Application an external rule import reads from.
+pub enum ExternalRuleImportSource {
+    /// Sonarr custom formats, imported as disabled scoring rule sets.
+    Sonarr,
+    /// Radarr custom formats, imported as disabled scoring rule sets.
+    Radarr,
+    /// Maintainerr rule groups, imported as disabled lifecycle rules.
+    Maintainerr,
+}
+
+#[derive(InputObject, Clone)]
+/// Where an external rule import reads from.
+pub struct ExternalRuleImportInput {
+    /// Application the URL serves.
+    pub source: ExternalRuleImportSource,
+    /// Base URL of the application, including any URL base or BASE_PATH prefix.
+    pub base_url: String,
+    /// API key; required for Sonarr and Radarr. Maintainerr has no API authentication, so a key sent with a Maintainerr import is ignored.
+    pub api_key: Option<String>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Step an external rule import has reached.
+pub enum ExternalRuleImportPhase {
+    /// Accepted and not yet started.
+    Queued,
+    /// Reading the source.
+    Fetching,
+    /// Translating what was read.
+    Planning,
+    /// Saving translated rules.
+    Saving,
+    /// Done; the report is final.
+    Finished,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Outcome of one imported source object.
+pub enum ExternalRuleImportItemState {
+    /// Planned and not yet saved.
+    Pending,
+    /// Saved as an exact translation.
+    Saved,
+    /// Saved, but the translation needs review.
+    SavedNeedsReview,
+    /// Saved as a placeholder because the source rule could not be translated.
+    SavedFailedTranslation,
+    /// A rule with this name already exists; nothing was written.
+    SkippedExists,
+    /// Nothing was saved.
+    Failed,
+}
+
+#[derive(SimpleObject)]
+/// A coded observation about an import run or one of its items.
+pub struct ExternalRuleImportFactPayload {
+    /// Stable reason code.
+    pub code: String,
+    /// The server's sentence: the fallback for an unrecognized code.
+    pub message: String,
+    /// Values the code refers to, such as a settings id or a limit, or null.
+    pub details: Option<Json<serde_json::Value>>,
+}
+
+#[derive(SimpleObject)]
+/// Report line for one source object.
+pub struct ExternalRuleImportItemPayload {
+    /// Stable identity within the source, such as customformat:12.
+    pub key: String,
+    /// Name in the source application.
+    pub source_name: String,
+    /// Name the saved rule received, or null when nothing was saved.
+    pub saved_name: Option<String>,
+    /// Saved rule set identity, or null when nothing was saved.
+    pub rule_set_id: Option<ID>,
+    /// Outcome.
+    pub state: ExternalRuleImportItemState,
+    /// Stable reason code for a skipped, failed or partial outcome, or null.
+    pub reason: Option<String>,
+    /// The server's failure sentence: the fallback for an unrecognized reason.
+    pub message: Option<String>,
+    /// Translation observations about this item.
+    pub facts: Vec<ExternalRuleImportFactPayload>,
+}
+
+#[derive(SimpleObject)]
+/// Number of report lines in each state.
+pub struct ExternalRuleImportCountsPayload {
+    /// Every report line.
+    pub total: i32,
+    /// Lines not yet saved.
+    pub pending: i32,
+    /// Lines saved as exact translations.
+    pub saved: i32,
+    /// Lines saved but needing review.
+    pub saved_needs_review: i32,
+    /// Lines saved as untranslated placeholders.
+    pub saved_failed_translation: i32,
+    /// Lines skipped because the rule already exists.
+    pub skipped_exists: i32,
+    /// Lines where nothing was saved.
+    pub failed: i32,
+}
+
+#[derive(SimpleObject)]
+/// An external rule import run and its per-item report. Credentials are never returned.
+pub struct ExternalRuleImportStatusPayload {
+    /// Job run identity.
+    pub run_id: ID,
+    /// Job run status.
+    pub status: JobRunStatusValue,
+    /// Whether the run is still working.
+    pub active: bool,
+    /// Report revision; a higher revision is newer.
+    pub revision: i64,
+    /// Last persisted update time.
+    pub updated_at: DateTime<Utc>,
+    /// Application read.
+    pub source: ExternalRuleImportSource,
+    /// Base URL read.
+    pub base_url: String,
+    /// Step reached.
+    pub phase: ExternalRuleImportPhase,
+    /// Stable reason the run stopped short, or null.
+    pub reason: Option<String>,
+    /// The server's sentence for that reason: the fallback for an unrecognized code.
+    pub message: Option<String>,
+    /// Per-state counts.
+    pub counts: ExternalRuleImportCountsPayload,
+    /// One line per source object, at most 1000.
+    pub items: Vec<ExternalRuleImportItemPayload>,
+    /// Observations about the fetch that belong to no single item.
+    pub facts: Vec<ExternalRuleImportFactPayload>,
 }

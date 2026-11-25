@@ -221,6 +221,10 @@ pub struct DestinationLibraryFacts {
     /// Root ids configured on the destination library, used to reject a root id
     /// that belongs somewhere else.
     pub root_ids: Vec<String>,
+    /// The destination library's default root: where a title crossing into it
+    /// lands when the request names no root.
+    #[serde(default)]
+    pub default_root_id: Option<String>,
 }
 
 /// Everything the classifier needs about one selected title.
@@ -723,10 +727,14 @@ pub fn classify_title(
         }
     }
 
-    // The destination root: the requested one, or the title's own when the
-    // request left the root alone.
+    // The destination root: the requested one; for a title crossing into
+    // another library, that library's default root, since the title's own root
+    // belongs to the library it is leaving; otherwise the title's own.
     let destination_root_id = match destination.root_id.as_deref() {
         Some(root_id) => root_id.to_string(),
+        None if crosses_libraries => destination_library
+            .and_then(|library| library.default_root_id.clone())
+            .unwrap_or_else(|| facts.root_id.clone()),
         None => facts.root_id.clone(),
     };
     if let Some(requested_root) = destination.root_id.as_deref()
@@ -941,7 +949,32 @@ mod tests {
             library_name: "Movies".to_string(),
             facet: MediaFacet::Movie,
             root_ids: root_ids.iter().map(|id| (*id).to_string()).collect(),
+            default_root_id: None,
         }
+    }
+
+    /// A transfer that names only the destination library lands each title on
+    /// that library's default root, not on the root it is leaving.
+    #[test]
+    fn a_library_only_transfer_lands_on_the_destination_default_root() {
+        let titles = vec![
+            TitleClassificationFacts::new("crossing", MediaFacet::Movie, "lib-other", "root-x")
+                .with_library_name("Other")
+                .with_tracked_files(1),
+        ];
+        let mut library = movies_library(&["root-a", "root-b"]);
+        library.default_root_id = Some("root-b".to_string());
+
+        let result = classify_selection(
+            &titles,
+            &DestinationRequest::to_library("lib-movies"),
+            Some(&library),
+        );
+
+        let crossing = result.classification_of("crossing").expect("title present");
+        assert_eq!(crossing.destination_library_id, "lib-movies");
+        assert_eq!(crossing.destination_root_id, "root-b");
+        assert!(!result.blocks_start());
     }
 
     /// US2.3: a bulk selection mixing titles on root A and root B with B as the
@@ -1227,6 +1260,7 @@ mod tests {
             library_name: "Series".to_string(),
             facet: MediaFacet::Series,
             root_ids: vec!["root-s".to_string()],
+            default_root_id: None,
         };
 
         let classification = classify_title(
@@ -1325,6 +1359,7 @@ mod tests {
             library_name: "Movies B".to_string(),
             facet: MediaFacet::Movie,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
 
         let classification = classify_title(
@@ -1372,6 +1407,7 @@ mod tests {
             library_name: "Anime".to_string(),
             facet: MediaFacet::Anime,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
 
         let classification = classify_title(
@@ -1412,6 +1448,7 @@ mod tests {
             library_name: "Series B".to_string(),
             facet: MediaFacet::Series,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
 
         let classification = classify_title(
@@ -1438,6 +1475,7 @@ mod tests {
             library_name: "Series".to_string(),
             facet: MediaFacet::Series,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
 
         let classification = classify_title(
@@ -1471,6 +1509,7 @@ mod tests {
             library_name: "Movies B".to_string(),
             facet: MediaFacet::Movie,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
         let destination = DestinationRequest::to_library_root("lib-b", "root-b");
 
@@ -1559,6 +1598,7 @@ mod tests {
             library_name: "Movies B".to_string(),
             facet: MediaFacet::Movie,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
 
         let classification = classify_title(
@@ -1602,6 +1642,7 @@ mod tests {
             library_name: "Series B".to_string(),
             facet: MediaFacet::Series,
             root_ids: vec!["root-b".to_string()],
+            default_root_id: None,
         };
 
         let result = classify_selection(

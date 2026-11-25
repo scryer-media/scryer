@@ -151,6 +151,13 @@ pub struct TitleMetadataUpdate {
     pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
     /// Ratings returned by SMG/MDBList. `Some(default)` clears stale stored ratings.
     pub ratings: Option<TitleRatingSummary>,
+    /// Content ratings returned by SMG, one entry per country, in the shape the
+    /// request rules read. `Some(vec![])` clears stale stored ratings; `None`
+    /// leaves the stored rows untouched for callers that do not hydrate.
+    pub content_ratings: Option<Vec<ContentRating>>,
+    /// Awards returned by SMG, in its order, under the same contract as
+    /// `content_ratings`.
+    pub awards: Option<Vec<TitleAward>>,
     /// Complete credit set returned by SMG. `Some(vec![])` clears the stale cache;
     /// `None` leaves the existing rows untouched for callers that do not hydrate.
     pub credits: Option<Vec<TitleCredit>>,
@@ -1450,7 +1457,7 @@ pub struct TitleTagMembershipCounts {
 /// changing meaning.
 ///
 /// The four reference counts are kept apart rather than summed so the warning
-/// can name what the operator has to go and look at: a maintenance rule, a
+/// can name what the operator has to go and look at: a lifecycle rule, a
 /// release rule, a request rule, or a managed pack's tag filter are four
 /// different places.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1460,7 +1467,7 @@ pub struct TitleTagRewriteCounts {
     /// touched no title can still have touched series movies.
     pub series_movies: u64,
     pub delay_profiles: u64,
-    pub maintenance_rule_sets: u64,
+    pub lifecycle_rule_sets: u64,
     pub release_rule_sets: u64,
     /// Release rule sets whose managed `tag_filter` list carries the label.
     /// A managed pack can appear here and in `release_rule_sets` at once; the
@@ -1595,6 +1602,17 @@ pub struct MediaRequestCounts {
     pub movie: i64,
     pub series: i64,
     pub anime: i64,
+}
+
+/// Everyone linked to one title through the media requests that created it,
+/// and when the earliest of those requests was made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleRequesters {
+    /// Submitters first, in request order, then everyone who joined them in
+    /// the order they did, deduped keeping the first appearance.
+    pub user_ids: Vec<String>,
+    /// `created_at` of the oldest request that created the title.
+    pub first_requested_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1905,9 +1923,81 @@ pub struct ReleaseDecision {
     pub candidate_score: i32,
     pub current_score: Option<i32>,
     pub score_delta: Option<i32>,
-    pub explanation_json: Option<String>,
+    pub explanation_json: Option<ReleaseDecisionExplanation>,
     pub created_at: String,
 }
+
+/// A release decision's explanation JSON, and whether its text is already in
+/// the compact form serde_json writes for a parsed value.
+///
+/// Only [`ReleaseDecisionExplanation::from_value`] yields canonical text, so
+/// the store can compress it without parsing it again. Text of any other
+/// origin comes in through [`ReleaseDecisionExplanation::untrusted`] and is
+/// parsed and re-serialized before it is stored.
+#[derive(Clone, Debug)]
+pub struct ReleaseDecisionExplanation {
+    text: String,
+    canonical: bool,
+}
+
+impl ReleaseDecisionExplanation {
+    /// Serializes `value` compactly; the result is canonical.
+    pub fn from_value(value: &serde_json::Value) -> Self {
+        Self {
+            text: value.to_string(),
+            canonical: true,
+        }
+    }
+
+    /// Text the store decoded from a stored explanation. It is checked to be
+    /// JSON and trusted, not checked, to be in the canonical form every
+    /// writer stores. Only the store's codec calls this.
+    #[doc(hidden)]
+    pub fn stored_canonical(text: String) -> Self {
+        Self {
+            text,
+            canonical: true,
+        }
+    }
+
+    /// Text whose form is not known, such as a saved pending release's
+    /// explanation.
+    pub fn untrusted(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            canonical: false,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    pub fn into_string(self) -> String {
+        self.text
+    }
+
+    /// The text, when it is known to be canonical.
+    pub fn canonical_text(&self) -> Option<&str> {
+        self.canonical.then_some(self.text.as_str())
+    }
+}
+
+impl std::ops::Deref for ReleaseDecisionExplanation {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl PartialEq for ReleaseDecisionExplanation {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for ReleaseDecisionExplanation {}
 
 #[derive(Clone, Debug)]
 pub struct DecisionCodeCount {
@@ -2977,6 +3067,12 @@ pub enum IndexerSearchOutcome {
     ClientUnavailable {
         reason: &'static str,
     },
+    /// A local monthly limit on the indexer refused the request, or its usage
+    /// could not be checked. Nothing was sent, so the indexer did not fail and
+    /// its health is untouched. `reason` is the stable code of the refusal.
+    LocalLimit {
+        reason: &'static str,
+    },
     Errored,
 }
 
@@ -3475,7 +3571,57 @@ pub struct IndexerErrorPage {
 #[derive(Clone, Debug)]
 pub struct JwtAuthConfig {
     pub issuer: String,
+    /// Keys the stored hashes of API keys, OAuth tokens and indexer client
+    /// keys. It never changes for an instance, or every stored credential
+    /// stops verifying.
     pub jwt_signing_salt: String,
+    /// Keys the per-user session and JWT signing keys. Kept apart from
+    /// `jwt_signing_salt` so it can be derived from the instance's own
+    /// encryption master key instead of a value shipped in the binary.
+    pub session_signing_salt: String,
+}
+
+impl JwtAuthConfig {
+    /// HKDF-SHA256 info label for the session signing salt. Changing it
+    /// signs every session out, so a new derivation gets a new version.
+    pub const SESSION_SIGNING_SALT_INFO: &'static [u8] = b"scryer/session-signing-salt/v1";
+
+    /// The session signing salt: an explicit `SCRYER_JWT_SIGNING_SECRET` when
+    /// the operator sets one, unchanged, and otherwise the salt derived from
+    /// the encryption master key.
+    pub fn select_session_signing_salt(
+        explicit_secret: Option<&str>,
+        master_key_base64: &str,
+    ) -> Result<String, String> {
+        match explicit_secret {
+            Some(secret) => Ok(secret.to_string()),
+            None => Self::derive_session_signing_salt(master_key_base64),
+        }
+    }
+
+    /// Derives the session signing salt from the instance's encryption master
+    /// key (standard base64, 32 bytes) with HKDF-SHA256.
+    pub fn derive_session_signing_salt(master_key_base64: &str) -> Result<String, String> {
+        use aws_lc_rs::hkdf;
+        use base64::Engine as _;
+
+        let master_key = base64::engine::general_purpose::STANDARD
+            .decode(master_key_base64.trim())
+            .map_err(|error| format!("encryption master key is not valid base64: {error}"))?;
+        if master_key.len() != 32 {
+            return Err(format!(
+                "encryption master key must be exactly 32 bytes, got {}",
+                master_key.len()
+            ));
+        }
+        let mut output = [0u8; 32];
+        hkdf::Salt::new(hkdf::HKDF_SHA256, &[])
+            .extract(&master_key)
+            .expand(&[Self::SESSION_SIGNING_SALT_INFO], hkdf::HKDF_SHA256)
+            .and_then(|okm| okm.fill(&mut output))
+            .map_err(|_| "session signing salt derivation failed".to_string())?;
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(output))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3687,6 +3833,14 @@ pub struct TotpFailedAttemptRecord {
 pub struct UserAuthFactorStatus {
     pub has_mfa: bool,
     pub has_passkey: bool,
+}
+
+/// When an account was created and last signed in. Each is `None` when the
+/// account row stores no value for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UserAccountTimestamps {
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -4548,6 +4702,10 @@ pub struct HealthCheckResult {
     pub source: String,
     pub status: HealthCheckStatus,
     pub message: String,
+    /// The condition, as a stable code, for a check that reports one.
+    pub reason: Option<&'static str>,
+    /// Counts the reason names, beside the sentence.
+    pub facts: Vec<(&'static str, u64)>,
 }
 
 #[derive(Clone, Debug)]
@@ -4895,7 +5053,8 @@ impl UiDashboardBreakpoint {
     }
 }
 
-/// One panel's place on a dashboard grid. The panel id is opaque to the server.
+/// One panel's place on a dashboard grid. The panel id and its settings are
+/// opaque to the server: the web owns what a panel's settings mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiDashboardLayoutItem {
     pub panel_id: String,
@@ -4903,6 +5062,8 @@ pub struct UiDashboardLayoutItem {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// The panel's own settings, a JSON object, or `None` when it has none.
+    pub settings: Option<serde_json::Value>,
 }
 
 /// The dashboard layout a user saved for one breakpoint. An empty item list is
@@ -4960,6 +5121,39 @@ impl UiPalette {
     }
 }
 
+/// How a user left a guided tour. Either way the tour is not offered again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UiTourOutcome {
+    Completed,
+    Skipped,
+}
+
+impl UiTourOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Skipped => "skipped",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "completed" => Some(Self::Completed),
+            "skipped" => Some(Self::Skipped),
+            _ => None,
+        }
+    }
+}
+
+/// A guided tour the user has finished or skipped. Tour ids are opaque here:
+/// the web owns the tour registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiTourProgress {
+    pub tour_id: String,
+    pub outcome: UiTourOutcome,
+    pub recorded_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiSettings {
     pub user_id: String,
@@ -4984,6 +5178,8 @@ pub struct UiSettings {
     pub catalog_views: Vec<UiCatalogViewSetting>,
     /// Saved dashboard layouts, one per breakpoint that has one.
     pub dashboard_layouts: Vec<UiDashboardLayout>,
+    /// Guided tours the user has finished or skipped.
+    pub tours: Vec<UiTourProgress>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -5032,6 +5228,7 @@ impl UiSettings {
             table_columns: Vec::new(),
             catalog_views: Vec::new(),
             dashboard_layouts: Vec::new(),
+            tours: Vec::new(),
             created_at: None,
             updated_at: None,
         }
@@ -5420,6 +5617,8 @@ mod indexer_search_identity_tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

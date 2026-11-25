@@ -6,10 +6,12 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-COPY ${TARGETARCH}/scryer ${TARGETARCH}/scryer-launcher /opt/scryer/
+# The build context arrives as an Actions artifact, which drops the executable
+# bit. Set the mode while copying: a later chmod would store both binaries a
+# second time in its own layer.
+COPY --chmod=0755 ${TARGETARCH}/scryer ${TARGETARCH}/scryer-launcher /opt/scryer/
 
-RUN chmod +x /opt/scryer/scryer /opt/scryer/scryer-launcher \
-    && mkdir -p /config /data
+RUN mkdir -p /config /data
 
 USER 0:0
 

@@ -61,7 +61,7 @@ pub(crate) fn srrdb_lookup_applies(enabled: bool, client_type: &str) -> bool {
 /// Synchronous and streaming: callers run it under `tokio::task::spawn_blocking`.
 /// The returned CRC is formatted for the API as `format!("{crc:08X}")`.
 pub(crate) fn crc32_iso_hdlc_of_file(path: &Path) -> std::io::Result<(u32, u64)> {
-    let mut file = std::fs::File::open(path)?;
+    let mut file = crate::disk::Disk::process().open_blocking(path, crate::disk::Open::read())?;
     let mut digest = crc_turbo::Digest::new(crc_turbo::CrcAlgorithm::Crc32IsoHdlc);
     let mut buffer = vec![0u8; SRRDB_CRC_CHUNK_BYTES];
     let mut total: u64 = 0;

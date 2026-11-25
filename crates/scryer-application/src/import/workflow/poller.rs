@@ -560,7 +560,7 @@ async fn validate_completed_import_source_and_mark_processing(
     // skipped so the poller never retries this entry.
     let source_ref = &request.completed.download_client_item_id;
     let source_path = std::path::Path::new(&request.completed.dest_dir);
-    if !source_path.exists() {
+    if Disk::process().follow(source_path).await.exists() == Some(false) {
         tracing::debug!(
             source_ref,
             dest_dir = %request.completed.dest_dir,
@@ -635,7 +635,7 @@ async fn finalize_completed_import_error(
     request: &CompletedImportRequest,
     error: AppError,
 ) -> AppResult<ImportResult> {
-    let requires_reconciliation = matches!(&error, AppError::ManualReconciliationRequired(_));
+    let requires_reconciliation = error.requires_manual_reconciliation();
     let cancelled = matches!(&error, AppError::Canceled(_));
     let skip_reason = completed_import_error_skip_reason(&error);
     let result = ImportResult {
@@ -652,6 +652,8 @@ async fn finalize_completed_import_error(
         } else {
             error.to_string()
         }),
+        reason_code: error.reason().map(str::to_string),
+        needs_reconciliation: requires_reconciliation,
         release_burned: false,
         title_id: completed_import_request_title_id(request),
         ..base_completed_import_result(
@@ -679,13 +681,17 @@ async fn finalize_completed_import_error(
     Ok(result)
 }
 
-fn completed_import_error_skip_reason(error: &AppError) -> Option<ImportSkipReason> {
+pub(crate) fn completed_import_error_skip_reason(error: &AppError) -> Option<ImportSkipReason> {
     if crate::archive_extractor::is_password_required_error(error) {
         Some(ImportSkipReason::PasswordRequired)
     } else if matches!(error, AppError::ArchiveExtractionPluginRequired { .. }) {
         Some(ImportSkipReason::ArchiveExtractionPluginRequired)
     } else if crate::archive_extractor::is_timeout_error(error) {
         Some(ImportSkipReason::ArchiveExtractionTimedOut)
+    } else if error.validation_reason()
+        == Some(crate::error_reasons::archive_extraction::BLOCKED)
+    {
+        Some(ImportSkipReason::ArchiveExtractionBlocked)
     } else if error
         .validation_reason()
         .is_some_and(title_folder_refusal_needs_operator)

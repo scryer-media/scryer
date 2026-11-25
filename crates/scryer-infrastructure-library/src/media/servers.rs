@@ -233,6 +233,41 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
         Ok(items)
     }
 
+    async fn list_playback_items_for_provider_items(
+        &self,
+        provider_items: &[(String, String)],
+    ) -> AppResult<Vec<MediaServerPlaybackItem>> {
+        // One `provider_item_id IN (...)` list per connection, each served by
+        // `idx_media_server_playback_items_provider_item`, chunked so a caller
+        // can never pass the bind limit.
+        let mut ids_by_connection: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for (connection_id, provider_item_id) in provider_items {
+            ids_by_connection
+                .entry(connection_id.as_str())
+                .or_default()
+                .push(provider_item_id.clone());
+        }
+        let mut items = Vec::new();
+        for (connection_id, mut ids) in ids_by_connection {
+            ids.sort();
+            ids.dedup();
+            for chunk in ids.chunks(PLAYBACK_ENTITY_ID_CHUNK) {
+                let sql = playback_items_sql(&format!(
+                    "connection_id = {{}} AND provider_item_id IN ({})",
+                    vec!["{}"; chunk.len()].join(", ")
+                ));
+                let mut args = Vec::with_capacity(chunk.len() + 1);
+                args.push(SqlArg::Text(connection_id.to_string()));
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+                for row in &rows {
+                    items.push(row_to_playback_item(row)?);
+                }
+            }
+        }
+        Ok(items)
+    }
+
     async fn upsert_playback_items_for_connection(
         &self,
         connection_id: &str,

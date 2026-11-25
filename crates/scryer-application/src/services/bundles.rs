@@ -115,8 +115,8 @@ pub struct AppIntegrationServices {
     /// in every assembly that does not wire the production adapter, which is
     /// indistinguishable from the admin setting being off.
     pub(crate) srrdb_filename_lookup: RuntimeFeature<Arc<dyn crate::ports::SrrdbFilenameLookup>>,
-    /// Live playback observation across the media-server connections above
-    /// (RFC 137 §9.10, WP-G). Read-only; consulted by maintenance safety.
+    /// Live playback observation across the media-server connections above.
+    /// Read-only; consulted by lifecycle safety.
     pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
     /// Per-participant played-item reads from the same connections
     /// (RFC 137 §7.3, WP-M). Provider dispatch lives inside the adapter.
@@ -135,6 +135,7 @@ pub struct AppWorkflowServices {
     pub(crate) workflow_operations: Arc<dyn WorkflowOperationRepository>,
     pub(crate) file_importer: Arc<dyn FileImporter>,
     pub(crate) import_artifacts: Arc<dyn ImportArtifactRepository>,
+    pub(crate) archive_extractions: Arc<dyn crate::ArchiveExtractionRepository>,
     pub(crate) release_attempts: Arc<dyn ReleaseAttemptRepository>,
     pub(crate) acquisition_state: Arc<dyn AcquisitionStateRepository>,
     pub(crate) download_registry: Arc<dyn DownloadRegistryRepository>,
@@ -166,10 +167,10 @@ pub struct AppConfigServices {
 #[derive(Clone)]
 pub struct AppCustomizationServices {
     pub(crate) rule_sets: Arc<dyn RuleSetRepository>,
-    pub(crate) maintenance_rule_sets: Arc<dyn MaintenanceRuleSetRepository>,
-    pub(crate) maintenance_evaluation: Arc<dyn crate::ports::MaintenanceEvaluationRepository>,
+    pub(crate) lifecycle_rule_sets: Arc<dyn LifecycleRuleSetRepository>,
+    pub(crate) lifecycle_evaluation: Arc<dyn crate::ports::LifecycleEvaluationRepository>,
     /// User-authored request rules (spec 0003). Ships dark behind the same
-    /// experimental gate as maintenance.
+    /// experimental gate as lifecycle.
     pub(crate) request_rule_sets: Arc<dyn crate::ports::RequestRuleSetRepository>,
     /// Append-only traces of every request evaluation (spec 0003 FR-016).
     pub(crate) request_rule_decisions: Arc<dyn crate::ports::RequestRuleDecisionRepository>,
@@ -184,6 +185,9 @@ pub struct AppCustomizationServices {
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
     pub(crate) user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
     pub(crate) rule_mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Held across each lifecycle rule set insert and rename, so a write that
+    /// checks names first never interleaves with another write.
+    pub(crate) lifecycle_rule_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -449,6 +453,7 @@ impl AppServices {
                 workflow_operations: Arc::new(NullWorkflowOperationRepository),
                 file_importer: Arc::new(NullFileImporter),
                 import_artifacts: Arc::new(null_repositories::NullImportArtifactRepository),
+                archive_extractions: Arc::new(crate::InMemoryArchiveExtractionRepository::default()),
                 release_attempts,
                 acquisition_state: Arc::new(NullAcquisitionStateRepository),
                 download_registry: Arc::new(null_repositories::NullDownloadRegistryRepository),
@@ -477,19 +482,17 @@ impl AppServices {
             },
             customization: AppCustomizationServices {
                 rule_sets: Arc::new(NullRuleSetRepository),
-                maintenance_rule_sets: Arc::new(
-                    null_repositories::NullMaintenanceRuleSetRepository,
-                ),
-                maintenance_evaluation: Arc::new(
-                    null_repositories::NullMaintenanceEvaluationRepository,
+                lifecycle_rule_sets: Arc::new(null_repositories::NullLifecycleRuleSetRepository),
+                lifecycle_evaluation: Arc::new(
+                    null_repositories::NullLifecycleEvaluationRepository,
                 ),
                 request_rule_sets: Arc::new(null_repositories::NullRequestRuleSetRepository),
                 request_rule_decisions: Arc::new(
                     null_repositories::NullRequestRuleDecisionRepository,
                 ),
-                request_rules_engine: Arc::new(std::sync::RwLock::new(
+                request_rules_engine: Arc::new(std::sync::RwLock::new(Arc::new(
                     crate::request_rules::RequestRulesEngineCache::default(),
-                )),
+                ))),
                 pp_scripts: Arc::new(NullPostProcessingScriptRepository),
                 plugin_installations: Arc::new(NullPluginInstallationRepository),
                 plugin_descriptor_loader: Arc::new(NullPluginDescriptorLoader),
@@ -497,6 +500,7 @@ impl AppServices {
                     scryer_rules::UserRulesEngine::empty(),
                 )),
                 rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+                lifecycle_rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             notifications: AppNotificationServices::Disabled,
             lists: AppListServices::disabled(),

@@ -72,6 +72,60 @@ impl ListExclusionRepository for ListStore {
         .await
     }
 
+    async fn create_many(&self, exclusions: Vec<ListExclusion>) -> AppResult<()> {
+        if exclusions.is_empty() {
+            return Ok(());
+        }
+        let mut exclusion_rows = Vec::with_capacity(exclusions.len());
+        let mut id_rows = Vec::new();
+        for exclusion in &exclusions {
+            exclusion_rows.push(vec![
+                SqlArg::Text(exclusion.id.clone()),
+                SqlArg::Text(exclusion.kind.as_str().to_string()),
+                SqlArg::Text(exclusion.display_title.clone()),
+                SqlArg::OptI32(exclusion.year),
+                SqlArg::Text(exclusion.scope.as_str().to_string()),
+                SqlArg::OptText(exclusion.scope.subscription_id().map(str::to_string)),
+                SqlArg::OptText(exclusion.created_by_user_id.clone()),
+                SqlArg::Timestamp(exclusion.created_at),
+            ]);
+            for (source, kind, value) in dedupe_ids(&exclusion.external_ids) {
+                id_rows.push(vec![
+                    SqlArg::Text(exclusion.id.clone()),
+                    SqlArg::Text(source),
+                    SqlArg::Text(value),
+                    SqlArg::Text(kind),
+                ]);
+            }
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "create_list_exclusions", move |tx| {
+            let exclusion_rows = exclusion_rows.clone();
+            let id_rows = id_rows.clone();
+            Box::pin(async move {
+                SqlRuntime::execute_batch_insert(
+                    tx,
+                    &format!("INSERT INTO list_exclusions ({EXCLUSION_COLUMNS})"),
+                    8,
+                    exclusion_rows,
+                    "",
+                )
+                .await?;
+                if !id_rows.is_empty() {
+                    SqlRuntime::execute_batch_insert(
+                        tx,
+                        "INSERT INTO list_exclusion_external_ids (exclusion_id, source, value, external_kind)",
+                        4,
+                        id_rows,
+                        "",
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ListExclusion>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
@@ -144,6 +198,60 @@ impl ListExclusionRepository for ListStore {
         )
         .await?;
         self.hydrate_exclusions(rows).await
+    }
+
+    /// An exact match on `(source, value)`, served by
+    /// `idx_list_exclusion_external_ids_lookup`. Equivalent to
+    /// [`Self::find_matching`]'s `LOWER()` form because every stored id is
+    /// lowercased on write.
+    async fn any_matching(
+        &self,
+        kind: MediaFacet,
+        external_ids: &[ExternalId],
+        subscription_id: Option<&str>,
+    ) -> AppResult<bool> {
+        let ids = dedupe_ids(external_ids);
+        if ids.is_empty() {
+            return Ok(false);
+        }
+        let mut args = vec![SqlArg::Text(kind.as_str().to_string())];
+        let id_predicates: Vec<&str> = ids
+            .iter()
+            .map(|(source, kind, value)| {
+                args.push(SqlArg::Text(source.clone()));
+                args.push(SqlArg::Text(value.clone()));
+                if kind.is_empty() {
+                    "(x.source = {} AND x.value = {})"
+                } else {
+                    args.push(SqlArg::Text(kind.clone()));
+                    "(x.source = {} AND x.value = {}
+                      AND (x.external_kind = '' OR x.external_kind = {}))"
+                }
+            })
+            .collect();
+        let scope_clause = match subscription_id {
+            Some(subscription_id) => {
+                args.push(SqlArg::Text(subscription_id.to_string()));
+                "(e.scope = 'all_lists' OR e.subscription_id = {})"
+            }
+            None => "e.scope = 'all_lists'",
+        };
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT 1 AS matched
+                   FROM list_exclusions e
+                   JOIN list_exclusion_external_ids x ON x.exclusion_id = e.id
+                  WHERE e.kind = {{}}
+                    AND ({})
+                    AND {scope_clause}
+                  LIMIT 1",
+                id_predicates.join(" OR ")
+            ),
+            &args,
+        )
+        .await?;
+        Ok(row.is_some())
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {

@@ -1,3 +1,6 @@
+// disk-guard: this crate is fixture tooling, one of the three crates clippy.toml exempts from the disk guard by name.
+#![allow(clippy::disallowed_methods)]
+
 mod fixtures;
 mod nzbgeek;
 mod nzbget;

@@ -24,7 +24,7 @@ use super::*;
 use crate::acquisition::convergence::convergence_scope_key;
 use crate::acquisition::targets::AcquisitionTarget;
 use crate::contracts::{QueueDownloadOutcome, SubmissionConflictPolicy, SubmissionScope};
-use crate::ports::MaintenanceSearchJobRunCreation;
+use crate::ports::LifecycleSearchJobRunCreation;
 
 /// Convergence state of a scope for the UI. Mirrors the GraphQL
 /// `ConvergenceStateValue`; the interface maps this 1:1.
@@ -495,13 +495,16 @@ impl AppUseCase {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        // A title's rows are every scope it has (each episode of a series), so
+        // they are read without their decisions; only the page's own rows get
+        // their latest decision, in one read below.
         let states = self
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(&title_ids)
+            .list_acquisition_scope_states_for_title_ids_without_decisions(&title_ids)
             .await?;
-        let mut states_by_scope = HashMap::new();
+        let mut states_by_scope: HashMap<String, AcquisitionScopeState> = HashMap::new();
         for state in states {
             let scope = SubmissionScope::from_persisted(
                 &state.title_id,
@@ -517,8 +520,33 @@ impl AppUseCase {
                 states_by_scope.insert(scope_key, state);
             }
         }
+        let kept_ids = states_by_scope
+            .values()
+            .map(|state| state.id.clone())
+            .collect::<Vec<_>>();
+        let mut latest_decisions = self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .list_latest_release_decisions_for_acquisition_scope_states(&kept_ids)
+            .await?;
+        for state in states_by_scope.values_mut() {
+            state.latest_release_decision = latest_decisions.remove(&state.id);
+        }
+        // Each row moves to the last view of its scope; an earlier view of the
+        // same scope, if the page ever repeats one, gets a copy.
+        let mut remaining_views = HashMap::<String, usize>::new();
+        for view in page.iter() {
+            *remaining_views.entry(view.scope_key.clone()).or_default() += 1;
+        }
         for view in page.iter_mut() {
-            view.state = states_by_scope.get(&view.scope_key).cloned();
+            let remaining = remaining_views.entry(view.scope_key.clone()).or_default();
+            *remaining = remaining.saturating_sub(1);
+            view.state = if *remaining == 0 {
+                states_by_scope.remove(&view.scope_key)
+            } else {
+                states_by_scope.get(&view.scope_key).cloned()
+            };
         }
         // One grouped query for the page's items — never a read of the whole
         // standby table, which is uncapped by design.
@@ -994,6 +1022,28 @@ fn acquisition_search_job_status(
         JobRunStatus::Warning
     }
 }
+/// The single item a waiting or running search was started for, when it was
+/// started for one.
+fn acquisition_search_run_scope_key(run: &JobRun) -> Option<String> {
+    let progress: serde_json::Value = serde_json::from_str(run.progress_json.as_deref()?).ok()?;
+    progress["search"]["scopeKey"].as_str().map(str::to_string)
+}
+impl AppUseCase {
+    /// The waiting or running search of the single item `scope_key`, if any.
+    async fn active_acquisition_search_for_scope(&self, scope_key: Option<&str>) -> Option<JobRun> {
+        let scope_key = scope_key?;
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .list_active()
+            .await
+            .into_iter()
+            .find(|run| {
+                run.job_key == JobKey::AcquisitionSearch
+                    && acquisition_search_run_scope_key(run).as_deref() == Some(scope_key)
+            })
+    }
+}
 fn progress_with_search_context(
     progress: &AcquisitionSearchProgress,
     previous: Option<&str>,
@@ -1041,7 +1091,7 @@ fn acquisition_search_state_for_status(status: JobRunStatus, cancelled: bool) ->
 mod acquisition_search_state_tests {
     use super::*;
     #[test]
-    fn completion_preserves_maintenance_request_metadata() {
+    fn completion_preserves_lifecycle_request_metadata() {
         let original = serde_json::json!({
             "schema_version": 1,
             "maintenance_action_request": {"wanted_kind": "missing", "title_id": "title"},
@@ -1187,32 +1237,67 @@ impl AppUseCase {
         {
             return Err(AppError::validation_refused(crate::error_reasons::acquisition::AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM, "Automatic search requires a title and cannot select a Wanted item"));
         }
+        // A search of one item the operator picked waits its turn behind the
+        // running search instead of being refused: searches take as long as
+        // the indexers do, and an operator picks several items in a row.
+        // Broader searches keep single admission.
+        let single_item = !request.automatic
+            && request
+                .wanted_item_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty());
+        let another_search_running = || {
+            AppError::validation_refused(
+                crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING,
+                "Another search is running. Wait for it to finish or cancel it before starting this search.",
+            )
+        };
         let search_guard = self
             .runtime
             .jobs
             .acquisition_search_lock
             .clone()
             .try_lock_owned()
-            .map_err(|_| {
-                AppError::validation_refused(crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING, "Another search is running. Wait for it to finish or cancel it before starting this search.")
-            })?;
-        if self
+            .ok();
+        if search_guard.is_none() && !single_item {
+            return Err(another_search_running());
+        }
+        let search_guard = if self
             .runtime
             .jobs
             .job_run_tracker
             .has_active_job(JobKey::AcquisitionSearch)
             .await
         {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING,
-                "Another search is running. Wait for it to finish or cancel it before starting this search.",
-            ));
-        }
+            if !single_item {
+                return Err(another_search_running());
+            }
+            // Searches are already waiting: join the line behind them.
+            None
+        } else {
+            search_guard
+        };
 
         self.authorize_acquisition_search(actor, &request).await?;
         let scopes = self
             .resolve_acquisition_search_scopes(actor, &request)
             .await?;
+        let queued_scope_key = if single_item {
+            scopes
+                .first()
+                .map(|scope| scope.scope_key.clone())
+                .filter(|key| !key.is_empty())
+        } else {
+            None
+        };
+        // Asking again for an item whose search is waiting or running returns
+        // that search; it is not searched twice.
+        if let Some(existing) = self
+            .active_acquisition_search_for_scope(queued_scope_key.as_deref())
+            .await
+        {
+            return Ok(existing);
+        }
         let plan = self.acquisition_search_plan(&request, scopes).await?;
 
         let now = chrono::Utc::now();
@@ -1224,7 +1309,11 @@ impl AppUseCase {
                 request.wanted_kind.as_str(),
                 plan.scope_count()
             ),
-            status: JobRunStatus::Running,
+            status: if search_guard.is_some() {
+                JobRunStatus::Running
+            } else {
+                JobRunStatus::Queued
+            },
             trigger_source: JobTriggerSource::Manual,
             actor_user_id: Some(actor.id.clone()),
             progress_json: serde_json::to_string(&AcquisitionSearchProgress {
@@ -1251,8 +1340,29 @@ impl AppUseCase {
             "titleId": request.title_id,
             "seasonNumber": request.season_number,
             "intent": if request.automatic { "AUTOMATIC" } else { "WANTED" },
+            "scopeKey": queued_scope_key,
         });
         run.progress_json = Some(progress.to_string());
+        // The same-item check and the new run's entry among the active runs
+        // are one step, so two requests for one item cannot both start a
+        // search of it. The step holds only the check and the row insert.
+        let start_guard = match queued_scope_key {
+            Some(_) => Some(
+                self.runtime
+                    .jobs
+                    .acquisition_search_start_lock
+                    .clone()
+                    .lock_owned()
+                    .await,
+            ),
+            None => None,
+        };
+        if let Some(existing) = self
+            .active_acquisition_search_for_scope(queued_scope_key.as_deref())
+            .await
+        {
+            return Ok(existing);
+        }
         run = self.services.events.job_runs.create_job_run(&run).await?;
         let run_payload = JobRun::from_record(&run, None);
         self.runtime
@@ -1260,6 +1370,7 @@ impl AppUseCase {
             .job_run_tracker
             .upsert_active_run(run_payload.clone())
             .await;
+        drop(start_guard);
 
         let cancellation = tokio_util::sync::CancellationToken::new();
         self.runtime
@@ -1285,16 +1396,68 @@ impl AppUseCase {
 
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
-            app.run_acquisition_search_job(
-                run,
-                actor,
-                actor_event,
-                plan,
-                cancellation,
-                search_guard,
-            )
-            .await;
+        // Tracked by the restore coordinator so a restore waits for the
+        // search instead of replacing the database under it.
+        self.restore_coordinator().spawn_task(async move {
+            // A panic inside the search is caught here, so it still ends the
+            // job run and releases its cancellation entry instead of leaving
+            // the run listed as running.
+            let panic_run = run.clone();
+            let panic_actor = actor_event.clone();
+            let panic_total = plan.scope_count();
+            let worker = app.clone();
+            let search = std::panic::AssertUnwindSafe(async move {
+                let app = worker;
+                let mut run = run;
+                let search_guard = match search_guard {
+                    Some(guard) => guard,
+                    None => {
+                        let admission = app.runtime.jobs.acquisition_search_lock.clone();
+                        let guard = tokio::select! {
+                            guard = admission.lock_owned() => guard,
+                            _ = cancellation.cancelled() => {
+                                let total = plan.scope_count();
+                                app.finish_acquisition_search_job(
+                                    run,
+                                    actor_event,
+                                    total,
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    true,
+                                )
+                                .await;
+                                return;
+                            }
+                        };
+                        run.status = JobRunStatus::Running;
+                        guard
+                    }
+                };
+                app.run_acquisition_search_job(
+                    run,
+                    actor,
+                    actor_event,
+                    plan,
+                    cancellation,
+                    search_guard,
+                )
+                .await;
+            });
+            if futures_util::FutureExt::catch_unwind(search).await.is_err() {
+                app.finish_acquisition_search_job(
+                    panic_run,
+                    panic_actor,
+                    panic_total,
+                    1,
+                    0,
+                    1,
+                    false,
+                    false,
+                )
+                .await;
+            }
         });
 
         Ok(run_payload)
@@ -1304,26 +1467,26 @@ impl AppUseCase {
     /// interactive search. The accepted receipt and the job row commit together
     /// before this method returns or spawns; an existing receipt deliberately
     /// returns without starting another worker.
-    pub async fn start_maintenance_acquisition_search_job(
+    pub async fn start_lifecycle_acquisition_search_job(
         &self,
         actor: &User,
         request: AcquisitionSearchRequest,
-        receipt: scryer_domain::MaintenanceActionJobReceipt,
-    ) -> AppResult<scryer_domain::MaintenanceActionJobReceipt> {
+        receipt: scryer_domain::LifecycleActionJobReceipt,
+    ) -> AppResult<scryer_domain::LifecycleActionJobReceipt> {
         receipt
             .validate_schema()
             .map_err(|error| AppError::Validation(error.to_string()))?;
         let Some(job_run_id) = receipt.job_run_id.clone() else {
-            return Err(AppError::validation_refused(crate::error_reasons::acquisition::MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID, "maintenance Search dispatch requires a preallocated job run id"));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID, "lifecycle Search dispatch requires a preallocated job run id"));
         };
-        if receipt.state != scryer_domain::MaintenanceActionJobReceiptState::Accepted {
-            return Err(AppError::validation_refused(crate::error_reasons::acquisition::MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT, "maintenance Search dispatch requires an accepted receipt intent"));
+        if receipt.state != scryer_domain::LifecycleActionJobReceiptState::Accepted {
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT, "lifecycle Search dispatch requires an accepted receipt intent"));
         }
 
         if let Some(existing) = self
             .services
             .customization
-            .maintenance_evaluation
+            .lifecycle_evaluation
             .list_action_job_receipts(&receipt.key)
             .await?
             .into_iter()
@@ -1332,8 +1495,8 @@ impl AppUseCase {
                     && existing.logical_request_key == receipt.logical_request_key
                     && matches!(
                         existing.state,
-                        scryer_domain::MaintenanceActionJobReceiptState::Accepted
-                            | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                        scryer_domain::LifecycleActionJobReceiptState::Accepted
+                            | scryer_domain::LifecycleActionJobReceiptState::Completed
                     )
             })
         {
@@ -1357,7 +1520,7 @@ impl AppUseCase {
                 if let Some(existing) = self
                     .services
                     .customization
-                    .maintenance_evaluation
+                    .lifecycle_evaluation
                     .list_action_job_receipts(&receipt.key)
                     .await?
                     .into_iter()
@@ -1366,8 +1529,8 @@ impl AppUseCase {
                             && existing.logical_request_key == receipt.logical_request_key
                             && matches!(
                                 existing.state,
-                                scryer_domain::MaintenanceActionJobReceiptState::Accepted
-                                    | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                                scryer_domain::LifecycleActionJobReceiptState::Accepted
+                                    | scryer_domain::LifecycleActionJobReceiptState::Completed
                             )
                     })
                 {
@@ -1403,7 +1566,9 @@ impl AppUseCase {
             ),
             status: JobRunStatus::Running,
             trigger_source: JobTriggerSource::SystemInternal,
-            actor_user_id: Some(actor.id.clone()),
+            // The synthetic system actor has no `users` row, and the job's
+            // actor column references one. The summary records it instead.
+            actor_user_id: (!actor.is_system_execution_actor()).then(|| actor.id.clone()),
             progress_json: serde_json::to_string(&AcquisitionSearchProgress {
                 state: "running".to_string(),
                 total: plan.scope_count(),
@@ -1416,6 +1581,7 @@ impl AppUseCase {
             summary_json: Some(
                 serde_json::json!({
                     "schema_version": 1,
+                    "system_actor": actor.is_system_execution_actor(),
                     "maintenance_action_request": {
                         "automatic": request.automatic,
                         "wanted_kind": request.wanted_kind.as_str(),
@@ -1439,11 +1605,11 @@ impl AppUseCase {
             .services
             .events
             .job_runs
-            .create_maintenance_search_job_run(&run, &receipt)
+            .create_lifecycle_search_job_run(&run, &receipt)
             .await?
         {
-            MaintenanceSearchJobRunCreation::Existing { receipt } => return Ok(receipt),
-            MaintenanceSearchJobRunCreation::Created { run, receipt } => (*run, receipt),
+            LifecycleSearchJobRunCreation::Existing { receipt } => return Ok(receipt),
+            LifecycleSearchJobRunCreation::Created { run, receipt } => (*run, receipt),
         };
 
         self.runtime
@@ -1487,9 +1653,9 @@ impl AppUseCase {
         Ok(receipt)
     }
 
-    /// Reserve and resume durable maintenance searches before startup marks
+    /// Reserve and resume durable lifecycle searches before startup marks
     /// other abandoned jobs failed. Reuse their receipt and job identities.
-    pub async fn resume_interrupted_maintenance_searches(&self) -> AppResult<Vec<String>> {
+    pub async fn resume_interrupted_lifecycle_searches(&self) -> AppResult<Vec<String>> {
         let runs = self.services.events.job_runs.list_active_job_runs().await?;
         let mut reserved = Vec::new();
         {
@@ -1581,16 +1747,21 @@ impl AppUseCase {
                         season_number: saved.season_number,
                         wanted_item_id: saved.wanted_item_id,
                     };
-                    let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
-                        AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_UNAVAILABLE, "search actor is unavailable")
-                    })?;
-                    // A maintenance sequence dispatches its Search step as the
+                    // A lifecycle sequence dispatches its Search step as the
                     // synthetic system actor, which has no persisted user row.
                     // Reconstructing it is what makes those steps recoverable
                     // at all; `UserStore` would answer "no such user" forever.
-                    let actor = if actor_id == User::SYSTEM_EXECUTION_ID {
+                    // The job records it as `system_actor` in its summary with
+                    // no actor id, because the actor column references
+                    // `users`; the id form is still read for older rows.
+                    let system_actor = summary["system_actor"].as_bool() == Some(true)
+                        || persisted.actor_user_id.as_deref() == Some(User::SYSTEM_EXECUTION_ID);
+                    let actor = if system_actor {
                         User::system_execution_actor()
                     } else {
+                        let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
+                            AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_UNAVAILABLE, "search actor is unavailable")
+                        })?;
                         let actor = app
                             .services
                             .identity
