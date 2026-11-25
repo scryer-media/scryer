@@ -4438,6 +4438,8 @@ export const REQUEST_RULE_SET_FIELDS = `
     name
     description
     enabled
+    evaluationMode
+    applicability
     libraryIds
     currentRevisionNumber
     decisionCount
@@ -4508,6 +4510,45 @@ export const requestRuleRevisionsQuery = `query RequestRuleRevisions($ruleSetId:
 
 export const requestRuleDecisionsQuery = `query RequestRuleDecisions($limit: Int, $outcome: RequestDecisionOutcomeValue) {
   requestRuleDecisions(limit: $limit, outcome: $outcome) {${REQUEST_RULE_DECISION_FIELDS}
+  }
+}`;
+
+export const libraryContentBlocksQuery = `query LibraryContentBlocks($libraryId: ID!, $limit: Int) {
+  libraryContentBlocks(libraryId: $libraryId, limit: $limit) {
+    id
+    sizeBytes
+    sampleBlake3
+    reason
+    createdAt
+  }
+}`;
+
+export const mediaIssuesQuery = `query MediaIssues($libraryId: ID!, $status: MediaIssueStatusValue, $limit: Int, $offset: Int) {
+  mediaIssues(libraryId: $libraryId, status: $status, limit: $limit, offset: $offset) {
+    id
+    titleId
+    mediaFileId
+    affectedEpisodeIds
+    remediation
+    authorizedRemediation
+    status
+    executionStatus
+    executionErrorCode
+    details
+    createdAt
+  }
+}`;
+
+export const mediaIssueRecycleSettingsQuery = `query MediaIssueRecycleSettings {
+  recycleBinSettings {
+    enabled
+    validationError
+  }
+}`;
+
+export const mediaIssueTitleQuery = `query MediaIssueTitle($titleId: ID!) {
+  title(id: $titleId) {
+    name
   }
 }`;
 

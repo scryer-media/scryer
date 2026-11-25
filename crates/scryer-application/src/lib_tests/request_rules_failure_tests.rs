@@ -33,6 +33,7 @@ async fn unbuildable_persisted_rules_hold_only_their_enforcing_scope() {
                         "Broken policy",
                         "",
                         &["another-library".into()],
+                        scryer_domain::RequestRuleApplicability::Acquisition,
                         Utc::now(),
                     )
                     .await
@@ -476,10 +477,18 @@ impl crate::ports::RequestRuleSetRepository for ReadFailingRequestRuleStore {
         name: &str,
         description: &str,
         library_ids: &[String],
+        applicability: scryer_domain::RequestRuleApplicability,
         updated_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<()> {
         self.inner
-            .update_rule_set_metadata(id, name, description, library_ids, updated_at)
+            .update_rule_set_metadata(
+                id,
+                name,
+                description,
+                library_ids,
+                applicability,
+                updated_at,
+            )
             .await
     }
 

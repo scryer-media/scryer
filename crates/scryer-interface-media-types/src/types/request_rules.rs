@@ -25,6 +25,16 @@ pub enum RequestRuleEvaluationModeValue {
     Disabled,
     /// An enabled rule was evaluated, recorded, and acted on.
     Enforce,
+    /// Record the rule verdict without acting on or side-effecting it.
+    Shadow,
+}
+
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestRuleApplicabilityValue {
+    Acquisition,
+    MediaIssue,
+    AcquisitionAndMediaIssue,
 }
 
 /// What a request evaluation concluded.
@@ -104,6 +114,8 @@ pub struct RequestRuleSet {
     pub description: String,
     /// Whether the rule set takes part in deciding requests.
     pub enabled: bool,
+    pub evaluation_mode: RequestRuleEvaluationModeValue,
+    pub applicability: RequestRuleApplicabilityValue,
     /// Libraries the rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Revision number of the matcher currently in force.
@@ -397,6 +409,7 @@ pub struct CreateRequestRuleSetInput {
     pub rego_source: String,
     /// Libraries to confine the rule to. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    pub applicability: Option<RequestRuleApplicabilityValue>,
 }
 
 /// Replaces the matcher of an existing rule set, appending revision N+1.
@@ -420,6 +433,7 @@ pub struct UpdateRequestRuleMetadataInput {
     pub description: Option<String>,
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    pub applicability: Option<RequestRuleApplicabilityValue>,
 }
 
 /// Validates request rule source without saving it.
@@ -436,11 +450,22 @@ pub struct ValidateRequestRuleInput {
 /// title*", and a synthetic requester would exercise none of the permission,
 /// history, or linked-provider facts that make request rules useful.
 #[derive(InputObject, Clone)]
+pub struct RequestMediaIssuePreviewInput {
+    /// Existing file resolved in the sample library. All associations and
+    /// provenance come from the server, as on submission.
+    pub media_file_id: ID,
+    pub reason_code: String,
+    pub remediation: String,
+}
+
+#[derive(InputObject, Clone)]
 pub struct RequestRuleSampleInput {
     /// User to evaluate as.
     pub user_id: ID,
     /// Library to evaluate against.
     pub library_id: ID,
+    pub kind: Option<String>,
+    pub media_issue: Option<RequestMediaIssuePreviewInput>,
     /// Provider identifiers of the sample title. An empty list is a legitimate
     /// preview of requester facts alone, and leaves every metadata fact
     /// unknown.

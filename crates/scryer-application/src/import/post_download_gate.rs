@@ -95,6 +95,7 @@ impl ImportedFileRejection {
                 | crate::error_reasons::media::PROBE_IO_FAILED
                 | crate::error_reasons::media::PROBE_MALFORMED
                 | crate::error_reasons::media::PROBE_ENCRYPTED
+                | crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
         ) || self
             .blocking_rule_codes
             .iter()
@@ -122,7 +123,10 @@ pub(crate) fn review_hold_skip_reason_for_code(code: &str) -> ImportSkipReason {
         SOURCE_CHANGED_AFTER_PROBE_CODE | IMPORT_SOURCE_CHANGED_AFTER_PROBE_CODE
     ) {
         ImportSkipReason::SourceChanged
-    } else if code == SOURCE_SNAPSHOT_UNAVAILABLE_CODE {
+    } else if matches!(
+        code,
+        SOURCE_SNAPSHOT_UNAVAILABLE_CODE | crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
+    ) {
         ImportSkipReason::SourceUnavailable
     } else {
         ImportSkipReason::PolicyMismatch
@@ -165,6 +169,35 @@ fn import_source_snapshot_unavailable_rejection(
         recycle_reason: SOURCE_SNAPSHOT_UNAVAILABLE_CODE,
         skip_reason: Some(ImportSkipReason::SourceUnavailable),
         blocking_rule_codes: vec![SOURCE_SNAPSHOT_UNAVAILABLE_CODE.to_string()],
+    }
+}
+
+fn content_block_rejection(path: &Path) -> ImportedFileRejection {
+    use crate::error_reasons::media;
+    ImportedFileRejection {
+        message: format!(
+            "import content matches a confirmed bad-media block: {}",
+            path.display()
+        ),
+        recycle_reason: media::CONTENT_BLOCK_MATCHED,
+        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        blocking_rule_codes: vec![media::CONTENT_BLOCK_MATCHED.to_string()],
+    }
+}
+
+fn content_block_lookup_rejection(
+    path: &Path,
+    detail: impl std::fmt::Display,
+) -> ImportedFileRejection {
+    use crate::error_reasons::media;
+    ImportedFileRejection {
+        message: format!(
+            "could not verify bad-media content block for {}: {detail}",
+            path.display()
+        ),
+        recycle_reason: media::CONTENT_BLOCK_LOOKUP_FAILED,
+        skip_reason: Some(ImportSkipReason::SourceUnavailable),
+        blocking_rule_codes: vec![media::CONTENT_BLOCK_LOOKUP_FAILED.to_string()],
     }
 }
 
@@ -1676,6 +1709,25 @@ pub(crate) async fn prepare_import_candidate_with_disc_selection(
             ));
         }
         let accepted = accepted?;
+
+        let proof = crate::fs_integrity::import_content_proof_async(path)
+            .await
+            .map_err(|error| content_block_lookup_rejection(path, error))?;
+        match app
+            .services
+            .workflow
+            .blocklist_repo
+            .is_content_blocked(
+                &title.library_id,
+                &proof,
+                crate::fs_integrity::IMPORT_CONTENT_PROOF_SCHEME,
+            )
+            .await
+        {
+            Ok(true) => return Err(content_block_rejection(path)),
+            Ok(false) => {}
+            Err(error) => return Err(content_block_lookup_rejection(path, error)),
+        }
 
         let (parsed, rescore_changes) = rescore_from_mediainfo(parsed, accepted.as_ref());
         if !rescore_changes.is_empty() {

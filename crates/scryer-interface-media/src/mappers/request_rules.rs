@@ -26,7 +26,8 @@ use scryer_application::request_rules::{
 use scryer_application::{MediaRequestMetadataSnapshot, RequestPreflight};
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
+    RequestDecisionOutcome, RequestRuleApplicability, RequestRuleDecisionRecord,
+    RequestRuleEvaluationMode,
 };
 use scryer_rules::request::{
     REQUEST_INPUT_SCHEMA_VERSION, RequestVote, certification_rank_for_label,
@@ -46,6 +47,31 @@ pub fn request_rule_evaluation_mode_value(
     match mode {
         RequestRuleEvaluationMode::Disabled => RequestRuleEvaluationModeValue::Disabled,
         RequestRuleEvaluationMode::Enforce => RequestRuleEvaluationModeValue::Enforce,
+        RequestRuleEvaluationMode::Shadow => RequestRuleEvaluationModeValue::Shadow,
+    }
+}
+
+pub fn request_rule_applicability_value(
+    applicability: RequestRuleApplicability,
+) -> RequestRuleApplicabilityValue {
+    match applicability {
+        RequestRuleApplicability::Acquisition => RequestRuleApplicabilityValue::Acquisition,
+        RequestRuleApplicability::MediaIssue => RequestRuleApplicabilityValue::MediaIssue,
+        RequestRuleApplicability::AcquisitionAndMediaIssue => {
+            RequestRuleApplicabilityValue::AcquisitionAndMediaIssue
+        }
+    }
+}
+
+pub fn request_rule_applicability_into_application(
+    applicability: RequestRuleApplicabilityValue,
+) -> RequestRuleApplicability {
+    match applicability {
+        RequestRuleApplicabilityValue::Acquisition => RequestRuleApplicability::Acquisition,
+        RequestRuleApplicabilityValue::MediaIssue => RequestRuleApplicability::MediaIssue,
+        RequestRuleApplicabilityValue::AcquisitionAndMediaIssue => {
+            RequestRuleApplicability::AcquisitionAndMediaIssue
+        }
     }
 }
 
@@ -113,6 +139,8 @@ pub fn from_request_rule_set(
         name: rule_set.name.clone(),
         description: rule_set.description.clone(),
         enabled: rule_set.enabled,
+        evaluation_mode: request_rule_evaluation_mode_value(rule_set.evaluation_mode),
+        applicability: request_rule_applicability_value(rule_set.applicability),
         library_ids: rule_set.library_ids.clone(),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         decision_count: to_graphql_int(i64::try_from(decision_count).unwrap_or(i64::MAX)),
@@ -252,35 +280,6 @@ pub fn from_request_rule_decision_view(view: RequestRuleDecisionView) -> Request
 /// The outcome one rule's vote contributes, on its own.
 ///
 /// A preview runs a single matcher, so there is no arbitration across rules: an
-/// approve previews as an auto-approval, a deny as a
-/// denial, and everything uncertain — a manual, an abstain, a hold, a failure —
-/// as manual review, which is the direction the real arbitration also takes.
-fn preview_outcome(vote: Option<RequestVote>) -> RequestDecisionOutcome {
-    match vote {
-        Some(RequestVote::Approve) => RequestDecisionOutcome::AutoApprove,
-        Some(RequestVote::Deny) => RequestDecisionOutcome::Deny,
-        _ => RequestDecisionOutcome::ManualReview,
-    }
-}
-
-/// Why a preview did not follow a vote, in the same vocabulary the stored
-/// traces use.
-fn preview_fallback_reason(result: &AppPreviewResult) -> Option<String> {
-    if result.error.is_some() {
-        return Some(scryer_application::FALLBACK_ERROR.to_string());
-    }
-    match result.vote {
-        Some(RequestVote::Manual) if result.held => {
-            Some(scryer_application::FALLBACK_HELD.to_string())
-        }
-        Some(RequestVote::Manual) => Some(scryer_application::FALLBACK_RULE_MANUAL.to_string()),
-        Some(RequestVote::Abstain) => {
-            Some(scryer_application::FALLBACK_NO_RULE_MATCHED.to_string())
-        }
-        _ => None,
-    }
-}
-
 /// `mode` is the stored rule set's mode, or `DISABLED` for an unsaved draft —
 /// an unsaved matcher is not enabled, because it is not stored.
 pub fn from_request_rule_preview_result(
@@ -288,8 +287,8 @@ pub fn from_request_rule_preview_result(
     rule_set_name: String,
     mode: RequestRuleEvaluationMode,
 ) -> RequestRulePreviewPayload {
-    let outcome = request_decision_outcome_value(preview_outcome(result.vote));
-    let fallback_reason = preview_fallback_reason(&result);
+    let effective_outcome = request_decision_outcome_value(result.effective_outcome);
+    let policy_outcome = request_decision_outcome_value(result.policy_outcome);
     let reasons: Vec<RequestPreflightReason> = result
         .reasons
         .iter()
@@ -324,9 +323,9 @@ pub fn from_request_rule_preview_result(
             request_id: None,
             evaluated_at: result.evaluated_at,
             mode: request_rule_evaluation_mode_value(mode),
-            effective_outcome: outcome,
-            policy_outcome: outcome,
-            fallback_reason,
+            effective_outcome,
+            policy_outcome,
+            fallback_reason: result.fallback_reason,
             votes: vec![vote],
             reasons,
             tags: result.tags,
@@ -550,9 +549,31 @@ pub fn request_rule_sample_into_application(
         (None, true) => Some(None),
         (None, false) => None,
     };
+    let media_issue = sample
+        .media_issue
+        .map(|issue| {
+            let remediation = scryer_domain::MediaIssueRemediation::parse(&issue.remediation)
+                .ok_or_else(|| {
+                    scryer_application::AppError::validation_refused(
+                        scryer_application::error_reasons::request_rules::RULE_VALIDATION_FAILED,
+                        "The sample remediation must be mark_bad or recycle_and_search",
+                    )
+                })?;
+            Ok::<_, scryer_application::AppError>(
+                scryer_application::media_issues::SubmitMediaIssueInput {
+                    media_file_id: String::from(issue.media_file_id),
+                    reason_code: issue.reason_code,
+                    remediation,
+                    details: None,
+                },
+            )
+        })
+        .transpose()?;
     Ok(scryer_application::RequestRuleSample {
         user_id: String::from(sample.user_id),
         library_id: String::from(sample.library_id),
+        kind: sample.kind,
+        media_issue,
         external_ids: sample
             .external_ids
             .into_iter()
@@ -654,21 +675,6 @@ mod tests {
         );
         assert_eq!(decision.votes.len(), 1);
         assert_eq!(decision.votes[0].vote, None);
-    }
-
-    #[test]
-    fn preview_outcomes_never_approve_on_uncertainty() {
-        assert_eq!(
-            preview_outcome(Some(RequestVote::Approve)),
-            RequestDecisionOutcome::AutoApprove
-        );
-        assert_eq!(
-            preview_outcome(Some(RequestVote::Deny)),
-            RequestDecisionOutcome::Deny
-        );
-        for vote in [Some(RequestVote::Manual), Some(RequestVote::Abstain), None] {
-            assert_eq!(preview_outcome(vote), RequestDecisionOutcome::ManualReview);
-        }
     }
 
     #[test]

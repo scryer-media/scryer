@@ -53,7 +53,7 @@ pub use crate::policy::observation::Observation;
 /// version; bumping it is a breaking change to every stored request rule, and
 /// it is recorded on every decision trace so an old decision stays explainable
 /// against the surface it was made on.
-pub const REQUEST_INPUT_SCHEMA_VERSION: u32 = 1;
+pub const REQUEST_INPUT_SCHEMA_VERSION: u32 = 2;
 
 /// Package prefix for user-authored request rules.
 pub(crate) const USER_PACKAGE_PREFIX: &str = "scryer.request.user";
@@ -111,15 +111,43 @@ pub struct RequestInput {
 
 impl Serialize for RequestInput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let namespaces =
+        let mut namespaces =
             serialize_fact_namespaces(&self.facts).map_err(serde::ser::Error::custom)?;
+        let mut request = serde_json::to_value(&self.request).map_err(serde::ser::Error::custom)?;
+        if self.request.media_issue.is_some() {
+            let fields = request
+                .as_object_mut()
+                .expect("RequestDoc serializes as an object");
+            for field in [
+                "origin",
+                "list",
+                "quality_profile_id",
+                "quality_profile_name",
+                "monitor_type",
+                "monitor_selection_season_count",
+                "lease_forever",
+                "lease_days",
+                "required_audio_languages",
+                "preferred_audio_languages",
+            ] {
+                fields.remove(field);
+            }
+            let media = serialize_fact_namespaces(&self.facts.media_issue)
+                .map_err(serde::ser::Error::custom)?;
+            namespaces
+                .facts
+                .insert("media_issue".into(), media.facts.into());
+            namespaces
+                .observations
+                .insert("media_issue".into(), media.observations.into());
+        }
         let mut state = serializer.serialize_struct("RequestInput", 8)?;
         state.serialize_field("schema_version", &self.schema_version)?;
         state.serialize_field("evaluation_time", &self.evaluation_time)?;
         state.serialize_field("now", &self.now)?;
         state.serialize_field("requester", &self.requester)?;
         state.serialize_field("library", &self.library)?;
-        state.serialize_field("request", &self.request)?;
+        state.serialize_field("request", &request)?;
         state.serialize_field("facts", &namespaces.facts)?;
         state.serialize_field("observations", &namespaces.observations)?;
         state.end()
@@ -195,6 +223,12 @@ pub struct RequestLibraryDoc {
 /// a list submitted for them.
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestDoc {
+    /// `acquisition_request` or `media_issue`. Existing acquisition rules must
+    /// remain scoped to acquisition requests by default.
+    pub kind: String,
+    /// Media-issue details; absent for acquisition requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_issue: Option<RequestMediaIssueDoc>,
     /// `manual`, `public_list` or `personal_list`.
     pub origin: String,
     pub title: String,
@@ -220,6 +254,27 @@ pub struct RequestDoc {
     /// request, and for a list request whose list could not be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list: Option<RequestListDoc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestMediaIssueDoc {
+    pub operation: String,
+    pub reason_code: String,
+    pub remediation: String,
+    pub title_id: String,
+    pub library_id: String,
+    pub media_file_id: String,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+    pub provenance: String,
+    pub wider_hash_impact: WiderHashImpact,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WiderHashImpact {
+    None,
+    Unknown,
 }
 
 /// The list behind a list-sourced request. A personal list is never named.
@@ -254,6 +309,10 @@ pub struct RequestCertificationDoc {
 /// and "nobody could tell me whether this film is adult".
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestFactsDoc {
+    // ── media issues ──
+    #[serde(skip_serializing)]
+    pub media_issue: RequestMediaIssueFactsDoc,
+
     // ── content rating ──
     /// Minimum age the content is rated for.
     pub age_rating: Observation<i64>,
@@ -318,6 +377,11 @@ pub struct RequestFactsDoc {
 
     // ── library ──
     pub library_title_count: Observation<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestMediaIssueFactsDoc {
+    pub reporter_requested_affected_media: Observation<bool>,
 }
 
 // ── Contract helpers ────────────────────────────────────────────────────────
@@ -521,7 +585,7 @@ impl PolicyFamily for RequestFamily {
     type Policy = RequestPolicy;
     type Input = RequestInput;
     type Decision = RequestRuleDecision;
-    type RuleExtra = ();
+    type RuleExtra = String;
     type EvalContext = ();
     type EvalError = RequestEvalError;
 
@@ -545,7 +609,9 @@ impl PolicyFamily for RequestFamily {
         decision_wrapper_rule_path(rule_id)
     }
 
-    fn rule_extra(_policy: &Self::Policy) -> Self::RuleExtra {}
+    fn rule_extra(policy: &Self::Policy) -> Self::RuleExtra {
+        policy.id.clone()
+    }
 
     /// A rule whose fact dependencies cannot be read off its source must not
     /// load at all: the host could not then tell whether it is deciding on
@@ -625,6 +691,14 @@ impl RequestRulesEvaluator {
     /// enough to send the request to a human.
     pub fn evaluate(&mut self, input: &RequestInput) -> Result<RequestEvalResult, RulesError> {
         self.evaluate_policies(input, &())
+    }
+
+    pub fn evaluate_scoped(
+        &mut self,
+        input: &RequestInput,
+        selected: impl Fn(&str) -> bool,
+    ) -> Result<RequestEvalResult, RulesError> {
+        self.evaluate_policies_where(input, &(), "scoped", |id| selected(id))
     }
 }
 
@@ -767,6 +841,8 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             is_default: true,
         },
         request: RequestDoc {
+            kind: "acquisition_request".to_string(),
+            media_issue: None,
             origin: "public_list".to_string(),
             title: "Test Movie".to_string(),
             year: Some(2024),
@@ -794,6 +870,9 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             }),
         },
         facts: RequestFactsDoc {
+            media_issue: RequestMediaIssueFactsDoc {
+                reporter_requested_affected_media: Observation::absent_because("not_media_issue"),
+            },
             age_rating: Observation::known(13),
             certifications: Observation::known(vec![RequestCertificationDoc {
                 country: "US".to_string(),
@@ -1364,7 +1443,7 @@ mod tests {
 
         let doc = serde_json::to_value(&input).expect("input serializes");
 
-        assert_eq!(doc["schema_version"], 1);
+        assert_eq!(doc["schema_version"], REQUEST_INPUT_SCHEMA_VERSION);
         assert_eq!(doc["evaluation_time"], "2023-11-14T22:13:20Z");
         assert_eq!(doc["now"]["weekday"], "tuesday");
         assert_eq!(doc["now"]["hour_utc"], 22);
@@ -1384,16 +1463,60 @@ mod tests {
             assert!(doc["facts"].get(fact).is_none(), "{fact}");
             assert!(doc["observations"][fact]["reason"].is_string(), "{fact}");
         }
+
         assert_eq!(
             doc["observations"]["certification_rank"]["status"],
             "unknown"
         );
         assert_eq!(doc["observations"]["network"]["status"], "absent");
-
-        // The two namespaces describe the same facts, so neither can gain a key
-        // the other never heard of.
         for fact in doc["facts"].as_object().expect("facts object").keys() {
             assert!(doc["observations"].get(fact).is_some(), "{fact}");
+        }
+    }
+
+    #[test]
+    fn media_issue_relationship_is_known_false_or_held_and_has_no_acquisition_fields() {
+        let mut input = synthetic_request_input();
+        input.request.kind = "media_issue".into();
+        input.request.media_issue = Some(RequestMediaIssueDoc {
+            operation: "mark_bad".into(),
+            reason_code: "playback".into(),
+            remediation: "mark_bad".into(),
+            title_id: "title".into(),
+            library_id: "library".into(),
+            media_file_id: "file".into(),
+            affected_episode_ids: vec!["ep-1".into(), "ep-2".into()],
+            affected_series_movie_link_ids: vec![],
+            provenance: "unknown".into(),
+            wider_hash_impact: WiderHashImpact::Unknown,
+        });
+        let policy = policy(
+            "issue_rule",
+            "approve if { input.facts.media_issue.reporter_requested_affected_media == true }\n",
+        );
+        let engine = RequestRulesEngine::build(&[policy]).unwrap();
+        let mut evaluator = engine.evaluator();
+        for (observation, vote, held) in [
+            (Observation::known(true), RequestVote::Approve, false),
+            (Observation::known(false), RequestVote::Abstain, false),
+            (
+                Observation::unknown("affected_media_scope_missing"),
+                RequestVote::Manual,
+                true,
+            ),
+        ] {
+            input.facts.media_issue.reporter_requested_affected_media = observation;
+            let doc = serde_json::to_value(&input).unwrap();
+            assert!(doc["request"].get("lease_forever").is_none());
+            assert!(doc["request"].get("quality_profile_id").is_none());
+            assert_eq!(
+                doc["observations"]["media_issue"]["reporter_requested_affected_media"]["status"],
+                if held { "unknown" } else { "known" },
+            );
+            let outcome = evaluator.evaluate(&input).unwrap();
+            assert!(outcome.errors.is_empty());
+            assert_eq!(outcome.records[0].decision.vote, vote);
+            assert_eq!(outcome.records[0].decision.held, held);
         }
     }
 

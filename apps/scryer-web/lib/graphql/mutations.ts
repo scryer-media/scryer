@@ -2983,6 +2983,11 @@ export const setRequestRuleEnabledMutation = `mutation SetRequestRuleEnabled($ru
   }
 }`;
 
+export const setRequestRuleEvaluationModeMutation = `mutation SetRequestRuleEvaluationMode($ruleSetId: ID!, $mode: RequestRuleEvaluationModeValue!) {
+  setRequestRuleEvaluationMode(ruleSetId: $ruleSetId, mode: $mode) {${REQUEST_RULE_SET_FIELDS}
+  }
+}`;
+
 export const deleteRequestRuleSetMutation = `mutation DeleteRequestRuleSet($id: ID!) {
   deleteRequestRuleSet(id: $id) {
     id
@@ -3353,6 +3358,47 @@ export const blocklistExternalSubtitleMutation = `mutation BlocklistExternalSubt
   blocklistExternalSubtitle(input: $input) {
     id
     blocklisted
+  }
+}`;
+
+export const submitMediaIssueMutation = `mutation SubmitMediaIssue($input: SubmitMediaIssueInput!) {
+  submitMediaIssue(input: $input) {
+    id
+  }
+}`;
+
+export const approveMediaIssueMutation = `mutation ApproveMediaIssue($issueId: ID!) {
+  approveMediaIssue(issueId: $issueId) {
+    id
+    status
+    authorizedRemediation
+    executionStatus
+  }
+}`;
+
+export const approveMediaIssueRecycleSearchMutation = `mutation ApproveMediaIssueRecycleSearch($issueId: ID!, $previewFingerprint: String!, $typedConfirmation: String!) {
+  approveMediaIssueRecycleSearch(
+    issueId: $issueId
+    previewFingerprint: $previewFingerprint
+    typedConfirmation: $typedConfirmation
+  ) {
+    id
+    status
+    authorizedRemediation
+    executionStatus
+  }
+}`;
+
+export const rejectMediaIssueMutation = `mutation RejectMediaIssue($issueId: ID!) {
+  rejectMediaIssue(issueId: $issueId) {
+    id
+    status
+  }
+}`;
+
+export const clearLibraryContentBlockMutation = `mutation ClearLibraryContentBlock($blockId: ID!) {
+  clearLibraryContentBlock(blockId: $blockId) {
+    id
   }
 }`;
 

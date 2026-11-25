@@ -31,7 +31,8 @@ use scryer_domain::{
 use scryer_rules::request::{
     Observation, REQUEST_INPUT_SCHEMA_VERSION, RequestCertificationDoc, RequestClockDoc,
     RequestDoc, RequestFactsDoc, RequestInput, RequestLibraryDoc, RequestListDoc,
-    RequestRequesterDoc, certification_rank_for_label, max_resolution_for_quality_tiers,
+    RequestMediaIssueFactsDoc, RequestRequesterDoc, certification_rank_for_label,
+    max_resolution_for_quality_tiers,
 };
 
 use crate::media_requests::snapshot::{MediaRequestMetadataSnapshot, SNAPSHOT_GROUP_ALL};
@@ -61,6 +62,10 @@ const US_COUNTRY_CODES: [&str; 4] = ["us", "usa", "united states", "united state
 /// a pre-flight preview, a submit, or an edit of a pending request.
 #[derive(Clone, Debug)]
 pub struct RequestDraft {
+    pub kind: String,
+    pub media_issue: Option<scryer_rules::request::RequestMediaIssueDoc>,
+    pub media_issue_reporter_requested_affected_media:
+        Option<scryer_rules::request::Observation<bool>>,
     pub facet: MediaFacet,
     pub title: String,
     pub year: Option<i32>,
@@ -131,6 +136,9 @@ pub struct RequestInputContext {
     pub history: RequestRequesterHistoryContext,
     /// `None` when no count is available; the fact reads unknown.
     pub library_title_count: Option<i64>,
+    /// Host-derived relationship evidence for a media-issue input. `None`
+    /// means this is an acquisition request, not a media issue.
+    pub media_issue_reporter_requested_affected_media: Option<Observation<bool>>,
 }
 
 // ── The pure builder ────────────────────────────────────────────────────────
@@ -154,6 +162,12 @@ fn build_facts(context: &RequestInputContext) -> RequestFactsDoc {
     let ratings_known = !snapshot.is_missing(GROUP_RATINGS);
 
     RequestFactsDoc {
+        media_issue: RequestMediaIssueFactsDoc {
+            reporter_requested_affected_media: context
+                .media_issue_reporter_requested_affected_media
+                .clone()
+                .unwrap_or_else(|| Observation::absent_because("not_media_issue")),
+        },
         // ── content rating ──
         age_rating: snapshot_fact(snapshot, GROUP_CONTENT_RATINGS, || {
             snapshot_age_rating(snapshot).ok_or("no_age_rating")
@@ -569,6 +583,9 @@ impl AppUseCase {
             catalog,
             history,
             library_title_count,
+            media_issue_reporter_requested_affected_media: draft
+                .media_issue_reporter_requested_affected_media
+                .clone(),
         })
     }
 
@@ -920,6 +937,8 @@ impl AppUseCase {
 /// is looking at.
 fn request_doc(draft: &RequestDraft, list: Option<RequestListDoc>) -> RequestDoc {
     RequestDoc {
+        kind: draft.kind.clone(),
+        media_issue: draft.media_issue.clone(),
         origin: draft.origin.as_str().to_string(),
         title: draft.title.clone(),
         year: draft.year,

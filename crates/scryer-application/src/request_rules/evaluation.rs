@@ -204,10 +204,13 @@ impl AppUseCase {
         purpose: RequestEvaluationPurpose,
     ) -> AppResult<RequestEvaluation> {
         let metadata_partial = snapshot.partial;
-        let permission = self
-            .has_library_permission(actor, &library.id, LibraryPermission::AutoApproveRequests)
-            .await
-            .unwrap_or(false);
+        let permission = if draft.kind == "media_issue" {
+            false
+        } else {
+            self.has_library_permission(actor, &library.id, LibraryPermission::AutoApproveRequests)
+                .await
+                .unwrap_or(false)
+        };
         let cache = self.request_rules_engine_snapshot();
         if cache.unavailable {
             tracing::warn!(
@@ -218,8 +221,12 @@ impl AppUseCase {
                 .record_unavailable_engine_fallback(&purpose, permission, metadata_partial)
                 .await);
         }
-        let consulted: Vec<(String, crate::request_rules::engine::RequestRuleScope)> = cache
-            .scopes_for_library(&library.id)
+        let consulted: Vec<(String, crate::request_rules::engine::RequestRuleScope)> =
+            if draft.kind == "media_issue" {
+                cache.scopes_for_media_issue(&library.id)
+            } else {
+                cache.scopes_for_acquisition_request(&library.id)
+            }
             .into_iter()
             .map(|(id, scope)| (id.clone(), scope.clone()))
             .collect();
@@ -228,7 +235,7 @@ impl AppUseCase {
         // same verdict the legacy check does, and building the fact document
         // would cost a dozen repository reads to prove it — so short-circuit
         // without a trace: no rule took part.
-        if consulted.is_empty() {
+        if consulted.is_empty() && draft.media_issue.is_none() {
             let arbitration = arbitrate(&[], &[], permission);
             return Ok(RequestEvaluation {
                 decision_id: None,
@@ -277,8 +284,12 @@ impl AppUseCase {
             serde_json::to_string(&input).unwrap_or_default(),
         );
 
+        let selected = consulted
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<std::collections::HashSet<_>>();
         let mut evaluator = cache.engine.evaluator();
-        let outcome = match evaluator.evaluate(&input) {
+        let outcome = match evaluator.evaluate_scoped(&input, |id| selected.contains(id)) {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(
@@ -292,16 +303,11 @@ impl AppUseCase {
             }
         };
 
-        // Library scoping is applied here, on the votes, not on the engine:
-        // see `request_rules::engine`.
         let mut votes: Vec<ScopedVote> = Vec::new();
         for record in &outcome.records {
             let Some(scope) = cache.scopes.get(&record.rule_set_id) else {
                 continue;
             };
-            if !scope.covers(&library.id) {
-                continue;
-            }
             votes.push(ScopedVote {
                 rule_set_id: record.rule_set_id.clone(),
                 rule_set_name: record.rule_set_name.clone(),
@@ -328,9 +334,6 @@ impl AppUseCase {
             let Some(scope) = cache.scopes.get(&failure.rule_set_id) else {
                 continue;
             };
-            if !scope.covers(&library.id) {
-                continue;
-            }
             errors.push(ScopedError {
                 rule_set_id: failure.rule_set_id.clone(),
                 rule_set_name: failure.rule_set_name.clone(),
@@ -341,13 +344,34 @@ impl AppUseCase {
             });
         }
 
-        let arbitration = arbitrate(&votes, &errors, permission);
-        let mut effective_outcome = arbitration.policy_outcome;
-        let mut fallback_reason = arbitration.fallback_reason.map(str::to_string);
-        let applicable_tags = match self
-            .applicable_policy_tags(&purpose, &arbitration.tags)
-            .await
-        {
+        let enforced_votes: Vec<ScopedVote> = votes
+            .iter()
+            .filter(|vote| vote.mode != RequestRuleEvaluationMode::Shadow)
+            .cloned()
+            .collect();
+        let enforced_errors: Vec<ScopedError> = errors
+            .iter()
+            .filter(|error| error.mode != RequestRuleEvaluationMode::Shadow)
+            .cloned()
+            .collect();
+        let shadow_only = !consulted.is_empty()
+            && consulted
+                .iter()
+                .all(|(_, scope)| scope.mode == RequestRuleEvaluationMode::Shadow);
+        let arbitration = if shadow_only {
+            // Preserve the counterfactual in the trace; never execute it.
+            arbitrate(&votes, &errors, false)
+        } else {
+            arbitrate(&enforced_votes, &enforced_errors, permission)
+        };
+        let (mut effective_outcome, mut fallback_reason) =
+            effective_rule_outcome(&arbitration, draft.media_issue.as_ref(), shadow_only);
+        let applicable_tags = match if draft.media_issue.is_some() || shadow_only {
+            Ok(Vec::new())
+        } else {
+            self.applicable_policy_tags(&purpose, &arbitration.tags)
+                .await
+        } {
             Ok(tags) => tags,
             Err(error) => {
                 tracing::warn!(%error, "request rule tag registry unavailable; holding request");
@@ -366,15 +390,140 @@ impl AppUseCase {
             tags: applicable_tags,
             emitted_tags: arbitration.tags.clone(),
             reasons: reason_views(&arbitration),
-            evaluation_mode: RequestRuleEvaluationMode::Enforce,
+            evaluation_mode: if shadow_only {
+                RequestRuleEvaluationMode::Shadow
+            } else if consulted.is_empty() {
+                RequestRuleEvaluationMode::Disabled
+            } else {
+                RequestRuleEvaluationMode::Enforce
+            },
             metadata_partial,
         };
         evaluation.decision_id = self
-            .record_request_decision(&purpose, &evaluation, &votes, &errors, &input_hash)
+            .record_request_decision(
+                &purpose,
+                &evaluation,
+                &votes,
+                &errors,
+                &input_hash,
+                draft.media_issue.as_ref().map(|_| &input),
+            )
             .await;
         Ok(evaluation)
     }
+}
 
+pub(super) fn effective_rule_outcome(
+    arbitration: &Arbitration,
+    media_issue: Option<&scryer_rules::request::RequestMediaIssueDoc>,
+    shadow_only: bool,
+) -> (RequestDecisionOutcome, Option<String>) {
+    if shadow_only {
+        return (RequestDecisionOutcome::ManualReview, Some("shadow".into()));
+    }
+    if let Some(issue) = media_issue
+        && arbitration.policy_outcome == RequestDecisionOutcome::AutoApprove
+    {
+        if issue.remediation == "recycle_and_search" {
+            // Recycle/search remains a separate explicit approval surface.
+            return (
+                RequestDecisionOutcome::ManualReview,
+                Some("recycle_search_requires_explicit_authorization".into()),
+            );
+        }
+        if issue.remediation != "mark_bad" {
+            return (
+                RequestDecisionOutcome::ManualReview,
+                Some("media_issue_remediation_not_armed".into()),
+            );
+        }
+        if issue.wider_hash_impact == scryer_rules::request::WiderHashImpact::Unknown {
+            return (
+                RequestDecisionOutcome::ManualReview,
+                Some("wider_hash_impact_unproven".into()),
+            );
+        }
+    }
+    (
+        arbitration.policy_outcome,
+        arbitration.fallback_reason.map(str::to_string),
+    )
+}
+
+#[cfg(test)]
+mod media_issue_policy_tests {
+    use super::*;
+    use scryer_rules::request::{RequestMediaIssueDoc, RequestRuleDecision, WiderHashImpact};
+
+    fn issue(remediation: &str) -> RequestMediaIssueDoc {
+        RequestMediaIssueDoc {
+            operation: "mark_bad".into(),
+            reason_code: "playback".into(),
+            remediation: remediation.into(),
+            title_id: "title".into(),
+            library_id: "library".into(),
+            media_file_id: "file".into(),
+            affected_episode_ids: vec![],
+            affected_series_movie_link_ids: vec![],
+            provenance: "unknown".into(),
+            wider_hash_impact: WiderHashImpact::Unknown,
+        }
+    }
+
+    fn vote(name: &str, vote: RequestVote, held: bool) -> ScopedVote {
+        ScopedVote {
+            rule_set_id: name.into(),
+            rule_set_name: name.into(),
+            revision_number: 1,
+            content_hash: String::new(),
+            mode: RequestRuleEvaluationMode::Enforce,
+            decision: RequestRuleDecision {
+                vote,
+                held,
+                reason_codes: vec![],
+                tags: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn media_issue_deny_wins_but_shadow_never_transitions_a_report() {
+        let arbitration = arbitrate(
+            &[
+                vote("approve", RequestVote::Approve, false),
+                vote("hold", RequestVote::Manual, true),
+                vote("deny", RequestVote::Deny, false),
+            ],
+            &[],
+            false,
+        );
+        let issue = issue("mark_bad");
+        assert_eq!(
+            effective_rule_outcome(&arbitration, Some(&issue), false),
+            (RequestDecisionOutcome::Deny, None)
+        );
+        assert_eq!(
+            effective_rule_outcome(&arbitration, Some(&issue), true),
+            (RequestDecisionOutcome::ManualReview, Some("shadow".into()))
+        );
+    }
+
+    #[test]
+    fn media_issue_approval_holds_without_complete_hash_impact_or_armed_recycling() {
+        let arbitration = arbitrate(&[vote("approve", RequestVote::Approve, false)], &[], false);
+        for (action, reason) in [
+            ("mark_bad", "wider_hash_impact_unproven"),
+            ("recycle_and_search", "recycle_search_requires_explicit_authorization"),
+        ] {
+            assert_eq!(
+                effective_rule_outcome(&arbitration, Some(&issue(action)), false),
+                (RequestDecisionOutcome::ManualReview, Some(reason.into()))
+            );
+        }
+    }
+}
+
+impl AppUseCase {
     /// The subset of `emitted` the title tag registry defines.
     ///
     /// Rules may name any label within the family's bounds, but a title only
@@ -436,6 +585,7 @@ impl AppUseCase {
         votes: &[ScopedVote],
         errors: &[ScopedError],
         input_hash: &str,
+        media_issue_input: Option<&scryer_rules::request::RequestInput>,
     ) -> Option<String> {
         let now = Utc::now();
         let record = RequestRuleDecisionRecord {
@@ -457,6 +607,31 @@ impl AppUseCase {
             input_schema_version: i64::from(REQUEST_INPUT_SCHEMA_VERSION),
             created_at: now,
         };
+        if let Some(input) = media_issue_input
+            && matches!(purpose, RequestEvaluationPurpose::Submit { .. })
+        {
+            let input_json = match serde_json::to_string(input) {
+                Ok(json) => json,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to serialize media issue rule input");
+                    return None;
+                }
+            };
+            return match self
+                .services
+                .workflow
+                .blocklist_repo
+                .record_media_issue_rule_trace(&record, &input_json)
+                .await
+            {
+                Ok(true) => Some(record.id),
+                Ok(false) => None,
+                Err(error) => {
+                    tracing::warn!(%error, report_id = record.request_id, "failed to persist media issue rule trace");
+                    None
+                }
+            };
+        }
         match self
             .services
             .customization
@@ -491,7 +666,7 @@ impl AppUseCase {
         evaluation.policy_outcome = RequestDecisionOutcome::ManualReview;
         evaluation.evaluation_mode = RequestRuleEvaluationMode::Enforce;
         evaluation.decision_id = self
-            .record_request_decision(purpose, &evaluation, &[], &[], "")
+            .record_request_decision(purpose, &evaluation, &[], &[], "", None)
             .await;
         evaluation
     }
@@ -512,7 +687,7 @@ impl AppUseCase {
         evaluation.effective_outcome = RequestDecisionOutcome::ManualReview;
         evaluation.evaluation_mode = RequestRuleEvaluationMode::Enforce;
         evaluation.decision_id = self
-            .record_request_decision(purpose, &evaluation, &[], &[], "")
+            .record_request_decision(purpose, &evaluation, &[], &[], "", None)
             .await;
         evaluation
     }

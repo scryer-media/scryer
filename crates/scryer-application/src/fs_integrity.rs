@@ -12,6 +12,7 @@ use crate::{AppError, AppResult};
 use scryer_domain::ImportContentProof;
 
 pub const IMPORT_CONTENT_PROOF_SAMPLE_BYTES: usize = 1024 * 1024;
+pub const IMPORT_CONTENT_PROOF_SCHEME: &str = "import_content_proof_v1";
 
 /// Retain an import filesystem failure's native kind beside its diagnostic.
 pub fn import_io_failure(error: &std::io::Error, message: String) -> AppError {
@@ -51,6 +52,16 @@ pub fn import_content_proof(path: &Path) -> AppResult<ImportContentProof> {
         .len();
 
     sampled_content_proof_from_reader(&mut file, &path.display().to_string(), size_bytes)
+}
+
+/// Async wrapper for sampled proof computation on the blocking pool.
+pub async fn import_content_proof_async(path: &Path) -> AppResult<ImportContentProof> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || import_content_proof(&path))
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("import content proof task failed to join: {error}"))
+        })?
 }
 
 /// Compute the sampled proof from an already-open seekable reader. This is used
@@ -202,6 +213,41 @@ mod tests {
             self.seeks.push(next);
             Ok(next)
         }
+    }
+
+    #[test]
+    fn small_file_uses_one_non_overlapping_window() {
+        let bytes = b"quick identity";
+        let mut reader = RecordingReader::new(bytes.to_vec());
+        let proof =
+            sampled_content_proof_from_reader(&mut reader, "small", bytes.len() as u64).unwrap();
+        assert_eq!(proof.size_bytes, bytes.len() as u64);
+        assert_eq!(proof.sample_bytes, bytes.len() as u64);
+        assert!(reader.seeks.len() >= 1);
+        assert_eq!(reader.reads, vec![bytes.len()]);
+    }
+
+    #[test]
+    fn large_file_samples_head_and_tail_only() {
+        let size = IMPORT_CONTENT_PROOF_SAMPLE_BYTES * 2 + 17;
+        let mut bytes = vec![0u8; size];
+        bytes[..32].fill(7);
+        bytes[size - 32..].fill(9);
+        let mut reader = RecordingReader::new(bytes);
+        let proof = sampled_content_proof_from_reader(&mut reader, "large", size as u64).unwrap();
+        assert_eq!(proof.size_bytes, size as u64);
+        assert_eq!(
+            proof.sample_bytes,
+            (IMPORT_CONTENT_PROOF_SAMPLE_BYTES * 2) as u64
+        );
+        assert_eq!(reader.seeks.len(), 2);
+        assert_eq!(
+            reader.reads,
+            vec![
+                IMPORT_CONTENT_PROOF_SAMPLE_BYTES,
+                IMPORT_CONTENT_PROOF_SAMPLE_BYTES
+            ]
+        );
     }
 
     #[test]

@@ -1390,6 +1390,24 @@ impl AppUseCase {
         delete_from_disk: bool,
         delete_confirmation: Option<DeleteExecutionConfirmation>,
     ) -> AppResult<DeleteMediaFileJobAccepted> {
+        self.start_media_file_removal_job(
+            actor,
+            file_id,
+            delete_from_disk,
+            delete_confirmation,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn start_media_file_removal_job(
+        &self,
+        actor: &User,
+        file_id: &str,
+        delete_from_disk: bool,
+        delete_confirmation: Option<DeleteExecutionConfirmation>,
+        recycle_issue: Option<scryer_domain::MediaIssue>,
+    ) -> AppResult<DeleteMediaFileJobAccepted> {
         let guard_key = format!("media-file:{file_id}");
         let deletion_guard = self
             .runtime
@@ -1403,14 +1421,25 @@ impl AppUseCase {
                     format!("a media file deletion is already running for {file_id}"),
                 )
             })?;
-        let library_id = self
-            .validate_delete_media_file_job_request(
+        let library_id = if let Some(issue) = recycle_issue.as_ref() {
+            // Approved recycle work revalidates the confirmation under the
+            // execution lock, or proves from its receipt that the move ran.
+            self.require_library_permission(
+                actor,
+                &issue.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            issue.library_id.clone()
+        } else {
+            self.validate_delete_media_file_job_request(
                 actor,
                 file_id,
                 delete_from_disk,
                 delete_confirmation.as_ref(),
             )
-            .await?;
+            .await?
+        };
 
         let now = chrono::Utc::now();
         let mut run = JobRunRecord {
@@ -1468,6 +1497,7 @@ impl AppUseCase {
                 file_id,
                 delete_from_disk,
                 delete_confirmation,
+                recycle_issue,
                 deletion_guard,
             )
             .await;
@@ -1541,11 +1571,16 @@ impl AppUseCase {
         file_id: String,
         delete_from_disk: bool,
         delete_confirmation: Option<DeleteExecutionConfirmation>,
+        recycle_issue: Option<scryer_domain::MediaIssue>,
         _deletion_guard: tokio::sync::OwnedMutexGuard<()>,
     ) {
-        let result = self
-            .delete_media_file(&actor, &file_id, delete_from_disk, delete_confirmation)
-            .await;
+        let result = if let Some(issue) = recycle_issue {
+            self.run_media_issue_recycle(&actor, &issue, delete_confirmation.as_ref())
+                .await
+        } else {
+            self.delete_media_file(&actor, &file_id, delete_from_disk, delete_confirmation)
+                .await
+        };
         let (status, summary_text, error_text) = match result {
             Ok(()) => (
                 JobRunStatus::Completed,

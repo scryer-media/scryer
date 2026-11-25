@@ -539,7 +539,8 @@ impl AppUseCase {
         // over an incumbent replaces that file, and a file awaiting review is
         // not replaced by an import.
         let counts_as_incumbent = |file: &crate::TitleMediaFile| {
-            intent == SubjectIntent::Grab || file.scan_status != "review_required"
+            file.scan_status != "content_blocked"
+                && (intent == SubjectIntent::Grab || file.scan_status != "review_required")
         };
 
         match scope {

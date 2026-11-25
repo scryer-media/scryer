@@ -49,6 +49,7 @@ pub struct RequestRuleDraft {
     pub rego_source: String,
     /// Empty means every library.
     pub library_ids: Vec<String>,
+    pub applicability: scryer_domain::RequestRuleApplicability,
 }
 
 /// Which matcher a preview should run.
@@ -70,6 +71,8 @@ pub enum RequestRulePreviewMatcher {
 pub struct RequestRuleSample {
     pub user_id: String,
     pub library_id: String,
+    pub kind: Option<String>,
+    pub media_issue: Option<crate::media_issues::SubmitMediaIssueInput>,
     pub external_ids: Vec<ExternalId>,
     pub quality_profile_id: Option<String>,
     pub monitor_type: Option<String>,
@@ -121,6 +124,9 @@ pub struct RequestRulePreviewResult {
     /// emit will be dropped at approval until somebody defines it.
     pub undefined_tags: Vec<String>,
     pub error: Option<String>,
+    pub policy_outcome: scryer_domain::RequestDecisionOutcome,
+    pub effective_outcome: scryer_domain::RequestDecisionOutcome,
+    pub fallback_reason: Option<String>,
     /// The exact document the rule saw, pretty-printed. An author debugging
     /// "why did this not match" needs the facts, not just the verdict.
     pub input_json: String,
@@ -235,6 +241,7 @@ impl AppUseCase {
             // Created disabled: enabling is a second, deliberate call.
             enabled: false,
             evaluation_mode: RequestRuleEvaluationMode::Disabled,
+            applicability: draft.applicability,
             library_ids: draft.library_ids,
             current_revision_number: 1,
             created_at: now,
@@ -294,23 +301,57 @@ impl AppUseCase {
         name: String,
         description: String,
         library_ids: Vec<String>,
+        applicability: Option<scryer_domain::RequestRuleApplicability>,
     ) -> AppResult<RequestRuleSet> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
         let mut rule_set = self.require_request_rule_set(rule_set_id).await?;
+        let applicability = applicability.unwrap_or(rule_set.applicability);
         let name = require_non_empty(&name, "name")?;
         let now = Utc::now();
 
         self.services
             .customization
             .request_rule_sets
-            .update_rule_set_metadata(&rule_set.id, &name, &description, &library_ids, now)
+            .update_rule_set_metadata(
+                &rule_set.id,
+                &name,
+                &description,
+                &library_ids,
+                applicability,
+                now,
+            )
             .await?;
 
         rule_set.name = name;
         rule_set.description = description;
         rule_set.library_ids = library_ids;
+        rule_set.applicability = applicability;
+        rule_set.updated_at = now;
+        self.rebuild_request_rules_engine().await?;
+        Ok(rule_set)
+    }
+
+    pub async fn set_request_rule_evaluation_mode(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        mode: RequestRuleEvaluationMode,
+    ) -> AppResult<RequestRuleSet> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        let mut rule_set = self.require_request_rule_set(rule_set_id).await?;
+        let enabled =
+            mode == RequestRuleEvaluationMode::Enforce || mode == RequestRuleEvaluationMode::Shadow;
+        let now = Utc::now();
+        self.services
+            .customization
+            .request_rule_sets
+            .update_rule_set_evaluation_mode(&rule_set.id, mode, enabled, now)
+            .await?;
+        rule_set.evaluation_mode = mode;
+        rule_set.enabled = enabled;
         rule_set.updated_at = now;
         self.rebuild_request_rules_engine().await?;
         Ok(rule_set)
@@ -398,7 +439,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let policy = self.resolve_request_preview_policy(request.matcher).await?;
+        let (policy, mode) = self.resolve_request_preview_policy(request.matcher).await?;
         // Preview evaluates against a real requester and reports the verdict,
         // so an ungated one is a person-fact oracle: ask "would this approve
         // for user x" and read the answer. The same bar authoring meets applies
@@ -407,6 +448,16 @@ impl AppUseCase {
             .await?;
 
         let sample = request.sample;
+        if sample.media_issue.is_some()
+            && !self
+                .has_app_permission(actor, AppPermission::ManagePermissions)
+                .await?
+        {
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::request_rules::PERSON_TARGETING_PERMISSION_REQUIRED,
+                "Testing a media issue exposes the sample user's request relationship",
+            ));
+        }
         let requester = self
             .services
             .identity
@@ -420,6 +471,43 @@ impl AppUseCase {
                 )
             })?;
         let requester = self.attach_user_authorization(requester).await?;
+        let (library, draft, snapshot) = match (sample.kind.as_deref(), sample.media_issue.as_ref())
+        {
+            (Some("media_issue") | None, Some(issue)) => {
+                let (library, draft) = self
+                    .preview_media_issue_draft(&requester, sample.library_id.trim(), issue)
+                    .await?;
+                (
+                    library,
+                    draft,
+                    MediaRequestMetadataSnapshot::unavailable(
+                        "media_issue_not_acquisition_metadata",
+                    ),
+                )
+            }
+            (Some("acquisition_request") | None, None) => {
+                self.acquisition_rule_preview_draft(sample).await?
+            }
+            _ => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::request_rules::RULE_VALIDATION_FAILED,
+                    "The sample kind must match the supplied request fields",
+                ));
+            }
+        };
+
+        self.test_request_preview_policy(policy, mode, &requester, &library, &draft, snapshot)
+            .await
+    }
+
+    async fn acquisition_rule_preview_draft(
+        &self,
+        sample: RequestRuleSample,
+    ) -> AppResult<(
+        scryer_domain::Library,
+        RequestDraft,
+        MediaRequestMetadataSnapshot,
+    )> {
         let library = self
             .services
             .catalog
@@ -472,6 +560,9 @@ impl AppUseCase {
         };
 
         let draft = RequestDraft {
+            kind: "acquisition_request".to_string(),
+            media_issue: None,
+            media_issue_reporter_requested_affected_media: None,
             facet: library.facet.clone(),
             title: preview_sample_title(&library.facet),
             year: None,
@@ -490,17 +581,22 @@ impl AppUseCase {
             list_rank: None,
         };
 
+        Ok((library, draft, snapshot))
+    }
+
+    async fn test_request_preview_policy(
+        &self,
+        policy: RequestPolicy,
+        mode: RequestRuleEvaluationMode,
+        requester: &User,
+        library: &scryer_domain::Library,
+        draft: &RequestDraft,
+        snapshot: MediaRequestMetadataSnapshot,
+    ) -> AppResult<RequestRulePreviewResult> {
         let evaluated_at = Utc::now();
         let metadata_partial = snapshot.partial;
         let context = self
-            .assemble_request_input_context(
-                &requester,
-                &library,
-                &draft,
-                snapshot,
-                evaluated_at,
-                None,
-            )
+            .assemble_request_input_context(requester, library, draft, snapshot, evaluated_at, None)
             .await?;
         let input = build_request_input(context);
         let input_json = serde_json::to_string_pretty(&input).unwrap_or_else(|_| "{}".to_string());
@@ -514,12 +610,38 @@ impl AppUseCase {
             )
         })?;
         let mut evaluator = engine.evaluator();
-        let outcome = evaluator.evaluate(&input).map_err(|error| {
+        let mut outcome = evaluator.evaluate(&input).map_err(|error| {
             AppError::validation_refused(
                 crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
                 format!("rule evaluation failed: {error}"),
             )
         })?;
+        // Test a rule must also show the result of the live arbitration. Other
+        // applicable rules are evaluated with the same server-built input, and
+        // the unsaved rule remains selected separately above.
+        let cache = self.request_rules_engine_snapshot();
+        let selected: std::collections::HashSet<String> = if draft.kind == "media_issue" {
+            cache.scopes_for_media_issue(&library.id)
+        } else {
+            cache.scopes_for_acquisition_request(&library.id)
+        }
+        .into_iter()
+        .filter(|(id, _)| id.as_str() != policy.id)
+        .map(|(id, _)| id.clone())
+        .collect();
+        if !selected.is_empty() {
+            let mut cache_evaluator = cache.engine.evaluator();
+            let cached = cache_evaluator
+                .evaluate_scoped(&input, |id| selected.contains(id))
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
+                        format!("rule evaluation failed: {error}"),
+                    )
+                })?;
+            outcome.records.extend(cached.records);
+            outcome.errors.extend(cached.errors);
+        }
 
         let (vote, held, reasons, tags, error) =
             match (outcome.records.first(), outcome.errors.first()) {
@@ -558,6 +680,36 @@ impl AppUseCase {
         // only says which of them cannot land yet.
         let undefined_tags = self.undefined_title_tag_labels(&tags).await?;
 
+        use super::arbitration::{ScopedError, ScopedVote, arbitrate};
+        let votes: Vec<_> = outcome
+            .records
+            .into_iter()
+            .map(|record| ScopedVote {
+                rule_set_id: record.rule_set_id,
+                rule_set_name: record.rule_set_name,
+                revision_number: 0,
+                content_hash: matcher_content_hash.clone(),
+                mode,
+                decision: record.decision,
+            })
+            .collect();
+        let errors: Vec<_> = error
+            .iter()
+            .map(|message| ScopedError {
+                rule_set_id: rule_set_id.clone(),
+                rule_set_name: policy.name.clone(),
+                revision_number: 0,
+                content_hash: matcher_content_hash.clone(),
+                mode,
+                message: message.clone(),
+            })
+            .collect();
+        let arbitration = arbitrate(&votes, &errors, false);
+        let (effective_outcome, fallback_reason) = super::evaluation::effective_rule_outcome(
+            &arbitration,
+            draft.media_issue.as_ref(),
+            mode == RequestRuleEvaluationMode::Shadow,
+        );
         Ok(RequestRulePreviewResult {
             rule_set_id,
             matcher_content_hash,
@@ -568,6 +720,9 @@ impl AppUseCase {
             tags,
             undefined_tags,
             error,
+            policy_outcome: arbitration.policy_outcome,
+            effective_outcome,
+            fallback_reason,
             input_json,
             metadata_partial,
         })
@@ -652,25 +807,31 @@ impl AppUseCase {
     async fn resolve_request_preview_policy(
         &self,
         matcher: RequestRulePreviewMatcher,
-    ) -> AppResult<RequestPolicy> {
+    ) -> AppResult<(RequestPolicy, RequestRuleEvaluationMode)> {
         match matcher {
             RequestRulePreviewMatcher::Stored { rule_set_id } => {
                 let rule_set = self.require_request_rule_set(&rule_set_id).await?;
                 let detail = self.load_request_rule_detail(rule_set).await?;
-                Ok(RequestPolicy {
-                    id: detail.rule_set.id,
-                    name: detail.rule_set.name,
-                    rego_source: detail.revision.rego_source,
-                })
+                Ok((
+                    RequestPolicy {
+                        id: detail.rule_set.id,
+                        name: detail.rule_set.name,
+                        rego_source: detail.revision.rego_source,
+                    },
+                    detail.rule_set.evaluation_mode,
+                ))
             }
             RequestRulePreviewMatcher::Inline { rego_source } => {
                 let scratch_id = Id::new_rego_safe().0;
                 let prepared = prepare_matcher(&scratch_id, &rego_source)?;
-                Ok(RequestPolicy {
-                    id: scratch_id,
-                    name: "preview".to_string(),
-                    rego_source: prepared.rego_source,
-                })
+                Ok((
+                    RequestPolicy {
+                        id: scratch_id,
+                        name: "preview".to_string(),
+                        rego_source: prepared.rego_source,
+                    },
+                    RequestRuleEvaluationMode::Disabled,
+                ))
             }
         }
     }

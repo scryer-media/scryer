@@ -4,6 +4,7 @@ import * as React from "react";
 import { useClient, type CombinedError } from "urql";
 
 import { RequestsView } from "@/components/views/requests-view";
+import { MediaIssueReview } from "@/components/views/media-issue-review";
 import {
   approveMediaRequestMutation,
   cancelMyMediaRequestMutation,
@@ -938,6 +939,11 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       mode={mode}
       canShowAdminMode={canShowAdminMode}
       canShowRequesterMode={canShowRequesterMode}
+      mediaIssueReview={
+        canManageAnyTitle && canShowAdminMode && mode === "admin" ? (
+          <MediaIssueReview key={librariesKey} libraries={adminLibraries} />
+        ) : undefined
+      }
       onModeChange={changeMode}
       statusFilter={statusFilter}
       onStatusFilterChange={setStatusFilter}

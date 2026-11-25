@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, RequestRuleSetRepository};
-use scryer_domain::{RequestRuleEvaluationMode, RequestRuleRevision, RequestRuleSet};
+use scryer_domain::{
+    RequestRuleApplicability, RequestRuleEvaluationMode, RequestRuleRevision, RequestRuleSet,
+};
 use sqlx::Row;
 
 use crate::queries::sql_runtime::{
@@ -178,11 +180,13 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         name: &str,
         description: &str,
         library_ids: &[String],
+        applicability: RequestRuleApplicability,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let args = vec![
             SqlArg::Text(name.to_string()),
             SqlArg::Text(description.to_string()),
+            SqlArg::Text(applicability.as_storage_str().to_string()),
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(id.to_string()),
         ];
@@ -194,7 +198,7 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
             let library_ids = library_ids.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx),
-                    "UPDATE request_rule_sets SET name = {}, description = {}, updated_at = {} WHERE id = {}",
+                    "UPDATE request_rule_sets SET name = {}, description = {}, applicability = {}, updated_at = {} WHERE id = {}",
                     &args).await?;
                 replace_library_scope(tx, &id, &library_ids).await
             })
@@ -239,7 +243,7 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
 const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode,
-    current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
+    applicability, current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
     FROM request_rule_sets
     LEFT JOIN request_rule_set_libraries scope ON scope.rule_set_id = request_rule_sets.id";
 
@@ -250,9 +254,9 @@ const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source,
 const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO request_rule_sets
-        (id, name, description, enabled, evaluation_mode,
+        (id, name, description, enabled, evaluation_mode, applicability,
          current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO request_rule_revisions
         (id, rule_set_id, revision_number, rego_source, matcher_content_hash,
@@ -282,6 +286,7 @@ fn rule_set_args(rule_set: &RequestRuleSet) -> Vec<SqlArg> {
         SqlArg::Text(rule_set.description.clone()),
         SqlArg::Bool(rule_set.enabled),
         SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
+        SqlArg::Text(rule_set.applicability.as_storage_str().to_string()),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
@@ -310,6 +315,11 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RequestRuleSet> {
         // reads back as disabled so this build never acts on semantics it does
         // not implement.
         evaluation_mode: RequestRuleEvaluationMode::parse_storage(&row.text("evaluation_mode")?)
+            .unwrap_or_default(),
+        applicability: row
+            .opt_text("applicability")?
+            .as_deref()
+            .and_then(RequestRuleApplicability::parse_storage)
             .unwrap_or_default(),
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         current_revision_number: row.i64("current_revision_number")?,

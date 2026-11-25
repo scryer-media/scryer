@@ -152,17 +152,29 @@ pub fn unobservable_facts(document: &serde_json::Value) -> BTreeMap<String, Stri
 
     observations
         .iter()
-        .filter_map(|(name, envelope)| {
-            if envelope.get("status").and_then(serde_json::Value::as_str) != Some(UNKNOWN_STATUS) {
-                return None;
-            }
-            let reason = envelope
-                .get("reason")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(UNKNOWN_STATUS);
-            Some((name.clone(), reason.to_string()))
+        .filter_map(|(name, observation)| {
+            nested_unknown_reason(observation).map(|reason| (name.clone(), reason.to_string()))
         })
         .collect()
+}
+
+fn nested_unknown_reason(observation: &serde_json::Value) -> Option<&str> {
+    match observation
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(UNKNOWN_STATUS) => Some(
+            observation
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(UNKNOWN_STATUS),
+        ),
+        Some(_) => None,
+        None => observation
+            .as_object()?
+            .values()
+            .find_map(nested_unknown_reason),
+    }
 }
 
 /// Reason codes explaining why a rule cannot be consulted, deduplicated and in

@@ -54,6 +54,15 @@ impl RequestRuleMutations {
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
                     library_ids: input.library_ids.unwrap_or_default(),
+                    applicability: match input.applicability {
+                        Some(crate::types::RequestRuleApplicabilityValue::MediaIssue) => {
+                            scryer_domain::RequestRuleApplicability::MediaIssue
+                        }
+                        Some(
+                            crate::types::RequestRuleApplicabilityValue::AcquisitionAndMediaIssue,
+                        ) => scryer_domain::RequestRuleApplicability::AcquisitionAndMediaIssue,
+                        _ => scryer_domain::RequestRuleApplicability::Acquisition,
+                    },
                 },
             )
             .await
@@ -108,11 +117,52 @@ impl RequestRuleMutations {
                 input.name,
                 input.description.unwrap_or_default(),
                 input.library_ids.unwrap_or_default(),
+                input.applicability.map(|value| match value {
+                    crate::types::RequestRuleApplicabilityValue::MediaIssue => {
+                        scryer_domain::RequestRuleApplicability::MediaIssue
+                    }
+                    crate::types::RequestRuleApplicabilityValue::AcquisitionAndMediaIssue => {
+                        scryer_domain::RequestRuleApplicability::AcquisitionAndMediaIssue
+                    }
+                    crate::types::RequestRuleApplicabilityValue::Acquisition => {
+                        scryer_domain::RequestRuleApplicability::Acquisition
+                    }
+                }),
             )
             .await
             .map_err(to_gql_error)?;
         let count = decision_count(&app, &actor, &rule_set_id).await?;
 
+        Ok(crate::mappers::from_request_rule_set(&rule_set, count))
+    }
+
+    /// Set explicit enforcement mode, including shadow evaluation.
+    async fn set_request_rule_evaluation_mode(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Request rule-set identity.")] rule_set_id: ID,
+        #[graphql(desc = "Disabled, enforce, or shadow evaluation mode.")]
+        mode: crate::types::RequestRuleEvaluationModeValue,
+    ) -> GqlResult<RequestRuleSet> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let mode = match mode {
+            crate::types::RequestRuleEvaluationModeValue::Disabled => {
+                scryer_domain::RequestRuleEvaluationMode::Disabled
+            }
+            crate::types::RequestRuleEvaluationModeValue::Enforce => {
+                scryer_domain::RequestRuleEvaluationMode::Enforce
+            }
+            crate::types::RequestRuleEvaluationModeValue::Shadow => {
+                scryer_domain::RequestRuleEvaluationMode::Shadow
+            }
+        };
+        let rule_set = app
+            .set_request_rule_evaluation_mode(&actor, rule_set_id.as_ref(), mode)
+            .await
+            .map_err(to_gql_error)?;
+        let count = decision_count(&app, &actor, rule_set_id.as_ref()).await?;
         Ok(crate::mappers::from_request_rule_set(&rule_set, count))
     }
 

@@ -16,6 +16,7 @@ import { useSessionUser } from "@/lib/hooks/use-auth";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { LibraryRecord } from "@/lib/types";
 import type {
+  RequestEvaluationMode,
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
@@ -52,7 +53,7 @@ import {
   createRequestRuleSetMutation,
   deleteRequestRuleSetMutation,
   previewRequestRuleMutation,
-  setRequestRuleEnabledMutation,
+  setRequestRuleEvaluationModeMutation,
   updateRequestRuleMatcherMutation,
   updateRequestRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
@@ -66,6 +67,8 @@ function initialPreviewSample(): RequestRulePreviewSample {
   return {
     userId: "",
     libraryId: "",
+    kind: "ACQUISITION_REQUEST",
+    mediaIssue: { mediaFileId: "", reasonCode: "", remediation: "mark_bad" },
     externalIds: [],
     titleLabel: "",
     qualityProfileId: "",
@@ -518,15 +521,15 @@ export function SettingsRequestRulesContainer() {
     }
   };
 
-  const setRuleEnabled = useCallback(
-    async (record: RequestRuleSetRecord, enabled: boolean) => {
-      if (enabled === record.enabled) return;
+  const setRuleMode = useCallback(
+    async (record: RequestRuleSetRecord, mode: RequestEvaluationMode) => {
+      if (mode === record.evaluationMode) return;
       setMutatingRuleSetId(record.id);
       try {
         const { error } = await client
-          .mutation(setRequestRuleEnabledMutation, {
+          .mutation(setRequestRuleEvaluationModeMutation, {
             ruleSetId: record.id,
-            enabled,
+            mode,
           })
           .toPromise();
         if (error) throw error;
@@ -580,17 +583,26 @@ export function SettingsRequestRulesContainer() {
             ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
             regoSource:
               previewSource === "draft" ? ruleSetDraft.regoSource : null,
-            sample: {
-              userId: previewSample.userId,
-              libraryId: previewSample.libraryId,
-              externalIds: previewSample.externalIds,
-              qualityProfileId: previewSample.qualityProfileId || null,
-              monitorType: previewSample.monitorType || null,
-              leaseForever: previewSample.leaseForever ? true : null,
-              leaseDays: previewSample.leaseForever
-                ? null
-                : clampRequestLeaseDays(previewSample.leaseDays),
-            },
+            sample:
+              previewSample.kind === "MEDIA_ISSUE"
+                ? {
+                    userId: previewSample.userId,
+                    libraryId: previewSample.libraryId,
+                    kind: "media_issue",
+                    externalIds: [],
+                    mediaIssue: previewSample.mediaIssue,
+                  }
+                : {
+                    userId: previewSample.userId,
+                    libraryId: previewSample.libraryId,
+                    externalIds: previewSample.externalIds,
+                    qualityProfileId: previewSample.qualityProfileId || null,
+                    monitorType: previewSample.monitorType || null,
+                    leaseForever: previewSample.leaseForever ? true : null,
+                    leaseDays: previewSample.leaseForever
+                      ? null
+                      : clampRequestLeaseDays(previewSample.leaseDays),
+                  },
           },
         })
         .toPromise();
@@ -636,9 +648,7 @@ export function SettingsRequestRulesContainer() {
         validating={validating}
         validationResult={validationResult}
         applyRequesters={applyRequesters}
-        setRuleEnabled={(record, enabled) =>
-          void setRuleEnabled(record, enabled)
-        }
+        setRuleMode={(record, mode) => void setRuleMode(record, mode)}
         canManagePermissions={canManagePermissions}
         previewSource={previewSource}
         setPreviewSource={setPreviewSource}

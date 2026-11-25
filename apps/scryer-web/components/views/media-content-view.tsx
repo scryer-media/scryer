@@ -1215,10 +1215,7 @@ function TitleContextPanel({
   const titleMediaFiles = React.useMemo<MediaFileOnDisk[]>(
     () =>
       (title?.mediaFiles ?? []).flatMap((file) => {
-        const filePath = file.filePath?.trim();
-        if (!filePath) {
-          return [];
-        }
+        const filePath = file.filePath?.trim() ?? "";
         return [
           {
             ...file,

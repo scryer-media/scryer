@@ -1,5 +1,72 @@
 use super::*;
 
+#[tokio::test]
+async fn media_issue_graphql_permissions_and_stale_identity() {
+    use scryer_infrastructure_library::media::libraries::state_store::BlocklistStore;
+
+    let ctx = TestContext::new().await;
+    let fixture = reassign_fixture(&ctx, "Bad Media Fixture", "97108").await;
+    let (file_id, path) =
+        seed_primary_file(&ctx, &fixture, "synthetic.mkv", &fixture.episodes[0]).await;
+    let store = std::sync::Arc::new(BlocklistStore::new(ctx.db.datastore()));
+    let app = ctx
+        .app
+        .with_test_overrides(|builder| builder.with_blocklist_repo(store));
+    let schema = scryer_interface::build_schema(app.clone(), ctx.auth_runtime.clone());
+    let admin = app.find_or_create_default_user().await.expect("operator");
+    let mut requester = admin.clone();
+    requester.authorization = scryer_domain::UserAuthorization {
+        app: scryer_domain::AppPermissionMask::NONE,
+        libraries: std::collections::HashMap::from([(
+            fixture.title.library_id.clone(),
+            scryer_domain::LibraryPermissionMask::from_permissions([
+                LibraryPermission::View,
+                LibraryPermission::Request,
+            ]),
+        )]),
+        loaded: true,
+        ..Default::default()
+    };
+    let execute = |query, variables, actor: User| {
+        schema.execute(
+            async_graphql::Request::new(query)
+                .variables(async_graphql::Variables::from_json(variables))
+                .data(actor),
+        )
+    };
+    let report = execute(
+        "mutation($input: SubmitMediaIssueInput!) {
+            submitMediaIssue(input: $input) { id status affectedEpisodeIds authorizedRemediation }
+        }",
+        json!({"input": {"mediaFileId": file_id, "reasonCode": "bad_media", "remediation": "MARK_BAD"}}),
+        requester.clone(),
+    ).await;
+    let report = serde_json::to_value(report).unwrap();
+    assert_no_errors(&report);
+    let issue = &report["data"]["submitMediaIssue"];
+    assert_eq!(issue["status"], "PENDING");
+    assert_eq!(issue["affectedEpisodeIds"], json!([fixture.episodes[0].id]));
+    assert!(issue["authorizedRemediation"].is_null());
+
+    let approve = "mutation($id: ID!) { approveMediaIssue(issueId: $id) { status } }";
+    let variables = json!({"id": issue["id"]});
+    assert!(
+        !execute(approve, variables.clone(), requester)
+            .await
+            .errors
+            .is_empty()
+    );
+
+    let len = std::fs::metadata(&path).unwrap().len() as usize;
+    std::fs::write(&path, vec![b'x'; len]).unwrap();
+    let stale = serde_json::to_value(execute(approve, variables, admin).await).unwrap();
+    assert_eq!(
+        stale["errors"][0]["extensions"]["reason"], "MEDIA_SOURCE_CHANGED_DURING_INSPECTION",
+        "{stale}"
+    );
+    assert_eq!(std::fs::read(path).unwrap(), vec![b'x'; len]);
+}
+
 /// One synthetic series with three episodes in season one, a recorded title
 /// folder under a temp library root, and the season folder that holds files.
 struct ReassignFixture {

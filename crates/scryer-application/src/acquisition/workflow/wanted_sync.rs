@@ -49,7 +49,12 @@ impl AppUseCase {
                 .get_by_id(&item.title_id)
                 .await?
                 .map(|title| title.library_id)
-                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?,
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", item.title_id),
+                    )
+                })?,
         };
         self.require_privileged_library_access(actor, &library_id)
             .await?;
@@ -186,7 +191,11 @@ impl AppUseCase {
         // re-derived bar, and `admission_subject_for_scope` re-derives it over
         // the file's full span).
         // A file awaiting review counts, as it does for the grab gate.
-        let files = LandedBarFile::group(rows);
+        let files = LandedBarFile::group(
+            rows.into_iter()
+                .filter(|file| file.scan_status != "content_blocked")
+                .collect(),
+        );
 
         // One catalog read per title, shared by the runtime basis and by
         // collection membership. Resolving members with
@@ -371,11 +380,9 @@ impl AppUseCase {
                             }
                             bar
                         });
-                    bars[scope_index] = Some(
-                        bars[scope_index].map_or(landed, |current| {
-                            current.with_file(landed, &context.profile().criteria.decision_pipeline)
-                        }),
-                    );
+                    bars[scope_index] = Some(bars[scope_index].map_or(landed, |current| {
+                        current.with_file(landed, &context.profile().criteria.decision_pipeline)
+                    }));
                 }
             }
         }
@@ -593,14 +600,24 @@ impl AppUseCase {
         let item = self
             .resolve_or_create_wanted_state_row(wanted_item_id)
             .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND, "wanted item not found".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND,
+                    "wanted item not found".to_string(),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&item.title_id)
             .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", item.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -628,14 +645,24 @@ impl AppUseCase {
         let item = self
             .resolve_or_create_wanted_state_row(wanted_item_id)
             .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND, "wanted item not found".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND,
+                    "wanted item not found".to_string(),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&item.title_id)
             .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", item.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,

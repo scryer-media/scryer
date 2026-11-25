@@ -104,6 +104,16 @@
       "path": "input.request",
       "fields": [
         {
+          "field": "kind",
+          "type": "string",
+          "descKey": "settings.refReqRequestKind"
+        },
+        {
+          "field": "media_issue",
+          "type": "object?",
+          "descKey": "settings.refReqRequestMediaIssue"
+        },
+        {
           "field": "origin",
           "type": "string",
           "descKey": "settings.refReqRequestOrigin"
@@ -238,9 +248,81 @@
       ]
     },
     {
+      "titleKey": "settings.refReqSectionRequestMediaIssue",
+      "path": "input.request.media_issue",
+      "fields": [
+        {
+          "field": "operation",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueOperation"
+        },
+        {
+          "field": "reason_code",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueReasonCode"
+        },
+        {
+          "field": "remediation",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueRemediation"
+        },
+        {
+          "field": "title_id",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueTitleId"
+        },
+        {
+          "field": "library_id",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueLibraryId"
+        },
+        {
+          "field": "media_file_id",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueMediaFileId"
+        },
+        {
+          "field": "affected_episode_ids",
+          "type": "string[]",
+          "descKey": "settings.refReqMediaIssueAffectedEpisodeIds"
+        },
+        {
+          "field": "affected_series_movie_link_ids",
+          "type": "string[]",
+          "descKey": "settings.refReqMediaIssueAffectedSeriesMovieLinkIds"
+        },
+        {
+          "field": "provenance",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueProvenance"
+        },
+        {
+          "field": "wider_hash_impact",
+          "type": "string",
+          "descKey": "settings.refReqMediaIssueWiderHashImpact"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionFactsMediaIssue",
+      "path": "input.facts.media_issue",
+      "fields": [
+        {
+          "field": "reporter_requested_affected_media",
+          "type": "bool",
+          "descKey": "settings.refReqFactsReporterRequestedAffectedMedia"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refReqSectionFacts",
       "path": "input.facts",
       "fields": [
+        {
+          "field": "media_issue",
+          "type": "object",
+          "descKey": "settings.refReqFactsMediaIssue"
+        },
         {
           "field": "age_rating",
           "type": "number",

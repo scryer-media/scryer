@@ -108,6 +108,7 @@ pub use lists::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
 pub mod location;
 pub mod maintenance_rules;
 mod media;
+pub mod media_issues;
 pub(crate) mod media_references;
 mod media_requests;
 pub mod media_server_signals;
@@ -421,17 +422,18 @@ pub use contracts::{
     IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
     IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
     ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
-    MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
-    NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
-    PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
-    PreparedIndexerArtifact, ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome,
-    QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery,
-    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StandbyQueueChoice,
-    StandbyQueueOutcome, StorageRootUsage, SubmissionConflictPolicy, SubmissionScope,
-    SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
-    SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
-    TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
-    UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
+    MediaFileCatalogDisposition, MediaFileRole, MediaIssueMatchingCandidate, MediaIssueRecycleIntent, NewBlocklistEntry,
+    NewLibraryContentBlock, NewMediaIssue, NewProxyConfig, NewSeedingProfile,
+    NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob, PendingReleasePageSort,
+    PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals, PreparedIndexerArtifact,
+    ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome, QueuedDownloadResult,
+    QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery, ResolvedDownloadArtifact,
+    SearchMode, SeedingProfileUpdate, StagedNzbRef, StandbyQueueChoice, StandbyQueueOutcome,
+    StorageRootUsage, SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict,
+    SubtitleGenerationInput, SubtitleProviderConfigUpdate, SubtitleProviderValidationResult,
+    SubtitleStreamDetail, SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter,
+    TitleHistoryPage, UnconfirmedDownloadSubmission, WantedSearchOutcome,
+    indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{

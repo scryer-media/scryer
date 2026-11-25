@@ -6228,13 +6228,15 @@ fn title_catalog_live_media_file_predicate(dialect: TitleCatalogSqlDialect, alia
         TitleCatalogSqlDialect::Sqlite => {
             format!(
                 "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
-                  AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0)"
+                  AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0
+                  AND {alias}.content_block_id IS NULL)"
             )
         }
         TitleCatalogSqlDialect::Postgres => {
             format!(
                 "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
-                  AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0)"
+                  AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0
+                  AND {alias}.content_block_id IS NULL)"
             )
         }
     }

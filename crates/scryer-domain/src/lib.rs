@@ -4201,6 +4201,153 @@ pub struct BlocklistEntry {
     pub created_at: String,
 }
 
+/// A library-scoped block of sampled media-file content.
+///
+/// This identity is intentionally not a full-file hash and is not a path:
+/// `(scheme, size_bytes, sample_bytes, sample_blake3)` describes the same
+/// 1 MiB head/tail proof used by import integrity checks. A match is a
+/// sampled match, not proof of full-byte equality.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryContentBlock {
+    pub id: String,
+    pub library_id: String,
+    pub scheme: String,
+    pub size_bytes: u64,
+    pub sample_bytes: u64,
+    pub sample_blake3: String,
+    pub reason: Option<String>,
+    pub approving_actor_id: Option<String>,
+    pub source_report_id: Option<String>,
+    pub source_media_file_id: Option<String>,
+    pub provenance_json: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueRemediation {
+    MarkBad,
+    RecycleAndSearch,
+}
+
+impl MediaIssueRemediation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MarkBad => "mark_bad",
+            Self::RecycleAndSearch => "recycle_and_search",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "mark_bad" => Some(Self::MarkBad),
+            "recycle_and_search" => Some(Self::RecycleAndSearch),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Canceled,
+}
+
+impl MediaIssueStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Canceled => "canceled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "pending" => Some(Self::Pending),
+            "approved" => Some(Self::Approved),
+            "rejected" => Some(Self::Rejected),
+            "canceled" => Some(Self::Canceled),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueExecutionStatus {
+    None,
+    Blocked,
+    Recycling,
+    RecycleFailed,
+    NoEligibleRelease,
+    DownloadQueued,
+    ReplacementImported,
+    Searching,
+    Complete,
+    Failed,
+}
+
+impl MediaIssueExecutionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Blocked => "blocked",
+            Self::Recycling => "recycling",
+            Self::RecycleFailed => "recycle_failed",
+            Self::NoEligibleRelease => "no_eligible_release",
+            Self::DownloadQueued => "download_queued",
+            Self::ReplacementImported => "replacement_imported",
+            Self::Searching => "searching",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssue {
+    pub id: String,
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub file_path_snapshot: String,
+    pub file_version: String,
+    pub size_bytes: u64,
+    pub scheme: String,
+    pub sample_bytes: u64,
+    pub sample_blake3: String,
+    pub reporter_user_id: String,
+    pub reason_code: String,
+    pub details: Option<String>,
+    pub remediation: MediaIssueRemediation,
+    /// The remediation actually authorized by review/rule policy. It is
+    /// separate from the request, so mark-bad approval can never implicitly
+    /// authorize recycle-and-search.
+    pub authorized_remediation: Option<MediaIssueRemediation>,
+    pub rule_input_schema_version: Option<i32>,
+    pub rule_input_hash: Option<String>,
+    pub rule_snapshot_json: Option<String>,
+    pub rule_votes_json: Vec<String>,
+    pub rule_effective_outcome: Option<String>,
+    pub rule_policy_outcome: Option<String>,
+    pub rule_hold_reasons: Vec<String>,
+    pub status: MediaIssueStatus,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+    pub rule_decision_id: Option<String>,
+    pub reviewed_by_user_id: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub execution_status: MediaIssueExecutionStatus,
+    pub execution_error_code: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ── Titles ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -4288,6 +4435,10 @@ pub enum DomainEventType {
     MediaRequestApproved,
     MediaRequestRejected,
     MediaRequestCanceled,
+    MediaIssueSubmitted,
+    MediaIssueApproved,
+    MediaIssueRejected,
+    MediaIssueRecycleExecution,
     TitleAdded,
     TitleUpdated,
     TitleRematched,
@@ -4353,6 +4504,10 @@ impl DomainEventType {
             Self::MediaRequestApproved => "media_request_approved",
             Self::MediaRequestRejected => "media_request_rejected",
             Self::MediaRequestCanceled => "media_request_canceled",
+            Self::MediaIssueSubmitted => "media_issue_submitted",
+            Self::MediaIssueApproved => "media_issue_approved",
+            Self::MediaIssueRejected => "media_issue_rejected",
+            Self::MediaIssueRecycleExecution => "media_issue_recycle_execution",
             Self::TitleAdded => "title_added",
             Self::TitleUpdated => "title_updated",
             Self::TitleRematched => "title_rematched",
@@ -4418,6 +4573,10 @@ impl DomainEventType {
             "media_request_approved" => Some(Self::MediaRequestApproved),
             "media_request_rejected" => Some(Self::MediaRequestRejected),
             "media_request_canceled" => Some(Self::MediaRequestCanceled),
+            "media_issue_submitted" => Some(Self::MediaIssueSubmitted),
+            "media_issue_approved" => Some(Self::MediaIssueApproved),
+            "media_issue_rejected" => Some(Self::MediaIssueRejected),
+            "media_issue_recycle_execution" => Some(Self::MediaIssueRecycleExecution),
             "title_added" => Some(Self::TitleAdded),
             "title_updated" => Some(Self::TitleUpdated),
             "title_rematched" => Some(Self::TitleRematched),
@@ -4562,6 +4721,17 @@ pub struct MediaRequestResolvedEventData {
     pub approved_lease_days: Option<i64>,
     #[serde(default)]
     pub policy_tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssueEventData {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub remediation: String,
+    pub status: String,
+    pub execution_status: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5355,6 +5525,10 @@ pub enum DomainEventPayload {
     MediaRequestApproved(MediaRequestResolvedEventData),
     MediaRequestRejected(MediaRequestResolvedEventData),
     MediaRequestCanceled(MediaRequestResolvedEventData),
+    MediaIssueSubmitted(MediaIssueEventData),
+    MediaIssueApproved(MediaIssueEventData),
+    MediaIssueRejected(MediaIssueEventData),
+    MediaIssueRecycleExecution(MediaIssueEventData),
     TitleAdded(TitleAddedEventData),
     TitleUpdated(TitleUpdatedEventData),
     TitleRematched(TitleRematchedEventData),
@@ -5422,6 +5596,10 @@ impl DomainEventPayload {
             Self::MediaRequestApproved(_) => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected(_) => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled(_) => DomainEventType::MediaRequestCanceled,
+            Self::MediaIssueSubmitted(_) => DomainEventType::MediaIssueSubmitted,
+            Self::MediaIssueApproved(_) => DomainEventType::MediaIssueApproved,
+            Self::MediaIssueRejected(_) => DomainEventType::MediaIssueRejected,
+            Self::MediaIssueRecycleExecution(_) => DomainEventType::MediaIssueRecycleExecution,
             Self::TitleAdded(_) => DomainEventType::TitleAdded,
             Self::TitleUpdated(_) => DomainEventType::TitleUpdated,
             Self::TitleRematched(_) => DomainEventType::TitleRematched,
@@ -6643,6 +6821,8 @@ pub enum RequestRuleEvaluationMode {
     Disabled,
     /// Evaluate, record, and act on the decision.
     Enforce,
+    /// Evaluate and record the decision without acting on it.
+    Shadow,
 }
 
 impl RequestRuleEvaluationMode {
@@ -6650,6 +6830,7 @@ impl RequestRuleEvaluationMode {
         match self {
             Self::Disabled => "disabled",
             Self::Enforce => "enforce",
+            Self::Shadow => "shadow",
         }
     }
 
@@ -6657,6 +6838,35 @@ impl RequestRuleEvaluationMode {
         match value {
             "disabled" => Some(Self::Disabled),
             "enforce" => Some(Self::Enforce),
+            "shadow" => Some(Self::Shadow),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestRuleApplicability {
+    #[default]
+    Acquisition,
+    MediaIssue,
+    AcquisitionAndMediaIssue,
+}
+
+impl RequestRuleApplicability {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Acquisition => "acquisition",
+            Self::MediaIssue => "media_issue",
+            Self::AcquisitionAndMediaIssue => "acquisition_and_media_issue",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "acquisition" => Some(Self::Acquisition),
+            "media_issue" => Some(Self::MediaIssue),
+            "acquisition_and_media_issue" => Some(Self::AcquisitionAndMediaIssue),
             _ => None,
         }
     }
@@ -6673,6 +6883,7 @@ pub struct RequestRuleSet {
     pub description: String,
     pub enabled: bool,
     pub evaluation_mode: RequestRuleEvaluationMode,
+    pub applicability: RequestRuleApplicability,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Revision number of the matcher currently in force.

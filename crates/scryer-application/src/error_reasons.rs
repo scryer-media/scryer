@@ -5997,6 +5997,19 @@ pub mod services {
 }
 
 pub mod media {
+    /// A library content block record was not found.
+    pub const CONTENT_BLOCK_NOT_FOUND: &str = "MEDIA_CONTENT_BLOCK_NOT_FOUND";
+    /// A sampled quick identity matches a confirmed bad-media block.
+    pub const CONTENT_BLOCK_MATCHED: &str = "MEDIA_CONTENT_BLOCK_MATCHED";
+    /// The library content-block repository could not be queried safely.
+    pub const CONTENT_BLOCK_LOOKUP_FAILED: &str = "MEDIA_CONTENT_BLOCK_LOOKUP_FAILED";
+    /// A remediation needs a separately guarded deletion workflow that is not
+    /// armed by mark-bad approval.
+    pub const REMEDIATION_NOT_AVAILABLE: &str = "MEDIA_REMEDIATION_NOT_AVAILABLE";
+    /// A recycle job failed before completing all of its durable stages.
+    pub const RECYCLE_FAILED: &str = "MEDIA_RECYCLE_FAILED";
+    /// A media-issue report's details field exceeded the public size limit.
+    pub const DETAILS_TOO_LONG: &str = "MEDIA_DETAILS_TOO_LONG";
     /// Unavailable media analysis cannot authorize replacement of an existing file.
     pub const UNVERIFIED_REPLACEMENT: &str = "MEDIA_UNVERIFIED_REPLACEMENT";
     /// References or companion files cannot safely survive relocation.
@@ -6079,6 +6092,12 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        CONTENT_BLOCK_NOT_FOUND,
+        CONTENT_BLOCK_MATCHED,
+        CONTENT_BLOCK_LOOKUP_FAILED,
+        REMEDIATION_NOT_AVAILABLE,
+        RECYCLE_FAILED,
+        DETAILS_TOO_LONG,
         UNVERIFIED_REPLACEMENT,
         REFERENCES_REQUIRE_REVIEW,
         PROBE_IO_FAILED,

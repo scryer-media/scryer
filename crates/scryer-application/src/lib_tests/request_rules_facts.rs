@@ -132,6 +132,8 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             is_default: true,
         },
         request: RequestDoc {
+            kind: "acquisition_request".to_string(),
+            media_issue: None,
             origin: "manual".to_string(),
             title: "Glass Harbor".to_string(),
             year: Some(2023),
@@ -168,6 +170,7 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             readable: true,
         },
         library_title_count: Some(412),
+        media_issue_reporter_requested_affected_media: None,
     }
 }
 
@@ -494,6 +497,9 @@ fn the_lease_the_requester_asked_for_reaches_the_document() {
 
 fn list_draft(origin: scryer_domain::MediaRequestOrigin) -> crate::request_rules::RequestDraft {
     crate::request_rules::RequestDraft {
+        kind: "acquisition_request".to_string(),
+        media_issue: None,
+        media_issue_reporter_requested_affected_media: None,
         facet: scryer_domain::MediaFacet::Movie,
         title: "Glass Harbor".to_string(),
         year: Some(2023),

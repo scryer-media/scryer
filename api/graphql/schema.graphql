@@ -2092,6 +2092,10 @@ type ClearExternalImportSetupSecretDraftPayload {
 	cleared: Boolean!
 }
 
+type ClearLibraryContentBlockPayload {
+	id: ID!
+}
+
 """
 Accepted request to clear cached title images.
 """
@@ -2926,6 +2930,7 @@ input CreateRequestRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	applicability: RequestRuleApplicabilityValue
 }
 
 """
@@ -5454,6 +5459,22 @@ enum DomainEventTypeValue {
 	A public list was unfollowed.
 	"""
 	LIST_UNFOLLOWED
+	"""
+	A bad-media report was submitted.
+	"""
+	MEDIA_ISSUE_SUBMITTED
+	"""
+	A bad-media report was approved.
+	"""
+	MEDIA_ISSUE_APPROVED
+	"""
+	A bad-media report was rejected.
+	"""
+	MEDIA_ISSUE_REJECTED
+	"""
+	A recycle-and-search execution state changed.
+	"""
+	MEDIA_ISSUE_RECYCLE_EXECUTION
 	"""
 	A sync of a list ended and its run was recorded, whatever the outcome.
 	"""
@@ -10693,6 +10714,31 @@ enum JobTriggerSourceValue {
 	Started internally by the system.
 	"""
 	SYSTEM_INTERNAL
+}
+
+"""
+A confirmed library-scoped sampled-content block. A match means the
+sampled bytes and size agree, not that the complete files are identical.
+"""
+type LibraryContentBlockPayload {
+	id: ID!
+	libraryId: ID!
+	"""
+	Versioned identity scheme; sampled content and release hashes are distinct.
+	"""
+	scheme: String!
+	sizeBytes: Int!
+	sampleBytes: Int!
+	"""
+	BLAKE3 digest of the sampled bytes, not a full-file digest.
+	"""
+	sampleBlake3: String!
+	reason: String
+	approvingActorId: ID
+	sourceReportId: ID
+	sourceMediaFileId: ID
+	provenanceJson: String
+	createdAt: DateTime!
 }
 
 """
@@ -17468,6 +17514,78 @@ type MediaHdrCapabilitiesPayload {
 }
 
 """
+Durable execution state for an approved media issue.
+"""
+enum MediaIssueExecutionStatusValue {
+	NONE
+	BLOCKED
+	RECYCLING
+	RECYCLE_FAILED
+	NO_ELIGIBLE_RELEASE
+	DOWNLOAD_QUEUED
+	REPLACEMENT_IMPORTED
+	SEARCHING
+	COMPLETE
+	FAILED
+}
+
+"""
+A bad-media report and its review/execution state. Filesystem paths are not exposed.
+"""
+type MediaIssuePayload {
+	id: ID!
+	libraryId: ID!
+	titleId: ID!
+	mediaFileId: ID!
+	reporterUserId: ID!
+	reasonCode: String!
+	details: String
+	"""
+	Proposed action, not an authorization.
+	"""
+	remediation: MediaIssueRemediationValue!
+	"""
+	Action explicitly authorized by the final review or policy.
+	"""
+	authorizedRemediation: MediaIssueRemediationValue
+	status: MediaIssueStatusValue!
+	affectedEpisodeIds: [ID!]!
+	affectedSeriesMovieLinkIds: [ID!]!
+	ruleDecisionId: ID
+	ruleInputSchemaVersion: Int
+	ruleInputHash: String
+	ruleSnapshotJson: String
+	ruleVotesJson: [String!]!
+	ruleEffectiveOutcome: String
+	rulePolicyOutcome: String
+	ruleHoldReasons: [String!]!
+	reviewedByUserId: ID
+	reviewedAt: DateTime
+	executionStatus: MediaIssueExecutionStatusValue!
+	executionErrorCode: String
+	createdAt: DateTime!
+	updatedAt: DateTime!
+}
+
+"""
+What a media issue requests after confirmation.
+"""
+enum MediaIssueRemediationValue {
+	MARK_BAD
+	RECYCLE_AND_SEARCH
+}
+
+"""
+Review state of a media issue.
+"""
+enum MediaIssueStatusValue {
+	PENDING
+	APPROVED
+	REJECTED
+	CANCELED
+}
+
+"""
 Mastering display chromaticity coordinates and luminance.
 """
 type MediaMasteringDisplayPayload {
@@ -21297,6 +21415,61 @@ type MutationRoot {
 		input: RehydrateAllMetadataInput!
 	): RehydrateAllMetadataPayload!
 	"""
+	Submit a bad-media report for one existing media file.
+	"""
+	submitMediaIssue(
+		"""
+		Existing media file and requested bad-media remediation.
+		"""
+		input: SubmitMediaIssueInput!
+	): MediaIssuePayload!
+	"""
+	Explicitly confirm recycle-and-search for a pending media issue through
+	the existing preview/fingerprint/typed-confirmation deletion job.
+	"""
+	approveMediaIssueRecycleSearch(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!,
+		"""
+		Preview fingerprint from the deletion preview.
+		"""
+		previewFingerprint: String!,
+		"""
+		Typed confirmation required by the preview.
+		"""
+		typedConfirmation: String
+	): MediaIssuePayload!
+	"""
+	Confirm a sampled content block for a pending report without moving any files.
+	"""
+	approveMediaIssue(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!
+	): MediaIssuePayload!
+	"""
+	Reject a pending media issue without creating or changing content blocks.
+	"""
+	rejectMediaIssue(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!
+	): MediaIssuePayload!
+	"""
+	Explicitly clear a library's confirmed sampled-content block.
+	Clearing does not restore recycled files or remove a separate release block.
+	"""
+	clearLibraryContentBlock(
+		"""
+		Confirmed content-block identity.
+		"""
+		blockId: ID!
+	): ClearLibraryContentBlockPayload!
+	"""
 	Preview survivor selection and every file disposition before settling conflicts.
 	"""
 	previewPendingImportConflicts(
@@ -21858,6 +22031,19 @@ type MutationRoot {
 		Rule-set identity, replacement name, and optional description and library scope.
 		"""
 		input: UpdateRequestRuleMetadataInput!
+	): RequestRuleSet!
+	"""
+	Set explicit enforcement mode, including shadow evaluation.
+	"""
+	setRequestRuleEvaluationMode(
+		"""
+		Request rule-set identity.
+		"""
+		ruleSetId: ID!,
+		"""
+		Disabled, enforce, or shadow evaluation mode.
+		"""
+		mode: RequestRuleEvaluationModeValue!
 	): RequestRuleSet!
 	"""
 	Enable or disable a request rule set.
@@ -25958,6 +26144,40 @@ type QueryRoot {
 		limit: Int
 	): [TitleReleaseBlocklistEntryPayload!]!
 	"""
+	List bounded confirmed bad-media content blocks for a library.
+	"""
+	libraryContentBlocks(
+		"""
+		Library identity whose content blocks are returned.
+		"""
+		libraryId: ID!,
+		"""
+		Maximum entries to return; defaults to 100 and clamps to 1 through 1000.
+		"""
+		limit: Int
+	): [LibraryContentBlockPayload!]!
+	"""
+	List bounded bad-media reports for a library.
+	"""
+	mediaIssues(
+		"""
+		Library identity whose bad-media reports are returned.
+		"""
+		libraryId: ID!,
+		"""
+		Optional review status filter.
+		"""
+		status: MediaIssueStatusValue,
+		"""
+		Maximum entries to return; defaults to 100 and is clamped to 1 through 1000.
+		"""
+		limit: Int,
+		"""
+		Rows to skip in newest-first report order.
+		"""
+		offset: Int
+	): [MediaIssuePayload!]!
+	"""
 	Return grab, upgrade, import, and failure counts for a trailing window and the window before it.
 	"""
 	dashboardActivityStats(
@@ -28403,6 +28623,24 @@ enum RequestDecisionOutcomeValue {
 }
 
 """
+The hypothetical request an author-side preview is evaluated against.
+
+It names a real user and a real library on purpose: the question a preview
+answers is "what would this rule do to *this person* asking for *this
+title*", and a synthetic requester would exercise none of the permission,
+history, or linked-provider facts that make request rules useful.
+"""
+input RequestMediaIssuePreviewInput {
+	"""
+	Existing file resolved in the sample library. All associations and
+	provenance come from the server, as on submission.
+	"""
+	mediaFileId: ID!
+	reasonCode: String!
+	remediation: String!
+}
+
+"""
 Requester-side pre-flight: what would happen if this draft were submitted
 now (FR-020).
 
@@ -28454,6 +28692,12 @@ type RequestPreflightReason {
 	Name of the rule that emitted it.
 	"""
 	ruleName: String!
+}
+
+enum RequestRuleApplicabilityValue {
+	ACQUISITION
+	MEDIA_ISSUE
+	ACQUISITION_AND_MEDIA_ISSUE
 }
 
 """
@@ -28528,6 +28772,10 @@ enum RequestRuleEvaluationModeValue {
 	An enabled rule was evaluated, recorded, and acted on.
 	"""
 	ENFORCE
+	"""
+	Record the rule verdict without acting on or side-effecting it.
+	"""
+	SHADOW
 }
 
 """
@@ -28607,14 +28855,6 @@ type RequestRuleRevision {
 	createdAt: DateTime!
 }
 
-"""
-The hypothetical request an author-side preview is evaluated against.
-
-It names a real user and a real library on purpose: the question a preview
-answers is "what would this rule do to *this person* asking for *this
-title*", and a synthetic requester would exercise none of the permission,
-history, or linked-provider facts that make request rules useful.
-"""
 input RequestRuleSampleInput {
 	"""
 	User to evaluate as.
@@ -28624,6 +28864,8 @@ input RequestRuleSampleInput {
 	Library to evaluate against.
 	"""
 	libraryId: ID!
+	kind: String
+	mediaIssue: RequestMediaIssuePreviewInput
 	"""
 	Provider identifiers of the sample title. An empty list is a legitimate
 	preview of requester facts alone, and leaves every metadata fact
@@ -28680,6 +28922,8 @@ type RequestRuleSet {
 	Whether the rule set takes part in deciding requests.
 	"""
 	enabled: Boolean!
+	evaluationMode: RequestRuleEvaluationModeValue!
+	applicability: RequestRuleApplicabilityValue!
 	"""
 	Libraries the rule is confined to. Empty means every library.
 	"""
@@ -31313,6 +31557,16 @@ input SubmitExternalReleaseInput {
 	Release flags: freeleech, halfleech, double_upload, internal, scene, freeleech_75, freeleech_25, nuked, subtitles, golden, or approved.
 	"""
 	flags: [String!]! = []
+}
+
+"""
+Report one existing media file as bad.
+"""
+input SubmitMediaIssueInput {
+	mediaFileId: ID!
+	reasonCode: String!
+	details: String
+	remediation: MediaIssueRemediationValue!
 }
 
 """
@@ -35615,6 +35869,7 @@ input UpdateRequestRuleMetadataInput {
 	Replacement library scope. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	applicability: RequestRuleApplicabilityValue
 }
 
 """

@@ -119,6 +119,9 @@ impl AppUseCase {
         };
 
         let draft = RequestDraft {
+            kind: "acquisition_request".to_string(),
+            media_issue: None,
+            media_issue_reporter_requested_affected_media: None,
             facet: input.facet.clone(),
             title: input.title.trim().to_string(),
             year: input.year,

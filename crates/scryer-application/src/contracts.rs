@@ -1412,6 +1412,52 @@ pub struct NewBlocklistEntry {
     pub reason: Option<String>,
 }
 
+/// A confirmed library-scoped sampled-content block.
+#[derive(Clone, Debug)]
+pub struct NewLibraryContentBlock {
+    pub library_id: String,
+    pub proof: scryer_domain::ImportContentProof,
+    pub scheme: String,
+    pub reason: Option<String>,
+    pub approving_actor_id: Option<String>,
+    pub source_report_id: Option<String>,
+    pub source_media_file_id: Option<String>,
+    pub provenance_json: Option<String>,
+}
+
+/// A pending or reviewed media-issue report.
+#[derive(Clone, Debug)]
+pub struct NewMediaIssue {
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub file_path_snapshot: String,
+    pub file_version: String,
+    pub proof: scryer_domain::ImportContentProof,
+    pub scheme: String,
+    pub reporter_user_id: String,
+    pub reason_code: String,
+    pub details: Option<String>,
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MediaIssueMatchingCandidate {
+    pub id: String,
+    pub title_id: String,
+    pub file_path: String,
+    pub size_bytes: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MediaIssueRecycleIntent {
+    pub issue_id: String,
+    pub actor_id: String,
+    pub preview_fingerprint: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Interactive,

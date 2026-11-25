@@ -304,6 +304,36 @@ impl InputReferencePath {
         match self.components.as_slice() {
             [
                 InputPathComponent::Field(input),
+                InputPathComponent::Field(namespace),
+            ] if input == "input" && namespace == "observations" => {
+                // Reading the entire object also reaches the sensitive
+                // relationship envelope.
+                Some("input.observations".into())
+            }
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(namespace),
+                selector,
+                ..,
+            ] if input == "input"
+                && namespace == "observations"
+                && !matches!(selector, InputPathComponent::Field(_)) =>
+            {
+                Some("input.observations".into())
+            }
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(namespace),
+                InputPathComponent::Field(fact),
+                ..,
+            ] if input == "input"
+                && matches!(namespace.as_str(), "facts" | "observations")
+                && fact == "media_issue" =>
+            {
+                Some(format!("input.{namespace}.media_issue"))
+            }
+            [
+                InputPathComponent::Field(input),
                 InputPathComponent::Field(requester),
             ] if input == "input" && requester == "requester" => {
                 Some(PERSON_TARGETED_REQUEST_ROOT.to_string())

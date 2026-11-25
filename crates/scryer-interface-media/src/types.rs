@@ -956,6 +956,223 @@ pub struct FixTitleMatchPayload {
     pub warnings: Vec<String>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What a media issue requests after confirmation.
+pub enum MediaIssueRemediationValue {
+    MarkBad,
+    RecycleAndSearch,
+}
+
+impl From<scryer_domain::MediaIssueRemediation> for MediaIssueRemediationValue {
+    fn from(value: scryer_domain::MediaIssueRemediation) -> Self {
+        match value {
+            scryer_domain::MediaIssueRemediation::MarkBad => Self::MarkBad,
+            scryer_domain::MediaIssueRemediation::RecycleAndSearch => Self::RecycleAndSearch,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Review state of a media issue.
+pub enum MediaIssueStatusValue {
+    Pending,
+    Approved,
+    Rejected,
+    Canceled,
+}
+
+impl From<scryer_domain::MediaIssueStatus> for MediaIssueStatusValue {
+    fn from(value: scryer_domain::MediaIssueStatus) -> Self {
+        match value {
+            scryer_domain::MediaIssueStatus::Pending => Self::Pending,
+            scryer_domain::MediaIssueStatus::Approved => Self::Approved,
+            scryer_domain::MediaIssueStatus::Rejected => Self::Rejected,
+            scryer_domain::MediaIssueStatus::Canceled => Self::Canceled,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Durable execution state for an approved media issue.
+pub enum MediaIssueExecutionStatusValue {
+    None,
+    Blocked,
+    Recycling,
+    RecycleFailed,
+    NoEligibleRelease,
+    DownloadQueued,
+    ReplacementImported,
+    Searching,
+    Complete,
+    Failed,
+}
+
+impl From<scryer_domain::MediaIssueExecutionStatus> for MediaIssueExecutionStatusValue {
+    fn from(value: scryer_domain::MediaIssueExecutionStatus) -> Self {
+        match value {
+            scryer_domain::MediaIssueExecutionStatus::None => Self::None,
+            scryer_domain::MediaIssueExecutionStatus::Blocked => Self::Blocked,
+            scryer_domain::MediaIssueExecutionStatus::Recycling => Self::Recycling,
+            scryer_domain::MediaIssueExecutionStatus::RecycleFailed => Self::RecycleFailed,
+            scryer_domain::MediaIssueExecutionStatus::NoEligibleRelease => Self::NoEligibleRelease,
+            scryer_domain::MediaIssueExecutionStatus::DownloadQueued => Self::DownloadQueued,
+            scryer_domain::MediaIssueExecutionStatus::ReplacementImported => {
+                Self::ReplacementImported
+            }
+            scryer_domain::MediaIssueExecutionStatus::Searching => Self::Searching,
+            scryer_domain::MediaIssueExecutionStatus::Complete => Self::Complete,
+            scryer_domain::MediaIssueExecutionStatus::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+/// A confirmed library-scoped sampled-content block. A match means the
+/// sampled bytes and size agree, not that the complete files are identical.
+pub struct LibraryContentBlockPayload {
+    pub id: ID,
+    pub library_id: ID,
+    /// Versioned identity scheme; sampled content and release hashes are distinct.
+    pub scheme: String,
+    pub size_bytes: i64,
+    pub sample_bytes: i64,
+    /// BLAKE3 digest of the sampled bytes, not a full-file digest.
+    pub sample_blake3: String,
+    pub reason: Option<String>,
+    pub approving_actor_id: Option<ID>,
+    pub source_report_id: Option<ID>,
+    pub source_media_file_id: Option<ID>,
+    pub provenance_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ClearLibraryContentBlockPayload {
+    pub id: ID,
+}
+
+impl LibraryContentBlockPayload {
+    pub fn from_domain(block: scryer_domain::LibraryContentBlock) -> async_graphql::Result<Self> {
+        let created_at = DateTime::parse_from_rfc3339(&block.created_at)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| {
+                async_graphql::Error::new(format!(
+                    "invalid library content block timestamp: {error}"
+                ))
+            })?;
+        Ok(Self {
+            id: block.id.into(),
+            library_id: block.library_id.into(),
+            scheme: block.scheme,
+            size_bytes: i64::try_from(block.size_bytes).unwrap_or(i64::MAX),
+            sample_bytes: i64::try_from(block.sample_bytes).unwrap_or(i64::MAX),
+            sample_blake3: block.sample_blake3,
+            reason: block.reason,
+            approving_actor_id: block.approving_actor_id.map(ID::from),
+            source_report_id: block.source_report_id.map(ID::from),
+            source_media_file_id: block.source_media_file_id.map(ID::from),
+            provenance_json: block.provenance_json,
+            created_at,
+        })
+    }
+}
+
+#[derive(InputObject, Clone)]
+/// Report one existing media file as bad.
+pub struct SubmitMediaIssueInput {
+    pub media_file_id: ID,
+    pub reason_code: String,
+    pub details: Option<String>,
+    pub remediation: MediaIssueRemediationValue,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A bad-media report and its review/execution state. Filesystem paths are not exposed.
+pub struct MediaIssuePayload {
+    pub id: ID,
+    pub library_id: ID,
+    pub title_id: ID,
+    pub media_file_id: ID,
+    pub reporter_user_id: ID,
+    pub reason_code: String,
+    pub details: Option<String>,
+    /// Proposed action, not an authorization.
+    pub remediation: MediaIssueRemediationValue,
+    /// Action explicitly authorized by the final review or policy.
+    pub authorized_remediation: Option<MediaIssueRemediationValue>,
+    pub status: MediaIssueStatusValue,
+    pub affected_episode_ids: Vec<ID>,
+    pub affected_series_movie_link_ids: Vec<ID>,
+    pub rule_decision_id: Option<ID>,
+    pub rule_input_schema_version: Option<i32>,
+    pub rule_input_hash: Option<String>,
+    pub rule_snapshot_json: Option<String>,
+    pub rule_votes_json: Vec<String>,
+    pub rule_effective_outcome: Option<String>,
+    pub rule_policy_outcome: Option<String>,
+    pub rule_hold_reasons: Vec<String>,
+    pub reviewed_by_user_id: Option<ID>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub execution_status: MediaIssueExecutionStatusValue,
+    pub execution_error_code: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MediaIssuePayload {
+    pub fn from_domain(issue: scryer_domain::MediaIssue) -> async_graphql::Result<Self> {
+        let parse_timestamp = |value: &str, field: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .map(|value| value.with_timezone(&Utc))
+                .map_err(|error| {
+                    async_graphql::Error::new(format!("invalid {field} timestamp: {error}"))
+                })
+        };
+        Ok(Self {
+            id: issue.id.into(),
+            library_id: issue.library_id.into(),
+            title_id: issue.title_id.into(),
+            media_file_id: issue.media_file_id.into(),
+            reporter_user_id: issue.reporter_user_id.into(),
+            reason_code: issue.reason_code,
+            details: issue.details,
+            remediation: issue.remediation.into(),
+            authorized_remediation: issue.authorized_remediation.map(Into::into),
+            status: issue.status.into(),
+            affected_episode_ids: issue
+                .affected_episode_ids
+                .into_iter()
+                .map(ID::from)
+                .collect(),
+            affected_series_movie_link_ids: issue
+                .affected_series_movie_link_ids
+                .into_iter()
+                .map(ID::from)
+                .collect(),
+            rule_decision_id: issue.rule_decision_id.map(ID::from),
+            rule_input_schema_version: issue.rule_input_schema_version,
+            rule_input_hash: issue.rule_input_hash,
+            rule_snapshot_json: issue.rule_snapshot_json,
+            rule_votes_json: issue.rule_votes_json,
+            rule_effective_outcome: issue.rule_effective_outcome,
+            rule_policy_outcome: issue.rule_policy_outcome,
+            rule_hold_reasons: issue.rule_hold_reasons,
+            reviewed_by_user_id: issue.reviewed_by_user_id.map(ID::from),
+            reviewed_at: issue
+                .reviewed_at
+                .map(|value| parse_timestamp(&value, "media issue reviewed_at"))
+                .transpose()?,
+            execution_status: issue.execution_status.into(),
+            execution_error_code: issue.execution_error_code,
+            created_at: parse_timestamp(&issue.created_at, "media issue created_at")?,
+            updated_at: parse_timestamp(&issue.updated_at, "media issue updated_at")?,
+        })
+    }
+}
+
 #[derive(SimpleObject, Clone)]
 /// Result of assigning an imported file to different episodes of its title.
 pub struct ReassignEpisodeFilePayload {

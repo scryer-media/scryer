@@ -10652,6 +10652,230 @@ pub trait BlocklistRepository: Send + Sync {
     /// Drops every block recorded against one indexer. Called when the indexer
     /// is deleted: its rows can never match again, but they would still render.
     async fn delete_for_indexer(&self, indexer_id: &str) -> AppResult<()>;
+
+    /// Record a confirmed library-scoped sampled-content block.
+    async fn block_content(&self, entry: &NewLibraryContentBlock) -> AppResult<bool> {
+        let _ = entry;
+        Ok(false)
+    }
+
+    /// Whether this sampled proof is blocked in the library.
+    async fn is_content_blocked(
+        &self,
+        library_id: &str,
+        proof: &scryer_domain::ImportContentProof,
+        scheme: &str,
+    ) -> AppResult<bool> {
+        let _ = (library_id, proof, scheme);
+        Ok(false)
+    }
+
+    async fn has_content_block_size(&self, library_id: &str, size_bytes: i64) -> AppResult<bool> {
+        let _ = (library_id, size_bytes);
+        Ok(false)
+    }
+
+    /// Return one confirmed library content block.
+    async fn get_content_block(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::LibraryContentBlock>> {
+        let _ = id;
+        Ok(None)
+    }
+
+    /// Remove one confirmed library content block.
+    async fn remove_content_block(&self, id: &str) -> AppResult<()> {
+        let _ = id;
+        Ok(())
+    }
+
+    /// List bounded confirmed content blocks for a library.
+    async fn list_content_blocks(
+        &self,
+        library_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LibraryContentBlock>> {
+        let _ = (library_id, limit);
+        Ok(Vec::new())
+    }
+
+    /// Persist a media-issue report for later review.
+    async fn submit_media_issue(
+        &self,
+        issue: &NewMediaIssue,
+    ) -> AppResult<scryer_domain::MediaIssue> {
+        let _ = issue;
+        Err(AppError::Repository(
+            "media issue repository is not configured".into(),
+        ))
+    }
+
+    async fn get_media_issue(&self, id: &str) -> AppResult<Option<scryer_domain::MediaIssue>> {
+        let _ = id;
+        Ok(None)
+    }
+
+    async fn record_media_issue_rule_trace(
+        &self,
+        record: &scryer_domain::RequestRuleDecisionRecord,
+        input_json: &str,
+    ) -> AppResult<bool> {
+        let _ = (record, input_json);
+        Ok(false)
+    }
+
+    /// False proves that no other registered file in the library can match
+    /// this sampled proof. None denotes an unavailable impact index.
+    async fn media_issue_has_other_size_candidates(
+        &self,
+        library_id: &str,
+        file_id: &str,
+        size_bytes: i64,
+    ) -> AppResult<Option<bool>> {
+        let _ = (library_id, file_id, size_bytes);
+        Ok(None)
+    }
+
+    async fn list_media_issue_matching_candidates(
+        &self,
+        library_id: &str,
+        size_bytes: i64,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<crate::MediaIssueMatchingCandidate>> {
+        let _ = (library_id, size_bytes, after_id, limit);
+        Ok(Vec::new())
+    }
+
+    async fn note_scanned_content_block(
+        &self,
+        library_id: &str,
+        file_id: &str,
+        proof: &scryer_domain::ImportContentProof,
+        scheme: &str,
+    ) -> AppResult<()> {
+        let _ = (library_id, file_id, proof, scheme);
+        Ok(())
+    }
+
+    async fn clear_scanned_content_block(&self, file_id: &str) -> AppResult<()> {
+        let _ = file_id;
+        Ok(())
+    }
+
+    async fn list_media_issues(
+        &self,
+        library_id: &str,
+        status: Option<scryer_domain::MediaIssueStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<Vec<scryer_domain::MediaIssue>> {
+        let _ = (library_id, status, limit, offset);
+        Ok(Vec::new())
+    }
+
+    async fn list_media_issues_for_title(
+        &self,
+        title_id: &str,
+        status: Option<scryer_domain::MediaIssueStatus>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::MediaIssue>> {
+        let _ = (title_id, status, limit);
+        Ok(Vec::new())
+    }
+
+    /// Atomically confirm the content block and the pending report. True only
+    /// for the caller that performed the transition.
+    async fn confirm_media_issue(
+        &self,
+        issue_id: &str,
+        reviewer_user_id: Option<&str>,
+        rule_decision_id: Option<&str>,
+        remediation: scryer_domain::MediaIssueRemediation,
+        block: &NewLibraryContentBlock,
+        release: Option<&NewBlocklistEntry>,
+        recycle_fingerprint: Option<&str>,
+        _matching_media_file_ids: &[String],
+    ) -> AppResult<bool> {
+        let _ = (
+            issue_id,
+            reviewer_user_id,
+            rule_decision_id,
+            remediation,
+            block,
+            release,
+            recycle_fingerprint,
+        );
+        Err(AppError::Repository(
+            "media issue repository is not configured".into(),
+        ))
+    }
+
+    async fn interrupted_media_issue_recycles(
+        &self,
+        limit: u32,
+    ) -> AppResult<Vec<crate::MediaIssueRecycleIntent>> {
+        let _ = limit;
+        Ok(Vec::new())
+    }
+
+    async fn save_media_issue_recycle_receipt(
+        &self,
+        issue_id: &str,
+        receipt: &crate::recycle_bin::PreparedRecycleFile,
+    ) -> AppResult<bool> {
+        let _ = (issue_id, receipt);
+        Ok(false)
+    }
+
+    async fn get_media_issue_recycle_receipt(
+        &self,
+        issue_id: &str,
+    ) -> AppResult<Option<crate::recycle_bin::PreparedRecycleFile>> {
+        let _ = issue_id;
+        Ok(None)
+    }
+
+    async fn reject_media_issue(
+        &self,
+        issue_id: &str,
+        reviewer_user_id: Option<&str>,
+        rule_decision_id: Option<&str>,
+    ) -> AppResult<Option<scryer_domain::MediaIssue>> {
+        let _ = (issue_id, reviewer_user_id, rule_decision_id);
+        Ok(None)
+    }
+
+    async fn set_media_issue_execution_status(
+        &self,
+        issue_id: &str,
+        execution_status: scryer_domain::MediaIssueExecutionStatus,
+        execution_error_code: Option<&str>,
+    ) -> AppResult<bool> {
+        let _ = (issue_id, execution_status, execution_error_code);
+        Ok(false)
+    }
+
+    async fn set_media_issue_execution_statuses(
+        &self,
+        issue_ids: &[String],
+        execution_status: scryer_domain::MediaIssueExecutionStatus,
+        execution_error_code: Option<&str>,
+    ) -> AppResult<usize> {
+        let mut count = 0;
+        for issue_id in issue_ids {
+            count += usize::from(
+                self.set_media_issue_execution_status(
+                    issue_id,
+                    execution_status,
+                    execution_error_code,
+                )
+                .await?,
+            );
+        }
+        Ok(count)
+    }
 }
 
 #[async_trait]
@@ -11394,6 +11618,7 @@ pub trait RequestRuleSetRepository: Send + Sync {
         name: &str,
         description: &str,
         library_ids: &[String],
+        applicability: scryer_domain::RequestRuleApplicability,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 

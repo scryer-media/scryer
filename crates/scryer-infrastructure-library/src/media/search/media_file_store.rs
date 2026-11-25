@@ -845,6 +845,7 @@ impl MediaFileStore {
                    AND {}
                    AND media_files.role IN ('primary', 'additional')
                    AND media_files.scan_status <> 'review_required'
+                   AND media_files.content_block_id IS NULL
                    AND {normalized_quality} IS NOT NULL
              ) ranked
              WHERE quality_row = 1
@@ -900,6 +901,7 @@ impl MediaFileStore {
                    AND titles.facet = 'movie'
                    AND {}
                    AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
+                   AND media_files.content_block_id IS NULL
              ) ranked
              WHERE media_row = 1",
             live_media_file_predicate(dialect, "media_files")
@@ -943,7 +945,7 @@ impl MediaFileStore {
              FROM episodes e
              INNER JOIN collections c ON c.id = e.collection_id
              LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
+             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required' AND mf.content_block_id IS NULL
              WHERE e.title_id IN ({placeholders})
                AND c.collection_type <> 'specials'
                AND c.collection_index <> '0'
@@ -1289,6 +1291,7 @@ impl MediaFileRepository for MediaFileStore {
              LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
              WHERE mf.title_id = {{}} AND {}
                AND COALESCE(fem.role, mf.role) = 'primary'
+               AND mf.content_block_id IS NULL
              ORDER BY mf.created_at DESC",
             series_movie_link_ids_aggregate(dialect),
             live_media_file_predicate(dialect, "mf")
@@ -1361,6 +1364,7 @@ impl MediaFileRepository for MediaFileStore {
              LEFT JOIN file_episode_map fem_all ON fem_all.file_id = mf.id
              WHERE mf.title_id = {{}}
                AND {}
+               AND mf.content_block_id IS NULL
              GROUP BY mf.id
              ORDER BY mf.created_at DESC",
             media_file_select_columns(
@@ -1967,7 +1971,7 @@ impl MediaFileRepository for MediaFileStore {
                         COUNT(DISTINCT CASE WHEN {countable} AND mf.id IS NOT NULL THEN e.id END) AS owned_episodes
                  FROM episodes e
                  LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-                 LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
+                 LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required' AND mf.content_block_id IS NULL
                  WHERE e.title_id IN ({placeholders})
                    AND e.collection_id IS NOT NULL
                  GROUP BY e.collection_id",
@@ -2235,7 +2239,8 @@ impl MediaFileRepository for MediaFileStore {
         };
         let sql = format!(
             "UPDATE media_files SET size_bytes = {{}},
-                source_signature_scheme = {{}}, source_signature_value = {{}}{invalidation}
+                source_signature_scheme = {{}}, source_signature_value = {{}},
+                content_block_id = NULL{invalidation}
              WHERE id = {{}}"
         );
         execute_write(
@@ -3075,6 +3080,7 @@ async fn list_episode_media_availability_query(
             INNER JOIN requested_episodes e ON e.id = fem.episode_id
             INNER JOIN media_files mf ON mf.id = fem.file_id
             WHERE {} AND fem.role IN ('primary', 'additional')
+              AND mf.content_block_id IS NULL
          )
          SELECT e.title_id,
                 e.id AS episode_id,
@@ -3374,7 +3380,10 @@ fn media_file_select_columns(dialect: SqlDialect, episode_expr: &str, role_expr:
             mf.size_bytes, mf.announced_size_bytes, {role_expr} AS role,
             mf.source_signature_scheme, mf.source_signature_value,
             mf.full_blake3, mf.move_crc, mf.move_crc_algorithm, mf.hash_computed_at,
-            mf.quality_id, mf.scan_status, mf.created_at,
+            mf.quality_id,
+            CASE WHEN mf.content_block_id IS NOT NULL THEN 'content_blocked'
+                 ELSE mf.scan_status END AS scan_status,
+            mf.created_at,
             mf.video_codec, mf.video_width, mf.video_height,
             mf.video_bitrate_kbps, mf.video_bit_depth,
             mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,

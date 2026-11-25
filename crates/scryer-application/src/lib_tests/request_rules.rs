@@ -302,6 +302,7 @@ async fn a_new_rule_set_is_stored_disabled_and_loads_nothing() {
                 description: "test".to_string(),
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -392,6 +393,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
                 description: String::new(),
                 rego_source: PERSON_TARGETED.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -412,6 +414,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
                 description: String::new(),
                 rego_source: PERSON_TARGETED.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -427,6 +430,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
                 description: String::new(),
                 rego_source: DENY_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -447,6 +451,7 @@ async fn an_invalid_matcher_is_refused_with_the_reference_wording() {
                     "package rules\nimport rego.v1\n\napprove if {\n\tinput.facts.not_a_fact\n}\n"
                         .to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -918,6 +923,7 @@ async fn a_library_scoped_rule_does_not_vote_on_another_librarys_request() {
                 description: String::new(),
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: vec![series_library],
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -1821,6 +1827,7 @@ async fn create_rule(
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids: Vec::new(),
+                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
             },
         )
         .await
@@ -1877,6 +1884,8 @@ fn sample(harness: &MediaRequestTestHarness, library_id: &str, tvdb_id: i64) -> 
     RequestRuleSample {
         user_id: harness.user.id.clone(),
         library_id: library_id.to_string(),
+        kind: None,
+        media_issue: None,
         external_ids: vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
         quality_profile_id: Some("1080p".to_string()),
         monitor_type: None,

@@ -34,6 +34,8 @@ mod lifecycle_claims_one_operator_keep_upgrade_tests;
 #[cfg(test)]
 mod list_search_mode_upgrade_tests;
 #[cfg(test)]
+mod media_content_blocks_upgrade_tests;
+#[cfg(test)]
 #[path = "migration_progress_tests.rs"]
 mod migration_progress_tests;
 #[cfg(test)]

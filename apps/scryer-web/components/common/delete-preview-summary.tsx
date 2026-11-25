@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -35,6 +36,8 @@ export function DeletePreviewSummary({
   typedConfirmationInputId,
 }: DeletePreviewSummaryProps) {
   const t = useTranslate();
+  const defaultPromptId = useId();
+  const promptId = typedConfirmationPromptId ?? defaultPromptId;
 
   if (loading) {
     return (
@@ -129,15 +132,13 @@ export function DeletePreviewSummary({
       ) : null}
       {preview.requiresTypedConfirmation ? (
         <div className="space-y-2">
-          <p
-            id={typedConfirmationPromptId}
-            className="text-xs font-medium text-foreground"
-          >
+          <p id={promptId} className="text-xs font-medium text-foreground">
             {preview.typedConfirmationPrompt ??
               t("deletePreview.confirmPrompt")}
           </p>
           <Input
             id={typedConfirmationInputId}
+            aria-labelledby={promptId}
             value={typedConfirmation}
             onChange={(event) => onTypedConfirmationChange(event.target.value)}
             placeholder="DELETE"

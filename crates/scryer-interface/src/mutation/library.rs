@@ -786,4 +786,112 @@ impl LibraryMutations {
             titles_cleared: i64::try_from(cleared).unwrap_or(i64::MAX),
         })
     }
+
+    /// Submit a bad-media report for one existing media file.
+    async fn submit_media_issue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Existing media file and requested bad-media remediation.")]
+        input: crate::types::SubmitMediaIssueInput,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let remediation = match input.remediation {
+            crate::types::MediaIssueRemediationValue::MarkBad => {
+                scryer_domain::MediaIssueRemediation::MarkBad
+            }
+            crate::types::MediaIssueRemediationValue::RecycleAndSearch => {
+                scryer_domain::MediaIssueRemediation::RecycleAndSearch
+            }
+        };
+        let mut issue = app
+            .submit_media_issue(
+                &actor,
+                scryer_application::media_issues::SubmitMediaIssueInput {
+                    media_file_id: input.media_file_id.to_string(),
+                    reason_code: input.reason_code,
+                    details: input.details,
+                    remediation,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        // The operator review queue may expose the rule trace. A submission
+        // response must not expose internal facts or rule diagnostics.
+        issue.rule_snapshot_json = None;
+        issue.rule_votes_json.clear();
+        issue.rule_hold_reasons.clear();
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Explicitly confirm recycle-and-search for a pending media issue through
+    /// the existing preview/fingerprint/typed-confirmation deletion job.
+    async fn approve_media_issue_recycle_search(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending media-issue identity.")] issue_id: ID,
+        #[graphql(desc = "Preview fingerprint from the deletion preview.")]
+        preview_fingerprint: String,
+        #[graphql(desc = "Typed confirmation required by the preview.")] typed_confirmation: Option<
+            String,
+        >,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let issue = app
+            .approve_media_issue_recycle_search(
+                &actor,
+                issue_id.as_ref(),
+                &preview_fingerprint,
+                typed_confirmation.as_deref(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Confirm a sampled content block for a pending report without moving any files.
+    async fn approve_media_issue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending media-issue identity.")] issue_id: ID,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let issue = app
+            .approve_media_issue(&actor, issue_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Reject a pending media issue without creating or changing content blocks.
+    async fn reject_media_issue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending media-issue identity.")] issue_id: ID,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let issue = app
+            .reject_media_issue(&actor, issue_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Explicitly clear a library's confirmed sampled-content block.
+    /// Clearing does not restore recycled files or remove a separate release block.
+    async fn clear_library_content_block(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Confirmed content-block identity.")] block_id: ID,
+    ) -> GqlResult<crate::types::ClearLibraryContentBlockPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.clear_library_content_block(&actor, block_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::types::ClearLibraryContentBlockPayload { id: block_id })
+    }
 }

@@ -8060,6 +8060,94 @@ const en: LocaleDictionary = {
     "Some ranges or warnings were omitted because the report limit was reached.",
   "mediaFile.subtitleCount": "{{count}} Subs",
   "mediaFile.delete": "Delete file",
+  "mediaFile.markBad": "Mark bad",
+  "mediaFile.markBadFile": "Mark bad: {{file}}",
+  "mediaFile.numberedVersion": "File version {{number}}",
+  "mediaFile.markBadDescription":
+    "Report {{file}} as a bad version. The library’s policy determines whether it needs operator review.",
+  "mediaFile.markBadOnly": "Mark bad only",
+  "mediaFile.markBadOnlyHint":
+    "Keep the file on disk and mark its content as bad.",
+  "mediaFile.markBadRecycleSearch": "Mark bad, recycle, and search",
+  "mediaFile.markBadRecycleSearchHint":
+    "Ask an operator to recycle the file and search for a replacement.",
+  "mediaFile.markBadReason": "What’s wrong with this version? (optional)",
+  "mediaFile.submitBadReport": "Submit report",
+  "mediaFile.markBadSubmitted": "Bad-media report submitted",
+  "mediaFile.markBadSubmitFailed":
+    "The report could not be submitted. Check that this version is still available and try again.",
+  "mediaFile.confirmedContentBlocks": "Content blocks",
+  "mediaFile.clearContentBlock": "Clear block",
+  "mediaFile.badMedia": "Bad media",
+  "mediaIssue.reviewTitle": "Bad-media review",
+  "mediaIssue.reviewHint":
+    "Review reported file versions and manage content blocks for each library.",
+  "mediaIssue.library": "Library",
+  "mediaIssue.reports": "Reports",
+  "mediaIssue.reviewStatus": "Review status",
+  "mediaIssue.pending": "Pending review",
+  "mediaIssue.approved": "Approved",
+  "mediaIssue.rejected": "Rejected",
+  "mediaIssue.canceled": "Canceled",
+  "mediaIssue.allReports": "All reports",
+  "mediaIssue.noPending": "No reports are waiting for review in this library.",
+  "mediaIssue.noReports": "No bad-media reports in this library.",
+  "mediaIssue.reportsFailed":
+    "Could not load the reports. Refresh to try again.",
+  "mediaIssue.previousPage": "Previous page",
+  "mediaIssue.nextPage": "Next page",
+  "mediaIssue.viewReport": "View report",
+  "mediaIssue.hideReport": "Hide report",
+  "mediaIssue.titleId": "Title: {{id}}",
+  "mediaIssue.file": "Affected file",
+  "mediaIssue.episodes": "Affected episodes and linked movies",
+  "mediaIssue.noEpisodeAssociations": "No episode or linked movie associations",
+  "mediaIssue.requestedAction": "Requested action",
+  "mediaIssue.approvedAction": "Approved action",
+  "mediaIssue.executionError": "Execution error",
+  "mediaIssue.notStarted": "No action started",
+  "mediaIssue.blocked": "Content blocked",
+  "mediaIssue.recycling": "Recycling",
+  "mediaIssue.recycleFailed": "Recycle failed",
+  "mediaIssue.noEligibleRelease": "No eligible replacement release",
+  "mediaIssue.downloadQueued": "Replacement download queued",
+  "mediaIssue.replacementImported": "Replacement imported",
+  "mediaIssue.searching": "Replacement search",
+  "mediaIssue.complete": "Remediation complete",
+  "mediaIssue.failed": "Remediation failed",
+  "mediaIssue.approveMarkOnly": "Approve mark bad only",
+  "mediaIssue.approveMarkOnlyHint":
+    "Block matching content in this library and leave the file on disk.",
+  "mediaIssue.reviewRecycle": "Review recycle and search",
+  "mediaIssue.approveRecycle": "Approve recycle and search",
+  "mediaIssue.approveRecycleHint":
+    "Review the files below. Approval blocks matching content, recycles the reported file, and requests a replacement search.",
+  "mediaIssue.previewFingerprint": "Reviewed file fingerprint",
+  "mediaIssue.typeConfirmation": "Type DELETE to approve recycling.",
+  "mediaIssue.unexpectedPreviewScope":
+    "The preview does not identify exactly one media file. This report cannot be approved for recycling.",
+  "mediaIssue.reviewSaved":
+    "Review saved. Switch to All reports to see its execution status.",
+  "mediaIssue.recycleUnavailable":
+    "The recycle bin is disabled or unavailable. You can still approve mark bad only.",
+  "mediaIssue.remediationUnavailable":
+    "This report is not eligible for the selected action.",
+  "mediaIssue.reportedFileChanged":
+    "The reported file no longer matches the report. Ask for a new report on the current file.",
+  "mediaIssue.reject": "Reject report",
+  "mediaIssue.rejectHint":
+    "Reject this report without creating a block or changing files.",
+  "mediaIssue.blocksHint":
+    "Blocks apply only to this library and compare file size and sampled content, not every byte.",
+  "mediaIssue.noBlocks": "No content blocks in this library.",
+  "mediaIssue.blocksFailed":
+    "Could not load content blocks. Refresh to try again.",
+  "mediaIssue.blockLimit": "Showing the {{count}} most recent content blocks.",
+  "mediaIssue.clearHint":
+    "Allow matching content in this library again. This won’t restore recycled files or clear a separate release block.",
+  "mediaIssue.clearFailed": "Could not clear the content block. Try again.",
+  "mediaIssue.blockNotFound":
+    "This content block no longer exists. Refresh the list.",
   "subtitle.batchProgress":
     "Searching subtitles: {{completed}} of {{total}} processed.",
   "subtitle.batchCompleted":
@@ -10167,6 +10255,11 @@ const en: LocaleDictionary = {
   "settings.requestRuleRequesterFieldsHint":
     "This rule reads requester fields and needs Manage permissions to save.",
   "settings.requestRuleLibraries": "Libraries",
+  "settings.requestRuleApplicability": "Rule applicability",
+  "settings.requestRuleApplicabilityAcquisition": "Acquisition requests only",
+  "settings.requestRuleApplicabilityMediaIssue": "Bad-media reports only",
+  "settings.requestRuleApplicabilityBoth":
+    "Acquisition requests and bad-media reports",
   "settings.requestRuleLibrariesAll": "All libraries",
   "settings.requestRuleLibrariesHelp":
     "Leave every box unticked to apply this rule to requests in every library.",
@@ -10210,6 +10303,24 @@ const en: LocaleDictionary = {
   "settings.requestPreviewUserPlaceholder": "Choose an account",
   "settings.requestPreviewLibrary": "Library",
   "settings.requestPreviewLibraryPlaceholder": "Choose a library",
+  "settings.requestRuleMode": "Evaluation mode",
+  "settings.requestRuleModeDisabled": "Disabled",
+  "settings.requestRuleModeShadow": "Shadow (record only)",
+  "requests.fallbackShadow": "Shadow mode records the decision without acting",
+  "requests.fallbackWiderHashImpact":
+    "Other affected files in this library could not be ruled out",
+  "requests.fallbackIssueRemediationNotArmed":
+    "Automatic recycling and search are not authorized",
+  "settings.requestRuleModeEnforce": "Enforce",
+  "settings.requestPreviewMediaFileId": "Existing media file ID",
+  "settings.requestPreviewIssueReason": "Report reason code",
+  "settings.requestPreviewRemediation": "Requested action",
+  "settings.requestPreviewMarkBad": "Mark bad",
+  "settings.requestPreviewRecycleAndSearch": "Mark bad, recycle and search",
+  "settings.refReqMediaIssueAffectedSeriesMovieLinkIds":
+    "IDs of the series-movie links served by the selected file",
+  "settings.refReqMediaIssueWiderHashImpact":
+    "Whether the selected file's quick identity also affects other files in this library; unknown until the complete impact can be proven",
   "settings.requestPreviewProfile": "Quality profile",
   "settings.requestPreviewProfilePlaceholder": "Choose a profile",
   "settings.requestPreviewMonitor": "Monitoring",
@@ -10441,6 +10552,26 @@ const en: LocaleDictionary = {
     "Audio languages the requester prefers, in order. null leaves it to the library",
   "settings.refReqRequestList":
     "The list that submitted the request; see input.request.list below. Absent for a manual request",
+  "settings.refReqRequestKind": "acquisition_request or media_issue",
+  "settings.refReqRequestMediaIssue":
+    "Media-issue details for a bad-media report; absent for acquisition requests",
+  "settings.refReqSectionRequestMediaIssue":
+    "— The bad-media report targeted by input.request.media_issue",
+  "settings.refReqMediaIssueOperation":
+    "The issue operation, currently mark_bad",
+  "settings.refReqMediaIssueReasonCode":
+    "The stable reason code for the bad-media report",
+  "settings.refReqMediaIssueRemediation":
+    "Requested mark-bad, recycle, or search remediation",
+  "settings.refReqMediaIssueTitleId": "The title affected by the report",
+  "settings.refReqMediaIssueLibraryId":
+    "The library-scoped identity of the report",
+  "settings.refReqMediaIssueMediaFileId":
+    "The reported media file; paths are not exposed",
+  "settings.refReqMediaIssueAffectedEpisodeIds":
+    "Every episode or series-movie association affected by the file",
+  "settings.refReqMediaIssueProvenance":
+    "Whether the file was scanned or grabbed, or provenance is unknown",
   "settings.refReqSectionExternalIds":
     "— Provider identifiers on input.request.external_ids",
   "settings.refReqSectionRequestList":
@@ -10466,6 +10597,12 @@ const en: LocaleDictionary = {
     "TVDB identifier, when the provider had one",
   "settings.refReqSectionFacts":
     "— What Scryer knows about the media and about this requester's history. A fact Scryer could not observe is missing, and reading a missing fact holds the request for a person",
+  "settings.refReqFactsMediaIssue":
+    "Host-derived media-issue relationship facts",
+  "settings.refReqSectionFactsMediaIssue":
+    "— Media-issue facts derived from persisted request and co-requester scope history",
+  "settings.refReqFactsReporterRequestedAffectedMedia":
+    "True only when an approved or fulfilled request by the reporter or a registered co-requester covers every affected media scope",
   "settings.refReqFactsAgeRating": "Minimum age the certification implies",
   "settings.refReqFactsCertifications":
     "Every certification the metadata carries; see input.facts.certifications[] below",

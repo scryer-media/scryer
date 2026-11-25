@@ -875,6 +875,125 @@ impl AppUseCase {
         .map(|_| ())
     }
 
+    pub(crate) async fn recycle_reviewed_media_file(
+        &self,
+        issue: &scryer_domain::MediaIssue,
+        file: &crate::TitleMediaFile,
+        confirmation: &crate::DeleteExecutionConfirmation,
+    ) -> AppResult<()> {
+        let context = self
+            .resolve_media_file_delete_context(&file.id, MediaFileDeleteOrigin::User, None)
+            .await?;
+        let manifest = self
+            .validate_delete_context(
+                context.clone(),
+                &confirmation.preview_fingerprint,
+                DeleteConfirmationAuthority::Human {
+                    typed_confirmation: confirmation.typed_confirmation.as_deref(),
+                },
+            )
+            .await?;
+        let UserDeleteContext::MediaFile(context) = context else {
+            unreachable!("media file resolver returned another context");
+        };
+        let path = normalize_absolute_path(&stored_path_to_path_buf(&file.file_path))?;
+        let changed = || {
+            AppError::validation_refused(
+                crate::delete_refusal::PREVIEW_STALE,
+                "the reviewed primary file changed; nothing was recycled",
+            )
+        };
+        if context.title_id != issue.title_id
+            || context.file_path != file.file_path
+            || !manifest.entries.iter().any(|entry| {
+                entry.path == path && matches!(entry.delete_kind, DeletePathKind::File)
+            })
+        {
+            return Err(changed());
+        }
+        let roots = normalize_root_folders(context.root_folders, context.facet)?;
+        let root = crate::fs_safety::containing_root_for_path(&path, &roots)?;
+        let config = self
+            .recycle_bin_config_for_media_root_path(Some(&root))
+            .await;
+        let (version, metadata) =
+            crate::location::resolution::file_version_and_metadata(&path).await?;
+        if version != issue.file_version
+            || !metadata.is_file()
+            || !matches!(
+                crate::location::hardlinks::link_count_from_metadata(&metadata),
+                crate::location::hardlinks::LinkCount::Known(1)
+            )
+        {
+            return Err(changed());
+        }
+        crate::location::title_folder_recovery::inspect_path(&path, false).await?;
+        let mut receipt = crate::recycle_bin::RecycleManifest::pending_upgrade(
+            file.file_path.clone(),
+            file.id.clone(),
+            issue.size_bytes,
+            file.title_id.clone(),
+            Some(path_to_stored_string(&root)),
+        );
+        receipt.source_operation_id = Some(issue.id.clone());
+        receipt.reason = "media_issue".to_string();
+        receipt.media_row =
+            Some(crate::recycle_bin::RecycledMediaRowSnapshot::from_media_file(file));
+        let repo = &self.services.workflow.blocklist_repo;
+        let prepared =
+            if let Some(prepared) = repo.get_media_issue_recycle_receipt(&issue.id).await? {
+                prepared
+            } else {
+                let prepared =
+                    crate::recycle_bin::prepare_conflict_recycle(&config, &path, receipt).await?;
+                if !repo
+                    .save_media_issue_recycle_receipt(&issue.id, &prepared)
+                    .await?
+                {
+                    return Err(changed());
+                }
+                prepared
+            };
+        crate::recycle_bin::execute_new_conflict_recycle(&config, &path, &prepared, &version).await
+    }
+
+    pub(crate) async fn finish_recovered_media_issue_recycle(
+        &self,
+        issue: &scryer_domain::MediaIssue,
+        receipt: &crate::recycle_bin::PreparedRecycleFile,
+    ) -> AppResult<bool> {
+        let path = stored_path_to_path_buf(&issue.file_path_snapshot);
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(AppError::Repository(error.to_string())),
+        }
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&issue.title_id)
+            .await?
+            .filter(|title| title.library_id == issue.library_id)
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::delete_refusal::PREVIEW_STALE,
+                    "the reviewed file ownership could not be revalidated",
+                )
+            })?;
+        let roots = normalize_root_folders(
+            self.root_folders_for_library(&title.library_id, &title.facet)
+                .await?,
+            title.facet,
+        )?;
+        let root = crate::fs_safety::containing_root_for_path(&path, &roots)?;
+        let config = self
+            .recycle_bin_config_for_media_root_path(Some(&root))
+            .await;
+        crate::recycle_bin::recover_reviewed_recycle(&config, issue, receipt).await?;
+        Ok(true)
+    }
+
     pub async fn delete_external_subtitle(
         &self,
         actor: &User,

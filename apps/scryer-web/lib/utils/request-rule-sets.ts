@@ -44,6 +44,7 @@ export function initialRequestRuleDraft(): RequestRuleSetDraft {
     description: "",
     regoSource: REQUEST_STARTER_SOURCE,
     libraryIds: [],
+    applicability: "ACQUISITION",
   };
 }
 
@@ -55,6 +56,7 @@ export function requestRuleDraftFromDetail(
     description: detail.ruleSet.description ?? "",
     regoSource: detail.revision.regoSource,
     libraryIds: [...detail.ruleSet.libraryIds],
+    applicability: detail.ruleSet.applicability,
   };
 }
 
@@ -74,6 +76,7 @@ export function createRequestRuleSetInput(draft: RequestRuleSetDraft) {
     description: draft.description.trim() || null,
     regoSource: draft.regoSource,
     libraryIds: draft.libraryIds,
+    applicability: draft.applicability,
   };
 }
 
@@ -93,6 +96,7 @@ export function updateRequestRuleMetadataInput(
     name: draft.name.trim(),
     description: draft.description.trim() || null,
     libraryIds: draft.libraryIds,
+    applicability: draft.applicability,
   };
 }
 
@@ -221,6 +225,10 @@ const FALLBACK_REASON_LABEL_KEYS: Record<string, string> = {
   error: "requests.fallbackError",
   no_rule_matched: "requests.fallbackNoRuleMatched",
   library_permission: "requests.fallbackLibraryPermission",
+  shadow: "requests.fallbackShadow",
+  wider_hash_impact_unproven: "requests.fallbackWiderHashImpact",
+  media_issue_remediation_not_armed:
+    "requests.fallbackIssueRemediationNotArmed",
 };
 
 export function requestFallbackReasonLabelKey(reason: string): string | null {
@@ -355,7 +363,7 @@ export function isPersonTargetingRefusal(diagnostic: {
 }
 
 const REQUESTER_REFERENCE_PATTERN =
-  /\binput\s*(?:\.\s*requester\b|\[\s*"requester"\s*\])/;
+  /\binput\s*(?:\.\s*requester\b|\[\s*"requester"\s*\]|(?:\.\s*(?:facts|observations)\b|\[\s*"(?:facts|observations)"\s*\])\s*(?:\.\s*media_issue\b|\[\s*"media_issue"\s*\]))/;
 
 /// Whether a matcher reads requester fields, which the API only saves for an
 /// author who can manage permissions. Comments are ignored so a note about the

@@ -5,7 +5,10 @@
 
 /// Whether an evaluation consulted an enabled rule (`ENFORCE`) or fell back
 /// to the requester's permission (`DISABLED`).
-export type RequestEvaluationMode = "DISABLED" | "ENFORCE";
+export type RequestEvaluationMode = "DISABLED" | "ENFORCE" | "SHADOW";
+
+export type RequestRuleApplicability =
+  "ACQUISITION" | "MEDIA_ISSUE" | "ACQUISITION_AND_MEDIA_ISSUE";
 
 /// What a decision came to. `MANUAL_REVIEW` is the domain default, so an
 /// unreadable verdict never reads back as an approval or a denial.
@@ -33,6 +36,8 @@ export type RequestRuleSetRecord = {
   name: string;
   description: string;
   enabled: boolean;
+  evaluationMode: RequestEvaluationMode;
+  applicability: RequestRuleApplicability;
   libraryIds: string[];
   currentRevisionNumber: number;
   /// How many stored decisions name this rule set. Read per rule set rather
@@ -183,6 +188,7 @@ export type RequestRuleSetDraft = {
   description: string;
   regoSource: string;
   libraryIds: string[];
+  applicability: RequestRuleApplicability;
 };
 
 /// One account the user picker can write into a matcher. Only the id and the
@@ -197,6 +203,12 @@ export type RequestRuleUserOption = {
 export type RequestRulePreviewSample = {
   userId: string;
   libraryId: string;
+  kind: "ACQUISITION_REQUEST" | "MEDIA_ISSUE";
+  mediaIssue: {
+    reasonCode: string;
+    remediation: "mark_bad" | "recycle_and_search";
+    mediaFileId: string;
+  };
   externalIds: Array<{ source: string; value: string }>;
   titleLabel: string;
   qualityProfileId: string;

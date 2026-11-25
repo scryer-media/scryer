@@ -6,20 +6,21 @@ use chrono::{Duration, Utc};
 use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
     AcquisitionScopeCoordinates, AcquisitionScopeState, AcquisitionScopeStateRepository,
-    AcquisitionScopeStatesQuery, AcquisitionScopeStatus, AppResult, BlocklistRepository,
+    AcquisitionScopeStatesQuery, AcquisitionScopeStatus, AppError, AppResult, BlocklistRepository,
     DownloadSourceKind, HousekeepingMediaFileRootRow, HousekeepingRepository,
-    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, PendingRelease,
-    PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
-    PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
-    ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
+    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, NewLibraryContentBlock,
+    MediaIssueMatchingCandidate, NewMediaIssue, PendingRelease, PendingReleaseObservation, PendingReleasePageSort,
+    PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery,
+    ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
     subtitles::{
         ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
         SubtitleSearchBackoffKey,
     },
 };
 use scryer_domain::{
-    BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id, SubtitleBlocklistEntry,
-    SubtitleDownload,
+    BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id, LibraryContentBlock,
+    MediaIssue, MediaIssueExecutionStatus, MediaIssueRemediation, MediaIssueStatus,
+    SubtitleBlocklistEntry, SubtitleDownload,
 };
 use scryer_plugin_sdk::torrent::normalize_info_hash;
 
@@ -29,6 +30,7 @@ use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
+use crate::storage::sql::json::canonical_json_text;
 
 use super::{decode_release_decision_explanation, encode_release_decision_explanation};
 
@@ -3077,6 +3079,145 @@ fn blocklist_row_to_entry_sql(row: &SqlRow) -> AppResult<BlocklistEntry> {
     })
 }
 
+fn library_content_block_row(row: &SqlRow) -> AppResult<LibraryContentBlock> {
+    let size_bytes = row.i64("size_bytes")?.max(0) as u64;
+    let sample_bytes = row.i64("sample_bytes")?.max(0) as u64;
+    Ok(LibraryContentBlock {
+        id: row.text("id")?,
+        library_id: row.text("library_id")?,
+        scheme: row.text("scheme")?,
+        size_bytes,
+        sample_bytes,
+        sample_blake3: row.text("sample_blake3")?,
+        reason: row.opt_text("reason")?,
+        approving_actor_id: row.opt_text("approving_actor_id")?,
+        source_report_id: row.opt_text("source_report_id")?,
+        source_media_file_id: row.opt_text("source_media_file_id")?,
+        provenance_json: row.opt_text("provenance_json")?,
+        created_at: required_timestamp_text(row, "created_at")?,
+    })
+}
+
+fn media_issue_row(row: &SqlRow) -> AppResult<MediaIssue> {
+    let remediation = MediaIssueRemediation::parse(&row.text("remediation")?)
+        .ok_or_else(|| AppError::Repository("invalid media issue remediation".into()))?;
+    let status = MediaIssueStatus::parse(&row.text("status")?)
+        .ok_or_else(|| AppError::Repository("invalid media issue status".into()))?;
+    let execution_status = match row.text("execution_status")?.as_str() {
+        "none" => MediaIssueExecutionStatus::None,
+        "blocked" => MediaIssueExecutionStatus::Blocked,
+        "recycling" => MediaIssueExecutionStatus::Recycling,
+        "recycle_failed" => MediaIssueExecutionStatus::RecycleFailed,
+        "no_eligible_release" => MediaIssueExecutionStatus::NoEligibleRelease,
+        "download_queued" => MediaIssueExecutionStatus::DownloadQueued,
+        "replacement_imported" => MediaIssueExecutionStatus::ReplacementImported,
+        "searching" => MediaIssueExecutionStatus::Searching,
+        "complete" => MediaIssueExecutionStatus::Complete,
+        "failed" => MediaIssueExecutionStatus::Failed,
+        value => {
+            return Err(AppError::Repository(format!(
+                "invalid media issue execution status: {value}"
+            )));
+        }
+    };
+    let affected_json = row.text("affected_episode_ids_json")?;
+    let affected_episode_ids: Vec<String> =
+        serde_json::from_str(&affected_json).map_err(|error| {
+            AppError::Repository(format!(
+                "invalid media issue affected episode JSON: {error}"
+            ))
+        })?;
+    let affected_series_movie_json = row
+        .opt_text("affected_series_movie_link_ids_json")?
+        .unwrap_or_else(|| "[]".to_string());
+    let affected_series_movie_link_ids: Vec<String> =
+        serde_json::from_str(&affected_series_movie_json).map_err(|error| {
+            AppError::Repository(format!(
+                "invalid media issue affected series-movie link JSON: {error}"
+            ))
+        })?;
+    let authorized_remediation = row
+        .opt_text("authorized_remediation")?
+        .as_deref()
+        .and_then(MediaIssueRemediation::parse);
+    let rule_votes_json = row
+        .opt_text("rule_votes_json")?
+        .unwrap_or_else(|| "[]".to_string());
+    let rule_votes: Vec<String> = serde_json::from_str(&rule_votes_json).unwrap_or_default();
+    let rule_hold_reasons_json = row
+        .opt_text("rule_hold_reasons_json")?
+        .unwrap_or_else(|| "[]".to_string());
+    let rule_hold_reasons: Vec<String> =
+        serde_json::from_str(&rule_hold_reasons_json).unwrap_or_default();
+    Ok(MediaIssue {
+        id: row.text("id")?,
+        library_id: row.text("library_id")?,
+        title_id: row.text("title_id")?,
+        media_file_id: row.text("media_file_id")?,
+        file_path_snapshot: row.text("file_path_snapshot")?,
+        file_version: row.text("file_version")?,
+        size_bytes: row.i64("size_bytes")?.max(0) as u64,
+        scheme: row.text("scheme")?,
+        sample_bytes: row.i64("sample_bytes")?.max(0) as u64,
+        sample_blake3: row.text("sample_blake3")?,
+        reporter_user_id: row.text("reporter_user_id")?,
+        reason_code: row.text("reason_code")?,
+        details: row.opt_text("details")?,
+        remediation,
+        authorized_remediation,
+        rule_input_schema_version: row
+            .opt_i64("rule_input_schema_version")?
+            .map(|value| value as i32),
+        rule_input_hash: row.opt_text("rule_input_hash")?,
+        rule_snapshot_json: row.opt_text("rule_snapshot_json")?,
+        rule_votes_json: rule_votes,
+        rule_effective_outcome: row.opt_text("rule_effective_outcome")?,
+        rule_policy_outcome: row.opt_text("rule_policy_outcome")?,
+        rule_hold_reasons,
+        status,
+        affected_episode_ids,
+        affected_series_movie_link_ids,
+        rule_decision_id: row.opt_text("rule_decision_id")?,
+        reviewed_by_user_id: row.opt_text("reviewed_by_user_id")?,
+        reviewed_at: opt_timestamp_text(row, "reviewed_at")?,
+        execution_status,
+        execution_error_code: row.opt_text("execution_error_code")?,
+        created_at: required_timestamp_text(row, "created_at")?,
+        updated_at: required_timestamp_text(row, "updated_at")?,
+    })
+}
+
+async fn set_media_issue_review(
+    datastore: &StoreDatastore,
+    issue_id: &str,
+    reviewer_user_id: Option<&str>,
+    rule_decision_id: Option<&str>,
+    status: MediaIssueStatus,
+) -> AppResult<()> {
+    let now = timestamp_arg_for_datastore(datastore, &Utc::now().to_rfc3339())?;
+    execute_datastore_write(
+        datastore,
+        "review_media_issue",
+        "UPDATE media_issues
+            SET status = {},
+                reviewed_by_user_id = {},
+                reviewed_at = {},
+                rule_decision_id = COALESCE({}, rule_decision_id),
+                updated_at = {}
+          WHERE id = {} AND status = 'pending'",
+        vec![
+            SqlArg::Text(status.as_str().to_string()),
+            SqlArg::OptText(reviewer_user_id.map(str::to_string)),
+            now.clone(),
+            SqlArg::OptText(rule_decision_id.map(str::to_string)),
+            now,
+            SqlArg::Text(issue_id.to_string()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
 async fn fetch_blocklist_entries(
     exec: SqlExec<'_, '_>,
     sql: &str,
@@ -3271,6 +3412,789 @@ impl BlocklistRepository for BlocklistStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn block_content(&self, entry: &NewLibraryContentBlock) -> AppResult<bool> {
+        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let rows = execute_datastore_write(
+            &self.datastore,
+            "insert_library_content_block",
+            "INSERT INTO library_content_blocks
+             (id, library_id, scheme, size_bytes, sample_bytes, sample_blake3,
+              reason, approving_actor_id, source_report_id, source_media_file_id,
+              provenance_json, created_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+             ON CONFLICT DO NOTHING",
+            vec![
+                SqlArg::Text(Id::new().0),
+                SqlArg::Text(entry.library_id.clone()),
+                SqlArg::Text(entry.scheme.clone()),
+                SqlArg::I64(i64::try_from(entry.proof.size_bytes).unwrap_or(i64::MAX)),
+                SqlArg::I64(i64::try_from(entry.proof.sample_bytes).unwrap_or(i64::MAX)),
+                SqlArg::Text(entry.proof.sample_blake3.clone()),
+                SqlArg::OptText(entry.reason.clone()),
+                SqlArg::OptText(entry.approving_actor_id.clone()),
+                SqlArg::OptText(entry.source_report_id.clone()),
+                SqlArg::OptText(entry.source_media_file_id.clone()),
+                SqlArg::OptText(entry.provenance_json.clone()),
+                now,
+            ],
+        )
+        .await?;
+        Ok(rows > 0)
+    }
+
+    async fn is_content_blocked(
+        &self,
+        library_id: &str,
+        proof: &scryer_domain::ImportContentProof,
+        scheme: &str,
+    ) -> AppResult<bool> {
+        fetch_exists(
+            self.datastore.read_exec(),
+            "SELECT EXISTS(
+                 SELECT 1 FROM library_content_blocks
+                  WHERE library_id = {}
+                    AND scheme = {}
+                    AND size_bytes = {}
+                    AND sample_bytes = {}
+                    AND sample_blake3 = {}
+             ) AS matched",
+            &[
+                SqlArg::Text(library_id.to_string()),
+                SqlArg::Text(scheme.to_string()),
+                SqlArg::I64(i64::try_from(proof.size_bytes).unwrap_or(i64::MAX)),
+                SqlArg::I64(i64::try_from(proof.sample_bytes).unwrap_or(i64::MAX)),
+                SqlArg::Text(proof.sample_blake3.clone()),
+            ],
+        )
+        .await
+    }
+
+    async fn has_content_block_size(&self, library_id: &str, size_bytes: i64) -> AppResult<bool> {
+        fetch_exists(
+            self.datastore.read_exec(),
+            "SELECT EXISTS(
+                 SELECT 1 FROM library_content_blocks
+                  WHERE library_id = {} AND size_bytes = {}
+             ) AS matched",
+            &[
+                SqlArg::Text(library_id.to_string()),
+                SqlArg::I64(size_bytes),
+            ],
+        )
+        .await
+    }
+
+    async fn get_content_block(&self, id: &str) -> AppResult<Option<LibraryContentBlock>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, library_id, scheme, size_bytes, sample_bytes, sample_blake3,
+                    reason, approving_actor_id, source_report_id, source_media_file_id,
+                    provenance_json, created_at
+               FROM library_content_blocks
+              WHERE id = {}
+              LIMIT 1",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?;
+        rows.first().map(library_content_block_row).transpose()
+    }
+
+    async fn remove_content_block(&self, id: &str) -> AppResult<()> {
+        SqlRuntime::run_in_transaction(&self.datastore, "clear_library_content_block", move |tx| {
+            let id = id.to_string();
+            Box::pin(async move {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE media_files SET content_block_id = NULL
+                     WHERE content_block_id = {}",
+                    &[SqlArg::Text(id.clone())],
+                )
+                .await?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM library_content_blocks WHERE id = {}",
+                    &[SqlArg::Text(id)],
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn list_content_blocks(
+        &self,
+        library_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<LibraryContentBlock>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, library_id, scheme, size_bytes, sample_bytes, sample_blake3,
+                    reason, approving_actor_id, source_report_id, source_media_file_id,
+                    provenance_json, created_at
+               FROM library_content_blocks
+              WHERE library_id = {}
+              ORDER BY created_at DESC, id ASC
+              LIMIT {}",
+            &[
+                SqlArg::Text(library_id.to_string()),
+                SqlArg::I64(limit.clamp(1, 1_000) as i64),
+            ],
+        )
+        .await?;
+        rows.iter().map(library_content_block_row).collect()
+    }
+
+    async fn submit_media_issue(&self, issue: &NewMediaIssue) -> AppResult<MediaIssue> {
+        let id = Id::new().0;
+        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let changed = execute_datastore_write(
+            &self.datastore,
+            "insert_media_issue",
+            "INSERT INTO media_issues
+             (id, library_id, title_id, media_file_id, file_path_snapshot, file_version,
+              size_bytes, scheme, sample_bytes, sample_blake3,
+              reporter_user_id, reason_code, details, remediation,
+              status, affected_episode_ids_json, affected_series_movie_link_ids_json,
+              execution_status, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 'pending', {}, {}, 'none', {}, {})
+             ON CONFLICT (library_id, media_file_id, file_version, reporter_user_id, remediation)
+             WHERE status <> 'canceled' DO NOTHING",
+            vec![
+                SqlArg::Text(id.clone()),
+                SqlArg::Text(issue.library_id.clone()),
+                SqlArg::Text(issue.title_id.clone()),
+                SqlArg::Text(issue.media_file_id.clone()),
+                SqlArg::Text(issue.file_path_snapshot.clone()),
+                SqlArg::Text(issue.file_version.clone()),
+                SqlArg::I64(i64::try_from(issue.proof.size_bytes).unwrap_or(i64::MAX)),
+                SqlArg::Text(issue.scheme.clone()),
+                SqlArg::I64(i64::try_from(issue.proof.sample_bytes).unwrap_or(i64::MAX)),
+                SqlArg::Text(issue.proof.sample_blake3.clone()),
+                SqlArg::Text(issue.reporter_user_id.clone()),
+                SqlArg::Text(issue.reason_code.clone()),
+                SqlArg::OptText(issue.details.clone()),
+                SqlArg::Text(issue.remediation.as_str().to_string()),
+                SqlArg::Text(canonical_json_text(&issue.affected_episode_ids)?),
+                SqlArg::Text(canonical_json_text(&issue.affected_series_movie_link_ids)?),
+                now.clone(),
+                now,
+            ],
+        )
+        .await?;
+        let id = if changed == 0 {
+            SqlRuntime::fetch_optional(
+                self.datastore.read_exec(),
+                "SELECT id FROM media_issues
+                 WHERE library_id = {} AND media_file_id = {} AND file_version = {}
+                   AND reporter_user_id = {} AND remediation = {} AND status <> 'canceled'",
+                &[
+                    SqlArg::Text(issue.library_id.clone()),
+                    SqlArg::Text(issue.media_file_id.clone()),
+                    SqlArg::Text(issue.file_version.clone()),
+                    SqlArg::Text(issue.reporter_user_id.clone()),
+                    SqlArg::Text(issue.remediation.as_str().to_string()),
+                ],
+            )
+            .await?
+            .ok_or_else(|| AppError::Repository("existing media issue could not be found".into()))?
+            .text("id")?
+        } else {
+            id
+        };
+        self.get_media_issue(&id).await?.ok_or_else(|| {
+            AppError::Repository("inserted media issue could not be reloaded".into())
+        })
+    }
+
+    async fn record_media_issue_rule_trace(
+        &self,
+        record: &scryer_domain::RequestRuleDecisionRecord,
+        input_json: &str,
+    ) -> AppResult<bool> {
+        let votes: Vec<serde_json::Value> = serde_json::from_str(&record.votes_json)
+            .map_err(|error| AppError::Repository(format!("invalid rule votes: {error}")))?;
+        let votes = votes
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>();
+        let holds = record.fallback_reason.iter().collect::<Vec<_>>();
+        let changed = execute_datastore_write(
+            &self.datastore,
+            "record_media_issue_rule_trace",
+            "UPDATE media_issues SET rule_decision_id = {}, rule_input_schema_version = {},
+                 rule_input_hash = {}, rule_snapshot_json = {}, rule_votes_json = {},
+                 rule_effective_outcome = {}, rule_policy_outcome = {}, rule_hold_reasons_json = {}
+             WHERE id = {} AND status = 'pending' AND rule_decision_id IS NULL",
+            vec![
+                SqlArg::Text(record.id.clone()),
+                SqlArg::I64(record.input_schema_version),
+                SqlArg::Text(record.input_hash.clone()),
+                SqlArg::Text(input_json.to_owned()),
+                SqlArg::Text(canonical_json_text(&votes)?),
+                SqlArg::Text(record.effective_outcome.as_storage_str().to_owned()),
+                SqlArg::Text(record.policy_outcome.as_storage_str().to_owned()),
+                SqlArg::Text(canonical_json_text(&holds)?),
+                SqlArg::Text(record.request_id.clone()),
+            ],
+        )
+        .await?;
+        Ok(changed > 0)
+    }
+
+    async fn media_issue_has_other_size_candidates(
+        &self,
+        library_id: &str,
+        file_id: &str,
+        size_bytes: i64,
+    ) -> AppResult<Option<bool>> {
+        fetch_exists(
+            self.datastore.read_exec(),
+            "SELECT EXISTS(
+                SELECT 1 FROM media_files mf JOIN titles t ON t.id = mf.title_id
+                WHERE mf.size_bytes = {} AND t.library_id = {} AND mf.id <> {}
+            ) AS matched",
+            &[
+                SqlArg::I64(size_bytes),
+                SqlArg::Text(library_id.to_owned()),
+                SqlArg::Text(file_id.to_owned()),
+            ],
+        )
+        .await
+        .map(Some)
+    }
+
+    async fn list_media_issue_matching_candidates(
+        &self,
+        library_id: &str,
+        size_bytes: i64,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<MediaIssueMatchingCandidate>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let mut sql = "SELECT mf.id, mf.title_id, mf.file_path, mf.size_bytes
+                         FROM media_files mf
+                         JOIN titles t ON t.id = mf.title_id
+                        WHERE t.library_id = {} AND mf.size_bytes = {}".to_string();
+        let mut args = vec![SqlArg::Text(library_id.to_string()), SqlArg::I64(size_bytes)];
+        if let Some(after_id) = after_id {
+            sql.push_str(" AND mf.id > {}");
+            args.push(SqlArg::Text(after_id.to_string()));
+        }
+        sql.push_str(" ORDER BY mf.id ASC LIMIT {}");
+        args.push(SqlArg::I64(limit));
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter()
+            .map(|row| {
+                Ok(MediaIssueMatchingCandidate {
+                    id: row.text("id")?,
+                    title_id: row.text("title_id")?,
+                    file_path: row.text("file_path")?,
+                    size_bytes: row.i64("size_bytes")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn note_scanned_content_block(
+        &self,
+        library_id: &str,
+        file_id: &str,
+        proof: &scryer_domain::ImportContentProof,
+        scheme: &str,
+    ) -> AppResult<()> {
+        execute_datastore_write(
+            &self.datastore,
+            "note_scanned_content_block",
+            "UPDATE media_files
+                SET content_block_id = (
+                    SELECT block.id
+                      FROM library_content_blocks block
+                     WHERE block.library_id = {}
+                       AND block.scheme = {}
+                       AND block.size_bytes = {}
+                       AND block.sample_bytes = {}
+                       AND block.sample_blake3 = {}
+                     LIMIT 1
+                )
+              WHERE id = {}
+                AND (content_block_id IS NULL OR content_block_id <> (
+                    SELECT block.id
+                      FROM library_content_blocks block
+                     WHERE block.library_id = {}
+                       AND block.scheme = {}
+                       AND block.size_bytes = {}
+                       AND block.sample_bytes = {}
+                       AND block.sample_blake3 = {}
+                     LIMIT 1
+                ))",
+            vec![
+                SqlArg::Text(library_id.to_owned()),
+                SqlArg::Text(scheme.to_owned()),
+                SqlArg::I64(i64::try_from(proof.size_bytes).unwrap_or(i64::MAX)),
+                SqlArg::I64(i64::try_from(proof.sample_bytes).unwrap_or(i64::MAX)),
+                SqlArg::Text(proof.sample_blake3.clone()),
+                SqlArg::Text(file_id.to_owned()),
+                SqlArg::Text(library_id.to_owned()),
+                SqlArg::Text(scheme.to_owned()),
+                SqlArg::I64(i64::try_from(proof.size_bytes).unwrap_or(i64::MAX)),
+                SqlArg::I64(i64::try_from(proof.sample_bytes).unwrap_or(i64::MAX)),
+                SqlArg::Text(proof.sample_blake3.clone()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn clear_scanned_content_block(&self, file_id: &str) -> AppResult<()> {
+        execute_datastore_write(
+            &self.datastore,
+            "clear_scanned_content_block",
+            "UPDATE media_files SET content_block_id = NULL
+             WHERE id = {} AND content_block_id IS NOT NULL",
+            vec![SqlArg::Text(file_id.to_owned())],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_media_issue(&self, id: &str) -> AppResult<Option<MediaIssue>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, library_id, title_id, media_file_id, file_path_snapshot, file_version,
+                    size_bytes, scheme, sample_bytes, sample_blake3,
+                    reporter_user_id, reason_code, details, remediation, status,
+                    affected_episode_ids_json, affected_series_movie_link_ids_json, rule_decision_id, reviewed_by_user_id,
+                    reviewed_at, execution_status, execution_error_code,
+                    authorized_remediation, rule_input_schema_version, rule_input_hash,
+                    rule_snapshot_json, rule_votes_json, rule_effective_outcome,
+                    rule_policy_outcome, rule_hold_reasons_json, created_at, updated_at
+               FROM media_issues
+              WHERE id = {}
+              LIMIT 1",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?;
+        rows.first().map(media_issue_row).transpose()
+    }
+
+    async fn list_media_issues(
+        &self,
+        library_id: &str,
+        status: Option<MediaIssueStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<Vec<MediaIssue>> {
+        let (sql, args) = if let Some(status) = status {
+            (
+                "SELECT id, library_id, title_id, media_file_id, file_path_snapshot, file_version,
+                        size_bytes, scheme, sample_bytes, sample_blake3,
+                        reporter_user_id, reason_code, details, remediation, status,
+                        affected_episode_ids_json, affected_series_movie_link_ids_json,
+                        rule_decision_id, reviewed_by_user_id,
+                        reviewed_at, execution_status, execution_error_code,
+                        authorized_remediation, rule_input_schema_version, rule_input_hash,
+                        rule_snapshot_json, rule_votes_json, rule_effective_outcome,
+                        rule_policy_outcome, rule_hold_reasons_json, created_at, updated_at
+                   FROM media_issues
+                  WHERE library_id = {} AND status = {}
+                  ORDER BY created_at DESC, id ASC
+                  LIMIT {} OFFSET {}"
+                    .to_string(),
+                vec![
+                    SqlArg::Text(library_id.to_string()),
+                    SqlArg::Text(status.as_str().to_string()),
+                    SqlArg::I64(limit.clamp(1, 1_000) as i64),
+                    SqlArg::I64(i64::try_from(offset).unwrap_or(i64::MAX)),
+                ],
+            )
+        } else {
+            (
+                "SELECT id, library_id, title_id, media_file_id, file_path_snapshot, file_version,
+                        size_bytes, scheme, sample_bytes, sample_blake3,
+                        reporter_user_id, reason_code, details, remediation, status,
+                        affected_episode_ids_json, affected_series_movie_link_ids_json,
+                        rule_decision_id, reviewed_by_user_id,
+                        reviewed_at, execution_status, execution_error_code,
+                        authorized_remediation, rule_input_schema_version, rule_input_hash,
+                        rule_snapshot_json, rule_votes_json, rule_effective_outcome,
+                        rule_policy_outcome, rule_hold_reasons_json, created_at, updated_at
+                   FROM media_issues
+                  WHERE library_id = {}
+                  ORDER BY created_at DESC, id ASC
+                  LIMIT {} OFFSET {}"
+                    .to_string(),
+                vec![
+                    SqlArg::Text(library_id.to_string()),
+                    SqlArg::I64(limit.clamp(1, 1_000) as i64),
+                    SqlArg::I64(i64::try_from(offset).unwrap_or(i64::MAX)),
+                ],
+            )
+        };
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter().map(media_issue_row).collect()
+    }
+
+    async fn list_media_issues_for_title(
+        &self,
+        title_id: &str,
+        status: Option<MediaIssueStatus>,
+        limit: usize,
+    ) -> AppResult<Vec<MediaIssue>> {
+        let sql = if status.is_some() {
+            "SELECT id, library_id, title_id, media_file_id, file_path_snapshot, file_version,
+                    size_bytes, scheme, sample_bytes, sample_blake3,
+                    reporter_user_id, reason_code, details, remediation, status,
+                    affected_episode_ids_json, affected_series_movie_link_ids_json,
+                    rule_decision_id, reviewed_by_user_id,
+                    reviewed_at, execution_status, execution_error_code,
+                    authorized_remediation, rule_input_schema_version, rule_input_hash,
+                    rule_snapshot_json, rule_votes_json, rule_effective_outcome,
+                    rule_policy_outcome, rule_hold_reasons_json, created_at, updated_at
+               FROM media_issues
+              WHERE title_id = {} AND status = {}
+              ORDER BY created_at DESC, id ASC
+              LIMIT {}"
+                .to_string()
+        } else {
+            "SELECT id, library_id, title_id, media_file_id, file_path_snapshot, file_version,
+                    size_bytes, scheme, sample_bytes, sample_blake3,
+                    reporter_user_id, reason_code, details, remediation, status,
+                    affected_episode_ids_json, affected_series_movie_link_ids_json,
+                    rule_decision_id, reviewed_by_user_id,
+                    reviewed_at, execution_status, execution_error_code,
+                    authorized_remediation, rule_input_schema_version, rule_input_hash,
+                    rule_snapshot_json, rule_votes_json, rule_effective_outcome,
+                    rule_policy_outcome, rule_hold_reasons_json, created_at, updated_at
+               FROM media_issues
+              WHERE title_id = {}
+              ORDER BY created_at DESC, id ASC
+              LIMIT {}"
+                .to_string()
+        };
+        let args = if let Some(status) = status {
+            vec![
+                SqlArg::Text(title_id.to_string()),
+                SqlArg::Text(status.as_str().to_string()),
+                SqlArg::I64(limit.clamp(1, 100) as i64),
+            ]
+        } else {
+            vec![
+                SqlArg::Text(title_id.to_string()),
+                SqlArg::I64(limit.clamp(1, 100) as i64),
+            ]
+        };
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter().map(media_issue_row).collect()
+    }
+
+    async fn confirm_media_issue(
+        &self,
+        issue_id: &str,
+        reviewer_user_id: Option<&str>,
+        rule_decision_id: Option<&str>,
+        remediation: scryer_domain::MediaIssueRemediation,
+        block: &NewLibraryContentBlock,
+        release: Option<&NewBlocklistEntry>,
+        recycle_fingerprint: Option<&str>,
+        matching_media_file_ids: &[String],
+    ) -> AppResult<bool> {
+        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let update_args = vec![
+            SqlArg::OptText(reviewer_user_id.map(str::to_string)),
+            now.clone(),
+            SqlArg::OptText(rule_decision_id.map(str::to_string)),
+            SqlArg::Text(remediation.as_str().to_string()),
+            SqlArg::Text(
+                match remediation {
+                    MediaIssueRemediation::MarkBad => MediaIssueExecutionStatus::Blocked,
+                    MediaIssueRemediation::RecycleAndSearch => MediaIssueExecutionStatus::Recycling,
+                }
+                .as_str()
+                .to_owned(),
+            ),
+            SqlArg::OptText(recycle_fingerprint.map(str::to_owned)),
+            now.clone(),
+            SqlArg::Text(issue_id.to_string()),
+        ];
+        let release_args = release.and_then(|entry| {
+            let normalized = normalize_release_name(Some(&entry.release_name))?;
+            Some(vec![
+                SqlArg::Text(Id::new().0),
+                SqlArg::Text(entry.title_id.clone()),
+                SqlArg::Text(entry.release_name.trim().to_string()),
+                SqlArg::Text(normalized),
+                SqlArg::Text(entry.indexer_id.trim().to_string()),
+                SqlArg::OptText(normalize_info_hash(entry.info_hash.as_deref())),
+                SqlArg::OptText(entry.reason.clone()),
+                now.clone(),
+            ])
+        });
+        let block_args = vec![
+            SqlArg::Text(Id::new().0),
+            SqlArg::OptText(block.approving_actor_id.clone()),
+            SqlArg::OptText(block.provenance_json.clone()),
+            now,
+            SqlArg::Text(issue_id.to_string()),
+        ];
+        let matching_media_file_ids = matching_media_file_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "confirm_media_issue", move |tx| {
+            let update_args = update_args.clone();
+            let block_args = block_args.clone();
+            let release_args = release_args.clone();
+            let matching_media_file_ids = matching_media_file_ids.clone();
+            Box::pin(async move {
+                let changed = SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE media_issues
+                        SET status = 'approved',
+                            reviewed_by_user_id = {}, reviewed_at = {},
+                            rule_decision_id = COALESCE({}, rule_decision_id),
+                            authorized_remediation = {}, execution_status = {},
+                            recycle_preview_fingerprint = {}, updated_at = {}
+                      WHERE id = {} AND status = 'pending'",
+                    &update_args,
+                )
+                .await?;
+                if changed == 0 {
+                    return Ok(false);
+                }
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "INSERT INTO library_content_blocks
+                         (id, library_id, scheme, size_bytes, sample_bytes, sample_blake3,
+                          reason, approving_actor_id, source_report_id, source_media_file_id,
+                          provenance_json, created_at)
+                     SELECT {}, library_id, scheme, size_bytes, sample_bytes, sample_blake3,
+                            reason_code, {}, id, media_file_id, {}, {}
+                       FROM media_issues WHERE id = {}
+                     ON CONFLICT (library_id, scheme, size_bytes, sample_bytes, sample_blake3)
+                     DO NOTHING",
+                    &block_args,
+                )
+                .await?;
+                if matching_media_file_ids.is_empty() {
+                    return Err(AppError::validation_refused(
+                        scryer_application::error_reasons::media::REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION,
+                        "the reported file changed before approval",
+                    ));
+                }
+                let (ids, per_statement) = id_list_statements(
+                    &matching_media_file_ids,
+                    1,
+                    1,
+                    max_binds(&SqlExec::Tx(tx)),
+                    500,
+                );
+                let mut updated = 0u64;
+                for chunk in ids.chunks(per_statement) {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    let mut sql = "UPDATE media_files
+                         SET content_block_id = (
+                             SELECT block.id FROM media_issues issue
+                             JOIN library_content_blocks block
+                               ON block.library_id = issue.library_id
+                              AND block.scheme = issue.scheme
+                              AND block.size_bytes = issue.size_bytes
+                              AND block.sample_bytes = issue.sample_bytes
+                              AND block.sample_blake3 = issue.sample_blake3
+                             WHERE issue.id = {}
+                         )
+                         WHERE id IN (".to_string();
+                    sql.push_str(&placeholders(chunk.len()));
+                    sql.push(')');
+                    let mut args = vec![update_args[7].clone()];
+                    args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                    updated = updated.saturating_add(
+                        SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?,
+                    );
+                }
+                if updated == 0
+                {
+                    return Err(AppError::validation_refused(
+                        scryer_application::error_reasons::media::REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION,
+                        "the reported file changed before approval",
+                    ));
+                }
+                if let Some(args) = release_args {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO blocklist
+                         (id, title_id, release_name, normalized_release_name, indexer_id,
+                          info_hash, reason, created_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}) ON CONFLICT DO NOTHING",
+                        &args,
+                    ).await?;
+                }
+                Ok(true)
+            })
+        })
+        .await
+    }
+
+    async fn interrupted_media_issue_recycles(
+        &self,
+        limit: u32,
+    ) -> AppResult<Vec<scryer_application::MediaIssueRecycleIntent>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, reviewed_by_user_id, recycle_preview_fingerprint FROM media_issues
+             WHERE status = 'approved' AND execution_status = 'recycling'
+               AND authorized_remediation = 'recycle_and_search'
+               AND recycle_preview_fingerprint IS NOT NULL AND reviewed_by_user_id IS NOT NULL
+             ORDER BY updated_at, id LIMIT {}",
+            &[SqlArg::I64(i64::from(limit))],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(scryer_application::MediaIssueRecycleIntent {
+                issue_id: row.text("id")?,
+                actor_id: row.text("reviewed_by_user_id")?,
+                preview_fingerprint: row.text("recycle_preview_fingerprint")?,
+            })
+        })
+        .collect()
+    }
+
+    async fn save_media_issue_recycle_receipt(
+        &self,
+        issue_id: &str,
+        receipt: &scryer_application::recycle_bin::PreparedRecycleFile,
+    ) -> AppResult<bool> {
+        execute_datastore_write(
+            &self.datastore,
+            "save_media_issue_recycle_receipt",
+            "UPDATE media_issues SET recycle_receipt_json = {}
+             WHERE id = {} AND status = 'approved' AND execution_status = 'recycling'
+               AND recycle_receipt_json IS NULL",
+            vec![
+                SqlArg::Text(canonical_json_text(receipt)?),
+                SqlArg::Text(issue_id.to_owned()),
+            ],
+        )
+        .await
+        .map(|changed| changed > 0)
+    }
+
+    async fn get_media_issue_recycle_receipt(
+        &self,
+        issue_id: &str,
+    ) -> AppResult<Option<scryer_application::recycle_bin::PreparedRecycleFile>> {
+        let receipt = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT recycle_receipt_json FROM media_issues
+             WHERE id = {} AND recycle_receipt_json IS NOT NULL",
+            &[SqlArg::Text(issue_id.to_owned())],
+        )
+        .await?;
+        receipt
+            .map(|row| {
+                serde_json::from_str(&row.text("recycle_receipt_json")?).map_err(|error| {
+                    AppError::Repository(format!("invalid media issue recycle receipt: {error}"))
+                })
+            })
+            .transpose()
+    }
+
+    async fn set_media_issue_execution_status(
+        &self,
+        issue_id: &str,
+        execution_status: scryer_domain::MediaIssueExecutionStatus,
+        execution_error_code: Option<&str>,
+    ) -> AppResult<bool> {
+        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let rows = execute_datastore_write(
+            &self.datastore,
+            "set_media_issue_execution_status",
+            "UPDATE media_issues
+                SET execution_status = {},
+                    execution_error_code = {},
+                    updated_at = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::Text(execution_status.as_str().to_string()),
+                SqlArg::OptText(execution_error_code.map(str::to_string)),
+                now,
+                SqlArg::Text(issue_id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(rows > 0)
+    }
+
+    async fn set_media_issue_execution_statuses(
+        &self,
+        issue_ids: &[String],
+        execution_status: scryer_domain::MediaIssueExecutionStatus,
+        execution_error_code: Option<&str>,
+    ) -> AppResult<usize> {
+        if issue_ids.is_empty() {
+            return Ok(0);
+        }
+        let (issue_ids, per_statement) = id_list_statements(
+            issue_ids,
+            1,
+            3,
+            max_binds(&self.datastore.read_exec()),
+            500,
+        );
+        let now = timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?;
+        let mut updated = 0usize;
+        for chunk in issue_ids.chunks(per_statement) {
+            let placeholders = placeholders(chunk.len());
+            let sql = format!(
+                "UPDATE media_issues
+                    SET execution_status = {{}},
+                        execution_error_code = {{}},
+                        updated_at = {{}}
+                  WHERE id IN ({placeholders})"
+            );
+            let mut args = vec![
+                SqlArg::Text(execution_status.as_str().to_string()),
+                SqlArg::OptText(execution_error_code.map(str::to_string)),
+                now.clone(),
+            ];
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
+            updated = updated.saturating_add(
+                execute_datastore_write(
+                    &self.datastore,
+                    "set_media_issue_execution_statuses",
+                    &sql,
+                    args,
+                )
+                .await? as usize,
+            );
+        }
+        Ok(updated)
+    }
+
+    async fn reject_media_issue(
+        &self,
+        issue_id: &str,
+        reviewer_user_id: Option<&str>,
+        rule_decision_id: Option<&str>,
+    ) -> AppResult<Option<MediaIssue>> {
+        let before = self.get_media_issue(issue_id).await?;
+        if before
+            .as_ref()
+            .is_some_and(|issue| issue.status != MediaIssueStatus::Pending)
+        {
+            return Ok(before);
+        }
+        set_media_issue_review(
+            &self.datastore,
+            issue_id,
+            reviewer_user_id,
+            rule_decision_id,
+            MediaIssueStatus::Rejected,
+        )
+        .await?;
+        self.get_media_issue(issue_id).await
     }
 }
 

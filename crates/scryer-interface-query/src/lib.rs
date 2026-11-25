@@ -2591,6 +2591,78 @@ impl CatalogQueries {
             .map(from_title_release_blocklist_entry)
             .collect())
     }
+
+    /// List bounded confirmed bad-media content blocks for a library.
+    async fn library_content_blocks(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Library identity whose content blocks are returned.")] library_id: ID,
+        #[graphql(
+            desc = "Maximum entries to return; defaults to 100 and clamps to 1 through 1000."
+        )]
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<scryer_interface_media::types::LibraryContentBlockPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let blocks = app
+            .list_library_content_blocks(
+                &actor,
+                library_id.as_ref(),
+                limit.unwrap_or(100).clamp(1, 1_000) as usize,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        blocks
+            .into_iter()
+            .map(scryer_interface_media::types::LibraryContentBlockPayload::from_domain)
+            .collect::<GqlResult<Vec<_>>>()
+    }
+
+    /// List bounded bad-media reports for a library.
+    async fn media_issues(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Library identity whose bad-media reports are returned.")] library_id: ID,
+        #[graphql(desc = "Optional review status filter.")] status: Option<
+            scryer_interface_media::types::MediaIssueStatusValue,
+        >,
+        #[graphql(
+            desc = "Maximum entries to return; defaults to 100 and is clamped to 1 through 1000."
+        )]
+        limit: Option<i32>,
+        #[graphql(desc = "Rows to skip in newest-first report order.")] offset: Option<i32>,
+    ) -> GqlResult<Vec<scryer_interface_media::types::MediaIssuePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let status = status.map(|value| match value {
+            scryer_interface_media::types::MediaIssueStatusValue::Pending => {
+                scryer_domain::MediaIssueStatus::Pending
+            }
+            scryer_interface_media::types::MediaIssueStatusValue::Approved => {
+                scryer_domain::MediaIssueStatus::Approved
+            }
+            scryer_interface_media::types::MediaIssueStatusValue::Rejected => {
+                scryer_domain::MediaIssueStatus::Rejected
+            }
+            scryer_interface_media::types::MediaIssueStatusValue::Canceled => {
+                scryer_domain::MediaIssueStatus::Canceled
+            }
+        });
+        let issues = app
+            .list_media_issues(
+                &actor,
+                library_id.as_ref(),
+                status,
+                limit.unwrap_or(100).clamp(1, 1_000) as usize,
+                offset.unwrap_or(0).max(0) as usize,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        issues
+            .into_iter()
+            .map(scryer_interface_media::types::MediaIssuePayload::from_domain)
+            .collect::<GqlResult<Vec<_>>>()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

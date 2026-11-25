@@ -111,7 +111,9 @@ function mountContainer(adminRequests: unknown[]) {
             }
           : query === "adminLibraries"
             ? { libraries: [{ id: "library-1" }] }
-            : { libraries: [] };
+            : query === "requesterLibraries"
+              ? { libraries: [{ id: "library-2" }] }
+              : { libraries: [] };
       return { toPromise: () => Promise.resolve({ data }) };
     },
     mutation(mutation: string, variables: Record<string, unknown>) {
@@ -123,6 +125,9 @@ function mountContainer(adminRequests: unknown[]) {
     react,
     urql: { useClient: () => client },
     "@/components/views/requests-view": { RequestsView: "requests-view" },
+    "@/components/views/media-issue-review": {
+      MediaIssueReview: "media-issue-review",
+    },
     "@/lib/graphql/mutations": {
       approveMediaRequestMutation: "approve",
       cancelMyMediaRequestMutation: "cancel",
@@ -304,4 +309,17 @@ test("a queue longer than one page is read to the end", async (t) => {
     ],
   );
   assert.equal(view.requests.length, 201);
+});
+
+test("bad-media review is exposed only in the manager queue", async (t) => {
+  const screen = mountContainer([]);
+  t.after(screen.unmount);
+
+  assert.equal(screen.render().mediaIssueReview, undefined);
+  await settle();
+  const queue = screen.render();
+  assert.ok(queue.mediaIssueReview);
+  assert.equal(queue.canShowRequesterMode, true);
+  queue.onModeChange("mine");
+  assert.equal(screen.render().mediaIssueReview, undefined);
 });

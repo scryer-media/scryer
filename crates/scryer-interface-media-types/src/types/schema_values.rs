@@ -890,6 +890,14 @@ pub enum DomainEventTypeValue {
     ListSyncFailed,
     /// A public list was unfollowed.
     ListUnfollowed,
+    /// A bad-media report was submitted.
+    MediaIssueSubmitted,
+    /// A bad-media report was approved.
+    MediaIssueApproved,
+    /// A bad-media report was rejected.
+    MediaIssueRejected,
+    /// A recycle-and-search execution state changed.
+    MediaIssueRecycleExecution,
     /// A sync of a list ended and its run was recorded, whatever the outcome.
     ListSyncFinished,
     /// A list was followed, changed, turned on or off, or unfollowed.
@@ -907,6 +915,10 @@ impl DomainEventTypeValue {
             DomainEventType::MediaRequestApproved => Self::MediaRequestApproved,
             DomainEventType::MediaRequestRejected => Self::MediaRequestRejected,
             DomainEventType::MediaRequestCanceled => Self::MediaRequestCanceled,
+            DomainEventType::MediaIssueSubmitted => Self::MediaIssueSubmitted,
+            DomainEventType::MediaIssueApproved => Self::MediaIssueApproved,
+            DomainEventType::MediaIssueRejected => Self::MediaIssueRejected,
+            DomainEventType::MediaIssueRecycleExecution => Self::MediaIssueRecycleExecution,
             DomainEventType::TitleAdded => Self::TitleAdded,
             DomainEventType::TitleUpdated => Self::TitleUpdated,
             DomainEventType::TitleRematched => Self::TitleRematched,
@@ -972,6 +984,10 @@ impl DomainEventTypeValue {
             Self::MediaRequestApproved => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled => DomainEventType::MediaRequestCanceled,
+            Self::MediaIssueSubmitted => DomainEventType::MediaIssueSubmitted,
+            Self::MediaIssueApproved => DomainEventType::MediaIssueApproved,
+            Self::MediaIssueRejected => DomainEventType::MediaIssueRejected,
+            Self::MediaIssueRecycleExecution => DomainEventType::MediaIssueRecycleExecution,
             Self::TitleAdded => DomainEventType::TitleAdded,
             Self::TitleUpdated => DomainEventType::TitleUpdated,
             Self::TitleRematched => DomainEventType::TitleRematched,

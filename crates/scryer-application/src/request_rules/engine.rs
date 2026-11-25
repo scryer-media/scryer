@@ -6,20 +6,9 @@
 //! mutating authoring call rebuilds it, so an operator who saves a rule and
 //! immediately submits a request is judged by what they just saved.
 //!
-//! # Why library scope is an application filter
-//!
-//! A rule set can be confined to specific libraries. That could be expressed
-//! three ways: build one engine per library, pass the library through the
-//! family's `EvalContext`, or build one engine and discard the votes of rules
-//! whose scope does not cover the request. The third is what this does.
-//!
-//! One engine per library multiplies compile cost and memory by the library
-//! count for a filter that touches one field. Threading it through
-//! `EvalContext` would put a host authorization concern inside the policy
-//! runtime, where the request family deliberately has none (`EvalContext = ()`,
-//! WP2 report §9.4). Discarding out-of-scope votes costs one map lookup per
-//! rule, is impossible to get subtly wrong, and keeps the scope readable in the
-//! trace: an out-of-scope rule simply does not appear.
+//! One cache compiles all rules. The application selects matching library and
+//! request-kind IDs before calling the evaluator; irrelevant matchers never
+//! run and do not appear in the trace.
 //!
 //! The scope map is captured **with** the engine, in the same swap, so a rule
 //! and the scope it was compiled under can never be read from different
@@ -38,6 +27,7 @@ use crate::{AppError, AppResult, AppUseCase};
 pub struct RequestRuleScope {
     pub name: String,
     pub mode: RequestRuleEvaluationMode,
+    pub applicability: scryer_domain::RequestRuleApplicability,
     /// Empty means every library.
     pub library_ids: Vec<String>,
     pub revision_number: i64,
@@ -48,6 +38,22 @@ impl RequestRuleScope {
     /// Whether this rule's vote counts for a request targeting `library_id`.
     pub fn covers(&self, library_id: &str) -> bool {
         self.library_ids.is_empty() || self.library_ids.iter().any(|id| id == library_id)
+    }
+
+    pub fn applies_to_acquisition(&self) -> bool {
+        matches!(
+            self.applicability,
+            scryer_domain::RequestRuleApplicability::Acquisition
+                | scryer_domain::RequestRuleApplicability::AcquisitionAndMediaIssue
+        )
+    }
+
+    pub fn applies_to_media_issue(&self) -> bool {
+        matches!(
+            self.applicability,
+            scryer_domain::RequestRuleApplicability::MediaIssue
+                | scryer_domain::RequestRuleApplicability::AcquisitionAndMediaIssue
+        )
     }
 }
 
@@ -88,6 +94,23 @@ impl RequestRulesEngineCache {
         self.scopes
             .iter()
             .filter(|(_, scope)| scope.covers(library_id))
+            .collect()
+    }
+
+    pub fn scopes_for_acquisition_request(
+        &self,
+        library_id: &str,
+    ) -> Vec<(&String, &RequestRuleScope)> {
+        self.scopes
+            .iter()
+            .filter(|(_, scope)| scope.covers(library_id) && scope.applies_to_acquisition())
+            .collect()
+    }
+
+    pub fn scopes_for_media_issue(&self, library_id: &str) -> Vec<(&String, &RequestRuleScope)> {
+        self.scopes
+            .iter()
+            .filter(|(_, scope)| scope.covers(library_id) && scope.applies_to_media_issue())
             .collect()
     }
 }
@@ -180,6 +203,7 @@ impl AppUseCase {
                     RequestRuleScope {
                         name: rule_set.name,
                         mode: rule_set.evaluation_mode,
+                        applicability: rule_set.applicability,
                         library_ids: rule_set.library_ids,
                         revision_number: rule_set.current_revision_number,
                         content_hash: String::new(),
@@ -202,6 +226,7 @@ impl AppUseCase {
                 RequestRuleScope {
                     name: rule_set.name,
                     mode: rule_set.evaluation_mode,
+                    applicability: rule_set.applicability,
                     library_ids: rule_set.library_ids,
                     revision_number: revision.revision_number,
                     content_hash: revision.matcher_content_hash,
