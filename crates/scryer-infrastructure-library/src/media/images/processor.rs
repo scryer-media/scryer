@@ -64,6 +64,23 @@ fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     Ok(pool)
 }
 
+/// Decode untrusted artwork with a hard decoder-level cap. The pixel guard
+/// checks the header's dimensions but explicitly falls through when the header
+/// cannot be parsed; `image::Limits` is enforced inside the decoder and covers
+/// both cases, including decoder temporaries that the pixel count does not see.
+const MAX_DECODE_DIMENSION: u32 = 16_384;
+const MAX_DECODE_ALLOC_BYTES: u64 = 128 * 1024 * 1024;
+
+fn decode_source_image(bytes: &[u8], format: ImageFormat) -> image::ImageResult<DynamicImage> {
+    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_DIMENSION);
+    limits.max_image_height = Some(MAX_DECODE_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC_BYTES);
+    reader.limits(limits);
+    reader.decode()
+}
+
 #[derive(Clone)]
 pub struct HttpTitleImageProcessor {
     outbound_http: OutboundHttpClient,
@@ -227,13 +244,12 @@ impl HttpTitleImageProcessor {
                 )
             })?;
         refuse_oversized_dimensions(bytes, guessed_format)?;
-        let decoded =
-            image::load_from_memory_with_format(bytes, guessed_format).map_err(|err| {
-                AppError::validation_refused(
-                    crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
-                    format!("failed to decode image: {err}"),
-                )
-            })?;
+        let decoded = decode_source_image(bytes, guessed_format).map_err(|err| {
+            AppError::validation_refused(
+                crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
+                format!("failed to decode image: {err}"),
+            )
+        })?;
         let oriented = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1));
         let rgba = oriented.to_rgba8();
         let (source_width, source_height) = rgba.dimensions();
@@ -1133,6 +1149,21 @@ mod tests {
         );
         // A header the reader cannot parse is left to the decode, as before.
         assert!(refuse_oversized_dimensions(b"not an image", ImageFormat::Jpeg).is_ok());
+    }
+
+    #[test]
+    fn source_decode_caps_allocations_the_pixel_guard_allows() {
+        // 8k x 8k = 64 MP, below the 100 MP pixel guard, but ~256 MiB of RGBA.
+        // The guard accepts it; the decoder's allocation cap must not.
+        let bytes = jpeg_claiming(8_000, 8_000);
+        assert!(refuse_oversized_dimensions(&bytes, ImageFormat::Jpeg).is_ok());
+        assert!(
+            decode_source_image(&bytes, ImageFormat::Jpeg).is_err(),
+            "images inside the pixel limit must still be capped by image::Limits"
+        );
+
+        let ordinary = encode_test_image(ImageFormat::Png);
+        assert!(decode_source_image(&ordinary, ImageFormat::Png).is_ok());
     }
 
     #[test]
