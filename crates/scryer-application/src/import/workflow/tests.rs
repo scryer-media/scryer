@@ -1443,7 +1443,7 @@ mod tests {
     #[cfg(feature = "runtime-media-analysis")]
     fn copy_mediainfo_fixture(destination: &std::path::Path) {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
+            .join("test-fixtures/media/hevc_hdr10plus.mkv");
         std::fs::copy(fixture, destination).expect("copy MediaInfo fixture");
     }
 

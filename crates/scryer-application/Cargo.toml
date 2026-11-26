@@ -18,7 +18,8 @@ runtime-diagnostics = ["dep:zstd"]
 runtime-media-analysis = [
     "dep:chardetng",
     "dep:encoding_rs",
-    "dep:scryer-mediainfo",
+    "dep:mediaprobe",
+    "mediaprobe/probe",
     "dep:whatlang",
 ]
 runtime-plugin-trust = [
@@ -39,7 +40,7 @@ scryer-disk = { path = "../scryer-disk" }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 scryer-release-parser = { path = "../scryer-release-parser" }
 scryer-rules = { path = "../scryer-rules" }
-scryer-mediainfo = { path = "../scryer-mediainfo", optional = true }
+mediaprobe = { workspace = true, optional = true }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-tunnel = { workspace = true }
 scryer-logging = { path = "../scryer-logging" }

@@ -858,16 +858,16 @@ fn probe_video_content(
     {
         let started = std::time::Instant::now();
         let result = if disc_image {
-            scryer_mediainfo::probe_disc(
+            mediaprobe::probe_disc(
                 path,
                 Default::default(),
-                &scryer_mediainfo::ProbeOptions::new(),
+                &mediaprobe::ProbeOptions::new(),
             )
         } else {
-            scryer_mediainfo::probe_path(
+            mediaprobe::probe_path(
                 path,
-                &scryer_mediainfo::ProbeOptions::new()
-                    .with_depth(scryer_mediainfo::ProbeDepth::Identify),
+                &mediaprobe::ProbeOptions::new()
+                    .with_depth(mediaprobe::ProbeDepth::Identify),
             )
         };
         crate::media::metrics::record_probe(
@@ -901,8 +901,8 @@ fn probe_video_content(
                 }))
             }
             Ok(_)
-            | Err(scryer_mediainfo::ProbeError::Malformed(_))
-            | Err(scryer_mediainfo::ProbeError::Unsupported(_)) => Ok(None),
+            | Err(mediaprobe::ProbeError::Malformed(_))
+            | Err(mediaprobe::ProbeError::Unsupported(_)) => Ok(None),
             Err(error) => Err(error.message().to_owned()),
         }
     }

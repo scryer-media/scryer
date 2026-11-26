@@ -42,9 +42,7 @@ members = [
     "crates/scryer-launcher",
     "crates/scryer",
     "crates/scryer-mock-apis",
-    "crates/scryer-mediainfo",
     "crates/scryer-media-types",
-    "crates/scryer-media-model",
 ]
 exclude = ["test-plugins/test-indexer", "benchmarks/criterion"]
 resolver = "2"
@@ -56,6 +54,9 @@ edition = "2024"
 scryer-tunnel = { package = "proxy-tunnels", git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.8.0", features = ["http3"] }
 tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "1.0", features = ["derive"] }
+# Media container and stream facts. Data types only here; the application
+# turns on the parser with its `runtime-media-analysis` feature.
+mediaprobe = { version = "0.1.0", default-features = false }
 serde_json = { version = "1.0", features = ["float_roundtrip", "preserve_order"] }
 base64 = "0.23"
 dotenvy = "0.15"

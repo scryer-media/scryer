@@ -896,7 +896,7 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
         // An uncoded failure (a metadata read through a mount symlink, a probe
         // worker that died) is an I/O failure of the probe, handled below.
-        Err(error) => Err(scryer_mediainfo::ProbeError::Io {
+        Err(error) => Err(mediaprobe::ProbeError::Io {
             kind: std::io::ErrorKind::Other,
             message: error.to_string(),
         }),
@@ -911,15 +911,16 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 )));
             }
             if handling == Some(MediaHandling::Playlist)
-                && matches!(error, scryer_mediainfo::ProbeError::Unsupported(_))
+                && matches!(error, mediaprobe::ProbeError::Unsupported(_))
             {
                 return media_review_hold(reasons::REFERENCES_REQUIRE_REVIEW, error.to_string());
             }
             if runtime_sample_validation.mode == RuntimeSampleValidationMode::EnforceAutomatic {
                 let code = match &error {
-                    scryer_mediainfo::ProbeError::Io { .. }
-                    | scryer_mediainfo::ProbeError::SourceChanged => reasons::PROBE_IO_FAILED,
-                    scryer_mediainfo::ProbeError::Malformed(_) => reasons::PROBE_MALFORMED,
+                    mediaprobe::ProbeError::Io { .. } | mediaprobe::ProbeError::SourceChanged => {
+                        reasons::PROBE_IO_FAILED
+                    }
+                    mediaprobe::ProbeError::Malformed(_) => reasons::PROBE_MALFORMED,
                     // Unsupported, and any kind this version does not know.
                     _ => MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
                 };
@@ -2675,8 +2676,7 @@ mod tests {
     /// inventory walks, as every real-size MKV does.
     #[cfg(feature = "runtime-media-analysis")]
     fn coverage_limited_mkv(path: &Path) {
-        let mut bytes =
-            include_bytes!("../../../scryer-mediainfo/tests/media/h264_aac.mkv").to_vec();
+        let mut bytes = include_bytes!("../../test-fixtures/media/h264_aac.mkv").to_vec();
         // Segment header at 0x28: ID 18 53 80 67, then an 8-byte size vint.
         assert_eq!(&bytes[0x28..0x2c], &[0x18, 0x53, 0x80, 0x67]);
         assert_eq!(bytes[0x2c], 0x01);
@@ -2700,7 +2700,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let candidate = directory.path().join("Coverage.Limit.2024.mkv");
         coverage_limited_mkv(&candidate);
-        let probed = scryer_mediainfo::probe(&candidate).unwrap();
+        let probed = mediaprobe::probe(&candidate).unwrap();
         assert!(probed.report.budget_exhausted, "{:?}", probed.report);
         assert!(
             probed

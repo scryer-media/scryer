@@ -70,11 +70,11 @@ async fn assert_extended_movie_import(extension: &str, contents: &[u8], allowed:
             if extension == "m2v" {
                 assert_eq!(files[0].video_codec, None);
                 assert!(
-                    files[0]
-                        .analysis_details
-                        .streams
-                        .iter()
-                        .any(|stream| { stream.codec.as_deref() == Some("mpeg1video") })
+                    files[0].analysis_details.streams.iter().any(|stream| stream
+                        .codec
+                        .as_ref()
+                        .map(|codec| codec.as_str())
+                        == Some("mpeg1video"))
                 );
             } else {
                 assert_eq!(

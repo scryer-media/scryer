@@ -126,7 +126,7 @@ impl<T: Clone> AnalysisFlight<T> {
 
 #[cfg(feature = "runtime-media-analysis")]
 static NATIVE_PROBE_FLIGHTS: std::sync::LazyLock<
-    AnalysisFlights<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::ProbeError>>,
+    AnalysisFlights<Result<scryer_media_types::AnalysisDetails, mediaprobe::ProbeError>>,
 > = std::sync::LazyLock::new(AnalysisFlights::default);
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -158,7 +158,7 @@ pub(crate) async fn probe_native_catalog(
     path: PathBuf,
     selection: scryer_media_types::DiscSelection,
     operation: crate::media::metrics::ProbeOperation,
-) -> AppResult<Result<scryer_media_types::AnalysisDetails, scryer_mediainfo::ProbeError>> {
+) -> AppResult<Result<scryer_media_types::AnalysisDetails, mediaprobe::ProbeError>> {
     let source_path = path.clone();
     // A metadata read that fails is an I/O failure for this file, not
     // evidence about the file's identity. Folding it into `None` and
@@ -181,24 +181,18 @@ pub(crate) async fn probe_native_catalog(
                 }) {
                     match crate::media_references::playlist_is_relocatable(&path) {
                         Ok(true) => Ok(unavailable_analysis(&path)),
-                        Ok(false) => Err(scryer_mediainfo::ProbeError::Unsupported(
+                        Ok(false) => Err(mediaprobe::ProbeError::Unsupported(
                             "playlist references require review".into(),
                         )),
                         Err(error) => Err(error.into()),
                     }
                 } else if scryer_domain::is_disc_image(&path) {
-                    scryer_mediainfo::probe_disc(
-                        &path,
-                        selection,
-                        &scryer_mediainfo::ProbeOptions::new(),
-                    )
+                    mediaprobe::probe_disc(&path, selection, &mediaprobe::ProbeOptions::new())
                 } else {
-                    scryer_mediainfo::probe(&path)
+                    mediaprobe::probe(&path)
                 };
             let result = match result {
-                Err(scryer_mediainfo::ProbeError::Unsupported(_))
-                    if permits_unavailable_probe(&path) =>
-                {
+                Err(mediaprobe::ProbeError::Unsupported(_)) if permits_unavailable_probe(&path) => {
                     Ok(unavailable_analysis(&path))
                 }
                 result => result,
@@ -237,7 +231,7 @@ pub(crate) async fn hold_native_probe_for_test(
         // first drops the sender, which ends the wait too.
         held.recv()
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        Ok(scryer_mediainfo::probe(&path))
+        Ok(mediaprobe::probe(&path))
     });
     (release, move || std::sync::Arc::strong_count(&flight))
 }
@@ -254,9 +248,9 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
             tokio::task::spawn_blocking(move || {
                 nice_thread();
                 let started = std::time::Instant::now();
-                let result = scryer_mediainfo::diagnostics::diagnose_file(
+                let result = mediaprobe::diagnostics::diagnose_file(
                     &path,
-                    scryer_mediainfo::diagnostics::DiagnosticsOptions {
+                    mediaprobe::diagnostics::DiagnosticsOptions {
                         disc_selection: selection,
                         ..Default::default()
                     },

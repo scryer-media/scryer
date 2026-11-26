@@ -58,7 +58,6 @@ const SCRYER_PROD_PACKAGES: &[&str] = &[
     "scryer-infrastructure-sql",
     "scryer-infrastructure-workflow",
     "scryer-interface",
-    "scryer-mediainfo",
     "scryer-outbound-http",
     "scryer-plugins",
     "scryer-release-parser",

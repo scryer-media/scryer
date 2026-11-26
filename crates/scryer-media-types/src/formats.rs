@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-pub use scryer_media_model::formats::*;
+pub use mediaprobe::formats::*;
 
 /// Whether a recognized suffix may represent its own library item.
 ///
@@ -157,6 +157,42 @@ mod tests {
             ))));
         }
         assert!(is_standalone_video_path(Path::new("Release.MKV_")));
+    }
+
+    /// The suffix lists the web client checks paths against.
+    fn web_media_formats() -> String {
+        let list = |extensions: &mut dyn Iterator<Item = &str>| {
+            extensions
+                .map(|extension| format!("  \"{extension}\",\n"))
+                .collect::<String>()
+        };
+        format!(
+            "// Generated from the mediaprobe registry and the library roles in\n\
+             // crates/scryer-media-types. After changing either, run\n\
+             // SCRYER_WRITE_WEB_MEDIA_FORMATS=1 cargo nextest run -p scryer-media-types web_media_formats\n\
+             export const VIDEO_EXTENSIONS = [\n{}] as const;\n\
+             \n\
+             // Suffixes that can be standalone library files; the rest are registered for\n\
+             // probing and classification only.\n\
+             export const STANDALONE_VIDEO_EXTENSIONS = [\n{}] as const;\n",
+            list(&mut MEDIA_FORMATS.iter().map(|entry| entry.extension)),
+            list(&mut standalone_video_extensions()),
+        )
+    }
+
+    #[test]
+    fn web_media_formats_match_the_registry() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/scryer-web/lib/utils/media-formats.generated.ts");
+        let expected = web_media_formats();
+        if std::env::var_os("SCRYER_WRITE_WEB_MEDIA_FORMATS").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        assert!(
+            std::fs::read_to_string(&path).unwrap() == expected,
+            "{} is stale; rerun this test with SCRYER_WRITE_WEB_MEDIA_FORMATS=1",
+            path.display()
+        );
     }
 
     #[cfg(unix)]
