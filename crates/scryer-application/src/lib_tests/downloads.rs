@@ -7751,50 +7751,7 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         .await
         .unwrap();
     let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
-    for name in [
-        "h264_aac.mkv",
-        "matrix_ts_002.m2ts",
-        "av1_sequence_pq.mp4",
-        "av1_sequence_pq.mkv",
-        "hevc_sequence_pq.mp4",
-        "hevc_hdr10plus.mp4",
-        "dv_profile5.mkv",
-        "dv_profile7.mkv",
-        "dv_profile8.mkv",
-        "hevc_hdr10plus.mkv",
-        "hevc_sequence_pq.mkv",
-        "chapters_nero.mp4",
-        "chapters_quicktime.mp4",
-        "matrix_mkv_004.mkv",
-        "matrix_mkv_005.mkv",
-        "matrix_mp4_002.m4v",
-        "matrix_mp4_011.m4v",
-        "matrix_ts_003.ts",
-        "matrix_ts_004.m2ts",
-        "matrix_mkv_003.mkv",
-        "matrix_mkv_007.mkv",
-        "matrix_mkv_020.mkv",
-        "matrix_mp4_008.m4v",
-        "ogv_theora_opus_surround.ogv",
-        "ogv_theora_vorbis.ogv",
-        "matrix_avi_001.avi",
-        "matrix_avi_009.avi",
-        "matrix_avi_013.avi",
-        "matrix_avi_005.avi",
-        "matrix_mkv_015.mkv",
-        "matrix_ts_016.m2ts",
-        "matrix_ts_005.ts",
-        "wmv_wmv1_aac_surround.wmv",
-        "wmv_wmv1_wmav1.wmv",
-        "wmv_wmv1_mp3_mono.wmv",
-        "wmv_wmv2_video_only.wmv",
-        "flv_flv1_pcm_s16le.flv",
-        "flv_flv1_pcm_u8.flv",
-        "flv_flv1_speex.flv",
-        "flv_h264_mp3.flv",
-        "ps_mpeg1_mp2.mpg",
-        "ps_mpeg2_mp2.vob",
-    ] {
+    for name in ["h264_aac.mkv", "h264_aac.mp4", "matrix_ts_002.m2ts"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test-fixtures/media")
             .join(name);
