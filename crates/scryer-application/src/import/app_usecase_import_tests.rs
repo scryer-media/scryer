@@ -3365,7 +3365,7 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     );
     let dir = tempfile::tempdir().expect("tempdir");
     let video_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
+        .join("test-fixtures/media/hevc_hdr10plus.mkv");
     let primary = dir.path().join("Manual.Movie.2024.1080p.WEB-DL.mkv");
     std::fs::copy(&video_fixture, &primary).expect("copy primary video fixture");
     let named_sample = dir.path().join("Manual.Movie.2024.1080p.WEB-DL-sample.mkv");

@@ -6049,8 +6049,7 @@ const PACK_VIDEO_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
 fn write_pack_video(dir: &Path, file_name: &str) -> std::path::PathBuf {
     let path = dir.join(file_name);
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv");
     std::fs::copy(fixture, &path).expect("copy source video fixture");
     std::fs::OpenOptions::new()
         .write(true)
@@ -7490,7 +7489,7 @@ async fn automatic_import_rejects_download_whose_only_file_matches_no_episode() 
 }
 
 #[cfg(feature = "runtime-media-analysis")]
-#[path = "../../../scryer-mediainfo/tests/support/disc_image.rs"]
+#[path = "authored_disc/disc_image.rs"]
 mod authored_disc_image;
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -7561,8 +7560,7 @@ async fn catalog_scan_and_final_import_join_the_same_native_probe() {
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv");
     let size = std::fs::metadata(&path).unwrap().len() as i64;
     let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
     let (release, references) =
@@ -7622,7 +7620,7 @@ async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("changing.mkv");
     let original = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
     )
     .unwrap();
     std::fs::write(&path, &original).unwrap();
@@ -7798,7 +7796,7 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         "ps_mpeg2_mp2.vob",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media")
+            .join("test-fixtures/media")
             .join(name);
         let crate::MediaAnalysisOutcome::Valid(catalog) =
             analyzer.analyze_file(path.clone()).await.unwrap()
@@ -7876,8 +7874,7 @@ async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
         let fixture = fail_closed_pack_fixture().await;
         let source_dir = tempfile::tempdir().unwrap();
         let mut clip = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/matrix_ts_002.m2ts"),
         )
         .unwrap();
         if kind == "encrypted" {
@@ -7992,8 +7989,7 @@ async fn manual_disc_import_for_filesystem(udf_metadata_partition: Option<bool>)
         );
     }
     let clip = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/matrix_ts_002.m2ts"),
     )
     .unwrap();
     let image_files = [
@@ -8192,7 +8188,7 @@ fn write_extensionless_video(dir: &Path, fixture: &str) -> std::path::PathBuf {
     let path = dir.join("dXRUKoYEAJ58jradJdxMKKxgczVTvt");
     std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media")
+            .join("test-fixtures/media")
             .join(fixture),
         &path,
     )
@@ -12694,7 +12690,7 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let probed = scryer_mediainfo::probe(&source).unwrap();
+    let probed = mediaprobe::probe(&source).unwrap();
     assert!(probed.is_playable_video());
     let native = crate::media::analysis_summary::summarize(probed);
     let policy = scryer_rules::UserPolicy {
@@ -12910,7 +12906,7 @@ async fn additional_movie_preparation_persists_native_analysis_and_manual_probe_
                 .set_len(PACK_VIDEO_SIZE_BYTES)
                 .unwrap();
             Some(crate::media::analysis_summary::summarize(
-                scryer_mediainfo::probe(&source).unwrap(),
+                mediaprobe::probe(&source).unwrap(),
             ))
         } else {
             // Harmless non-video bytes under a video extension exercise the

@@ -424,8 +424,8 @@ async fn set_folder_template(ctx: &TestContext, facet: MediaFacet, template: &st
 fn mediainfo_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("scryer-mediainfo")
-        .join("tests")
+        .join("scryer-application")
+        .join("test-fixtures")
         .join("media")
         .join(name)
 }

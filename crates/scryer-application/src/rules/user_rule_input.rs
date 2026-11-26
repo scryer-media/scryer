@@ -638,11 +638,9 @@ mod tests {
     #[cfg(feature = "runtime-media-analysis")]
     #[test]
     fn build_rule_input_populates_post_download_file_doc() {
-        let details = scryer_mediainfo::probe(
+        let details = mediaprobe::probe(
             &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("scryer-mediainfo")
-                .join("tests")
+                .join("test-fixtures")
                 .join("media")
                 .join("h264_aac.mkv"),
         )
