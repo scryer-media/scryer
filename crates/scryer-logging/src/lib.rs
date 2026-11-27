@@ -20,6 +20,10 @@ use tracing_subscriber::registry::LookupSpan;
 const CONTEXT_FIELD: &str = "scryer_context";
 const REDACTED_VALUE: &str = "[REDACTED]";
 
+/// A field that carries a search's text. JSON logs show it on debug and trace
+/// events only, and redact it on every other level.
+pub const SEARCH_TEXT_FIELD: &str = "search_text";
+
 /// Dedicated tracing target kept enabled so canonical context survives
 /// restrictive application log filters without emitting an extra log record.
 pub const CONTEXT_TARGET: &str = "scryer_context";
@@ -292,7 +296,7 @@ where
         event: &Event<'_>,
     ) -> fmt::Result {
         let metadata = event.metadata();
-        let mut fields = JsonFieldVisitor::default();
+        let mut fields = JsonFieldVisitor::for_level(*metadata.level());
         event.record(&mut fields);
 
         let mut root = Map::new();
@@ -332,14 +336,22 @@ where
     }
 }
 
-#[derive(Default)]
 struct JsonFieldVisitor {
     fields: Map<String, Value>,
+    shows_search_text: bool,
 }
 
 impl JsonFieldVisitor {
+    fn for_level(level: Level) -> Self {
+        Self {
+            fields: Map::new(),
+            shows_search_text: matches!(level, Level::DEBUG | Level::TRACE),
+        }
+    }
+
     fn insert(&mut self, field: &Field, value: Value) {
-        let value = if is_sensitive_field_name(field.name()) {
+        let hidden_search_text = field.name() == SEARCH_TEXT_FIELD && !self.shows_search_text;
+        let value = if hidden_search_text || is_sensitive_field_name(field.name()) {
             Value::String(REDACTED_VALUE.to_owned())
         } else {
             value
@@ -608,6 +620,41 @@ mod tests {
         assert_eq!(event["fields"]["safe_field"], "kept");
         assert!(!raw.contains("secret-token"));
         assert!(!raw.contains("ResetPassword"));
+    }
+
+    #[test]
+    fn formatter_shows_search_text_on_debug_events_only() {
+        let output = SharedWriter::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .event_format(JsonContextFormatter)
+                .with_writer(output.clone())
+                .with_ansi(false),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::trace!(search_text = "Synthetic Show S01E02", "trace search");
+            tracing::debug!(search_text = "Synthetic Show S01E02", "debug search");
+            tracing::info!(search_text = "Synthetic Show S01E02", "info search");
+            tracing::warn!(search_text = "Synthetic Show S01E02", "warn search");
+            tracing::error!(search_text = "Synthetic Show S01E02", "error search");
+            tracing::debug!(query = "Synthetic Show S01E02", "debug query");
+        });
+
+        let raw =
+            String::from_utf8(output.0.lock().expect("lock output").clone()).expect("utf8 output");
+        let events = raw
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("valid JSON event"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 6, "{raw}");
+        for event in &events[..2] {
+            assert_eq!(event["fields"]["search_text"], "Synthetic Show S01E02");
+        }
+        for event in &events[2..5] {
+            assert_eq!(event["fields"]["search_text"], REDACTED_VALUE);
+        }
+        assert_eq!(events[5]["fields"]["query"], REDACTED_VALUE);
     }
 
     #[test]

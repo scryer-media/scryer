@@ -3328,6 +3328,11 @@ impl AppUseCase {
             category = subject.category.as_str(),
             "searching indexers for title"
         );
+        debug!(
+            title_id = title_id.as_str(),
+            search_text = subject.queries.first().map(String::as_str).unwrap_or(""),
+            "searching indexers for title"
+        );
 
         let mut results = self
             .search_and_evaluate_subject(
@@ -3401,6 +3406,11 @@ impl AppUseCase {
             category = subject.category.as_str(),
             "searching indexers for series movie"
         );
+        debug!(
+            title_id = title_id.as_str(),
+            search_text = subject.queries.first().map(String::as_str).unwrap_or(""),
+            "searching indexers for series movie"
+        );
 
         let mut results = self
             .search_and_evaluate_subject(
@@ -3456,6 +3466,11 @@ impl AppUseCase {
             title_id = title_id.as_str(),
             query = subject.queries.first().map(String::as_str).unwrap_or(""),
             category = subject.category.as_str(),
+            "searching indexers for episode"
+        );
+        debug!(
+            title_id = title_id.as_str(),
+            search_text = subject.queries.first().map(String::as_str).unwrap_or(""),
             "searching indexers for episode"
         );
 

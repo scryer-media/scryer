@@ -226,6 +226,7 @@ fn field_names_decide_their_values() {
     assert_eq!(classify_field("client_ip"), FieldClass::Host);
     assert_eq!(classify_field("display_name"), FieldClass::User);
     assert_eq!(classify_field("indexer_name"), FieldClass::EntityName);
+    assert_eq!(classify_field("search_text"), FieldClass::EntityName);
     assert_eq!(classify_field("file_name"), FieldClass::Plain);
     assert_eq!(classify_field("release_name"), FieldClass::Plain);
     assert_eq!(classify_field("root_path"), FieldClass::Path);
