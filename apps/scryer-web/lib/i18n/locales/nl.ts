@@ -1627,8 +1627,8 @@ const nl: LocaleDictionary = {
   "title.table.runtime": "Speelduur",
   "title.table.avgRuntime": "Gem. speelduur",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} afleveringen",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} afleveringen ({{monitored}} gemonitord)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} afleveringen (totaal: {{total}})",
   "title.table.status": "Status",
   "title.table.root": "Root",
   "title.table.popularity": "Populariteit",

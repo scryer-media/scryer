@@ -1291,6 +1291,10 @@ pub struct TitleCatalogSort {
     /// Effective profile names a `Profile` sort orders by. Resolved by the
     /// caller because they live in settings, not on the title rows.
     pub profile_names: Option<TitleCatalogProfileNames>,
+    /// Last day an `Episodes` sort counts an episode as aired. Resolved by the
+    /// caller from the application clock, so the sort agrees with the episode
+    /// progress shown for the same titles.
+    pub episodes_aired_through: Option<chrono::NaiveDate>,
 }
 
 impl TitleCatalogSort {
@@ -1299,6 +1303,7 @@ impl TitleCatalogSort {
             key,
             direction,
             profile_names: None,
+            episodes_aired_through: None,
         }
     }
 }
@@ -4334,13 +4339,25 @@ pub struct MissingScopeCandidates {
     pub series_movie_links: Vec<MissingSeriesMovieLinkCandidate>,
 }
 
-/// Aggregated episode progress counts per title, excluding specials.
+/// Aggregated episode progress counts per title.
+///
+/// `owned_episodes`, `monitored_episodes` and `total_episodes` exclude specials
+/// and unnamed, TBA or undated placeholder episodes. The `episodes_*` and
+/// `episode_records_total` counts read every episode of the title, specials
+/// included, and follow the series progress definition: progress is
+/// `episodes_on_disk / episodes_expected`.
 #[derive(Clone, Debug)]
 pub struct TitleEpisodeProgressSummary {
     pub title_id: String,
     pub owned_episodes: i64,
     pub monitored_episodes: i64,
     pub total_episodes: i64,
+    /// Episodes with a live primary file.
+    pub episodes_on_disk: i64,
+    /// Episodes that are monitored and have aired, plus any episode on disk.
+    pub episodes_expected: i64,
+    /// Every episode record of the title.
+    pub episode_records_total: i64,
 }
 
 /// Compact availability information for an episode row. This intentionally
@@ -4469,6 +4486,10 @@ mod primary_quality_label_tests {
 }
 
 /// Aggregated episode progress counts per collection.
+///
+/// `owned_episodes`, `monitored_episodes` and `total_episodes` exclude
+/// unnamed, TBA or undated placeholder episodes; `episodes_on_disk`,
+/// `episodes_expected` and `episode_records_total` read every episode.
 #[derive(Clone, Debug)]
 pub struct CollectionEpisodeProgressSummary {
     pub collection_id: String,
@@ -4476,6 +4497,10 @@ pub struct CollectionEpisodeProgressSummary {
     pub monitored_episodes: i64,
     pub total_episodes: i64,
     pub episode_records_total: i64,
+    /// Episodes with a live primary file.
+    pub episodes_on_disk: i64,
+    /// Episodes that are monitored and have aired, plus any episode on disk.
+    pub episodes_expected: i64,
 }
 
 #[derive(Clone, Debug)]

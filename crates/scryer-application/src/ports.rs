@@ -10498,9 +10498,12 @@ pub trait MediaFileRepository: Send + Sync {
         self.list_missing_scope_candidates_for_title(title_id).await
     }
 
+    /// Episode progress per title. An episode counts as aired when its air
+    /// date is on or before `aired_through`.
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>>;
 
     /// Compact row data for episode availability. Implementations must not
@@ -10522,9 +10525,12 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Episode progress per collection of these titles, counting aired
+    /// episodes the way [`Self::list_title_episode_progress_summaries`] does.
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>>;
 
     async fn update_media_file_analysis(

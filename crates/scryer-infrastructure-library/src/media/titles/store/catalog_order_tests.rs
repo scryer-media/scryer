@@ -546,6 +546,7 @@ struct AggregateFixture {
     monitored: bool,
     year: Option<i32>,
     size: Option<i64>,
+    /// Episodes on disk and episodes expected.
     episodes: Option<(i64, i64)>,
     quality: Option<i64>,
     rating: Option<f64>,
@@ -603,7 +604,7 @@ const AGGREGATE_FIXTURES: &[AggregateFixture] = &[
         monitored: true,
         year: Some(2010),
         size: Some(300),
-        episodes: Some((2, 2)),
+        episodes: Some((3, 4)),
         quality: Some(4),
         rating: None,
     },
@@ -895,7 +896,9 @@ async fn seed_aggregate_fixtures(datastore: &StoreDatastore) {
 
     // Emberfall Deep: one double-episode file, also the season's ordered path, so
     // the old joins fanned it out; a recycled file; an unlinked file that quality
-    // still reads and size does not; a special and a TBA episode the counts skip.
+    // still reads and size does not. Episode progress counts the special the
+    // double file also covers, and the aired TBA episode whose only file is
+    // recycled as expected but not on disk.
     aggregate_collection(
         datastore,
         "c-s-deep",
@@ -1184,8 +1187,15 @@ fn previous_page_sql(
             .to_string(),
         other => panic!("no previous form kept for {other:?}"),
     };
-    let (where_sql, mut args) =
+    // The episode progress join binds its aired-through day, ahead of the WHERE.
+    let mut args = if sort.key == TitleCatalogSortKey::Episodes {
+        vec![title_catalog_episodes_aired_through(sort)]
+    } else {
+        Vec::new()
+    };
+    let (where_sql, where_args) =
         build_title_catalog_where_sql(facet, library_ids, None, filter, dialect);
+    args.extend(where_args);
     let order = build_title_catalog_order_sql(sort, dialect, &mut args);
     (
         format!("SELECT titles.id FROM titles{join} WHERE {where_sql} {order}"),
@@ -1239,16 +1249,17 @@ fn expected_aggregate_order(
         let value = match key {
             // A title with no counted file sorts as -1, below an empty file's 0.
             TitleCatalogSortKey::Size => directed(a.size.unwrap_or(-1).cmp(&b.size.unwrap_or(-1))),
+            // No episodes sorts as -1; nothing expected yet is complete.
             TitleCatalogSortKey::Episodes => {
                 let ratio = |f: &AggregateFixture| match f.episodes {
-                    Some((owned, total)) if total > 0 => owned as f64 / total as f64,
-                    _ => -1.0,
+                    Some((on_disk, expected)) if expected > 0 => on_disk as f64 / expected as f64,
+                    Some(_) => 1.0,
+                    None => -1.0,
                 };
-                let owned = |f: &AggregateFixture| f.episodes.map_or(0, |(owned, _)| owned);
-                let total = |f: &AggregateFixture| f.episodes.map_or(0, |(_, total)| total);
+                let expected =
+                    |f: &AggregateFixture| f.episodes.map_or(0, |(_, expected)| expected);
                 directed(ratio(a).partial_cmp(&ratio(b)).unwrap())
-                    .then_with(|| directed(owned(a).cmp(&owned(b))))
-                    .then_with(|| directed(total(a).cmp(&total(b))))
+                    .then_with(|| directed(expected(a).cmp(&expected(b))))
             }
             TitleCatalogSortKey::Quality => {
                 nullable(a.quality.map(|q| q as f64), b.quality.map(|q| q as f64))
@@ -1390,6 +1401,7 @@ async fn assert_catalog_aggregate_sorts(datastore: StoreDatastore) {
                 let sort = TitleCatalogSort {
                     key,
                     direction,
+                    episodes_aired_through: chrono::NaiveDate::from_ymd_opt(2026, 1, 1),
                     ..Default::default()
                 };
                 let mut paged = Vec::new();
@@ -1473,9 +1485,9 @@ async fn assert_catalog_aggregate_sorts(datastore: StoreDatastore) {
     }
 }
 
-/// The Episodes sort counts an episode as owned under exactly the file
-/// conditions the card's displayed counts use: a primary map row to a live file
-/// that is not waiting for review, whatever the file's own role.
+/// The Episodes sort counts an episode as on disk, and as expected, under
+/// exactly the conditions the card's displayed counts use: a primary map row to
+/// a live file that is not waiting for review, whatever the file's own role.
 async fn assert_episode_sort_counts_match_displayed_counts(datastore: StoreDatastore) {
     use scryer_application::MediaFileRepository;
 
@@ -1539,30 +1551,41 @@ async fn assert_episode_sort_counts_match_displayed_counts(datastore: StoreDatas
         aggregate_map_as(&datastore, file_id, &episode, map_role).await;
     }
 
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let sql = format!(
-        "SELECT owned_episodes, total_episodes FROM ({}) progress WHERE progress.title_id = {{}}",
+        "SELECT on_disk_episodes, expected_episodes FROM ({}) progress WHERE progress.title_id = {{}}",
         title_catalog_episode_progress_subquery_scoped(dialect, "")
     );
     let row = SqlRuntime::fetch_optional(
         datastore.read_exec(),
         &sql,
-        &[SqlArg::Text("s-emberfall-review".into())],
+        &[
+            title_catalog_episodes_aired_through(&TitleCatalogSort {
+                key: TitleCatalogSortKey::Episodes,
+                episodes_aired_through: Some(today),
+                ..Default::default()
+            }),
+            SqlArg::Text("s-emberfall-review".into()),
+        ],
     )
     .await
     .unwrap()
     .unwrap();
     let sorted_by = (
-        row.i64("owned_episodes").unwrap(),
-        row.i64("total_episodes").unwrap(),
+        row.i64("on_disk_episodes").unwrap(),
+        row.i64("expected_episodes").unwrap(),
     );
     let displayed = crate::media::search::media_file_store::MediaFileStore::new(datastore.clone())
-        .list_title_episode_progress_summaries(&["s-emberfall-review".to_string()])
+        .list_title_episode_progress_summaries(&["s-emberfall-review".to_string()], today)
         .await
         .unwrap();
     assert_eq!(displayed.len(), 1);
     assert_eq!(
         sorted_by,
-        (displayed[0].owned_episodes, displayed[0].total_episodes)
+        (
+            displayed[0].episodes_on_disk,
+            displayed[0].episodes_expected
+        )
     );
     assert_eq!(sorted_by, (2, 4));
 }

@@ -2185,6 +2185,15 @@ type CollectionPayload {
 	"""
 	episodeRecordsTotal: Int
 	"""
+	Episodes in this collection with a file.
+	"""
+	episodesOnDisk: Int
+	"""
+	Episodes in this collection expected on disk: each episode that has a
+	file, or that is monitored and has aired.
+	"""
+	episodesExpected: Int
+	"""
 	Parent title for this collection, or null if the title is no longer available to the caller.
 	"""
 	title: TitlePayload
@@ -34434,17 +34443,32 @@ type TitlePayload {
 	"""
 	sizeBytes: Long
 	"""
-	Owned-vs-total episode progress, excluding specials.
+	Episodes with a file, excluding specials and unnamed, TBA or undated placeholder episodes.
 	"""
 	episodesOwned: Int
 	"""
-	Monitored episode count, excluding specials.
+	Monitored episodes, excluding specials and unnamed, TBA or undated placeholder episodes.
 	"""
 	episodesMonitored: Int
 	"""
-	Total episode count, excluding specials.
+	Episodes, excluding specials and unnamed, TBA or undated placeholder episodes.
 	"""
 	episodesTotal: Int
+	"""
+	Episodes with a file, specials included. The numerator of the series
+	progress, over `episodesExpected`.
+	"""
+	episodesOnDisk: Int
+	"""
+	Episodes expected on disk, specials included: each episode that has a
+	file, or that is monitored and has aired. Progress is
+	`episodesOnDisk / episodesExpected`, complete when this is 0.
+	"""
+	episodesExpected: Int
+	"""
+	Every episode record of the title, specials and placeholders included.
+	"""
+	episodeRecordsTotal: Int
 	"""
 	Primary movie media resolution.
 	"""

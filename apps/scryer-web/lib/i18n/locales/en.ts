@@ -6678,8 +6678,8 @@ const en: LocaleDictionary = {
   "title.table.runtime": "Runtime",
   "title.table.avgRuntime": "Avg runtime",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} episodes",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} episodes ({{monitored}} monitored)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} episodes (total: {{total}})",
   "title.table.status": "Status",
   "title.table.root": "Root",
   "title.table.popularity": "Popularity",

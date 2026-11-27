@@ -203,6 +203,8 @@ export type TitleCollection = {
   episodesOwned: number | null;
   episodesMonitored: number | null;
   episodesTotal: number | null;
+  episodesOnDisk: number | null;
+  episodesExpected: number | null;
   episodeRecordsTotal: number | null;
   createdAt: string;
 };

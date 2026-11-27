@@ -1859,8 +1859,8 @@ const ru: LocaleDictionary = {
   "title.table.runtime": "Продолжительность",
   "title.table.avgRuntime": "Средняя продолжительность",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} эпизодов",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} эпизодов (отслеживается: {{monitored}})",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} эпизодов (всего: {{total}})",
   "title.table.status": "Статус",
   "title.table.root": "Корневая папка",
   "title.table.popularity": "Популярность",

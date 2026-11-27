@@ -1701,8 +1701,8 @@ const zh_TW: LocaleDictionary = {
   "title.table.runtime": "片長",
   "title.table.avgRuntime": "平均片長",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} 集",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} 集 ({{monitored}} 集已監控)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} 集（共 {{total}} 集）",
   "title.table.status": "狀態",
   "title.table.root": "根目錄",
   "title.table.popularity": "熱門度",

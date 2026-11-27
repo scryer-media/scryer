@@ -1203,7 +1203,10 @@ impl AppUseCase {
         self.services
             .library
             .media_files
-            .list_title_episode_progress_summaries(&title_ids)
+            .list_title_episode_progress_summaries(
+                &title_ids,
+                self.runtime.environment.now().date_naive(),
+            )
             .await
     }
 
@@ -1280,7 +1283,10 @@ impl AppUseCase {
         self.services
             .library
             .media_files
-            .list_collection_episode_progress_summaries(&title_ids)
+            .list_collection_episode_progress_summaries(
+                &title_ids,
+                self.runtime.environment.now().date_naive(),
+            )
             .await
     }
 }

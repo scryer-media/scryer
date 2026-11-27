@@ -395,6 +395,8 @@ const SERIES_SIDE_PANEL_COLLECTION_FIELDS = `
       episodesOwned
       episodesMonitored
       episodesTotal
+      episodesOnDisk
+      episodesExpected
       episodeRecordsTotal
       createdAt`;
 
@@ -1523,6 +1525,9 @@ export const TITLE_LIST_FIELDS = `
     episodesOwned
     episodesMonitored
     episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal
     contentStatus
     metadataLanguage
     metadataLanguageOverride
@@ -1617,7 +1622,10 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
     fields.push(`
     episodesOwned
     episodesMonitored
-    episodesTotal`);
+    episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal`);
   }
   if (projection.runtime) {
     fields.push(`
