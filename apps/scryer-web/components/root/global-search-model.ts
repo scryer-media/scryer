@@ -3,10 +3,14 @@ import {
   type RouteCommandItem,
 } from "../common/route-command-types.ts";
 import type { Translate } from "./types.ts";
+// eslint-disable-next-line no-restricted-imports -- pure model: callers pass the visible facets or hidden set; the registry covers owned-catalog sections and defaults
+import { FACET_REGISTRY } from "../../lib/facets/registry.ts";
+import type { FacetDefinition } from "../../lib/facets/registry.ts";
 import {
-  FACET_REGISTRY,
-  type FacetDefinition,
-} from "../../lib/facets/registry.ts";
+  NO_HIDDEN_FACETS,
+  visibleFacets,
+  type HiddenFacets,
+} from "../../lib/facets/visibility.ts";
 import type { MetadataTvdbSearchItem } from "../../lib/graphql/smg-queries.ts";
 import type { MetadataSearchResults } from "../../lib/hooks/use-global-search.ts";
 import { tmdbKindNamesSeries } from "../../lib/utils/metadata-result-external-ids.ts";
@@ -484,13 +488,17 @@ export function metadataSearchItemFromCatalogTitle(
   };
 }
 
+/** Result counts per facet; a hidden facet counts none, so it shows no section or tab. */
 export function buildMetadataResultCounts(
   metadataSearchResults: MetadataSearchResults,
+  hidden: HiddenFacets = NO_HIDDEN_FACETS,
 ): Record<Facet, number> {
   return Object.fromEntries(
     FACET_REGISTRY.map((f) => [
       f.id,
-      (metadataSearchResults[f.metadataKey] ?? []).length,
+      hidden.has(f.id)
+        ? 0
+        : (metadataSearchResults[f.metadataKey] ?? []).length,
     ]),
   ) as Record<Facet, number>;
 }
@@ -672,13 +680,15 @@ export function getVisibleMetadataFacets(
 
 export function getVisibleMetadataFacetsForFilters(
   selectedFilters: readonly GlobalSearchFilterKey[],
+  hidden: HiddenFacets = NO_HIDDEN_FACETS,
 ): FacetDefinition[] {
+  const facets = visibleFacets(hidden);
   if (selectedFilters.length === 0) {
-    return FACET_REGISTRY;
+    return facets;
   }
 
   const selectedFacets = new Set(selectedFacetFilters(selectedFilters));
-  return FACET_REGISTRY.filter((f) => selectedFacets.has(f.id));
+  return facets.filter((f) => selectedFacets.has(f.id));
 }
 
 export function getMetadataSectionFacets({
@@ -701,13 +711,17 @@ export function getMetadataSectionFacetsForFilters({
   selectedFilters,
   metadataSearchLoading,
   metadataResultCounts,
+  hidden = NO_HIDDEN_FACETS,
 }: {
   selectedFilters: readonly GlobalSearchFilterKey[];
   metadataSearchLoading: boolean;
   metadataResultCounts: Record<Facet, number>;
+  hidden?: HiddenFacets;
 }): FacetDefinition[] {
-  const visibleMetadataFacets =
-    getVisibleMetadataFacetsForFilters(selectedFilters);
+  const visibleMetadataFacets = getVisibleMetadataFacetsForFilters(
+    selectedFilters,
+    hidden,
+  );
   return metadataSearchLoading
     ? visibleMetadataFacets
     : visibleMetadataFacets.filter((f) => metadataResultCounts[f.id] > 0);
@@ -794,8 +808,11 @@ export function buildGlobalSearchTabs({
   metadataResultCounts,
   routeCommandResultCount,
   visibleCatalogResultCount,
+  facets = FACET_REGISTRY,
   t,
 }: {
+  /** Facets offered as tabs: the visible ones from `useFacets()`. */
+  facets?: readonly FacetDefinition[];
   canViewCatalog: boolean;
   catalogSearchSections: CatalogSearchSections;
   metadataResultCount: number;
@@ -822,7 +839,7 @@ export function buildGlobalSearchTabs({
           },
         ]
       : []),
-    ...FACET_REGISTRY.map((f) => ({
+    ...facets.map((f) => ({
       key: f.id as GlobalSearchTabKey,
       label: t(f.navLabelKey),
       count:

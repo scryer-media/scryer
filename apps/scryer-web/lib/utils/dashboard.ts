@@ -204,6 +204,27 @@ export type StorageRootUsage = {
   totalBytes: number | null;
 };
 
+/**
+ * The used figure a root's tile shows. A library on a single root shows its
+ * own size there; a library over several roots keeps the volume's used
+ * figure, since its size cannot be split between them. The ring and its
+ * warning tone always follow how full the volume is.
+ */
+export function storageTileUsedBytes(
+  root: { usedBytes: number | null; libraryBytes?: number | null },
+  libraryRootCount: number,
+): { usedBytes: number | null; isLibrarySize: boolean } {
+  if (
+    libraryRootCount === 1 &&
+    typeof root.libraryBytes === "number" &&
+    Number.isFinite(root.libraryBytes) &&
+    root.libraryBytes >= 0
+  ) {
+    return { usedBytes: root.libraryBytes, isLibrarySize: true };
+  }
+  return { usedBytes: root.usedBytes, isLibrarySize: false };
+}
+
 export type StorageLibraryGroup<T extends StorageRootUsage = StorageRootUsage> =
   {
     libraryId: string;

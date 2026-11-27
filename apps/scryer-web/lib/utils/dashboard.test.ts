@@ -10,6 +10,7 @@ import {
   formatTerabytes,
   groupStorageRootsByLibrary,
   isBreakingVersionChange,
+  storageTileUsedBytes,
   isProviderCoolingDown,
   isProviderErroring,
   summarizeIndexerHealth,
@@ -297,4 +298,33 @@ test("equally healthy providers sort by usage then name", () => {
     [...rows].sort(compareProviderRows).map((row) => row.name),
     ["Zulu", "Alpha", "Beta"],
   );
+});
+
+test("a single-root library shows its own size in place of the volume's used figure", () => {
+  assert.deepEqual(
+    storageTileUsedBytes({ usedBytes: 6_200, libraryBytes: 2_030 }, 1),
+    { usedBytes: 2_030, isLibrarySize: true },
+  );
+  assert.deepEqual(
+    storageTileUsedBytes({ usedBytes: 6_200, libraryBytes: 0 }, 1),
+    { usedBytes: 0, isLibrarySize: true },
+  );
+});
+
+test("a library over several roots keeps the volume's used figure", () => {
+  assert.deepEqual(
+    storageTileUsedBytes({ usedBytes: 6_200, libraryBytes: 2_030 }, 2),
+    { usedBytes: 6_200, isLibrarySize: false },
+  );
+});
+
+test("an unreported library size keeps the volume's used figure", () => {
+  assert.deepEqual(
+    storageTileUsedBytes({ usedBytes: 6_200, libraryBytes: null }, 1),
+    { usedBytes: 6_200, isLibrarySize: false },
+  );
+  assert.deepEqual(storageTileUsedBytes({ usedBytes: null }, 1), {
+    usedBytes: null,
+    isLibrarySize: false,
+  });
 });

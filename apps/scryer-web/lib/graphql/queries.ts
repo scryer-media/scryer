@@ -395,6 +395,8 @@ const SERIES_SIDE_PANEL_COLLECTION_FIELDS = `
       episodesOwned
       episodesMonitored
       episodesTotal
+      episodesOnDisk
+      episodesExpected
       episodeRecordsTotal
       createdAt`;
 
@@ -795,8 +797,14 @@ const HISTORY_SCORING_FIELDS = `scoring {
   comparisons { fileId episodeIds previousScore delta }
 }`;
 
+const HISTORY_FILE_PLACEMENT_FIELDS = `filePlacements {
+  path placement
+  linkFallback { cause reason osErrorCode }
+}`;
+
 const TITLE_EVENT_FIELDS = `
     ${HISTORY_SCORING_FIELDS}
+    ${HISTORY_FILE_PLACEMENT_FIELDS}
     id
     titleId
     episodeId
@@ -1479,6 +1487,7 @@ function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       rateLimited
       skipReason
       skippedUntil
@@ -1517,6 +1526,9 @@ export const TITLE_LIST_FIELDS = `
     episodesOwned
     episodesMonitored
     episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal
     contentStatus
     metadataLanguage
     metadataLanguageOverride
@@ -1611,7 +1623,10 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
     fields.push(`
     episodesOwned
     episodesMonitored
-    episodesTotal`);
+    episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal`);
   }
   if (projection.runtime) {
     fields.push(`
@@ -2543,7 +2558,7 @@ export const acquisitionSearchJobQuery = `query AcquisitionSearchJob($id: ID!) {
   }
 }`;
 
-export const usersQuery = `query Users {
+export const usersQuery = `query Users($includeLinkedMediaServers: Boolean! = false) {
   users {
     id
     username
@@ -2554,6 +2569,7 @@ export const usersQuery = `query Users {
     hasMfa
     hasPasskey
     accountKind
+    linkedMediaServers @include(if: $includeLinkedMediaServers)
     appPermissions
     libraryPermissions {
       libraryId
@@ -3265,6 +3281,7 @@ export const libraryDefaultMovieAvailabilityQuery = `query LibraryDefaultMovieAv
 
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    disabledFacets
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
@@ -3298,6 +3315,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -3921,6 +3939,7 @@ export const instanceFeaturesQuery = `query InstanceFeatures {
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    disabledFacets
   }
 }`;
 
@@ -5158,6 +5177,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
   titleHistory(filter: $filter) {
     items {
       ${HISTORY_SCORING_FIELDS}
+      ${HISTORY_FILE_PLACEMENT_FIELDS}
       id
       titleId
       titleName
@@ -5423,6 +5443,7 @@ export const dashboardStorageQuery = `query DashboardStorage {
     facet
     usedBytes
     totalBytes
+    libraryBytes
   }
 }`;
 

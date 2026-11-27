@@ -1358,6 +1358,10 @@ const ru: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Шаблон папки содержит недопустимый символ файловой системы: {{character}}",
   "settings.renameTemplateLabel": "Шаблон переименования",
+  "settings.renameTemplateNoExtensionTitle": "Сохранить без {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "В этом шаблоне переименования нет токена {ext}. Scryer добавит расширение каждого файла в конец имени.",
+  "settings.renameTemplateNoExtensionConfirm": "Всё равно сохранить",
   "settings.renameTemplatePlaceholder": "Заполнитель",
   "settings.renameTemplateHelp":
     "Токены шаблона основаны на метаданных (например: {title}, {year}, {quality}, {ext}).",
@@ -1478,6 +1482,11 @@ const ru: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Персонализированные рекомендации",
   "settings.personalizedDiscoveryHelp":
     "Отправляет сводку вашей библиотеки в шлюз метаданных, чтобы рекомендации могли предлагать тайтлы на основе того, что у вас есть. Отключите, чтобы ограничить рекомендации только публичными лентами.",
+  "settings.disabledFacetsLabel": "Типы медиа",
+  "settings.disabledFacetsHelp":
+    "Отключите тип медиа для всех. Он пропадёт из навигации, подборок, поиска и списков выбора, а его поиски, сканирования и обновления остановятся. Уже добавленные тайтлы остаются доступны.",
+  "settings.disabledFacetsLastEnabled":
+    "Хотя бы один тип медиа должен оставаться включённым.",
   "settings.srrdbFilenameRecoveryLabel":
     "Восстанавливать запутанные имена файлов через srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
@@ -1778,6 +1787,9 @@ const ru: LocaleDictionary = {
   "title.contextTitleList": "Список материалов",
   "title.contextListDisclosure": "Список",
   "title.showTitleList": "Показать список",
+  "title.sortBy": "Сортировка",
+  "title.sortAscending": "По возрастанию",
+  "title.sortDescending": "По убыванию",
   "title.hideTitleList": "Скрыть список",
   "title.contextEmptyTitle": "Материал не выбран",
   "title.contextEmptyBody": "Нет данных для предварительного просмотра.",
@@ -1859,8 +1871,8 @@ const ru: LocaleDictionary = {
   "title.table.runtime": "Продолжительность",
   "title.table.avgRuntime": "Средняя продолжительность",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} эпизодов",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} эпизодов (отслеживается: {{monitored}})",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} эпизодов (всего: {{total}})",
   "title.table.status": "Статус",
   "title.table.root": "Корневая папка",
   "title.table.popularity": "Популярность",
@@ -1978,6 +1990,10 @@ const ru: LocaleDictionary = {
     "Ошибка в {{count}} индексаторах: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "Пропущено индексаторов: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "Индексаторов, опрошенных частично из-за лимита запросов: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: следующий запрос возможен через {{seconds}} с",
   "title.noReleasesFound": "Для {{name}} релизы не найдены.",
   "title.searchNeedsDownloadClientTitle":
     "Для поиска требуется клиент загрузки",
@@ -2591,6 +2607,10 @@ const ru: LocaleDictionary = {
     "Сбросить MFA для пользователя {{name}}? При следующем входе ему потребуется повторно настроить MFA.",
   "settings.loginEnabled": "Вход разрешён",
   "settings.loginDisabled": "Вход запрещён",
+  "settings.accountOrigin.scryer": "Учётная запись Scryer",
+  "settings.accountOrigin.mediaServerLogin": "Создана при входе через {{provider}}",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Создана при входе через медиасервер",
+  "settings.linkedMediaServer": "Связана с {{provider}}",
   "settings.enableLogin": "Разрешить вход",
   "settings.disableLogin": "Запретить вход",
   "settings.disableLoginConfirm":
@@ -3720,6 +3740,14 @@ const ru: LocaleDictionary = {
   "profile.localAccount": "Локальная",
   "profile.externalAccount": "Внешняя",
   "profile.appearance": "Внешний вид",
+  "profile.facetVisibility": "Типы медиа",
+  "profile.facetVisibilityDescription":
+    "Выберите, какие типы медиа показывать в навигации, подборках, поиске и списках выбора. Уже добавленные тайтлы остаются доступны.",
+  "profile.facetVisibilityLastVisible":
+    "Хотя бы один тип медиа должен оставаться видимым.",
+  "profile.facetVisibilityDisabledByAdmin":
+    "Администратор отключил этот тип медиа для всех.",
+  "profile.facetVisibilitySaved": "Настройка типов медиа сохранена.",
   "profile.appearanceDescription":
     "Настройте внешний вид Scryer для своей учётной записи.",
   "profile.highlightColor": "Цвет выделения",
@@ -4479,6 +4507,16 @@ const ru: LocaleDictionary = {
   "history.noMore": "Больше событий нет",
   "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Загрузить ещё",
+  "history.placement": "Размещение",
+  "history.placementHardLink": "Жёсткая ссылка",
+  "history.placementCopy": "Скопирован",
+  "history.placementSymlink": "Символическая ссылка",
+  "history.placementRenamed": "Перемещён на место",
+  "history.placementAlreadyPresent": "Уже в библиотеке",
+  "history.linkFallbackFailed": "Скопирован, так как жёсткая ссылка не удалась",
+  "history.linkFallbackNotPossible": "Скопирован, так как жёсткая ссылка здесь невозможна",
+  "history.linkFallbackUnverifiable": "Скопирован, так как жёсткую ссылку не удалось проверить",
+  "history.linkFallbackError": "ошибка {{code}}",
   "convenience.title": "Упрощённые правила",
   "convenience.requiredAudioLabel": "Обязательные языки аудиодорожек",
   "convenience.requiredAudioHelp":
@@ -6431,6 +6469,13 @@ const ru: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "Пауза после недавних ошибок",
   "indexerSearch.skipReason.backedOffUntil": "Пауза до {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Не поддерживает текстовый поиск",
+  "indexerSearch.skipReason.queryBudget": "Превышен лимит запросов",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Превышен лимит запросов до {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Превышен лимит запросов, повторный запрос через {{seconds}} с",
+  "indexerSearch.queryBudget.partlySearched":
+    "Опрошен частично: лимит запросов остановил оставшиеся запросы. Результаты отправленных запросов сохранены.",
   "indexerSearch.health.retryFailed": "Повторить неудачные",
   "indexerSearch.refine.title": "Уточнить",
   "indexerSearch.refine.reset": "Сбросить",
@@ -7344,6 +7389,8 @@ const ru: LocaleDictionary = {
   "error.fallback.failedToRestartProwlarrDiscovery":
     "Не удалось перезапустить обнаружение Prowlarr",
   "error.fallback.failedToSave": "Не удалось сохранить",
+  "error.fallback.failedToUpdateFacetVisibility":
+    "Не удалось обновить показываемые типы медиа.",
   "error.fallback.failedToUpdateSponsorPreference":
     "Не удалось обновить настройку Sponsor.",
   "error.fallback.importFailed": "Не удалось выполнить импорт",
@@ -11056,6 +11103,12 @@ const ru: LocaleDictionary = {
     "Набор доверенных сертификатов должен содержать сертификаты X.509 в кодировке PEM.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Набор доверенных сертификатов может содержать только блоки PEM сертификатов X.509.",
+  "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
+    "Хотя бы один тип медиа должен оставаться видимым.",
+  "error.reason.SETTINGS_ALL_FACETS_DISABLED":
+    "Хотя бы один тип медиа должен оставаться включённым.",
+  "error.reason.SETTINGS_FACET_DISABLED":
+    "Этот тип медиа отключён на этом сервере.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "В настройках столбцов таблицы один и тот же столбец указан несколько раз.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
@@ -11652,6 +11705,9 @@ const ru: LocaleDictionary = {
   "dashboard.storageFree": "Свободно: {{size}}",
   "dashboard.storageUnavailable": "Данные об использовании недоступны",
   "dashboard.storageUsage": "{{used}}/{{total}} ТБ",
+  "dashboard.storageLibrarySize": "{{size}} в этой библиотеке",
+  "dashboard.storageLibraryUsageHint":
+    "Библиотека занимает {{library}} ТБ; на томе занято {{used}} ТБ",
   "dashboard.storageLegend": "В норме · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "МАЛО",
   "dashboard.tagCrit": "КРИТ",

@@ -1,5 +1,5 @@
 use super::{ActorKindValue, Long, MediaFacetValue, ReleaseDecidingStepValue};
-use async_graphql::{Enum, ID, InputObject, Json, SimpleObject};
+use async_graphql::{ComplexObject, Enum, ID, InputObject, Json, SimpleObject};
 use chrono::{DateTime, Utc};
 use scryer_domain::TitleHistoryEventType;
 
@@ -122,6 +122,7 @@ pub struct HistoryScoringPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 /// One event in a title's acquisition and file history.
 pub struct TitleHistoryEventPayload {
     /// Immutable decision-time evidence; absent for legacy events without scores.
@@ -192,12 +193,112 @@ pub struct TitleHistoryEventPayload {
     pub source_path: Option<String>,
     /// Destination file path, or null when unavailable.
     pub dest_path: Option<String>,
+    /// How each imported file was placed, as the event recorded it.
+    #[graphql(skip)]
+    pub file_placements: Vec<scryer_domain::ImportFilePlacement>,
     /// Additional event data as JSON, or null when absent.
     pub data_json: Option<Json<serde_json::Value>>,
     /// Time the event occurred in UTC.
     pub occurred_at: DateTime<Utc>,
     /// Time the event record was created in UTC.
     pub created_at: DateTime<Utc>,
+}
+
+#[ComplexObject]
+impl TitleHistoryEventPayload {
+    /// How each file of an import was placed in the library. Null for other
+    /// event types and for imports recorded before placements were.
+    async fn file_placements(&self) -> Option<Vec<ImportFilePlacementPayload>> {
+        (!self.file_placements.is_empty()).then(|| {
+            self.file_placements
+                .iter()
+                .map(ImportFilePlacementPayload::from_domain)
+                .collect()
+        })
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// How an import put a file at its library path.
+pub enum ImportPlacementValue {
+    /// A hard link to the download's file: both names are one file.
+    HardLink,
+    /// A copy of the download's file, proven before the import went on.
+    Copy,
+    /// A symbolic link, made because the download's file is itself one.
+    Symlink,
+    /// The download's file was renamed into place.
+    Renamed,
+    /// The library already held the file; nothing was placed.
+    AlreadyPresent,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Why a file was copied where a hard link was tried.
+pub enum ImportLinkFallbackCauseValue {
+    /// The hard link call failed with an error that does not say the
+    /// destination cannot hold a link.
+    Failed,
+    /// The destination cannot hold a hard link to the source.
+    NotPossible,
+    /// A link could not be proven to be the source, so it was not used.
+    Unverifiable,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A hard link that was tried and not used, so the file was copied.
+pub struct ImportLinkFallbackPayload {
+    /// Why the link was not used.
+    pub cause: ImportLinkFallbackCauseValue,
+    /// Stable disk reason code for the refusal.
+    pub reason: String,
+    /// The platform's error number for the failure, or null when the system
+    /// gave none.
+    pub os_error_code: Option<i32>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// How one imported file was placed.
+pub struct ImportFilePlacementPayload {
+    /// Library path the file was placed at.
+    pub path: String,
+    /// How the file was placed.
+    pub placement: ImportPlacementValue,
+    /// Set when the file was copied after a hard link was tried.
+    pub link_fallback: Option<ImportLinkFallbackPayload>,
+}
+
+impl ImportFilePlacementPayload {
+    fn from_domain(placement: &scryer_domain::ImportFilePlacement) -> Self {
+        use scryer_domain::{ImportLinkFallbackCause, ImportPlacement};
+        Self {
+            path: placement.path.clone(),
+            placement: match placement.placement {
+                ImportPlacement::HardLink => ImportPlacementValue::HardLink,
+                ImportPlacement::Copy => ImportPlacementValue::Copy,
+                ImportPlacement::Symlink => ImportPlacementValue::Symlink,
+                ImportPlacement::Renamed => ImportPlacementValue::Renamed,
+                ImportPlacement::AlreadyPresent => ImportPlacementValue::AlreadyPresent,
+            },
+            link_fallback: placement.link_fallback.as_ref().map(|fallback| {
+                ImportLinkFallbackPayload {
+                    cause: match fallback.cause {
+                        ImportLinkFallbackCause::Failed => ImportLinkFallbackCauseValue::Failed,
+                        ImportLinkFallbackCause::NotPossible => {
+                            ImportLinkFallbackCauseValue::NotPossible
+                        }
+                        ImportLinkFallbackCause::Unverifiable => {
+                            ImportLinkFallbackCauseValue::Unverifiable
+                        }
+                    },
+                    reason: fallback.reason.clone(),
+                    os_error_code: fallback.os_error_code,
+                }
+            }),
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone)]

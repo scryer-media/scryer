@@ -12,7 +12,7 @@ use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
     ApiKeyRecord, CollectionMediaSizeSummary, EpisodeMediaAvailability, EpisodeMediaSizeSummary,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
-    IndexerSearchStrategyEventSink, LoginVerificationChallengeRecord,
+    IndexerSearchStrategyEventSink, LibraryManagedBytes, LoginVerificationChallengeRecord,
     OAuthClientRegistrationRecord, PendingReleaseObservation, PendingReleaseRole,
     TitleCatalogFilterCounts,
 };
@@ -2313,6 +2313,17 @@ pub trait TitleRepository: Send + Sync {
             // Non-SQL test repositories do not expose media-file aggregates.
             managed_bytes: 0,
         })
+    }
+    /// The managed bytes of each library in `library_ids`, read in one pass
+    /// over the catalog: the same figure each library's unfiltered catalog
+    /// reports. A library with no tracked media file is left out.
+    async fn list_library_managed_bytes(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<Vec<LibraryManagedBytes>> {
+        // Non-SQL test repositories do not expose media-file aggregates.
+        let _ = library_ids;
+        Ok(Vec::new())
     }
     async fn title_catalog_filter_options(
         &self,
@@ -10506,9 +10517,12 @@ pub trait MediaFileRepository: Send + Sync {
         self.list_missing_scope_candidates_for_title(title_id).await
     }
 
+    /// Episode progress per title. An episode counts as aired when its air
+    /// date is on or before `aired_through`.
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>>;
 
     /// Compact row data for episode availability. Implementations must not
@@ -10530,9 +10544,12 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Episode progress per collection of these titles, counting aired
+    /// episodes the way [`Self::list_title_episode_progress_summaries`] does.
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>>;
 
     async fn update_media_file_analysis(

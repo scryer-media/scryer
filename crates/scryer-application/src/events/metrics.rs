@@ -496,6 +496,7 @@ mod tests {
             episode_ids: Vec::new(),
             size_bytes,
             upgrade: false,
+            file_placements: Vec::new(),
         }
     }
 

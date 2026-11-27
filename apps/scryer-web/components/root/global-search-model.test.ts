@@ -16,6 +16,7 @@ import {
   buildGlobalSearchTabs,
   buildMetadataSearchActionState,
   buildMetadataResultCounts,
+  getMetadataSectionFacetsForFilters,
   buildMetadataResultRequestPresentation,
   countHiddenCatalogResults,
   countHiddenCatalogResultsForFilters,
@@ -1004,5 +1005,29 @@ test("a mixed viewer runs the requester query and a result in the request-only l
       requestableLibraries: requestable,
     }),
     true,
+  );
+});
+
+test("a hidden facet gets no remote results and no remote section", () => {
+  const hidden = new Set<Facet>(["ANIME"]);
+  const counts = buildMetadataResultCounts(
+    {
+      movie: [metadata("Remote Movie", { smgId: 202, tvdbId: "" })],
+      series: [],
+      anime: [metadata("Remote Anime")],
+    },
+    hidden,
+  );
+  assert.equal(counts.ANIME, 0);
+  assert.equal(counts.MOVIE, 1);
+  const sections = getMetadataSectionFacetsForFilters({
+    selectedFilters: [],
+    metadataSearchLoading: true,
+    metadataResultCounts: counts,
+    hidden,
+  });
+  assert.deepEqual(
+    sections.map((facet) => facet.id),
+    ["MOVIE", "SERIES"],
   );
 });

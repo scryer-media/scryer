@@ -2185,6 +2185,15 @@ type CollectionPayload {
 	"""
 	episodeRecordsTotal: Int
 	"""
+	Episodes in this collection with a file.
+	"""
+	episodesOnDisk: Int
+	"""
+	Episodes in this collection expected on disk: each episode that has a
+	file, or that is monitored and has aired.
+	"""
+	episodesExpected: Int
+	"""
 	Parent title for this collection, or null if the title is no longer available to the caller.
 	"""
 	title: TitlePayload
@@ -8480,6 +8489,10 @@ type GeneralSettingsPayload {
 	"""
 	experimentalFeaturesEnabled: Boolean!
 	"""
+	Facets turned off for the whole instance. They are hidden for every user and their background work does not run; their titles and files stay.
+	"""
+	disabledFacets: [MediaFacetValue!]!
+	"""
 	Whether this instance sends its library context to the metadata gateway for personalized discovery.
 	"""
 	personalizedDiscoveryEnabled: Boolean!
@@ -8957,6 +8970,62 @@ enum ImportErrorCodeValue {
 }
 
 """
+How one imported file was placed.
+"""
+type ImportFilePlacementPayload {
+	"""
+	Library path the file was placed at.
+	"""
+	path: String!
+	"""
+	How the file was placed.
+	"""
+	placement: ImportPlacementValue!
+	"""
+	Set when the file was copied after a hard link was tried.
+	"""
+	linkFallback: ImportLinkFallbackPayload
+}
+
+"""
+Why a file was copied where a hard link was tried.
+"""
+enum ImportLinkFallbackCauseValue {
+	"""
+	The hard link call failed with an error that does not say the
+	destination cannot hold a link.
+	"""
+	FAILED
+	"""
+	The destination cannot hold a hard link to the source.
+	"""
+	NOT_POSSIBLE
+	"""
+	A link could not be proven to be the source, so it was not used.
+	"""
+	UNVERIFIABLE
+}
+
+"""
+A hard link that was tried and not used, so the file was copied.
+"""
+type ImportLinkFallbackPayload {
+	"""
+	Why the link was not used.
+	"""
+	cause: ImportLinkFallbackCauseValue!
+	"""
+	Stable disk reason code for the refusal.
+	"""
+	reason: String!
+	"""
+	The platform's error number for the failure, or null when the system
+	gave none.
+	"""
+	osErrorCode: Int
+}
+
+"""
 File operation used during import.
 """
 enum ImportModeValue {
@@ -8968,6 +9037,32 @@ enum ImportModeValue {
 	Move the source file.
 	"""
 	MOVE
+}
+
+"""
+How an import put a file at its library path.
+"""
+enum ImportPlacementValue {
+	"""
+	A hard link to the download's file: both names are one file.
+	"""
+	HARD_LINK
+	"""
+	A copy of the download's file, proven before the import went on.
+	"""
+	COPY
+	"""
+	A symbolic link, made because the download's file is itself one.
+	"""
+	SYMLINK
+	"""
+	The download's file was renamed into place.
+	"""
+	RENAMED
+	"""
+	The library already held the file; nothing was placed.
+	"""
+	ALREADY_PRESENT
 }
 
 """
@@ -10329,6 +10424,10 @@ type InstanceFeaturesPayload {
 	Whether this instance sends its library context to the metadata gateway for personalized discovery.
 	"""
 	personalizedDiscoveryEnabled: Boolean!
+	"""
+	Facets an administrator turned off for the whole instance.
+	"""
+	disabledFacets: [MediaFacetValue!]!
 }
 
 """
@@ -10380,10 +10479,18 @@ type InteractiveReleaseSearchIndexerPayload {
 	Stable code for a failure the operator must act on, such as
 	`ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
 	not loaded, or the monthly limit reason when `skipReason` is
-	`MONTHLY_LIMIT`; null for other failures and when the indexer did not
-	fail.
+	`MONTHLY_LIMIT`. `INDEXER_QUERY_BUDGET_NOT_SEARCHED` marks an indexer
+	skipped for its query budget, and `INDEXER_QUERY_BUDGET_PARTLY_SEARCHED`
+	a completed indexer that sent some of its requests before its budget
+	stopped the rest; its results are kept. Null for other failures and
+	when the indexer did not fail.
 	"""
 	failureReasonCode: String
+	"""
+	Seconds until the indexer can be asked again, when its query budget or
+	a rate limit stopped the search and the delay is known.
+	"""
+	retryAfterSeconds: Int
 	"""
 	How the capabilities used for this indexer were obtained, or null
 	before they were resolved.
@@ -10520,6 +10627,12 @@ enum InteractiveReleaseSearchSkipReasonValue {
 	could not be checked. `failureReasonCode` carries the reason code.
 	"""
 	MONTHLY_LIMIT
+	"""
+	The indexer's next query slot lies further out than an interactive
+	search waits, so it sent no request. `retryAfterSeconds` carries the
+	delay to that slot.
+	"""
+	QUERY_BUDGET
 }
 
 """
@@ -20705,7 +20818,7 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, language or table_columns keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, hidden_facets, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
 	): UiSettingsPayload!
@@ -25929,7 +26042,7 @@ type QueryRoot {
 		permission: LibraryPermissionValue
 	): [LibraryPayload!]!
 	"""
-	List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
+	List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem and, when selected, each owning library's own size; refuses callers with no such library.
 	"""
 	storageRoots: [StorageRootUsagePayload!]!
 	"""
@@ -31652,6 +31765,10 @@ input SetMyUiSettingsInput {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
+	Facets to hide from navigation, discovery and pickers; omitted or null preserves the saved list and an empty list shows every facet. At least one facet must stay visible.
+	"""
+	hiddenFacets: [UiSettingsFacetValue!]
+	"""
 	Optional interface language code; null preserves the saved value and an empty string clears it.
 	"""
 	language: String
@@ -32202,6 +32319,13 @@ type StorageRootUsagePayload {
 	Total bytes on the backing filesystem; null when it cannot be inspected.
 	"""
 	totalBytes: Long
+	"""
+	Bytes of the tracked media files of the library that owns this root
+	folder, across all of its root folders: the managed bytes its catalog
+	reports. Read from the catalog, not the filesystem, and only when
+	selected.
+	"""
+	libraryBytes: Long
 }
 
 """
@@ -33686,6 +33810,11 @@ type TitleHistoryEventPayload {
 	Time the event record was created in UTC.
 	"""
 	createdAt: DateTime!
+	"""
+	How each file of an import was placed in the library. Null for other
+	event types and for imports recorded before placements were.
+	"""
+	filePlacements: [ImportFilePlacementPayload!]
 }
 
 """
@@ -34379,17 +34508,32 @@ type TitlePayload {
 	"""
 	sizeBytes: Long
 	"""
-	Owned-vs-total episode progress, excluding specials.
+	Episodes with a file, excluding specials and unnamed, TBA or undated placeholder episodes.
 	"""
 	episodesOwned: Int
 	"""
-	Monitored episode count, excluding specials.
+	Monitored episodes, excluding specials and unnamed, TBA or undated placeholder episodes.
 	"""
 	episodesMonitored: Int
 	"""
-	Total episode count, excluding specials.
+	Episodes, excluding specials and unnamed, TBA or undated placeholder episodes.
 	"""
 	episodesTotal: Int
+	"""
+	Episodes with a file, specials included. The numerator of the series
+	progress, over `episodesExpected`.
+	"""
+	episodesOnDisk: Int
+	"""
+	Episodes expected on disk, specials included: each episode that has a
+	file, or that is monitored and has aired. Progress is
+	`episodesOnDisk / episodesExpected`, complete when this is 0.
+	"""
+	episodesExpected: Int
+	"""
+	Every episode record of the title, specials and placeholders included.
+	"""
+	episodeRecordsTotal: Int
 	"""
 	Primary movie media resolution.
 	"""
@@ -35510,6 +35654,10 @@ type UiSettingsPayload {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
+	Facets the caller hid from navigation, discovery and pickers; never every facet.
+	"""
+	hiddenFacets: [UiSettingsFacetValue!]!
+	"""
 	Interface language code saved on the caller's profile, or null to follow the browser.
 	"""
 	language: String
@@ -35850,6 +35998,10 @@ input UpdateGeneralSettingsInput {
 	Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
 	"""
 	experimentalFeaturesEnabled: Boolean
+	"""
+	Facets to turn off for the whole instance; at least one must stay on. Omission preserves the saved list.
+	"""
+	disabledFacets: [MediaFacetValue!]
 	"""
 	Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
 	"""
@@ -37161,6 +37313,12 @@ type UserPayload {
 	Library-specific permission grants.
 	"""
 	libraryPermissions: [UserLibraryPermissionGrantPayload!]!
+	"""
+	Media servers this user has an active, verified account link to, such
+	as the server whose login created the account. Pending invites and
+	disabled links are not listed.
+	"""
+	linkedMediaServers: [ExternalAccountProviderValue!]!
 }
 
 """

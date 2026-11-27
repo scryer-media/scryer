@@ -228,6 +228,7 @@ fn imported_payload(title_name: &str) -> DomainEventPayload {
         episode_ids: vec![],
         size_bytes: Some(IMPORTED_SIZE_BYTES),
         upgrade: false,
+        file_placements: Vec::new(),
     })
 }
 
@@ -652,6 +653,71 @@ async fn graphql_storage_roots_omits_libraries_the_caller_cannot_manage() {
         storage_root_rows_for_path(&body, &denied_path).is_empty(),
         "hidden library roots must not leak: {body}"
     );
+}
+
+/// Each root carries its library's own size: the managed bytes the library's
+/// catalog reports, the same on every root of that library, and zero for a
+/// library that tracks no file.
+#[tokio::test]
+async fn graphql_storage_roots_report_each_library_size_from_its_catalog() {
+    let ctx = TestContext::new().await;
+    let sized_root = tempfile::tempdir().expect("sized storage root tempdir");
+    let empty_root = tempfile::tempdir().expect("empty storage root tempdir");
+    let sized_path = sized_root.path().to_string_lossy().to_string();
+    let empty_path = empty_root.path().to_string_lossy().to_string();
+    let sized_library =
+        create_dashboard_library(&ctx, "MOVIE", "Dashboard Sized Library", &sized_path).await;
+    create_dashboard_library(&ctx, "MOVIE", "Dashboard Empty Library", &empty_path).await;
+    let sized_library_id = dashboard_library_id(&sized_library);
+    let sized_root_id = sized_library["roots"][0]["id"]
+        .as_str()
+        .expect("sized root id")
+        .to_string();
+
+    for (index, size_bytes) in [(1, 1_500_i64), (2, 2_500_i64)] {
+        let title_id = add_dashboard_title(
+            &ctx,
+            &format!("Lantern Size {index}"),
+            &format!("98810{index}"),
+            &sized_library_id,
+            &sized_root_id,
+        )
+        .await;
+        let file_path = sized_root
+            .path()
+            .join(format!("Lantern.Size.{index}.mkv"))
+            .to_string_lossy()
+            .to_string();
+        seed_title_size_sort_fixture(
+            &ctx,
+            &title_id,
+            &format!("lantern-size-{index}"),
+            &file_path,
+            size_bytes,
+        )
+        .await;
+    }
+
+    let body = gql(
+        &ctx,
+        r#"query($libraryIds: [ID!]) {
+            storageRoots { path libraryId libraryBytes usedBytes totalBytes }
+            titles(facet: MOVIE, libraryIds: $libraryIds) { managedBytes }
+        }"#,
+        json!({ "libraryIds": [sized_library_id] }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let sized_rows = storage_root_rows_for_path(&body, &sized_path);
+    assert_eq!(sized_rows.len(), 1, "{body}");
+    assert_eq!(sized_rows[0]["libraryBytes"], json!(4_000));
+    assert_eq!(
+        sized_rows[0]["libraryBytes"], body["data"]["titles"]["managedBytes"],
+        "the dashboard and the catalog agree: {body}"
+    );
+    let empty_rows = storage_root_rows_for_path(&body, &empty_path);
+    assert_eq!(empty_rows.len(), 1, "{body}");
+    assert_eq!(empty_rows[0]["libraryBytes"], json!(0));
 }
 
 // ---------------------------------------------------------------------------

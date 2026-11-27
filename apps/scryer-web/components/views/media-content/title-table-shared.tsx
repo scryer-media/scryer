@@ -11,6 +11,12 @@ import type { TitleRecord } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate } from "@/lib/utils/date-format";
 import {
+  type EpisodeProgressCounts,
+  episodeProgressCounts,
+  episodeProgressPercent,
+  episodeProgressText,
+} from "@/lib/utils/episode-progress";
+import {
   compactRatingNumber,
   externalRatingLabelForAliases,
 } from "@/lib/utils/title-ratings";
@@ -785,23 +791,6 @@ export function titleTableRatingColumnValue(
   );
 }
 
-export function formatEpisodeProgress(
-  ownedEpisodes: number | null | undefined,
-  targetEpisodes: number | null | undefined,
-) {
-  if (typeof targetEpisodes !== "number") {
-    return "—";
-  }
-
-  if (targetEpisodes <= 0) {
-    return "0 / 0";
-  }
-
-  const owned =
-    typeof ownedEpisodes === "number" && ownedEpisodes >= 0 ? ownedEpisodes : 0;
-  return `${owned} / ${targetEpisodes}`;
-}
-
 export type EpisodeProgressPresentation = {
   text: string;
   percent: number;
@@ -809,148 +798,67 @@ export type EpisodeProgressPresentation = {
   assistiveText: string;
 };
 
-function normalizeEpisodeProgressCounts(item: TitleRecord) {
-  const monitored =
-    typeof item.episodesMonitored === "number"
-      ? Math.max(0, item.episodesMonitored)
-      : null;
-  const total =
-    typeof item.episodesTotal === "number" && item.episodesTotal >= 0
-      ? item.episodesTotal
-      : null;
-
-  if (monitored == null && total == null) {
-    return null;
-  }
-
-  const owned =
-    typeof item.episodesOwned === "number" && item.episodesOwned > 0
-      ? item.episodesOwned
-      : 0;
-  const target = total ?? monitored ?? 0;
-
-  return {
-    monitored: monitored ?? 0,
-    owned,
-    total,
-    target,
-    displayedOwned: target > 0 ? Math.min(owned, target) : 0,
-  };
-}
-
-function episodeProgressIndicatorClass(item: TitleRecord, percent: number) {
-  if (percent >= 100) {
-    return item.contentStatus?.trim().toLowerCase() === "ended"
-      ? "bg-[var(--scry-success-solid)]"
-      : "bg-[var(--scry-info-solid)]";
-  }
-
-  const missingMonitoredEpisodes =
-    typeof item.episodesMonitored === "number" &&
-    item.episodesMonitored > 0 &&
-    (item.episodesOwned ?? 0) < item.episodesMonitored;
-
-  return missingMonitoredEpisodes
-    ? "bg-[var(--scry-danger-solid)]"
-    : "bg-slate-500 dark:bg-slate-500";
-}
-
-function collectionEpisodeProgressIndicatorClass(
-  missingMonitoredEpisodes: boolean,
+function episodeProgressIndicatorClass(
   percent: number,
+  completeClassName: string,
 ) {
-  if (percent >= 100) {
-    return "bg-[var(--scry-success-solid)]";
-  }
-
-  return missingMonitoredEpisodes
-    ? "bg-[var(--scry-danger-solid)]"
-    : "bg-slate-500 dark:bg-slate-500";
+  // Below complete, a monitored episode that has aired is missing.
+  return percent >= 100 ? completeClassName : "bg-[var(--scry-danger-solid)]";
 }
 
-function buildEpisodeProgressAssistiveText(item: TitleRecord, t: Translate) {
-  const counts = normalizeEpisodeProgressCounts(item);
-  if (!counts) {
-    return null;
-  }
-
-  return counts.total == null
-    ? t("title.table.episodeProgressTooltip", {
-        owned: counts.displayedOwned,
-        total: counts.target,
-      })
-    : t("title.table.episodeProgressTooltipWithTotal", {
-        owned: counts.displayedOwned,
-        total: counts.total,
-        monitored: counts.monitored,
-      });
+function episodeProgressPresentation(
+  counts: EpisodeProgressCounts,
+  completeClassName: string,
+  t: Translate,
+): EpisodeProgressPresentation {
+  const text = episodeProgressText(counts);
+  const percent = episodeProgressPercent(counts);
+  const assistiveText =
+    counts.total == null
+      ? t("title.table.episodeProgressTooltip", {
+          owned: counts.onDisk,
+          total: counts.expected,
+        })
+      : t("title.table.episodeProgressExpectedTooltip", {
+          onDisk: counts.onDisk,
+          expected: counts.expected,
+          total: counts.total,
+        });
+  return {
+    text,
+    percent,
+    indicatorClassName: episodeProgressIndicatorClass(
+      percent,
+      completeClassName,
+    ),
+    assistiveText,
+  };
 }
 
 export function getEpisodeProgressPresentation(
   item: TitleRecord,
   t: Translate,
 ): EpisodeProgressPresentation | null {
-  const counts = normalizeEpisodeProgressCounts(item);
+  const counts = episodeProgressCounts(item);
   if (!counts) {
     return null;
   }
-
-  const text = formatEpisodeProgress(counts.displayedOwned, counts.target);
-  const percent =
-    counts.target > 0 ? (counts.displayedOwned / counts.target) * 100 : 0;
-  const assistiveText = buildEpisodeProgressAssistiveText(item, t) ?? text;
-
-  return {
-    text,
-    percent,
-    indicatorClassName: episodeProgressIndicatorClass(item, percent),
-    assistiveText,
-  };
+  const completeClassName =
+    item.contentStatus?.trim().toLowerCase() === "ended"
+      ? "bg-[var(--scry-success-solid)]"
+      : "bg-[var(--scry-info-solid)]";
+  return episodeProgressPresentation(counts, completeClassName, t);
 }
 
-export function getCollectionEpisodeProgressPresentation({
-  ownedEpisodes,
-  totalEpisodes,
-  monitoredEpisodes,
-  t,
-}: {
-  ownedEpisodes: number | null | undefined;
-  totalEpisodes: number | null | undefined;
-  monitoredEpisodes?: number | null | undefined;
-  t: Translate;
-}): EpisodeProgressPresentation | null {
-  if (typeof totalEpisodes !== "number") {
-    return null;
-  }
-
-  const target = Math.max(0, totalEpisodes);
-  const owned =
-    typeof ownedEpisodes === "number" && ownedEpisodes >= 0 ? ownedEpisodes : 0;
-  const displayedOwned = target > 0 ? Math.min(owned, target) : 0;
-  const text = formatEpisodeProgress(displayedOwned, target);
-  const percent = target > 0 ? (displayedOwned / target) * 100 : 0;
-  const assistiveText = t("title.table.episodeProgressTooltipWithTotal", {
-    owned: displayedOwned,
-    total: target,
-    monitored:
-      typeof monitoredEpisodes === "number" && monitoredEpisodes >= 0
-        ? monitoredEpisodes
-        : 0,
-  });
-  const missingMonitoredEpisodes =
-    typeof monitoredEpisodes === "number" &&
-    monitoredEpisodes > 0 &&
-    owned < monitoredEpisodes;
-
-  return {
-    text,
-    percent,
-    indicatorClassName: collectionEpisodeProgressIndicatorClass(
-      missingMonitoredEpisodes,
-      percent,
-    ),
-    assistiveText,
-  };
+export function getCollectionEpisodeProgressPresentation(
+  counts: EpisodeProgressCounts,
+  t: Translate,
+): EpisodeProgressPresentation {
+  return episodeProgressPresentation(
+    counts,
+    "bg-[var(--scry-success-solid)]",
+    t,
+  );
 }
 
 export function EpisodeProgressBar({

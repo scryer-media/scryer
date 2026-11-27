@@ -23,6 +23,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
+  TableActionsCell,
+  TableActionsHead,
   TableBody,
   TableCell,
   TableHead,
@@ -33,6 +35,8 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { LibraryRecord, UserRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { userAccountBadges } from "@/lib/utils/user-account-origin";
+import { externalAccountProviderLabel } from "@/lib/constants/integration-providers";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 const USERS_PANEL_CLASS =
@@ -237,14 +241,15 @@ export function SettingsUsersSection({
                     >
                       {t("settings.temporaryPassword")}
                     </TableHead>
-                    <TableHead
+                    <TableActionsHead
+                      data-ui="settings-user-actions-head"
                       className={cn(
                         "w-44 text-right",
                         USERS_TABLE_HEADER_CELL_CLASS,
                       )}
                     >
                       {t("label.actions")}
-                    </TableHead>
+                    </TableActionsHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -286,10 +291,27 @@ export function SettingsUsersSection({
                             <div className="text-lg font-semibold text-[var(--scry-ink2)]">
                               {user.username}
                             </div>
-                            <div className="mt-1">
+                            <div className="mt-1 flex flex-wrap gap-1">
                               <UserLoginStatusBadge
                                 enabled={user.loginEnabled}
                               />
+                              {userAccountBadges(
+                                user,
+                                t,
+                                externalAccountProviderLabel,
+                              ).map((badge) => (
+                                <span
+                                  key={`${badge.kind}:${badge.label}`}
+                                  data-ui={
+                                    badge.kind === "origin"
+                                      ? "settings-user-account-origin"
+                                      : "settings-user-linked-media-server"
+                                  }
+                                  className="inline-flex items-center rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-0.5 text-xs font-medium text-[var(--scry-muted2)]"
+                                >
+                                  {badge.label}
+                                </span>
+                              ))}
                             </div>
                             {user.passwordChangeRequired ? (
                               <div className="mt-1 text-xs text-[var(--scry-warning-text)]">
@@ -468,7 +490,10 @@ export function SettingsUsersSection({
                               </span>
                             )}
                           </TableCell>
-                          <TableCell className="align-middle text-right">
+                          <TableActionsCell
+                            data-ui="settings-user-actions-cell"
+                            className="w-44 align-middle text-right"
+                          >
                             <div className="flex justify-end gap-2">
                               {!isOwnUser &&
                               (user.hasMfa || user.hasPasskey) ? (
@@ -530,7 +555,7 @@ export function SettingsUsersSection({
                                 </IconButton>
                               ) : null}
                             </div>
-                          </TableCell>
+                          </TableActionsCell>
                         </TableRow>
                       );
                     })

@@ -1,3 +1,5 @@
+import type { ExternalAccountProvider } from "./settings";
+
 export type UserAccountKind = "LOCAL" | "EXTERNAL_AUTO_PROVISIONED";
 
 export type UserRecord = {
@@ -10,6 +12,8 @@ export type UserRecord = {
   hasMfa: boolean;
   hasPasskey: boolean;
   accountKind: UserAccountKind;
+  /** Media servers with an active, verified link; only Known users loads it. */
+  linkedMediaServers?: ExternalAccountProvider[];
   appPermissions: string[];
   libraryPermissions: {
     libraryId: string;

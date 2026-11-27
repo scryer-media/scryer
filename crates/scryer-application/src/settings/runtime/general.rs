@@ -163,6 +163,8 @@ fn summarize_plugin_http_trusted_certificates(
 pub struct GeneralSettings {
     pub api_explorer_enabled: bool,
     pub experimental_features_enabled: bool,
+    /// Facets turned off for the whole instance, in facet order.
+    pub disabled_facets: Vec<MediaFacet>,
     pub personalized_discovery_enabled: bool,
     pub srrdb_filename_recovery_enabled: bool,
     pub keep_history_forever: bool,
@@ -197,6 +199,8 @@ pub struct BackupSettings {
 pub struct UpdateGeneralSettings {
     pub api_explorer_enabled: Option<bool>,
     pub experimental_features_enabled: Option<bool>,
+    /// Replaces the disabled facets; `None` keeps the saved list.
+    pub disabled_facets: Option<Vec<MediaFacet>>,
     pub personalized_discovery_enabled: Option<bool>,
     pub srrdb_filename_recovery_enabled: Option<bool>,
     pub keep_history_forever: Option<bool>,
@@ -263,11 +267,40 @@ async fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
 }
 
 /// Instance-wide feature switches that any signed-in user may read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceFeatures {
     pub api_explorer_enabled: bool,
     pub experimental_features_enabled: bool,
     pub personalized_discovery_enabled: bool,
+    pub disabled_facets: Vec<MediaFacet>,
+}
+
+const FACET_ORDER: [MediaFacet; 3] = [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime];
+
+/// Facets in facet order without duplicates.
+fn normalize_disabled_facets(facets: &[MediaFacet]) -> Vec<MediaFacet> {
+    FACET_ORDER
+        .iter()
+        .filter(|facet| facets.contains(facet))
+        .cloned()
+        .collect()
+}
+
+/// The stored disabled facets. Unknown names are dropped, and a list that
+/// would turn off every facet reads as none, so a bad row never stops the
+/// whole instance.
+fn disabled_facets_from_stored(stored: &[String]) -> Vec<MediaFacet> {
+    let facets = normalize_disabled_facets(
+        &stored
+            .iter()
+            .filter_map(|value| MediaFacet::parse(value))
+            .collect::<Vec<_>>(),
+    );
+    if facets.len() >= FACET_ORDER.len() {
+        Vec::new()
+    } else {
+        facets
+    }
 }
 
 impl AppUseCase {
@@ -278,6 +311,34 @@ impl AppUseCase {
             .read_setting_bool_value(EXPERIMENTAL_FEATURES_ENABLED_KEY, None)
             .await?
             .unwrap_or(false))
+    }
+
+    /// Facets an administrator turned off for the whole instance. A turned
+    /// off facet is hidden for every user and its background work does not
+    /// run; its titles and files stay as they are. This is the single place
+    /// the default (every facet on) lives.
+    pub async fn disabled_facets(&self) -> AppResult<Vec<MediaFacet>> {
+        let stored = self
+            .read_setting_json_value::<Vec<String>>(DISABLED_FACETS_KEY, None)
+            .await?
+            .unwrap_or_default();
+        Ok(disabled_facets_from_stored(&stored))
+    }
+
+    /// Whether `facet` is turned off for the whole instance.
+    pub async fn facet_disabled(&self, facet: &MediaFacet) -> AppResult<bool> {
+        Ok(self.disabled_facets().await?.contains(facet))
+    }
+
+    /// Refuses work that belongs to a facet turned off for the instance.
+    pub async fn ensure_facet_enabled(&self, facet: &MediaFacet, what: &str) -> AppResult<()> {
+        if self.facet_disabled(facet).await? {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::settings::FACET_DISABLED,
+                format!("{what} is off because the {} facet is turned off", facet.as_str()),
+            ));
+        }
+        Ok(())
     }
 
     /// Whether administrators may use the API explorer. Defaults to disabled.
@@ -319,6 +380,7 @@ impl AppUseCase {
                 && self.api_explorer_enabled().await?,
             experimental_features_enabled: self.experimental_features_enabled().await?,
             personalized_discovery_enabled: self.personalized_discovery_enabled().await?,
+            disabled_facets: self.disabled_facets().await?,
         })
     }
 }
@@ -327,6 +389,7 @@ impl AppUseCase {
     async fn load_general_settings(&self) -> AppResult<GeneralSettings> {
         let api_explorer_enabled = self.api_explorer_enabled().await?;
         let experimental_features_enabled = self.experimental_features_enabled().await?;
+        let disabled_facets = self.disabled_facets().await?;
         let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let srrdb_filename_recovery_enabled = self.srrdb_filename_recovery_enabled().await?;
         let keep_history_forever = self
@@ -372,6 +435,7 @@ impl AppUseCase {
         Ok(GeneralSettings {
             api_explorer_enabled,
             experimental_features_enabled,
+            disabled_facets,
             personalized_discovery_enabled,
             srrdb_filename_recovery_enabled,
             keep_history_forever,
@@ -512,6 +576,22 @@ impl AppUseCase {
         let experimental_features_enabled = input
             .experimental_features_enabled
             .unwrap_or(current.experimental_features_enabled);
+        let disabled_facets_update = input
+            .disabled_facets
+            .as_deref()
+            .map(normalize_disabled_facets);
+        if disabled_facets_update
+            .as_ref()
+            .is_some_and(|facets| facets.len() >= FACET_ORDER.len())
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::settings::ALL_FACETS_DISABLED,
+                "at least one facet must stay turned on".to_string(),
+            ));
+        }
+        let disabled_facets = disabled_facets_update
+            .clone()
+            .unwrap_or_else(|| current.disabled_facets.clone());
         let personalized_discovery_enabled = input
             .personalized_discovery_enabled
             .unwrap_or(current.personalized_discovery_enabled);
@@ -569,6 +649,21 @@ impl AppUseCase {
             )
             .await?;
             changed_keys.push(EXPERIMENTAL_FEATURES_ENABLED_KEY.to_string());
+        }
+        if let Some(facets) = disabled_facets_update
+            .as_ref()
+            .filter(|facets| **facets != current.disabled_facets)
+        {
+            let stored = facets
+                .iter()
+                .map(|facet| facet.as_str().to_string())
+                .collect::<Vec<_>>();
+            self.upsert_system_setting_json(DISABLED_FACETS_KEY, &stored, Some(actor.id.clone()))
+                .await?;
+            changed_keys.push(DISABLED_FACETS_KEY.to_string());
+            // A facet turned back on has work waiting; the walk and title
+            // hydration pick it up on their next pass.
+            self.runtime.catalog.title_hydration_wake.notify_one();
         }
         if input.personalized_discovery_enabled.is_some() {
             self.upsert_system_setting_json(
@@ -646,6 +741,7 @@ impl AppUseCase {
         Ok(GeneralSettings {
             api_explorer_enabled,
             experimental_features_enabled,
+            disabled_facets,
             personalized_discovery_enabled,
             srrdb_filename_recovery_enabled,
             keep_history_forever,
@@ -841,6 +937,22 @@ mod tests {
         "dlYNMnHca3kyT/MHY4oX5MmPsHY8ANxBBz0XSKw5ysN4cNpK/Q==\n",
         "-----END CERTIFICATE-----\n",
     );
+
+    #[test]
+    fn disabled_facets_from_stored_drops_unknown_values_and_never_disables_all() {
+        assert_eq!(
+            disabled_facets_from_stored(&["anime".into(), "bogus".into(), "anime".into()]),
+            vec![MediaFacet::Anime]
+        );
+        assert_eq!(
+            disabled_facets_from_stored(&["anime".into(), "movie".into()]),
+            vec![MediaFacet::Movie, MediaFacet::Anime]
+        );
+        assert!(
+            disabled_facets_from_stored(&["movie".into(), "series".into(), "anime".into()])
+                .is_empty()
+        );
+    }
 
     #[test]
     fn normalize_auto_backup_daily_time_local_trims_and_zero_pads_values() {

@@ -541,10 +541,16 @@ impl AppUseCase {
                 .push((pending, candidate));
         }
         let mut grabbed = 0;
+        // A facet turned off for the instance is frozen: its announcements
+        // stay waiting until the facet is turned back on.
+        let disabled_facets = self.disabled_facets().await?;
         for (title_id, pending) in grouped {
             let Some(title) = self.services.catalog.titles.get_by_id(&title_id).await? else {
                 continue;
             };
+            if disabled_facets.contains(&title.facet) {
+                continue;
+            }
             let mut candidates = Vec::new();
             for (pending, candidate) in pending {
                 if self

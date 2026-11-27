@@ -26,6 +26,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
+// eslint-disable-next-line no-restricted-imports -- the instance switch lists every facet so a turned-off one can be turned back on
+import { FACET_REGISTRY } from "@/lib/facets/registry";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import {
   TrustedCertificateUploadError,
@@ -286,6 +288,54 @@ export function SettingsOverviewSection({
                   });
                 }}
               />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Label>{t("settings.disabledFacetsLabel")}</Label>
+                <InfoHelp
+                  text={t("settings.disabledFacetsHelp")}
+                  ariaLabel={t("settings.disabledFacetsLabel")}
+                />
+              </div>
+              {FACET_REGISTRY.map((facet) => {
+                const disabledFacets = generalSettings.disabledFacets;
+                const enabled = !disabledFacets.includes(facet.id);
+                const lastEnabled =
+                  enabled && FACET_REGISTRY.length - disabledFacets.length <= 1;
+                return (
+                  <div
+                    key={facet.id}
+                    className="flex items-center gap-2"
+                    title={
+                      lastEnabled
+                        ? t("settings.disabledFacetsLastEnabled")
+                        : undefined
+                    }
+                  >
+                    <span className="text-sm text-[var(--scry-body)]">
+                      {t(facet.navLabelKey)}
+                    </span>
+                    <SettingsToggleSwitch
+                      id={`settings-general-facet-${facet.viewId}`}
+                      checked={enabled}
+                      ariaLabel={t(facet.navLabelKey)}
+                      disabled={generalSaving || lastEnabled}
+                      onChange={(nextValue) => {
+                        const next = FACET_REGISTRY.map(
+                          (item) => item.id,
+                        ).filter((id) =>
+                          id === facet.id
+                            ? !nextValue
+                            : disabledFacets.includes(id),
+                        );
+                        updateGeneralSettings({ disabledFacets: next });
+                        onGeneralSettingsCommit({ disabledFacets: next });
+                      }}
+                    />
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex items-center gap-3">

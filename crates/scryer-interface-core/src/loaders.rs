@@ -649,6 +649,20 @@ loader!(LibraryFullHashBackfillLoader, String, bool, |ctx, keys| {
         .map_err(to_gql_error)
 });
 
+// One external-account read for every user a query lists. The field that
+// listed the users already decided the actor may see them.
+loader!(
+    LinkedMediaServersLoader,
+    String,
+    Vec<scryer_domain::ExternalAccountProvider>,
+    |ctx, keys| {
+        ctx.app
+            .users_linked_media_servers(keys)
+            .await
+            .map_err(to_gql_error)
+    }
+);
+
 // Keyed by queue item: one import listing covers every row of the queue.
 loader!(
     HeldSourcesOfferLoader,
@@ -705,6 +719,7 @@ pub struct RequestLoaders {
     pub episode_media_availability: DataLoader<EpisodeMediaAvailabilityLoader>,
     pub episode_media_files: DataLoader<EpisodeMediaFilesLoader>,
     pub held_sources_offer: DataLoader<HeldSourcesOfferLoader>,
+    pub linked_media_servers: DataLoader<LinkedMediaServersLoader>,
 }
 
 impl RequestLoaders {
@@ -759,6 +774,7 @@ impl RequestLoaders {
             episode_media_availability: dl!(EpisodeMediaAvailabilityLoader),
             episode_media_files: dl!(EpisodeMediaFilesLoader),
             held_sources_offer: dl!(HeldSourcesOfferLoader),
+            linked_media_servers: dl!(LinkedMediaServersLoader),
         })
     }
 }

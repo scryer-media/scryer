@@ -1710,6 +1710,7 @@ impl AppUseCase {
     ) -> AppResult<LibraryScanSession> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        self.ensure_facet_enabled(&facet, "Library scan").await?;
 
         let library_paths = self.read_library_paths_for_scan_facet(&facet).await?;
         let library_id = self
@@ -1792,6 +1793,8 @@ impl AppUseCase {
                 )
             })?;
         self.require_library_management_permission(actor, &library.id)
+            .await?;
+        self.ensure_facet_enabled(&library.facet, "Library scan")
             .await?;
         let library_paths = configured_library_scan_paths(&library)?;
 

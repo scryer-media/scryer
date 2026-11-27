@@ -103,6 +103,8 @@ test("reactive catalog title refresh uses catalog list projection", () => {
   assert.equal(result.query.includes("episodesOwned"), true);
   assert.equal(result.query.includes("episodesMonitored"), true);
   assert.equal(result.query.includes("episodesTotal"), true);
+  assert.equal(result.query.includes("episodesOnDisk"), true);
+  assert.equal(result.query.includes("episodesExpected"), true);
   assert.equal(result.query.includes("runtimeMinutes"), true);
   // Background art is part of the catalog list projection (poster/list cards
   // render it), so the reactive refresh fetches it for row parity.
@@ -208,6 +210,7 @@ test("reactive catalog title refresh omits episodic fields by default", () => {
   assert.equal(result.query.includes("episodesOwned"), false);
   assert.equal(result.query.includes("episodesMonitored"), false);
   assert.equal(result.query.includes("episodesTotal"), false);
+  assert.equal(result.query.includes("episodesExpected"), false);
 });
 
 test("title catalog query can omit page metadata for quiet refreshes", () => {
@@ -418,6 +421,8 @@ test("series side panel overview scopes hydration to season aggregates", () => {
     seriesSidePanelOverviewQuery.includes("episodeRecordsTotal"),
     true,
   );
+  assert.equal(seriesSidePanelOverviewQuery.includes("episodesOnDisk"), true);
+  assert.equal(seriesSidePanelOverviewQuery.includes("episodesExpected"), true);
   assert.equal(seriesSidePanelOverviewQuery.includes("mediaFiles {"), false);
   assert.equal(seriesSidePanelOverviewQuery.includes("wantedItems"), false);
   assert.equal(seriesSidePanelOverviewQuery.includes("titleHistory("), false);

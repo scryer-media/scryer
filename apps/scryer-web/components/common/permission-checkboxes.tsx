@@ -58,6 +58,7 @@ const LIBRARY_PERMISSION_VALUES: LibraryPermission[] = [
   LIBRARY_PERMISSIONS.manageSubtitles,
 ];
 
+// eslint-disable-next-line no-restricted-syntax -- grants another user's permissions; an admin's hidden facets do not apply to them
 const FACETS: LibraryRecord["facet"][] = ["MOVIE", "SERIES", "ANIME"];
 
 /** A permission's label; one the UI does not know shows its raw value. */

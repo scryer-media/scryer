@@ -304,7 +304,22 @@ fn validate_ui_settings_update(mut input: UiSettingsUpdate) -> AppResult<UiSetti
     if let Some(columns) = input.table_columns.as_mut() {
         validate_table_columns(columns)?;
     }
+    input.hidden_facets = normalize_hidden_facets(&input.hidden_facets);
+    if input.hidden_facets.len() >= UiSettingsFacet::ALL.len() {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::settings::UI_ALL_FACETS_HIDDEN,
+            "at least one facet must stay visible",
+        ));
+    }
     Ok(input)
+}
+
+/// Hidden facets in registry order without duplicates.
+fn normalize_hidden_facets(facets: &[UiSettingsFacet]) -> Vec<UiSettingsFacet> {
+    UiSettingsFacet::ALL
+        .into_iter()
+        .filter(|facet| facets.contains(facet))
+        .collect()
 }
 
 /// Accepts a short language code (letters, digits and hyphens) and clears the
@@ -479,6 +494,68 @@ mod tour_id_tests {
             .collect();
         let error = validate_tour_ids(too_many).expect_err("too many tours");
         assert_eq!(reason(error), Some(settings::UI_TOUR_COUNT_OUT_OF_RANGE));
+    }
+}
+
+#[cfg(test)]
+mod hidden_facet_tests {
+    use super::{UiSettingsFacet, normalize_hidden_facets, validate_ui_settings_update};
+    use crate::{UiSettings, UiSettingsUpdate, error_reasons::settings};
+
+    fn update_hiding(facets: Vec<UiSettingsFacet>) -> UiSettingsUpdate {
+        let defaults = UiSettings::defaults_for_user("user-1");
+        UiSettingsUpdate {
+            theme: defaults.theme,
+            palette: defaults.palette,
+            date_time_format: defaults.date_time_format,
+            highlight_color: None,
+            secondary_color: None,
+            high_contrast_mode: false,
+            reduce_motion: false,
+            hide_sponsor_button: false,
+            discovery_grid_hide_owned: true,
+            discovery_grid_hide_requested: false,
+            density: defaults.density,
+            sidebar_mode: defaults.sidebar_mode,
+            default_landing_view: defaults.default_landing_view,
+            hidden_facets: facets,
+            language: None,
+            table_columns: None,
+        }
+    }
+
+    #[test]
+    fn hidden_facets_are_kept_in_registry_order_without_duplicates() {
+        assert_eq!(
+            normalize_hidden_facets(&[
+                UiSettingsFacet::Anime,
+                UiSettingsFacet::Movies,
+                UiSettingsFacet::Anime,
+            ]),
+            vec![UiSettingsFacet::Movies, UiSettingsFacet::Anime]
+        );
+        let accepted = validate_ui_settings_update(update_hiding(vec![
+            UiSettingsFacet::Anime,
+            UiSettingsFacet::Anime,
+        ]))
+        .expect("one hidden facet");
+        assert_eq!(accepted.hidden_facets, vec![UiSettingsFacet::Anime]);
+        let accepted = validate_ui_settings_update(update_hiding(Vec::new())).expect("none hidden");
+        assert!(accepted.hidden_facets.is_empty());
+    }
+
+    #[test]
+    fn hiding_every_facet_is_refused_with_a_reason() {
+        let error = validate_ui_settings_update(update_hiding(vec![
+            UiSettingsFacet::Series,
+            UiSettingsFacet::Anime,
+            UiSettingsFacet::Movies,
+        ]))
+        .expect_err("every facet hidden");
+        assert_eq!(
+            error.validation_reason(),
+            Some(settings::UI_ALL_FACETS_HIDDEN)
+        );
     }
 }
 

@@ -81,6 +81,7 @@ import {
   formatStorageSize,
   formatTerabytes,
   groupStorageRootsByLibrary,
+  storageTileUsedBytes,
   isProviderCoolingDown,
   isProviderErroring,
   summarizeIndexerHealth,
@@ -98,6 +99,7 @@ import type {
 } from "@/lib/utils/dashboard-layout";
 import { buildOverviewDetailPath, buildViewPath } from "@/lib/utils/routing";
 import { episodeTitleOrTba } from "@/lib/utils/episode-title";
+import { useFacets } from "@/lib/facets/use-facets";
 
 /** List panels scroll inside whatever height their grid cell gives them. */
 const PREVIEW_PANE_CLASS = "overflow-y-auto";
@@ -462,6 +464,7 @@ export function StatsPanel({
   breakpoint: DashboardBreakpoint;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
   const activity = overview?.activity;
   const grabbedDelta = activity
     ? activity.current.grabbed - activity.previous.grabbed
@@ -481,30 +484,33 @@ export function StatsPanel({
     >
       <StatTile
         label={t("dashboard.statLibrary")}
-        metrics={[
-          {
-            key: "movies",
-            value: overview?.library.movies ?? 0,
-            label: t("dashboard.metricMovies", {
-              count: overview?.library.movies ?? 0,
-            }),
-            facet: "MOVIE",
-          },
-          {
-            key: "series",
-            value: overview?.library.series ?? 0,
-            label: t("dashboard.metricSeries", {
-              count: overview?.library.series ?? 0,
-            }),
-            facet: "SERIES",
-          },
-          {
-            key: "anime",
-            value: overview?.library.anime ?? 0,
-            label: t("dashboard.metricAnime"),
-            facet: "ANIME",
-          },
-        ]}
+        metrics={visibleFacetItems(
+          [
+            {
+              key: "movies",
+              value: overview?.library.movies ?? 0,
+              label: t("dashboard.metricMovies", {
+                count: overview?.library.movies ?? 0,
+              }),
+              facet: "MOVIE",
+            },
+            {
+              key: "series",
+              value: overview?.library.series ?? 0,
+              label: t("dashboard.metricSeries", {
+                count: overview?.library.series ?? 0,
+              }),
+              facet: "SERIES",
+            },
+            {
+              key: "anime",
+              value: overview?.library.anime ?? 0,
+              label: t("dashboard.metricAnime"),
+              facet: "ANIME",
+            },
+          ],
+          (metric) => metric.facet,
+        )}
       />
       <StatTile
         label={t("dashboard.statWindow")}
@@ -1614,13 +1620,18 @@ export function DownloadClientsPanel({
 // ── Storage ─────────────────────────────────────────────────────────────────
 
 export function StoragePanel({
-  roots,
+  roots: allRoots,
   tier,
 }: {
   roots: DashboardStorageRoot[];
   tier: DashboardTier;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
+  const roots = React.useMemo(
+    () => visibleFacetItems(allRoots, (root) => root.facet),
+    [allRoots, visibleFacetItems],
+  );
   const groups = React.useMemo(
     () => groupStorageRootsByLibrary(roots),
     [roots],
@@ -1654,14 +1665,16 @@ export function StoragePanel({
               key={group.libraryId}
               className="flex min-w-0 flex-col gap-1.5"
             >
-              <h3 className="truncate text-[10px] font-semibold uppercase tracking-wide text-[var(--scry-muted2)]">
-                {group.libraryName}
+              <h3 className="flex min-w-0 items-baseline gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--scry-muted2)]">
+                <span className="min-w-0 truncate">{group.libraryName}</span>
+                <StorageLibrarySize root={group.roots[0]} />
               </h3>
               <div className="flex flex-wrap gap-2">
                 {group.roots.map((root) => (
                   <StorageRootTile
                     key={`${group.libraryId}:${root.path}`}
                     libraryName={group.libraryName}
+                    libraryRootCount={group.roots.length}
                     root={root}
                     compact={false}
                   />
@@ -1677,6 +1690,7 @@ export function StoragePanel({
               <StorageRootTile
                 key={`${group.libraryId}:${root.path}`}
                 libraryName={group.libraryName}
+                libraryRootCount={group.roots.length}
                 root={root}
                 compact={tier === "compact"}
               />
@@ -1688,12 +1702,31 @@ export function StoragePanel({
   );
 }
 
+/** A library's own size beside its heading, when the server reported it. */
+function StorageLibrarySize({ root }: { root: DashboardStorageRoot | undefined }) {
+  const t = useTranslate();
+  const size = formatStorageSize(root?.libraryBytes);
+  if (!size) {
+    return null;
+  }
+  return (
+    <span className="shrink-0 font-normal normal-case tabular-nums">
+      {t("dashboard.storageLibrarySize", {
+        size: `${size.value} ${size.unit}`,
+      })}
+    </span>
+  );
+}
+
 function StorageRootTile({
   libraryName,
+  libraryRootCount,
   root,
   compact,
 }: {
   libraryName: string;
+  /** Roots the owning library has; a single-root library shows its own size. */
+  libraryRootCount: number;
   root: DashboardStorageRoot;
   /** Path and percentage only, for a panel squeezed to its minimum. */
   compact: boolean;
@@ -1704,8 +1737,15 @@ function StorageRootTile({
   const toneStyle = usageToneStyle(tone);
   const tagTone = percent === null ? null : usageTagBadgeTone(tag);
   const tagKey = percent === null ? null : usageTagLabelKey(tag);
-  const usedTb = formatTerabytes(root.usedBytes);
+  const shownUsed = storageTileUsedBytes(root, libraryRootCount);
+  const usedTb = formatTerabytes(shownUsed.usedBytes);
   const totalTb = formatTerabytes(root.totalBytes);
+  const usageHint = shownUsed.isLibrarySize
+    ? t("dashboard.storageLibraryUsageHint", {
+        library: usedTb ?? "—",
+        used: formatTerabytes(root.usedBytes) ?? "—",
+      })
+    : undefined;
   const freeStorage =
     root.usedBytes !== null && root.totalBytes !== null
       ? formatStorageSize(Math.max(0, root.totalBytes - root.usedBytes))
@@ -1753,7 +1793,10 @@ function StorageRootTile({
               <span>{t("dashboard.storageUnavailable")}</span>
             ) : (
               <>
-                <span className="min-w-0 truncate tabular-nums">
+                <span
+                  className="min-w-0 truncate tabular-nums"
+                  title={usageHint}
+                >
                   {t("dashboard.storageUsage", {
                     used: usedTb ?? "—",
                     total: totalTb ?? "—",

@@ -25,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { FacetGate } from "@/lib/facets/use-facets";
 
 type Facet = "MOVIE" | "SERIES" | "ANIME";
 type TvdbSearchItem = MetadataTvdbSearchItem;
@@ -129,15 +130,21 @@ export function AddTitleForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MOVIE">
-                    {t("search.facetMovie")}
-                  </SelectItem>
-                  <SelectItem value="SERIES">
-                    {t("search.facetSeries")}
-                  </SelectItem>
-                  <SelectItem value="ANIME">
-                    {t("search.facetAnime")}
-                  </SelectItem>
+                  <FacetGate facet="MOVIE">
+                    <SelectItem value="MOVIE">
+                      {t("search.facetMovie")}
+                    </SelectItem>
+                  </FacetGate>
+                  <FacetGate facet="SERIES">
+                    <SelectItem value="SERIES">
+                      {t("search.facetSeries")}
+                    </SelectItem>
+                  </FacetGate>
+                  <FacetGate facet="ANIME">
+                    <SelectItem value="ANIME">
+                      {t("search.facetAnime")}
+                    </SelectItem>
+                  </FacetGate>
                 </SelectContent>
               </Select>
             </label>

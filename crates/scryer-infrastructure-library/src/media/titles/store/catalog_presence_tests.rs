@@ -1191,14 +1191,20 @@ async fn batch_readers_split_across_statements_match_one_statement() {
         rows
     }
 
+    let progress_day = chrono::NaiveDate::from_ymd_opt(2026, 6, 1).expect("fixed day");
     let files = crate::media::search::media_file_store::MediaFileStore::new(datastore.clone());
     let shows = crate::media::shows::store::ShowStore::new(datastore.clone());
     macro_rules! same {
-        ($store:ident, $read:ident, $shape:ident, $ids:expr, $padded:expr) => {{
-            let one = $shape(&$store.$read($ids).await.expect("one statement should run"));
+        ($store:ident, $read:ident, $shape:ident, $ids:expr, $padded:expr $(, $extra:expr)*) => {{
+            let one = $shape(
+                &$store
+                    .$read($ids $(, $extra)*)
+                    .await
+                    .expect("one statement should run"),
+            );
             let split = $shape(
                 &$store
-                    .$read($padded)
+                    .$read($padded $(, $extra)*)
                     .await
                     .expect("split statements should run"),
             );
@@ -1248,7 +1254,8 @@ async fn batch_readers_split_across_statements_match_one_statement() {
         list_title_episode_progress_summaries,
         sorted,
         &seeded,
-        &padded
+        &padded,
+        progress_day
     );
     same!(
         files,
@@ -1262,7 +1269,8 @@ async fn batch_readers_split_across_statements_match_one_statement() {
         list_collection_episode_progress_summaries,
         sorted,
         &seeded,
-        &padded
+        &padded,
+        progress_day
     );
     same!(
         files,

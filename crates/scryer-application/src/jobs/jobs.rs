@@ -1380,6 +1380,18 @@ impl AppUseCase {
         if trigger_source == JobTriggerSource::Manual {
             return true;
         }
+        // A facet turned off for the instance runs no scheduled scan or
+        // refresh. A failed read says yes, so the run records the failure.
+        if let Some(facet) = job_key_library_facet(job_key)
+            && self.facet_disabled(&facet).await.unwrap_or(false)
+        {
+            self.runtime
+                .jobs
+                .job_run_tracker
+                .record_idle_check(job_key, self.runtime.environment.now())
+                .await;
+            return false;
+        }
         let has_work = match job_key {
             JobKey::RssSync => self.rss_sync_tick_has_work().await,
             JobKey::PendingReleaseProcessing => self.pending_release_tick_has_work().await,
@@ -1818,6 +1830,8 @@ impl AppUseCase {
         }
 
         if let Some(facet) = job_key_library_facet(job_key) {
+            self.ensure_facet_enabled(&facet, job_key.display_name())
+                .await?;
             let library_id = match library_id {
                 Some(library_id) => library_id.to_string(),
                 None => self

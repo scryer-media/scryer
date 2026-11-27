@@ -1591,15 +1591,27 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Import placements in title history add ImportFilePlacementPayload,
+    // ImportLinkFallbackPayload, ImportPlacementValue and
+    // ImportLinkFallbackCauseValue: OBJECT 578->580, ENUM 219->221, public
+    // types 1062->1066.
+    for name in [
+        "ImportFilePlacementPayload",
+        "ImportLinkFallbackPayload",
+        "ImportPlacementValue",
+        "ImportLinkFallbackCauseValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     // Episode monitoring for a selection adds SetEpisodesMonitoredInput:
-    // INPUT_OBJECT 253->254, public types 1062->1063.
+    // INPUT_OBJECT 253->254, public types 1066->1067.
     assert!(public_type_names.contains(&"SetEpisodesMonitoredInput"));
     assert_eq!(
         public_types.len(),
-        1063,
+        1067,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 578);
+    assert_eq!(kind_count("OBJECT"), 580);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
@@ -1608,7 +1620,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert_eq!(kind_count("INPUT_OBJECT"), 254);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 219);
+    assert_eq!(kind_count("ENUM"), 221);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

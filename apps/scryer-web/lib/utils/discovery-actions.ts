@@ -1,6 +1,6 @@
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { CatalogDiscoveryItem, ExternalId, Facet } from "@/lib/types";
-import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
+import { discoveryItemDisplayTitle } from "./discovery-display.ts";
 
 export function normalizedDiscoveryItemFacet(
   value: string | null | undefined,
@@ -17,13 +17,29 @@ export function normalizedDiscoveryItemFacet(
   }
 }
 
+/**
+ * The facet a discovery item offers. SMG marks anime by content type and keeps
+ * the media kind in `targetKind`, so an anime film is `anime` over `movie`.
+ * While Anime is hidden that film is offered as a Movie (searchable, addable
+ * and requestable into a Movie library); an anime series stays Anime and is
+ * filtered out with the rest of the facet.
+ */
 export function discoveryItemFacet(
   item: Pick<CatalogDiscoveryItem, "contentType" | "targetKind">,
+  hidden?: ReadonlySet<Facet>,
 ): Facet | null {
   const contentType = item.contentType?.trim();
-  return contentType
+  const facet = contentType
     ? normalizedDiscoveryItemFacet(contentType)
     : normalizedDiscoveryItemFacet(item.targetKind);
+  if (
+    facet === "ANIME" &&
+    hidden?.has("ANIME") &&
+    normalizedDiscoveryItemFacet(item.targetKind) === "MOVIE"
+  ) {
+    return "MOVIE";
+  }
+  return facet;
 }
 
 type DiscoveryExternalIdSignals = {

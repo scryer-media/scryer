@@ -35,10 +35,12 @@ import {
   ANIME_INTER_SEASON_MOVIES_KEY,
   ANIME_MONITOR_SPECIALS_KEY,
   DEFAULT_MONITOR_TYPE_KEY,
+  PREFERRED_AUDIO_LANGUAGES_KEY,
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
   REQUEST_QUALITY_PROFILE_IDS_KEY,
+  REQUIRED_AUDIO_LANGUAGES_KEY,
 } from "@/lib/constants/settings";
 import {
   coerceProfileSetting,
@@ -79,6 +81,7 @@ import type {
   MonitorSelectionDraft,
   RootFolderOption,
 } from "@/lib/types/titles";
+import { animeAddTitleOptions } from "@/lib/utils/anime-add-options";
 import { monitorSelectionInput } from "@/lib/utils/monitor-selection";
 import type {
   TitleExternalRating,
@@ -515,7 +518,7 @@ function sameRootFolderOptions(
   );
 }
 
-function sameLibrariesByFacet(
+export function sameLibrariesByFacet(
   previous: Record<Facet, LibraryRecord[]>,
   next: Record<Facet, LibraryRecord[]>,
 ): boolean {
@@ -539,6 +542,14 @@ function sameLibrariesByFacet(
             (candidate.requestQualityProfileDefaultId ?? null) &&
           (entry.requestQualityProfileIds ?? []).join("|") ===
             (candidate.requestQualityProfileIds ?? []).join("|") &&
+          sameStringList(
+            entry.inheritedRequiredAudioLanguages,
+            candidate.inheritedRequiredAudioLanguages,
+          ) &&
+          sameStringList(
+            entry.inheritedPreferredAudioLanguages,
+            candidate.inheritedPreferredAudioLanguages,
+          ) &&
           sameRootFolderOptions(entry.roots, candidate.roots)
         );
       })
@@ -964,6 +975,8 @@ export function useGlobalSearch({
         QUALITY_PROFILE_ID_KEY,
         REQUEST_QUALITY_PROFILE_IDS_KEY,
         DEFAULT_MONITOR_TYPE_KEY,
+        REQUIRED_AUDIO_LANGUAGES_KEY,
+        PREFERRED_AUDIO_LANGUAGES_KEY,
         ...FACET_REGISTRY.map((f) => f.rootFoldersKey),
         ...FACET_REGISTRY.map((f) => f.folderSettingKey),
         ANIME_MONITOR_SPECIALS_KEY,
@@ -1749,12 +1762,7 @@ export function useGlobalSearch({
                 ...(facet === "MOVIE"
                   ? {}
                   : { useSeasonFolders: options.seasonFolder }),
-                ...(facet === "ANIME"
-                  ? {
-                      monitorSpecials: options.monitorSpecials !== false,
-                      interSeasonMovies: options.interSeasonMovies !== false,
-                    }
-                  : {}),
+                ...animeAddTitleOptions(facet, options),
                 ...(options.monitorType === "ADVANCED"
                   ? {
                       monitorSelection: monitorSelectionInput(

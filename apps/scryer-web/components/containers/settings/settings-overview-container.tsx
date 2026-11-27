@@ -42,6 +42,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   imageCacheMaxSizeEnvOverrideActive: false,
   pluginHttpCaBundlePem: "",
   pluginHttpTrustedCertificates: [],
+  disabledFacets: [],
 };
 
 type SettingsOverviewContainerProps = {
@@ -311,6 +312,7 @@ export function SettingsOverviewContainer({
         // actor-only query, so a save has to push the new value into the
         // provider for the gated surfaces to react without a reload.
         if (
+          update.disabledFacets !== undefined ||
           update.apiExplorerEnabled !== undefined ||
           update.experimentalFeaturesEnabled !== undefined ||
           update.personalizedDiscoveryEnabled !== undefined

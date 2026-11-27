@@ -437,6 +437,7 @@ async fn recycled_item_history_correlates_upgrade_chain_and_enforces_library_acc
             episode_ids: Vec::new(),
             size_bytes: Some(128),
             upgrade: true,
+            file_placements: Vec::new(),
         })
     };
     let upgraded = |old: &str, new: &str, import: &str| {

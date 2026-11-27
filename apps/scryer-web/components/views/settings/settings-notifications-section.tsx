@@ -52,6 +52,7 @@ import type { Facet } from "@/lib/types/titles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { useFacets } from "@/lib/facets/use-facets";
 
 type SettingsNotificationsSectionProps = {
   channels: NotificationChannel[];
@@ -104,6 +105,7 @@ type SettingsNotificationsSectionProps = {
 };
 
 const SCOPE_OPTIONS = ["global", "facet", "title"] as const;
+// eslint-disable-next-line no-restricted-syntax -- stored scope values; the picker filters with useFacets().values
 const FACET_SCOPE_OPTIONS: Facet[] = ["MOVIE", "SERIES", "ANIME"];
 const MEDIA_SERVER_PROVIDER_TYPES = new Set(["jellyfin", "plex", "emby"]);
 
@@ -463,6 +465,7 @@ export function SettingsNotificationsSection({
   localPathStyle,
 }: SettingsNotificationsSectionProps) {
   const t = useTranslate();
+  const { values: visibleFacetValues } = useFacets();
   const normalizedChannelType = channelDraft.channelType.trim().toLowerCase();
   const isEditingChannel = channelEditorMode === "edit";
   const isEditingSubscription = subscriptionEditorMode === "edit";
@@ -1355,7 +1358,10 @@ export function SettingsNotificationsSection({
                         {t("settings.notificationScopeId")}
                       </Label>
                       <div className="flex flex-wrap gap-4 rounded-md border border-border bg-card/40 p-3">
-                        {FACET_SCOPE_OPTIONS.map((facet) => (
+                        {visibleFacetValues(
+                          FACET_SCOPE_OPTIONS,
+                          selectedFacetScopeIds,
+                        ).map((facet) => (
                           <label
                             key={facet}
                             className="flex items-center gap-2 text-sm"

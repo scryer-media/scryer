@@ -558,6 +558,11 @@ pub struct StorageRootUsagePayload {
     pub used_bytes: Option<Long>,
     /// Total bytes on the backing filesystem; null when it cannot be inspected.
     pub total_bytes: Option<Long>,
+    /// Bytes of the tracked media files of the library that owns this root
+    /// folder, across all of its root folders: the managed bytes its catalog
+    /// reports. Read from the catalog, not the filesystem, and only when
+    /// selected.
+    pub library_bytes: Option<Long>,
 }
 
 #[derive(SimpleObject, Clone)]

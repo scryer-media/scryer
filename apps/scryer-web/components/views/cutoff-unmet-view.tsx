@@ -36,6 +36,7 @@ import type {
 } from "@/lib/types";
 import type { ViewId } from "@/components/root/types";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { FacetGate } from "@/lib/facets/use-facets";
 
 export type CutoffUnmetItem = {
   titleId: string;
@@ -339,13 +340,19 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{t("cutoff.allFacets")}</SelectItem>
-              <SelectItem value="MOVIE">{t("uiText.movie")}</SelectItem>
-              <SelectItem value="SERIES">
-                {t("dashboard.metricSeries")}
-              </SelectItem>
-              <SelectItem value="ANIME">
-                {t("dashboard.metricAnime")}
-              </SelectItem>
+              <FacetGate facet="MOVIE">
+                <SelectItem value="MOVIE">{t("uiText.movie")}</SelectItem>
+              </FacetGate>
+              <FacetGate facet="SERIES">
+                <SelectItem value="SERIES">
+                  {t("dashboard.metricSeries")}
+                </SelectItem>
+              </FacetGate>
+              <FacetGate facet="ANIME">
+                <SelectItem value="ANIME">
+                  {t("dashboard.metricAnime")}
+                </SelectItem>
+              </FacetGate>
             </SelectContent>
           </Select>
 

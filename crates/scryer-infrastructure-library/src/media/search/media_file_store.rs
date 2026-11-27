@@ -1045,37 +1045,28 @@ impl MediaFileStore {
     async fn list_title_episode_progress_summaries_statement(
         &self,
         title_ids: &[String],
+        aired_through: &str,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         if title_ids.is_empty() {
             return Ok(Vec::new());
         }
 
-        let dialect = dialect_for_datastore(&self.datastore);
         let placeholders = placeholders(title_ids.len());
-        let sql = format!(
-            "SELECT e.title_id,
-                    COUNT(DISTINCT e.id) AS total_episodes,
-                    COUNT(DISTINCT CASE WHEN {} THEN e.id END) AS monitored_episodes,
-                    COUNT(DISTINCT CASE WHEN mf.id IS NOT NULL THEN e.id END) AS owned_episodes
-             FROM episodes e
-             INNER JOIN collections c ON c.id = e.collection_id
-             LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
-             WHERE e.title_id IN ({placeholders})
-               AND c.collection_type <> 'specials'
-               AND c.collection_index <> '0'
-               AND trim(COALESCE(e.title, '')) <> ''
-               AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
-               AND trim(COALESCE(e.air_date, '')) <> ''
-             GROUP BY e.title_id",
-            bool_column_is_true(dialect, "e.monitored"),
-            live_media_file_predicate(dialect, "mf")
+        let episode_rows = episode_progress_rows_sql(
+            dialect_for_datastore(&self.datastore),
+            "e.title_id",
+            "LEFT JOIN collections c ON c.id = e.collection_id",
+            "c.collection_type <> 'specials' AND c.collection_index <> '0' AND ",
+            &format!("e.title_id IN ({placeholders})"),
         );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
+        let sql = format!(
+            "SELECT episode.owner_id AS title_id,
+                    {EPISODE_PROGRESS_COUNTS}
+               FROM ({episode_rows}) episode
+              GROUP BY episode.owner_id"
+        );
+        let mut args = vec![SqlArg::Text(aired_through.to_string())];
+        args.extend(title_ids.iter().cloned().map(SqlArg::Text));
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
@@ -1085,10 +1076,85 @@ impl MediaFileStore {
                     owned_episodes: row.i64("owned_episodes")?,
                     monitored_episodes: row.i64("monitored_episodes")?,
                     total_episodes: row.i64("total_episodes")?,
+                    episodes_on_disk: row.i64("episodes_on_disk")?,
+                    episodes_expected: row.i64("episodes_expected")?,
+                    episode_records_total: row.i64("episode_records_total")?,
                 })
             })
             .collect()
     }
+
+    /// Title-id chunks for a statement that binds the aired-through day ahead
+    /// of the ids.
+    fn episode_progress_title_id_statements<'a>(
+        &self,
+        title_ids: &'a [String],
+    ) -> (Cow<'a, [String]>, usize) {
+        id_list_statements(
+            title_ids,
+            1,
+            1,
+            max_binds(&self.datastore.read_exec()),
+            EPISODE_AVAILABILITY_ID_CHUNK,
+        )
+    }
+}
+
+/// The episode progress counts over [`episode_progress_rows_sql`] rows.
+///
+/// `episodes_on_disk`, `episodes_expected` and `episode_records_total` read
+/// every episode: an episode is expected once it is monitored and has aired,
+/// or as soon as it has a file. `owned_episodes`, `monitored_episodes` and
+/// `total_episodes` read only the `countable` episodes.
+const EPISODE_PROGRESS_COUNTS: &str = "COUNT(*) AS episode_records_total,
+                    COALESCE(SUM(episode.has_file), 0) AS episodes_on_disk,
+                    COALESCE(SUM(CASE WHEN episode.has_file = 1
+                                        OR (episode.monitored = 1 AND episode.aired = 1)
+                                      THEN 1 ELSE 0 END), 0) AS episodes_expected,
+                    COALESCE(SUM(episode.countable), 0) AS total_episodes,
+                    COALESCE(SUM(episode.countable * episode.monitored), 0) AS monitored_episodes,
+                    COALESCE(SUM(episode.countable * episode.has_file), 0) AS owned_episodes";
+
+/// One row per episode the `scope` keeps, with the flags the progress counts
+/// add up. `owner_id` is `owner`, the column the caller groups on.
+///
+/// The aired-through day is the statement's first bind. An episode is aired
+/// when its air date's day is on or before it. A file counts when it is a live
+/// primary file not awaiting review; it is asked as EXISTS, so an episode with
+/// several files is still one row. `countable` leaves out unnamed, TBA and
+/// undated placeholder episodes, and whatever `countable_prefix` adds.
+fn episode_progress_rows_sql(
+    dialect: SqlDialect,
+    owner: &str,
+    join: &str,
+    countable_prefix: &str,
+    scope: &str,
+) -> String {
+    format!(
+        "SELECT {owner} AS owner_id,
+                CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
+                CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                      AND substr(trim(e.air_date), 1, 10) <= {{}}
+                     THEN 1 ELSE 0 END AS aired,
+                CASE WHEN EXISTS (
+                     SELECT 1
+                       FROM file_episode_map fem
+                       JOIN media_files mf ON mf.id = fem.file_id
+                      WHERE fem.episode_id = e.id
+                        AND fem.role = 'primary'
+                        AND mf.scan_status <> 'review_required'
+                        AND {live_file}
+                ) THEN 1 ELSE 0 END AS has_file,
+                CASE WHEN {countable_prefix}trim(COALESCE(e.title, '')) <> ''
+                      AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
+                      AND trim(COALESCE(e.air_date, '')) <> ''
+                     THEN 1 ELSE 0 END AS countable
+           FROM episodes e
+           {join}
+          WHERE {scope}",
+        monitored = bool_column_is_true(dialect, "e.monitored"),
+        live_file = live_media_file_predicate(dialect, "mf"),
+    )
 }
 
 #[async_trait]
@@ -2075,12 +2141,14 @@ impl MediaFileRepository for MediaFileStore {
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
-        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let aired_through = aired_through.format("%Y-%m-%d").to_string();
+        let (title_ids, per_statement) = self.episode_progress_title_id_statements(title_ids);
         let mut summaries = Vec::new();
         for chunk in title_ids.chunks(per_statement) {
             summaries.extend(
-                self.list_title_episode_progress_summaries_statement(chunk)
+                self.list_title_episode_progress_summaries_statement(chunk, &aired_through)
                     .await?,
             );
         }
@@ -2136,40 +2204,37 @@ impl MediaFileRepository for MediaFileStore {
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         if title_ids.is_empty() {
             return Ok(Vec::new());
         }
 
         let dialect = dialect_for_datastore(&self.datastore);
+        let aired_through = aired_through.format("%Y-%m-%d").to_string();
         // A collection belongs to one title, so a chunk by title never splits
         // a group.
-        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let (title_ids, per_statement) = self.episode_progress_title_id_statements(title_ids);
         let mut summaries = Vec::new();
         for chunk in title_ids.chunks(per_statement) {
             let placeholders = placeholders(chunk.len());
-            // Countable episodes exclude unnamed/TBA/undated placeholder records; the
-            // record total intentionally counts every episode row so callers can tell
-            // "no episodes at all" apart from "only placeholder episodes".
-            let countable = "(trim(COALESCE(e.title, '')) <> ''
-                   AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
-                   AND trim(COALESCE(e.air_date, '')) <> '')";
-            let sql = format!(
-                "SELECT e.collection_id,
-                        COUNT(DISTINCT e.id) AS episode_records_total,
-                        COUNT(DISTINCT CASE WHEN {countable} THEN e.id END) AS total_episodes,
-                        COUNT(DISTINCT CASE WHEN {countable} AND {} THEN e.id END) AS monitored_episodes,
-                        COUNT(DISTINCT CASE WHEN {countable} AND mf.id IS NOT NULL THEN e.id END) AS owned_episodes
-                 FROM episodes e
-                 LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-                 LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
-                 WHERE e.title_id IN ({placeholders})
-                   AND e.collection_id IS NOT NULL
-                 GROUP BY e.collection_id",
-                bool_column_is_true(dialect, "e.monitored"),
-                live_media_file_predicate(dialect, "mf")
+            // The record total counts every episode row so callers can tell "no
+            // episodes at all" apart from "only placeholder episodes".
+            let episode_rows = episode_progress_rows_sql(
+                dialect,
+                "e.collection_id",
+                "",
+                "",
+                &format!("e.title_id IN ({placeholders}) AND e.collection_id IS NOT NULL"),
             );
-            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            let sql = format!(
+                "SELECT episode.owner_id AS collection_id,
+                        {EPISODE_PROGRESS_COUNTS}
+                   FROM ({episode_rows}) episode
+                  GROUP BY episode.owner_id"
+            );
+            let mut args = vec![SqlArg::Text(aired_through.clone())];
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
             for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
                 summaries.push(CollectionEpisodeProgressSummary {
                     collection_id: row.text("collection_id")?,
@@ -2177,6 +2242,8 @@ impl MediaFileRepository for MediaFileStore {
                     monitored_episodes: row.i64("monitored_episodes")?,
                     total_episodes: row.i64("total_episodes")?,
                     episode_records_total: row.i64("episode_records_total")?,
+                    episodes_on_disk: row.i64("episodes_on_disk")?,
+                    episodes_expected: row.i64("episodes_expected")?,
                 });
             }
         }
@@ -6278,7 +6345,10 @@ mod tests {
         assert_eq!(episode_size_summaries[0].total_size_bytes, 1_000);
 
         let episode_progress = media_files
-            .list_title_episode_progress_summaries(std::slice::from_ref(&title.id))
+            .list_title_episode_progress_summaries(
+                std::slice::from_ref(&title.id),
+                episode_progress_day(2026, 5, 1),
+            )
             .await
             .expect("episode progress summaries should succeed");
         assert_eq!(episode_progress.len(), 1);
@@ -6288,7 +6358,10 @@ mod tests {
         assert_eq!(episode_progress[0].owned_episodes, 1);
 
         let collection_progress = media_files
-            .list_collection_episode_progress_summaries(std::slice::from_ref(&title.id))
+            .list_collection_episode_progress_summaries(
+                std::slice::from_ref(&title.id),
+                episode_progress_day(2026, 5, 1),
+            )
             .await
             .expect("collection episode progress summaries should succeed");
         assert_eq!(collection_progress.len(), 1);
@@ -6329,6 +6402,294 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(db);
+    }
+
+    fn episode_progress_day(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(year, month, day).expect("valid fixture day")
+    }
+
+    /// Series progress counts an episode once it is monitored and has aired,
+    /// or as soon as it has a file, across every season including specials;
+    /// the record total counts every episode. The older owned, monitored and
+    /// total counts keep leaving specials and placeholders out.
+    #[tokio::test]
+    async fn episode_progress_counts_aired_monitored_or_owned_episodes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let services = SqliteServices::new(dir.path().join("progress.db").to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+
+        let title = make_test_series_title("title-progress-rule");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let quiet = make_test_series_title("title-progress-quiet");
+        titles
+            .create(quiet.clone())
+            .await
+            .expect("quiet title should insert");
+
+        let collection = |id: &str, title_id: &str, kind: CollectionType, index: &str| Collection {
+            id: id.to_string(),
+            title_id: title_id.to_string(),
+            collection_type: kind,
+            collection_index: index.to_string(),
+            label: None,
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let season = collection("progress-season", &title.id, CollectionType::Season, "1");
+        let specials = collection(
+            "progress-specials",
+            &title.id,
+            CollectionType::Specials,
+            "0",
+        );
+        let quiet_season = collection(
+            "progress-quiet-season",
+            &quiet.id,
+            CollectionType::Season,
+            "1",
+        );
+        for collection in [&season, &specials, &quiet_season] {
+            ShowRepository::create_collection(&shows, collection.clone())
+                .await
+                .expect("collection should insert");
+        }
+
+        // (id, title, collection, air date, monitored, has a file)
+        let episodes: [(&str, &Title, &Collection, Option<&str>, bool, bool); 13] = [
+            (
+                "progress-e1",
+                &title,
+                &season,
+                Some("2001-01-01"),
+                true,
+                true,
+            ),
+            (
+                "progress-e2",
+                &title,
+                &season,
+                Some("2001-01-08"),
+                true,
+                false,
+            ),
+            (
+                "progress-e3",
+                &title,
+                &season,
+                Some("2999-01-01"),
+                true,
+                false,
+            ),
+            (
+                "progress-e4",
+                &title,
+                &season,
+                Some("2001-01-15"),
+                false,
+                true,
+            ),
+            (
+                "progress-e5",
+                &title,
+                &season,
+                Some("2001-01-22"),
+                false,
+                false,
+            ),
+            ("progress-e6", &title, &season, None, true, false),
+            (
+                "progress-e7",
+                &title,
+                &season,
+                Some("2026-05-01"),
+                true,
+                false,
+            ),
+            (
+                "progress-e8",
+                &title,
+                &season,
+                Some("2026-05-02"),
+                true,
+                false,
+            ),
+            (
+                "progress-s1",
+                &title,
+                &specials,
+                Some("2001-02-01"),
+                false,
+                true,
+            ),
+            (
+                "progress-s2",
+                &title,
+                &specials,
+                Some("2001-02-08"),
+                false,
+                false,
+            ),
+            (
+                "progress-s3",
+                &title,
+                &specials,
+                Some("2001-02-15"),
+                true,
+                false,
+            ),
+            (
+                "progress-q1",
+                &quiet,
+                &quiet_season,
+                Some("2999-01-01"),
+                true,
+                false,
+            ),
+            (
+                "progress-q2",
+                &quiet,
+                &quiet_season,
+                Some("2001-01-01"),
+                false,
+                false,
+            ),
+        ];
+        for (index, (id, owner, collection, air_date, monitored, has_file)) in
+            episodes.into_iter().enumerate()
+        {
+            let number = (index + 1).to_string();
+            let episode = Episode {
+                id: id.to_string(),
+                title_id: owner.id.clone(),
+                collection_id: Some(collection.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(number.clone()),
+                season_number: Some(collection.collection_index.clone()),
+                episode_label: None,
+                title: Some(format!("Lantern {number}")),
+                air_date: air_date.map(str::to_string),
+                duration_seconds: None,
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                contiguous_absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                image_url: None,
+                monitored,
+                created_at: Utc::now(),
+            };
+            ShowRepository::create_episode(&shows, episode)
+                .await
+                .expect("episode should insert");
+            if has_file {
+                let file_id = media_files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: owner.id.clone(),
+                        file_path: format!("/library/Lantern/{id}.mkv"),
+                        size_bytes: 1_000,
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("media file should insert");
+                media_files
+                    .link_file_to_episode(&file_id, id)
+                    .await
+                    .expect("file should link");
+                media_files
+                    .set_media_file_roles_for_episode(&owner.id, id, &file_id, &[])
+                    .await
+                    .expect("file should be the episode's primary");
+            }
+        }
+
+        let today = episode_progress_day(2026, 5, 1);
+        let ids = vec![title.id.clone(), quiet.id.clone()];
+        let by_title = media_files
+            .list_title_episode_progress_summaries(&ids, today)
+            .await
+            .expect("title progress should load")
+            .into_iter()
+            .map(|summary| (summary.title_id.clone(), summary))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(by_title.len(), 2);
+
+        // Expected: e1 and e4 (on disk), e2 and e7 (monitored, aired by the
+        // day itself), s1 (an unmonitored special on disk) and s3 (a monitored
+        // aired special). Unaired e3 and e8, unmonitored e5 and s2 and undated
+        // e6 are left out.
+        let rule = &by_title[&title.id];
+        assert_eq!(rule.episodes_expected, 6);
+        assert_eq!(rule.episodes_on_disk, 3);
+        assert_eq!(rule.episode_records_total, 11);
+        assert_eq!(
+            (
+                rule.owned_episodes,
+                rule.monitored_episodes,
+                rule.total_episodes
+            ),
+            (2, 5, 7)
+        );
+
+        // Nothing has aired monitored and nothing is on disk: nothing is
+        // expected, which shows as complete.
+        let quiet_summary = &by_title[&quiet.id];
+        assert_eq!(quiet_summary.episodes_expected, 0);
+        assert_eq!(quiet_summary.episodes_on_disk, 0);
+        assert_eq!(quiet_summary.episode_records_total, 2);
+
+        // A day later e8 has aired too.
+        let tomorrow = media_files
+            .list_title_episode_progress_summaries(
+                std::slice::from_ref(&title.id),
+                episode_progress_day(2026, 5, 2),
+            )
+            .await
+            .expect("title progress should load");
+        assert_eq!(tomorrow[0].episodes_expected, 7);
+
+        let by_collection = media_files
+            .list_collection_episode_progress_summaries(&ids, today)
+            .await
+            .expect("collection progress should load")
+            .into_iter()
+            .map(|summary| (summary.collection_id.clone(), summary))
+            .collect::<HashMap<_, _>>();
+        let season_summary = &by_collection[&season.id];
+        assert_eq!(
+            (
+                season_summary.episodes_on_disk,
+                season_summary.episodes_expected,
+                season_summary.episode_records_total
+            ),
+            (2, 4, 8)
+        );
+        let specials_summary = &by_collection[&specials.id];
+        assert_eq!(
+            (
+                specials_summary.episodes_on_disk,
+                specials_summary.episodes_expected,
+                specials_summary.episode_records_total
+            ),
+            (1, 2, 3)
+        );
+        let quiet_season_summary = &by_collection[&quiet_season.id];
+        assert_eq!(quiet_season_summary.episodes_expected, 0);
+        assert_eq!(quiet_season_summary.episode_records_total, 2);
     }
 
     /// A scope whose Primary file awaits review keeps that file for search

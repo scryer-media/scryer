@@ -195,6 +195,7 @@ mod tests {
             blocklist_reason: None,
             source_path: None,
             dest_path: None,
+            file_placements: Vec::new(),
             data_json: None,
             occurred_at: "2026-06-19T00:00:00Z".to_string(),
             created_at: "2026-06-19T00:00:00Z".to_string(),

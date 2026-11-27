@@ -21,8 +21,8 @@ pub use raw::{
 };
 
 use super::release_search::{
-    QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
-    incomplete_indexer_reason,
+    IncompleteIndexerReason, QualityProfileLookup, compare_release_search_results,
+    dedupe_cross_indexer_release_results, incomplete_indexer_reason,
 };
 use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
@@ -131,6 +131,9 @@ pub struct InteractiveReleaseSearchIndexerView {
     pub skip_reason: Option<InteractiveIndexerSkipReason>,
     /// When a skip that lifts on its own ends, if known.
     pub skipped_until: Option<DateTime<Utc>>,
+    /// How long until the indexer can be asked again, when its answer said:
+    /// the next slot of its query budget, or a rate limit's retry delay.
+    pub retry_after: Option<std::time::Duration>,
     /// Releases this indexer returned that a title search removed because no
     /// enabled download client accepts their source kind, by reason code.
     /// They are not part of `result_count`.
@@ -151,6 +154,9 @@ pub enum InteractiveIndexerSkipReason {
     /// A local monthly limit on the indexer refused the search, or its usage
     /// could not be checked. `code` is the stable reason of the refusal.
     MonthlyLimit { code: &'static str },
+    /// The indexer's next query-budget slot lay beyond the longest wait an
+    /// interactive search allows, so nothing was sent to it.
+    QueryBudget,
 }
 
 impl InteractiveIndexerSkipReason {
@@ -158,8 +164,15 @@ impl InteractiveIndexerSkipReason {
     pub fn code(self) -> Option<&'static str> {
         match self {
             Self::MonthlyLimit { code } => Some(code),
+            Self::QueryBudget => Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED),
             _ => None,
         }
+    }
+
+    /// Whether the skip is a wait that lifts on its own rather than an
+    /// operator setting or a failure.
+    fn is_rate_limit(self) -> bool {
+        matches!(self, Self::QueryBudget)
     }
 
     /// Plain-text form of the reason, for logs and API clients that do not
@@ -174,20 +187,45 @@ impl InteractiveIndexerSkipReason {
             },
             Self::NoTextSearch => "does not support text search".to_string(),
             Self::MonthlyLimit { .. } => "not asked because of a local monthly limit".to_string(),
+            Self::QueryBudget => match until {
+                Some(until) => format!(
+                    "not asked: over its query budget until {}",
+                    until.to_rfc3339()
+                ),
+                None => "not asked: over its query budget".to_string(),
+            },
         }
     }
 
     /// The skip a raw search outcome reports, if the indexer was never asked.
-    fn from_outcome(outcome: crate::IndexerSearchOutcome) -> Option<IndexerSkip> {
+    fn from_outcome(
+        outcome: crate::IndexerSearchOutcome,
+        now: DateTime<Utc>,
+    ) -> Option<IndexerSkip> {
         match outcome {
             crate::IndexerSearchOutcome::Unsupported => Some((Self::NoTextSearch, None)),
             crate::IndexerSearchOutcome::BackedOff { until } => Some((Self::BackedOff, until)),
             crate::IndexerSearchOutcome::LocalLimit { reason } => {
                 Some((Self::MonthlyLimit { code: reason }, None))
             }
+            crate::IndexerSearchOutcome::Partial {
+                reason: Some(crate::IndexerSearchIncompleteReason::QueryBudgetExhausted),
+                retry_after,
+                ..
+            } => Some((
+                Self::QueryBudget,
+                retry_after.and_then(|delay| until_after(now, delay)),
+            )),
             _ => None,
         }
     }
+}
+
+/// The instant `delay` after `now`, when it can be represented.
+fn until_after(now: DateTime<Utc>, delay: std::time::Duration) -> Option<DateTime<Utc>> {
+    chrono::Duration::from_std(delay)
+        .ok()
+        .and_then(|delay| now.checked_add_signed(delay))
 }
 
 /// A skip reported for one indexer: the reason and when it lifts, if known.
@@ -684,6 +722,7 @@ impl AppUseCase {
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
                 skipped_until: skip.and_then(|(_, until)| until),
+                retry_after: None,
                 unroutable_results: Default::default(),
             });
         }
@@ -919,8 +958,9 @@ impl AppUseCase {
         {
             return;
         }
+        let now = self.runtime.environment.now();
         entry.snapshot.state = InteractiveReleaseSearchState::Completed;
-        entry.snapshot.completed_at = Some(self.runtime.environment.now());
+        entry.snapshot.completed_at = Some(now);
         match response {
             Ok((generation, page)) => {
                 entry.raw = Some(generation);
@@ -952,13 +992,27 @@ impl AppUseCase {
                 .elapsed_ms
                 .map(|elapsed| elapsed.min(i64::MAX as u64) as i64);
             view.caps = source.page.as_ref().and_then(|page| page.caps);
-            let skip = source
-                .outcome
-                .and_then(InteractiveIndexerSkipReason::from_outcome);
+            // A later page that found the indexer over its query budget does
+            // not undo the pages it already answered: the indexer was searched
+            // in part, and its delivered rows stay listed.
+            let outcome = match source.outcome {
+                Some(crate::IndexerSearchOutcome::Partial {
+                    empty,
+                    reason: Some(crate::IndexerSearchIncompleteReason::QueryBudgetExhausted),
+                    retry_after,
+                }) if source.delivered > 0 => Some(crate::IndexerSearchOutcome::Partial {
+                    empty,
+                    reason: Some(crate::IndexerSearchIncompleteReason::QueryBudgetPartial),
+                    retry_after,
+                }),
+                outcome => outcome,
+            };
+            let skip = outcome
+                .and_then(|outcome| InteractiveIndexerSkipReason::from_outcome(outcome, now));
             view.skip_reason = skip.map(|(reason, _)| reason);
             view.skipped_until = skip.and_then(|(_, until)| until);
             view.rate_limited = matches!(
-                source.outcome,
+                outcome,
                 Some(
                     crate::IndexerSearchOutcome::Deferred { .. }
                         | crate::IndexerSearchOutcome::Skipped { .. }
@@ -966,24 +1020,29 @@ impl AppUseCase {
                             reason: Some(
                                 crate::IndexerSearchIncompleteReason::RateLimited
                                     | crate::IndexerSearchIncompleteReason::QueryBudgetExhausted
+                                    | crate::IndexerSearchIncompleteReason::QueryBudgetPartial
                             ),
                             ..
                         }
                 )
             );
+            view.retry_after = source.retry_after;
+            let incomplete = if skip.is_some() {
+                None
+            } else {
+                outcome.and_then(incomplete_indexer_reason)
+            };
+            let partly_searched = incomplete
+                .as_ref()
+                .is_some_and(IncompleteIndexerReason::is_partly_searched);
             view.status = if source.pending {
                 InteractiveReleaseSearchIndexerStatus::Searching
             } else if skip.is_some() {
                 InteractiveReleaseSearchIndexerStatus::Skipped
-            } else if source.stopped {
+            } else if source.stopped && !partly_searched {
                 InteractiveReleaseSearchIndexerStatus::Failed
             } else {
                 InteractiveReleaseSearchIndexerStatus::Completed
-            };
-            let incomplete = if skip.is_some() {
-                None
-            } else {
-                source.outcome.and_then(incomplete_indexer_reason)
             };
             view.failure_reason_code = skip
                 .and_then(|(reason, _)| reason.code())
@@ -1243,12 +1302,13 @@ impl AppUseCase {
                     }
                 };
                 match outcome {
-                    Ok((_, _, Some((reason, until)), _)) => {
+                    Ok((_, failure_reason, Some((reason, until)), _)) => {
                         self.set_interactive_indexer_skipped(
                             &job_id,
                             &indexer_id,
                             reason,
                             until,
+                            failure_reason.and_then(|reason| reason.retry_after),
                             elapsed_ms,
                         )
                         .await;
@@ -1265,15 +1325,47 @@ impl AppUseCase {
                             elapsed_ms,
                         )
                         .await;
-                        if let Some(reason) = failure_reason {
-                            self.set_interactive_indexer_status(
-                                &job_id,
-                                &indexer_id,
-                                InteractiveReleaseSearchIndexerStatus::Failed,
-                                Some(reason),
-                                Some(elapsed_ms),
-                            )
-                            .await;
+                        match failure_reason {
+                            // Never asked: its query budget had no slot
+                            // within the wait an interactive search allows.
+                            Some(reason) if reason.is_not_searched_for_query_budget() => {
+                                let until = reason.retry_after.and_then(|delay| {
+                                    until_after(self.runtime.environment.now(), delay)
+                                });
+                                self.set_interactive_indexer_skipped(
+                                    &job_id,
+                                    &indexer_id,
+                                    InteractiveIndexerSkipReason::QueryBudget,
+                                    until,
+                                    reason.retry_after,
+                                    elapsed_ms,
+                                )
+                                .await;
+                            }
+                            // Searched in part: the merged results stay and
+                            // the indexer reads as answered, with the reason
+                            // and the delay beside it.
+                            Some(reason) if reason.is_partly_searched() => {
+                                self.set_interactive_indexer_status(
+                                    &job_id,
+                                    &indexer_id,
+                                    InteractiveReleaseSearchIndexerStatus::Completed,
+                                    Some(reason),
+                                    Some(elapsed_ms),
+                                )
+                                .await;
+                            }
+                            Some(reason) => {
+                                self.set_interactive_indexer_status(
+                                    &job_id,
+                                    &indexer_id,
+                                    InteractiveReleaseSearchIndexerStatus::Failed,
+                                    Some(reason),
+                                    Some(elapsed_ms),
+                                )
+                                .await;
+                            }
+                            None => {}
                         }
                     }
                     Err(error) if error.is_canceled() => {
@@ -1365,6 +1457,9 @@ impl AppUseCase {
                 .as_ref()
                 .is_some_and(super::release_search::reason_is_rate_limit);
             indexer.failure_reason_code = failure_reason.as_ref().and_then(|reason| reason.code);
+            indexer.retry_after = failure_reason
+                .as_ref()
+                .and_then(|reason| reason.retry_after);
             indexer.failure_reason = failure_reason.map(|reason| reason.message);
             if elapsed_ms.is_some() {
                 indexer.elapsed_ms = elapsed_ms;
@@ -1379,6 +1474,7 @@ impl AppUseCase {
         indexer_id: &str,
         reason: InteractiveIndexerSkipReason,
         until: Option<DateTime<Utc>>,
+        retry_after: Option<std::time::Duration>,
         elapsed_ms: i64,
     ) {
         let mut registry = self
@@ -1404,9 +1500,10 @@ impl AppUseCase {
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = Some(reason.describe(until));
             indexer.failure_reason_code = reason.code();
-            indexer.rate_limited = false;
+            indexer.rate_limited = reason.is_rate_limit();
             indexer.skip_reason = Some(reason);
             indexer.skipped_until = until;
+            indexer.retry_after = retry_after;
         }
     }
 
@@ -1474,6 +1571,7 @@ impl AppUseCase {
             indexer.failure_reason = None;
             indexer.failure_reason_code = None;
             indexer.rate_limited = false;
+            indexer.retry_after = None;
             indexer.unroutable_results = unroutable;
         }
         if query_listing {
@@ -1536,8 +1634,15 @@ impl AppUseCase {
             .iter()
             .find(|outcome| outcome.indexer_id == indexer_id)
             .map(|outcome| outcome.outcome);
-        if let Some(skip) = own_outcome.and_then(InteractiveIndexerSkipReason::from_outcome) {
-            return Ok((Vec::new(), None, Some(skip)));
+        let now = self.runtime.environment.now();
+        if let Some(skip) =
+            own_outcome.and_then(|outcome| InteractiveIndexerSkipReason::from_outcome(outcome, now))
+        {
+            return Ok((
+                Vec::new(),
+                own_outcome.and_then(incomplete_indexer_reason),
+                Some(skip),
+            ));
         }
         let failure_reason = own_outcome.and_then(incomplete_indexer_reason);
         let results = response

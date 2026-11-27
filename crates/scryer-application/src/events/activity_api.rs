@@ -980,6 +980,7 @@ fn media_request_title_history_records(
             dest_path: None,
             // A media request predates any file, so there are no bytes to report.
             size_bytes: None,
+            file_placements: Vec::new(),
             data_json: data_json.clone(),
             occurred_at: event.occurred_at.to_rfc3339(),
             created_at: event.occurred_at.to_rfc3339(),
