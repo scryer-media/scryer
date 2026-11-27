@@ -4449,6 +4449,14 @@ impl MediaIssueReason {
             .into_iter()
             .find(|reason| reason.as_str() == value)
     }
+
+    /// Whether the report condemns the content wherever it appears in the
+    /// title: every file holding it is marked and the import gate refuses
+    /// it. A wrong-content file may be right for another episode, so that
+    /// report marks only its file and blocks only its release.
+    pub const fn applies_title_wide(self) -> bool {
+        !matches!(self, Self::WrongContent)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4552,7 +4560,10 @@ impl MediaIssueExecutionStatus {
     }
 }
 
-/// A report that a library file is bad. Reports are kept as audit records.
+/// A report that a library file is bad.
+///
+/// Retention: reports are kept forever as audit records. Nothing prunes the
+/// `media_issues` table, and history retention does not apply to it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaIssue {
     pub id: String,

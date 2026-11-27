@@ -1524,6 +1524,9 @@ pub struct ConfirmMediaIssue<'a> {
     /// identity instead of a second entry being written.
     pub release: Option<&'a NewBlocklistEntry>,
     pub reason: &'a str,
+    /// Whether the import gate refuses this content for the title. False for
+    /// a wrong-content report, whose content may be right elsewhere.
+    pub blocks_imports: bool,
     pub recycle_fingerprint: Option<&'a str>,
     /// The title's files whose content matches. Each is stamped.
     pub matching_media_file_ids: &'a [String],

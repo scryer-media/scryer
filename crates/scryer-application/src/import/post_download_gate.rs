@@ -68,7 +68,8 @@ pub(crate) struct PostDownloadAcquisitionDecision {
 
 /// The title's bad-file content identities for one import unit of work.
 ///
-/// Read at most once, by the first file the gate prepares, so a season pack
+/// Only entries that gate imports: content a wrong-content report marked may
+/// be right for another episode, so it still imports. Read at most once, by the first file the gate prepares, so a season pack
 /// costs one indexed read rather than one per episode. A failed read is not
 /// kept: that file is held, and the next file tries again.
 pub(crate) struct TitleBadFiles {
@@ -85,7 +86,7 @@ impl TitleBadFiles {
     }
 
     /// Whether the proven content matches one of the title's bad files.
-    async fn matches(
+    pub(crate) async fn matches(
         &self,
         app: &AppUseCase,
         title_id: &str,
@@ -120,7 +121,7 @@ impl TitleBadFiles {
                 app.services
                     .workflow
                     .blocklist_repo
-                    .list_content_identities_for_title(&self.title_id)
+                    .list_import_blocking_identities_for_title(&self.title_id)
                     .await
                     .map(|rows| rows.into_iter().map(|(_, identity)| identity).collect())
             })

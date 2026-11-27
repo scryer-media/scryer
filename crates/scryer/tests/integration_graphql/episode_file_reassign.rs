@@ -206,6 +206,168 @@ async fn a_file_marked_bad_survives_the_wanted_pass_and_an_upgrade_import() {
     );
 }
 
+/// A wrong-content report marks only the reported file and blocks only its
+/// release. The same content in a sibling file stays unmarked, and the import
+/// gate lets it through, so it can import for the episode it belongs to. A
+/// corrupted report on that content then marks it and gates it title-wide.
+#[tokio::test]
+async fn a_wrong_content_report_marks_only_its_file_and_blocks_only_its_release() {
+    use scryer_application::BlocklistRepository;
+    use scryer_application::media_issues::SubmitMediaIssueInput;
+    use scryer_application::testing::bad_file_gate_refuses_for_test;
+    use scryer_infrastructure_library::media::libraries::state_store::BlocklistStore;
+
+    let ctx = TestContext::new().await;
+    let fixture = reassign_fixture(&ctx, "Wrong Content Fixture", "97110").await;
+    let bytes = b"synthetic shared episode content".to_vec();
+    let seed = |name: &str, release: &str, episode: usize| {
+        let path = fixture.season_dir.join(name);
+        std::fs::write(&path, &bytes).expect("write synthetic file");
+        let input = InsertMediaFileInput {
+            title_id: fixture.title.id.clone(),
+            file_path: path.to_string_lossy().into_owned(),
+            size_bytes: bytes.len() as i64,
+            quality_label: Some("1080p".to_string()),
+            indexer_source: Some("synthetic-indexer".to_string()),
+            grabbed_release_title: Some(release.to_string()),
+            release_listing_json: Some(
+                r#"{"v":1,"captured_at":"2024-02-01T12:00:00Z"}"#.to_string(),
+            ),
+            ..Default::default()
+        };
+        (input, path, fixture.episodes[episode].id.clone())
+    };
+    let mut files = Vec::new();
+    for (name, release, episode) in [
+        ("synthetic.e01.mkv", "Synthetic.S01E01.1080p.WEB-DL-GRP", 0),
+        ("synthetic.e02.mkv", "Synthetic.S01E02.1080p.WEB-DL-GRP", 1),
+    ] {
+        let (input, path, episode_id) = seed(name, release, episode);
+        let file_id = ctx
+            .media_files
+            .insert_media_file(&input)
+            .await
+            .expect("insert media file");
+        ctx.link_primary_file_to_episode(&fixture.title.id, &file_id, &episode_id)
+            .await
+            .expect("link primary file");
+        files.push((file_id, path));
+    }
+    let (reported_id, reported_path) = files[0].clone();
+    let (sibling_id, _) = files[1].clone();
+
+    let store = std::sync::Arc::new(BlocklistStore::new(ctx.db.datastore()));
+    let app = ctx.app.with_test_overrides(|builder| {
+        builder
+            .with_blocklist_repo(store.clone())
+            .with_media_files(std::sync::Arc::new(ctx.media_files.clone()))
+    });
+    let operator = app.find_or_create_default_user().await.expect("operator");
+    let with_library_permissions = |permissions: &[LibraryPermission]| {
+        let mut actor = operator.clone();
+        actor.authorization = scryer_domain::UserAuthorization {
+            libraries: std::collections::HashMap::from([(
+                fixture.title.library_id.clone(),
+                scryer_domain::LibraryPermissionMask::from_permissions(permissions.iter().copied()),
+            )]),
+            loaded: true,
+            ..Default::default()
+        };
+        actor
+    };
+    let requester =
+        with_library_permissions(&[LibraryPermission::View, LibraryPermission::Request]);
+    let admin =
+        with_library_permissions(&[LibraryPermission::View, LibraryPermission::ManageTitles]);
+    let report = |file_id: String, reason: scryer_domain::MediaIssueReason| {
+        let app = &app;
+        let requester = &requester;
+        let admin = &admin;
+        async move {
+            let issue = app
+                .submit_media_issue(
+                    requester,
+                    SubmitMediaIssueInput {
+                        media_file_id: file_id,
+                        reason,
+                        details: None,
+                        remediation: scryer_domain::MediaIssueRemediation::MarkBad,
+                    },
+                )
+                .await
+                .expect("submit report");
+            if issue.status == scryer_domain::MediaIssueStatus::Pending {
+                app.approve_media_issue(admin, &issue.id)
+                    .await
+                    .expect("approve report");
+            }
+        }
+    };
+    let both = vec![reported_id.clone(), sibling_id.clone()];
+
+    report(
+        reported_id.clone(),
+        scryer_domain::MediaIssueReason::WrongContent,
+    )
+    .await;
+    let marked = store
+        .marked_bad_file_ids(&both)
+        .await
+        .expect("marked files");
+    assert!(marked.contains(&reported_id), "the reported file is marked");
+    assert!(
+        !marked.contains(&sibling_id),
+        "a sibling holding the same content is not marked"
+    );
+    assert!(
+        !bad_file_gate_refuses_for_test(&app, &fixture.title.id, &reported_path)
+            .await
+            .expect("gate check"),
+        "the same content still imports for another episode"
+    );
+    assert!(
+        store
+            .is_blocked(
+                &fixture.title.id,
+                "synthetic-indexer",
+                "Synthetic.S01E01.1080p.WEB-DL-GRP",
+                None,
+            )
+            .await
+            .expect("reported release"),
+        "the reported release is blocked"
+    );
+    assert!(
+        !store
+            .is_blocked(
+                &fixture.title.id,
+                "synthetic-indexer",
+                "Synthetic.S01E02.1080p.WEB-DL-GRP",
+                None,
+            )
+            .await
+            .expect("other release"),
+        "a different release of the title is not blocked"
+    );
+
+    report(
+        sibling_id.clone(),
+        scryer_domain::MediaIssueReason::Corrupted,
+    )
+    .await;
+    let marked = store
+        .marked_bad_file_ids(&both)
+        .await
+        .expect("marked files");
+    assert!(marked.contains(&sibling_id), "the corrupted file is marked");
+    assert!(
+        bad_file_gate_refuses_for_test(&app, &fixture.title.id, &reported_path)
+            .await
+            .expect("gate check"),
+        "corrupted content is refused anywhere in the title"
+    );
+}
+
 /// One synthetic series with three episodes in season one, a recorded title
 /// folder under a temp library root, and the season folder that holds files.
 struct ReassignFixture {

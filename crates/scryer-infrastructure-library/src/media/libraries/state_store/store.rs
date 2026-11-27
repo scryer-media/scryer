@@ -3753,7 +3753,16 @@ impl BlocklistRepository for BlocklistStore {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<(String, BlocklistContentIdentity)>> {
-        super::bad_file_store::list_content_identities_for_title(&self.datastore, title_id).await
+        super::bad_file_store::list_content_identities_for_title(&self.datastore, title_id, false)
+            .await
+    }
+
+    async fn list_import_blocking_identities_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<(String, BlocklistContentIdentity)>> {
+        super::bad_file_store::list_content_identities_for_title(&self.datastore, title_id, true)
+            .await
     }
 
     async fn marked_bad_file_ids(
@@ -3769,17 +3778,18 @@ impl BlocklistRepository for BlocklistStore {
         identity: &BlocklistContentIdentity,
     ) -> AppResult<Option<BlocklistEntry>> {
         let sql = format!(
-            "SELECT {BLOCKLIST_COLUMNS} FROM blocklist WHERE {}",
+            "SELECT {BLOCKLIST_COLUMNS} FROM blocklist WHERE {}
+                AND content_blocks_imports = {{}}",
             super::bad_file_store::CONTENT_IDENTITY_PREDICATE
         );
-        Ok(fetch_blocklist_entries(
-            self.datastore.read_exec(),
-            &sql,
-            &super::bad_file_store::content_identity_lookup_args(title_id, identity),
+        let mut args = super::bad_file_store::content_identity_lookup_args(title_id, identity);
+        args.push(SqlArg::Bool(true));
+        Ok(
+            fetch_blocklist_entries(self.datastore.read_exec(), &sql, &args)
+                .await?
+                .into_iter()
+                .next(),
         )
-        .await?
-        .into_iter()
-        .next())
     }
 
     async fn remove_and_unmark(&self, id: &str) -> AppResult<Vec<UnmarkedMediaIssue>> {

@@ -11643,7 +11643,17 @@ pub trait BlocklistRepository: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// The title's bad-file entry with this content identity, if any.
+    /// The content identities the import gate refuses for the title: every
+    /// bad-file entry except those only wrong-content reports confirmed.
+    async fn list_import_blocking_identities_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<(String, scryer_domain::BlocklistContentIdentity)>> {
+        self.list_content_identities_for_title(title_id).await
+    }
+
+    /// The title's bad-file entry with this content identity that the import
+    /// gate refuses, if any.
     async fn find_content_block(
         &self,
         _title_id: &str,

@@ -9,6 +9,10 @@ ALTER TABLE blocklist ADD COLUMN content_scheme text;
 ALTER TABLE blocklist ADD COLUMN content_size_bytes bigint;
 ALTER TABLE blocklist ADD COLUMN content_sample_bytes bigint;
 ALTER TABLE blocklist ADD COLUMN content_sample_blake3 text;
+-- Whether the import gate refuses this content for the title. A wrong-content
+-- report marks only its file: the same content may be right for another
+-- episode, so it does not gate imports. Any other confirmed report does.
+ALTER TABLE blocklist ADD COLUMN content_blocks_imports boolean NOT NULL DEFAULT false;
 
 -- Release uniqueness covers rows that name a release. A content-only row has
 -- no release name and the empty indexer, so without this predicate a second

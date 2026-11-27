@@ -109,18 +109,29 @@ fn placeholders(count: usize) -> String {
 pub(super) async fn list_content_identities_for_title(
     datastore: &StoreDatastore,
     title_id: &str,
+    only_blocking_imports: bool,
 ) -> AppResult<Vec<(String, BlocklistContentIdentity)>> {
     // `idx_blocklist_content_identity_unique` serves this read; the query
     // repeats its predicate so both engines can use the partial index.
-    let rows = SqlRuntime::fetch_all(
-        datastore.read_exec(),
-        "SELECT id, content_scheme, content_size_bytes, content_sample_bytes,
-                content_sample_blake3
-           FROM blocklist
-          WHERE title_id = {} AND content_sample_blake3 IS NOT NULL",
-        &[SqlArg::Text(title_id.to_string())],
-    )
-    .await?;
+    let (sql, args) = if only_blocking_imports {
+        (
+            "SELECT id, content_scheme, content_size_bytes, content_sample_bytes,
+                    content_sample_blake3
+               FROM blocklist
+              WHERE title_id = {} AND content_sample_blake3 IS NOT NULL
+                AND content_blocks_imports = {}",
+            vec![SqlArg::Text(title_id.to_string()), SqlArg::Bool(true)],
+        )
+    } else {
+        (
+            "SELECT id, content_scheme, content_size_bytes, content_sample_bytes,
+                    content_sample_blake3
+               FROM blocklist
+              WHERE title_id = {} AND content_sample_blake3 IS NOT NULL",
+            vec![SqlArg::Text(title_id.to_string())],
+        )
+    };
+    let rows = SqlRuntime::fetch_all(datastore.read_exec(), sql, &args).await?;
     let mut identities = Vec::with_capacity(rows.len());
     for row in &rows {
         if let Some(identity) = blocklist_row_content(row)? {
@@ -493,6 +504,7 @@ pub(super) async fn confirm_media_issue(
     let title_id = confirm.title_id.to_string();
     let content = confirm.content.clone();
     let reason = confirm.reason.to_string();
+    let blocks_imports = confirm.blocks_imports;
     let issue_id = confirm.issue_id.to_string();
     let file_ids = confirm.matching_media_file_ids.to_vec();
     SqlRuntime::run_in_transaction(datastore, "confirm_media_issue", move |tx| {
@@ -578,13 +590,15 @@ pub(super) async fn confirm_media_issue(
                                 SqlArg::I64(to_i64(content.size_bytes)),
                                 SqlArg::I64(to_i64(content.sample_bytes)),
                                 SqlArg::Text(content.sample_blake3.clone()),
+                                SqlArg::Bool(blocks_imports),
                             ];
                             args.push(SqlArg::Text(id.clone()));
                             SqlRuntime::execute(
                                 SqlExec::Tx(tx),
                                 "UPDATE blocklist
                                     SET content_scheme = {}, content_size_bytes = {},
-                                        content_sample_bytes = {}, content_sample_blake3 = {}
+                                        content_sample_bytes = {}, content_sample_blake3 = {},
+                                        content_blocks_imports = {}
                                   WHERE id = {}",
                                 &args,
                             )
@@ -609,8 +623,8 @@ pub(super) async fn confirm_media_issue(
                                      (id, title_id, release_name, normalized_release_name,
                                       indexer_id, info_hash, reason, created_at, content_scheme,
                                       content_size_bytes, content_sample_bytes,
-                                      content_sample_blake3)
-                                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                                      content_sample_blake3, content_blocks_imports)
+                                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
                                  ON CONFLICT DO NOTHING",
                                 &[
                                     SqlArg::Text(id.clone()),
@@ -625,6 +639,7 @@ pub(super) async fn confirm_media_issue(
                                     SqlArg::I64(to_i64(content.size_bytes)),
                                     SqlArg::I64(to_i64(content.sample_bytes)),
                                     SqlArg::Text(content.sample_blake3.clone()),
+                                    SqlArg::Bool(blocks_imports),
                                 ],
                             )
                             .await?;
@@ -657,6 +672,21 @@ pub(super) async fn confirm_media_issue(
                 }
             };
             lookup.clear();
+            // A report that gates imports turns the gate on for an entry a
+            // wrong-content report wrote first; nothing turns it off.
+            if blocks_imports {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE blocklist SET content_blocks_imports = {}
+                      WHERE id = {} AND content_blocks_imports = {}",
+                    &[
+                        SqlArg::Bool(true),
+                        SqlArg::Text(blocklist_id.clone()),
+                        SqlArg::Bool(false),
+                    ],
+                )
+                .await?;
+            }
 
             let (ids, per_statement) =
                 id_list_statements(&file_ids, 1, 2, max_binds(&SqlExec::Tx(tx)), ID_CHUNK);

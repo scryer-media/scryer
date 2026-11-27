@@ -791,6 +791,7 @@ impl AppUseCase {
                 content: &issue.content,
                 release: release.as_ref(),
                 reason,
+                blocks_imports: issue.reason.applies_title_wide(),
                 recycle_fingerprint,
                 matching_media_file_ids: &matching,
             })
@@ -806,12 +807,17 @@ impl AppUseCase {
 
     /// The title's files holding the reported content: the reported file,
     /// already proven, and any other file of the same size whose sampled
-    /// proof matches. Only same-size files are read.
+    /// proof matches. Only same-size files are read. A wrong-content report
+    /// marks the reported file alone: the same content may be right for
+    /// another episode.
     async fn matching_media_issue_file_ids(
         &self,
         issue: &MediaIssue,
         reported: &TitleMediaFile,
     ) -> AppResult<Vec<String>> {
+        if !issue.reason.applies_title_wide() {
+            return Ok(vec![reported.id.clone()]);
+        }
         let files = self
             .services
             .library
