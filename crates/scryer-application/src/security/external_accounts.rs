@@ -226,6 +226,49 @@ impl AppUseCase {
         Ok(accounts)
     }
 
+    /// The media servers each user has an active, verified link to, in one
+    /// read for every user named. Every listed user has an entry; one with no
+    /// such link has an empty list. Pending invites and disabled links do not
+    /// count. Callers decide which users they may describe.
+    pub async fn users_linked_media_servers(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::ExternalAccountProvider>>>
+    {
+        let mut linked: std::collections::HashMap<
+            String,
+            Vec<scryer_domain::ExternalAccountProvider>,
+        > = user_ids
+            .iter()
+            .map(|user_id| (user_id.clone(), Vec::new()))
+            .collect();
+        if user_ids.is_empty() {
+            return Ok(linked);
+        }
+        for account in self
+            .services
+            .identity
+            .external_accounts
+            .list_by_user_ids(user_ids)
+            .await?
+        {
+            if account.status != scryer_domain::ExternalAccountStatus::Active
+                || account.verified_at.is_none()
+            {
+                continue;
+            }
+            if let Some(providers) = linked.get_mut(&account.user_id)
+                && !providers.contains(&account.provider)
+            {
+                providers.push(account.provider);
+            }
+        }
+        for providers in linked.values_mut() {
+            providers.sort_by_key(|provider| provider.as_str());
+        }
+        Ok(linked)
+    }
+
     pub async fn repair_legacy_jellyfin_external_account_invites(&self) -> AppResult<()> {
         let connections = self
             .services

@@ -417,6 +417,15 @@ html[data-palette]:not([data-palette="CLASSIC"]):not(
   --scry-table-hover-bg: var(--scry-hover);
 }
 
+/* The pinned users-table actions cell repeats the solid row hover fill. */
+html.dark[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="settings-user-table-row"]:hover
+  > [data-slot="table-actions-cell"][data-ui="settings-user-actions-cell"] {
+  background: var(--scry-hover);
+}
+
 /* Catalog rows sit on the page ground; the header keeps the raised surface. */
 html[data-palette]:not([data-palette="CLASSIC"]):not(
     [data-palette="SCRYER_DEFAULT"]

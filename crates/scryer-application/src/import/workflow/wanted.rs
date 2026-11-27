@@ -103,6 +103,20 @@ async fn execute_resolved_episode_import(
     // The title's bad files, read once for the whole download.
     bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<EpisodeImportOutcome> {
+    // One file for several episodes is named the way rename names a file
+    // linked to all of them, so a rename right after the import changes
+    // nothing. A single-episode file keeps the caller's tokens.
+    let span = crate::library::rename::multi_episode_rename_tokens(target_episodes);
+    let span = span.as_ref();
+    let rename_episode_number = span
+        .and_then(|span| span.episode.as_deref())
+        .unwrap_or(rename_episode_number);
+    let rename_absolute_number = span
+        .and_then(|span| span.absolute_episode.as_deref())
+        .or(rename_absolute_number);
+    let rename_episode_title = span
+        .and_then(|span| span.episode_title.as_deref())
+        .or(rename_episode_title);
     let use_season_folders = app.resolve_use_season_folders(title).await?;
     let source_size = import_source_size(source_video).await?;
     let target_episode_ids = target_episodes
@@ -377,6 +391,7 @@ async fn execute_resolved_episode_import(
             imported_media_file_id: Some(media_file_id),
             reason_code: Some("additional_file".to_string()),
             link_type: Some(link_type),
+            placement: file_result.file_placement(path_to_stored_string(&dest_path)),
             source_cleanup: file_result.source_cleanup.clone().map(Box::new),
             destination_permit: file_result.destination_permit(),
             size_bytes: Some(file_result.size_bytes as i64),
@@ -956,6 +971,7 @@ async fn execute_resolved_episode_import(
                     reason_code: Some("upgrade".to_string()),
                     link_type: (import_mode == scryer_domain::ImportMode::Move)
                         .then_some(scryer_domain::ImportStrategy::Move),
+                    placement: outcome.placement.clone(),
                     source_cleanup: outcome.source_cleanup.clone(),
                     destination_permit: outcome.destination_permit.clone(),
                     size_bytes: Some(outcome.new_size_bytes),
@@ -1129,6 +1145,7 @@ async fn execute_resolved_episode_import(
         imported_media_file_id: Some(media_file_id),
         reason_code: None,
         link_type: Some(link_type),
+        placement: file_result.file_placement(path_to_stored_string(&dest_path)),
         source_cleanup: file_result.source_cleanup.clone().map(Box::new),
         destination_permit: file_result.destination_permit(),
         size_bytes: Some(file_result.size_bytes as i64),

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 
-import { wsClient } from "@/lib/graphql/ws-client";
+import { onWsReconnected, wsClient } from "@/lib/graphql/ws-client";
 
 type WsSubscriptionRequest = Parameters<typeof wsClient.subscribe>[0];
 
@@ -117,16 +117,22 @@ export function useDeferredWsSubscription<TResult>({
     let startupTimer: ReturnType<typeof setTimeout> | null = null;
     let unsubscribe: (() => void) | null = null;
 
+    let stopReconnectCatchUp: (() => void) | null = null;
+
     const startSubscription = () => {
       startupTimer = null;
-      unsubscribe = wsClient.subscribe(requestRef.current, {
+      const subscription = wsClient.subscribe(requestRef.current, {
         next(result) {
           onNextRef.current(result as TResult);
         },
         error(error) {
+          stopReconnectCatchUp?.();
+          stopReconnectCatchUp = null;
           onErrorRef.current?.(error);
         },
         complete() {
+          stopReconnectCatchUp?.();
+          stopReconnectCatchUp = null;
           if (unsubscribeRef.current === unsubscribe) {
             unsubscribeRef.current = null;
             activeRequestSignatureRef.current = null;
@@ -134,6 +140,15 @@ export function useDeferredWsSubscription<TResult>({
           onCompleteRef.current?.();
         },
       });
+      // The client resubscribes on its own after a reconnect, but what
+      // happened while the socket was down was never delivered: catch up the
+      // same way as at the first start.
+      stopReconnectCatchUp = onWsReconnected(() => onStartRef.current?.());
+      unsubscribe = () => {
+        stopReconnectCatchUp?.();
+        stopReconnectCatchUp = null;
+        subscription();
+      };
 
       unsubscribeRef.current = unsubscribe;
       activeRequestSignatureRef.current = requestSignature;

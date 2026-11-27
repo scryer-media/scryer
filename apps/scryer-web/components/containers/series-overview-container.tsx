@@ -110,7 +110,7 @@ import {
   hasAppPermission,
 } from "@/lib/utils/permissions";
 import { exclusionInputFromTitle } from "@/lib/utils/lists";
-import type { Facet } from "@/lib/types/titles";
+import type { Facet, SameFilmPairing } from "@/lib/types/titles";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
 import { useTitleOverviewReactiveRefresh } from "@/lib/hooks/use-title-overview-reactive-refresh";
 import {
@@ -181,6 +181,7 @@ export type TitleDetail = {
   effectiveRecapPolicy?: string | null;
   renameEnabled?: boolean;
   seriesMovieLinks?: SeriesMovieLink[];
+  sameFilmElsewhere?: SameFilmPairing[];
   ratings?: TitleRatings | null;
   credits?: TitleCreditRecord[] | null;
   moreLikeThis?: CatalogDiscoveryItem[];
@@ -203,6 +204,8 @@ export type TitleCollection = {
   episodesOwned: number | null;
   episodesMonitored: number | null;
   episodesTotal: number | null;
+  episodesOnDisk: number | null;
+  episodesExpected: number | null;
   episodeRecordsTotal: number | null;
   createdAt: string;
 };
@@ -367,6 +370,11 @@ type SeriesOverviewContainerProps = {
   heroLeadingAction?: React.ReactNode;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
+  /** Tells the list behind this overview that a deletion was queued. */
+  onTitleDeletionQueued?: (
+    acceptedTitleIds: readonly string[],
+    run: JobRun,
+  ) => void;
   onTitleResolved?: (title: OverviewTitleTarget) => void;
   initialEpisodeId?: string | null;
 };
@@ -421,6 +429,7 @@ export const SeriesOverviewContainer = React.memo(
     heroLeadingAction,
     onTitleNotFound,
     onBackToList,
+    onTitleDeletionQueued,
     onTitleResolved,
     initialEpisodeId,
   }: SeriesOverviewContainerProps) {
@@ -1631,9 +1640,11 @@ export const SeriesOverviewContainer = React.memo(
           .toPromise();
         if (error) throw error;
         const run = normalizeJobRun(data?.deleteTitles?.jobRun);
-        if (!run || !data?.deleteTitles?.acceptedTitleIds?.includes(title.id)) {
+        const acceptedTitleIds = data?.deleteTitles?.acceptedTitleIds ?? [];
+        if (!run || !acceptedTitleIds.includes(title.id)) {
           throw new Error(t("status.apiError"));
         }
+        onTitleDeletionQueued?.(acceptedTitleIds, run);
         setDeleteDialogOpen(false);
         setDeleteFilesOnDisk(false);
 
@@ -1690,6 +1701,7 @@ export const SeriesOverviewContainer = React.memo(
       client,
       deleteFilesOnDisk,
       onBackToList,
+      onTitleDeletionQueued,
       onTitleNotFound,
       registerInteractiveJobRun,
       titleDeletePreview,

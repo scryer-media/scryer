@@ -177,6 +177,43 @@ fn cross_indexer_release_dedup_prefers_higher_priority_source() {
 }
 
 #[test]
+fn cross_indexer_release_dedup_tells_apart_indexers_that_share_a_name() {
+    let listing = |indexer_id: &str, url: &str| {
+        let mut result = make_search_result(
+            "Synthetic Indexer",
+            "Signal.Run.S01E12.720p.WEB-DL.x264-NTb",
+            url,
+            DownloadSourceKind::NzbUrl,
+        );
+        result.indexer_id = Some(indexer_id.to_string());
+        result
+    };
+
+    // Two configurations with one name are two indexers: one copy survives.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            listing("indexer-a", "https://example.test/a"),
+            listing("indexer-b", "https://example.test/b"),
+        ],
+        &HashMap::new(),
+        "nzb",
+    );
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].indexer_id.as_deref(), Some("indexer-a"));
+
+    // Two listings from one indexer are distinct and both stay.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            listing("indexer-a", "https://example.test/a1"),
+            listing("indexer-a", "https://example.test/a2"),
+        ],
+        &HashMap::new(),
+        "nzb",
+    );
+    assert_eq!(deduped.len(), 2);
+}
+
+#[test]
 fn cross_indexer_release_dedup_prefers_unlimited_grabs() {
     let mut limited = make_search_result(
         "Limited Source",
@@ -245,6 +282,203 @@ fn cross_indexer_release_dedup_prefers_lower_grab_usage() {
 
     assert_eq!(deduped.len(), 1);
     assert_eq!(deduped[0].source, "Lower Usage");
+}
+
+const SAME_KEY_FIRST: &str = "[GRP] Synthetic Run S02E06 1080p BILI WEB-DL AAC2.0 H.264";
+const SAME_KEY_SECOND: &str =
+    "[GRP] Synthetic Run S02E06 The Paper Lantern 1080p CR WEB-DL AAC2.0 H.264";
+
+fn assert_same_dedup_key(left: &str, right: &str) {
+    assert_eq!(
+        crate::release_dedup::build_release_dedup_key(&parse_release_metadata(left)),
+        crate::release_dedup::build_release_dedup_key(&parse_release_metadata(right)),
+    );
+}
+
+#[test]
+fn cross_indexer_release_dedup_keeps_distinct_releases_from_one_indexer() {
+    assert_same_dedup_key(SAME_KEY_FIRST, SAME_KEY_SECOND);
+    let results = vec![
+        make_search_result(
+            "Shared Source",
+            SAME_KEY_FIRST,
+            "https://example.test/first",
+            DownloadSourceKind::NzbUrl,
+        ),
+        make_search_result(
+            "Shared Source",
+            SAME_KEY_SECOND,
+            "https://example.test/second",
+            DownloadSourceKind::NzbUrl,
+        ),
+    ];
+
+    let deduped = dedupe_cross_indexer_release_results(
+        results,
+        &HashMap::from([("Shared Source".to_string(), 10)]),
+        "nzb",
+    );
+
+    let urls: Vec<_> = deduped
+        .iter()
+        .map(|result| result.download_url.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        urls,
+        ["https://example.test/first", "https://example.test/second"]
+    );
+}
+
+#[test]
+fn cross_indexer_release_dedup_judges_one_indexers_releases_together() {
+    assert_same_dedup_key(SAME_KEY_FIRST, SAME_KEY_SECOND);
+    let priorities = HashMap::from([
+        ("Shared Source".to_string(), 50),
+        ("Other Source".to_string(), 10),
+    ]);
+    let unrelated = "Synthetic.Lantern.S01E01.720p.WEB-DL.x264-OTH";
+
+    // The other indexer wins on priority, so the shared indexer's copy of the
+    // release it also carries gives way. The second release, which only the
+    // shared indexer has, stays.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_FIRST,
+                "https://example.test/shared-first",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                unrelated,
+                "https://example.test/unrelated",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Other Source",
+                SAME_KEY_FIRST,
+                "https://example.test/other",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_SECOND,
+                "https://example.test/shared-second",
+                DownloadSourceKind::NzbUrl,
+            ),
+        ],
+        &priorities,
+        "nzb",
+    );
+    let urls: Vec<_> = deduped
+        .iter()
+        .map(|result| result.download_url.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://example.test/unrelated",
+            "https://example.test/other",
+            "https://example.test/shared-second"
+        ]
+    );
+
+    // The shared indexer wins, so both of its releases stay, in order.
+    let priorities = HashMap::from([
+        ("Shared Source".to_string(), 10),
+        ("Other Source".to_string(), 50),
+    ]);
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            make_search_result(
+                "Other Source",
+                SAME_KEY_FIRST,
+                "https://example.test/other",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_FIRST,
+                "https://example.test/shared-first",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_SECOND,
+                "https://example.test/shared-second",
+                DownloadSourceKind::NzbUrl,
+            ),
+        ],
+        &priorities,
+        "nzb",
+    );
+    let urls: Vec<_> = deduped
+        .iter()
+        .map(|result| result.download_url.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://example.test/shared-first",
+            "https://example.test/shared-second"
+        ]
+    );
+}
+
+#[test]
+fn cross_indexer_release_dedup_keeps_a_release_only_one_indexer_carries() {
+    assert_same_dedup_key(SAME_KEY_FIRST, SAME_KEY_SECOND);
+    let priorities = HashMap::from([
+        ("Shared Source".to_string(), 50),
+        ("Preferred Source".to_string(), 10),
+    ]);
+    let shared_first = || {
+        make_search_result(
+            "Shared Source",
+            SAME_KEY_FIRST,
+            "https://example.test/shared-first",
+            DownloadSourceKind::NzbUrl,
+        )
+    };
+    let shared_second = || {
+        make_search_result(
+            "Shared Source",
+            SAME_KEY_SECOND,
+            "https://example.test/shared-second",
+            DownloadSourceKind::NzbUrl,
+        )
+    };
+    // The preferred indexer spells the same release with dots.
+    let preferred = || {
+        make_search_result(
+            "Preferred Source",
+            "[GRP].Synthetic.Run.S02E06.1080p.BILI.WEB-DL.AAC2.0.H.264",
+            "https://example.test/preferred",
+            DownloadSourceKind::NzbUrl,
+        )
+    };
+    let urls = |results: Vec<IndexerSearchResult>| {
+        let mut urls = dedupe_cross_indexer_release_results(results, &priorities, "nzb")
+            .into_iter()
+            .map(|result| result.download_url.unwrap_or_default())
+            .collect::<Vec<_>>();
+        urls.sort();
+        urls
+    };
+    let expected = [
+        "https://example.test/preferred".to_string(),
+        "https://example.test/shared-second".to_string(),
+    ];
+
+    assert_eq!(
+        urls(vec![shared_first(), shared_second(), preferred()]),
+        expected
+    );
+    assert_eq!(
+        urls(vec![preferred(), shared_first(), shared_second()]),
+        expected
+    );
 }
 
 #[test]
@@ -394,7 +628,7 @@ fn an_infohash_block_ignores_both_the_indexer_and_the_name() {
 }
 
 #[test]
-fn structured_dispatch_queries_collapse_equivalent_episode_variants() {
+fn structured_dispatch_queries_collapse_only_the_title_into_the_episode_request() {
     let queries = vec![
         "Synthetic Atlas 035".to_string(),
         "Synthetic Atlas S02E11".to_string(),
@@ -404,7 +638,14 @@ fn structured_dispatch_queries_collapse_equivalent_episode_variants() {
 
     let deduped = dedupe_structured_dispatch_queries(queries, Some(2), Some(11), Some(35));
 
-    assert_eq!(deduped, vec!["Synthetic Atlas 035".to_string()]);
+    assert_eq!(
+        deduped,
+        vec![
+            "Synthetic Atlas 035".to_string(),
+            "Synthetic Atlas S02E11".to_string(),
+            "Synthetic Atlas S02".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -449,11 +690,13 @@ fn structured_dispatch_queries_keep_a_contradicting_season_episode_token() {
 
     let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), Some(53));
 
-    // The forms that merely restate season=1&ep=53 still collapse.
+    // Only the plain title, sent as the S01E53 request, collapses.
     assert_eq!(
         deduped,
         vec![
             "Synthetic Atlas 053".to_string(),
+            "Synthetic Atlas S01E53".to_string(),
+            "Synthetic Atlas S01".to_string(),
             "Synthetic Atlas S04E17".to_string(),
         ]
     );
@@ -474,8 +717,8 @@ fn text_safe_dispatch_queries_keep_a_contradicting_season_episode_token() {
     assert_eq!(deduped, queries);
 }
 
-/// A bare `Sxx` that names a different season is kept for the same reason,
-/// while the one matching the dispatch still collapses.
+/// A bare `Sxx` asks for the season alone, so it is kept whether or not it
+/// names the dispatch's season.
 #[test]
 fn structured_dispatch_queries_keep_a_contradicting_season_token() {
     let queries = vec![
@@ -484,15 +727,9 @@ fn structured_dispatch_queries_keep_a_contradicting_season_token() {
         "Synthetic Atlas S04".to_string(),
     ];
 
-    let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), None);
+    let deduped = dedupe_structured_dispatch_queries(queries.clone(), Some(1), Some(53), None);
 
-    assert_eq!(
-        deduped,
-        vec![
-            "Synthetic Atlas".to_string(),
-            "Synthetic Atlas S04".to_string(),
-        ]
-    );
+    assert_eq!(deduped, queries);
 }
 
 #[test]
@@ -820,4 +1057,163 @@ fn an_indexer_over_its_query_budget_reads_as_a_wait_with_its_next_slot() {
         reason.kind,
         IncompleteIndexerKind::RateLimited | IncompleteIndexerKind::QueryBudget
     ));
+    assert_eq!(
+        reason.code,
+        Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED)
+    );
+    assert_eq!(reason.retry_after, Some(std::time::Duration::from_secs(45)));
+    assert!(reason.is_not_searched_for_query_budget());
+    assert!(!reason.is_partly_searched());
+}
+
+#[test]
+fn an_indexer_its_query_budget_stopped_part_way_reads_as_searched_in_part() {
+    let reason = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+        retry_after: Some(std::time::Duration::from_secs(52)),
+    })
+    .expect("a partly searched indexer is an incomplete outcome");
+
+    assert_eq!(
+        reason.code,
+        Some(crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED)
+    );
+    assert_eq!(reason.retry_after, Some(std::time::Duration::from_secs(52)));
+    assert!(reason_is_rate_limit(&reason));
+    assert!(reason.is_partly_searched());
+    assert!(!reason.is_not_searched_for_query_budget());
+}
+
+#[test]
+fn a_query_budget_skip_becomes_partial_only_for_an_indexer_another_query_reached() {
+    let not_searched = || {
+        incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+            empty: true,
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+            retry_after: Some(std::time::Duration::from_secs(40)),
+        })
+        .expect("over budget")
+    };
+    let mut reasons = HashMap::from([
+        ("idx-reached".to_string(), not_searched()),
+        ("idx-unasked".to_string(), not_searched()),
+    ]);
+    let searched = HashSet::from(["idx-reached".to_string()]);
+
+    settle_query_budget_reasons(&mut reasons, &searched);
+
+    let reached = &reasons["idx-reached"];
+    assert!(reached.is_partly_searched());
+    assert_eq!(
+        reached.retry_after,
+        Some(std::time::Duration::from_secs(40))
+    );
+    assert!(reasons["idx-unasked"].is_not_searched_for_query_budget());
+}
+
+#[test]
+fn an_indexer_reason_does_not_depend_on_which_query_finishes_first() {
+    let answer = |outcome: IndexerSearchOutcome| {
+        vec![IndexerQueryOutcome {
+            indexer_id: "idx-a".to_string(),
+            outcome,
+            page: None,
+        }]
+    };
+    let kept_back = answer(IndexerSearchOutcome::Partial {
+        empty: true,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+        retry_after: Some(std::time::Duration::from_secs(40)),
+    });
+    for partial_reason in [
+        IndexerSearchIncompleteReason::RateLimited,
+        IndexerSearchIncompleteReason::UpstreamFailure,
+        IndexerSearchIncompleteReason::FanoutBranchFailed,
+        IndexerSearchIncompleteReason::MalformedContent,
+    ] {
+        // This query reached the indexer and returned rows, then ended short.
+        let answered = answer(IndexerSearchOutcome::Partial {
+            empty: false,
+            reason: Some(partial_reason),
+            retry_after: None,
+        });
+        let settle = |first: &[IndexerQueryOutcome], second: &[IndexerQueryOutcome]| {
+            let mut reasons = HashMap::new();
+            let mut searched = HashSet::new();
+            record_query_indexer_outcomes(&mut reasons, &mut searched, first);
+            record_query_indexer_outcomes(&mut reasons, &mut searched, second);
+            settle_query_budget_reasons(&mut reasons, &searched);
+            let reason = reasons.remove("idx-a").expect("idx-a fell short");
+            (
+                searched.contains("idx-a"),
+                reason.kind,
+                reason.code,
+                reason.message,
+            )
+        };
+
+        let budget_first = settle(&kept_back, &answered);
+        let budget_last = settle(&answered, &kept_back);
+        assert_eq!(budget_first, budget_last, "{partial_reason:?}");
+        assert!(budget_first.0, "{partial_reason:?}: rows mean it was asked");
+        assert_ne!(
+            budget_first.2,
+            Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED),
+            "{partial_reason:?}"
+        );
+    }
+
+    // One query its budget cut short and another that stopped at the
+    // provider's result limit or a rate limit, both with rows: whichever
+    // reason is kept, the indexer still reads as answered, in either order.
+    let cut_short = answer(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+        retry_after: Some(std::time::Duration::from_secs(40)),
+    });
+    for stopped_reason in [
+        IndexerSearchIncompleteReason::PageCeilingReached,
+        IndexerSearchIncompleteReason::SaturatedPartition,
+        IndexerSearchIncompleteReason::RateLimited,
+    ] {
+        let stopped = answer(IndexerSearchOutcome::Partial {
+            empty: false,
+            reason: Some(stopped_reason),
+            retry_after: None,
+        });
+        let settle = |first: &[IndexerQueryOutcome], second: &[IndexerQueryOutcome]| {
+            let mut reasons = HashMap::new();
+            let mut searched = HashSet::new();
+            record_query_indexer_outcomes(&mut reasons, &mut searched, first);
+            record_query_indexer_outcomes(&mut reasons, &mut searched, second);
+            settle_query_budget_reasons(&mut reasons, &searched);
+            let reason = reasons.remove("idx-a").expect("idx-a fell short");
+            (
+                searched.contains("idx-a"),
+                reason.answered_when_rows_delivered(),
+                reason.kind,
+                reason.code,
+                reason.message,
+            )
+        };
+
+        let budget_first = settle(&cut_short, &stopped);
+        let budget_last = settle(&stopped, &cut_short);
+        assert_eq!(budget_first, budget_last, "{stopped_reason:?}");
+        assert!(budget_first.0, "{stopped_reason:?}: rows mean it was asked");
+        assert!(
+            budget_first.1,
+            "{stopped_reason:?}: an indexer that delivered rows reads as answered"
+        );
+    }
+
+    // A failure stays a failure even beside rows.
+    let failed = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+        retry_after: None,
+    })
+    .expect("an upstream failure falls short");
+    assert!(!failed.answered_when_rows_delivered());
 }

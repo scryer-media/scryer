@@ -33,6 +33,7 @@ use crate::media::canonical_tags::{
     attach_metadata_tags_to_titles, load_title_metadata_ratings, load_title_metadata_tags,
     replace_title_metadata_ratings_tx, replace_title_metadata_tags_tx,
 };
+use crate::media::episode_air::episode_aired_by_sql;
 use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::media::monitor_selections::{
     OWNER_KIND_TITLE, load_monitor_selection, replace_monitor_selection_tx,
@@ -1713,6 +1714,29 @@ impl TitleRepository for TitleStore {
             filter_counts,
             managed_bytes,
         })
+    }
+
+    async fn list_library_managed_bytes(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::LibraryManagedBytes>> {
+        if library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // A library's titles all sit in the one statement that binds its id,
+        // so a chunk never splits a library's total.
+        let (library_ids, per_statement) = id_list_statements(
+            library_ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            TITLE_ID_LIST_BIND_CHUNK,
+        );
+        let mut totals = Vec::new();
+        for chunk in library_ids.chunks(per_statement) {
+            totals.extend(fetch_library_managed_bytes(&self.datastore, chunk).await?);
+        }
+        Ok(totals)
     }
 
     async fn title_catalog_filter_options(
@@ -5245,6 +5269,43 @@ async fn fetch_title_catalog_count(
     )
 }
 
+/// Each library's managed bytes in one grouped statement. The scope is the
+/// unfiltered catalog's and the sizes are its media-size subquery's, so every
+/// total equals the managed bytes that library's own catalog reports.
+async fn fetch_library_managed_bytes(
+    datastore: &StoreDatastore,
+    library_ids: &[String],
+) -> AppResult<Vec<scryer_application::LibraryManagedBytes>> {
+    let dialect = title_catalog_dialect_for_datastore(datastore);
+    let (scope_sql, args) = build_title_catalog_where_sql(
+        None,
+        library_ids,
+        None,
+        &TitleCatalogFilter::default(),
+        dialect,
+    );
+    let media_size_sql =
+        title_catalog_media_size_subquery_scoped(dialect, TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN);
+    let sql = format!(
+        "WITH scoped_titles AS (SELECT id, library_id FROM titles WHERE {scope_sql}) \
+         SELECT scoped_titles.library_id, \
+                CAST(COALESCE(SUM(catalog_media_size.total_size_bytes), 0) AS BIGINT) AS managed_bytes \
+           FROM ({media_size_sql}) catalog_media_size \
+           JOIN scoped_titles ON scoped_titles.id = catalog_media_size.title_id \
+          GROUP BY scoped_titles.library_id"
+    );
+    SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(scryer_application::LibraryManagedBytes {
+                library_id: row.text("library_id")?,
+                managed_bytes: row.i64("managed_bytes")?.max(0),
+            })
+        })
+        .collect()
+}
+
 async fn fetch_title_catalog_managed_bytes(
     datastore: &StoreDatastore,
     facet: Option<MediaFacet>,
@@ -5661,11 +5722,21 @@ fn build_title_catalog_page_sql(
             "WITH scoped_titles AS (SELECT id FROM titles WHERE {scope_sql}) \
              SELECT {columns} FROM titles"
         ));
-        sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
+        sql.push_str(&build_title_catalog_sort_join_sql(
+            &sort, dialect, &mut args,
+        ));
         sql.push_str(" WHERE titles.id IN (SELECT id FROM scoped_titles)");
     } else {
         sql.push_str(&format!("SELECT {columns} FROM titles"));
-        sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
+        // The join comes ahead of the WHERE clause, so its binds do too.
+        let mut join_args = Vec::new();
+        sql.push_str(&build_title_catalog_sort_join_sql(
+            &sort,
+            dialect,
+            &mut join_args,
+        ));
+        join_args.append(&mut args);
+        args = join_args;
         if !where_sql.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&where_sql);
@@ -5721,7 +5792,6 @@ fn title_catalog_outstanding_episode_exists(dialect: TitleCatalogSqlDialect) -> 
             AND catalog_episode_collection.collection_index <> '0' \
             AND trim(COALESCE(catalog_episode.title, '')) <> '' \
             AND upper(trim(catalog_episode.title)) NOT IN ('TBA', 'TBD') \
-            AND trim(COALESCE(catalog_episode.air_date, '')) <> '' \
             AND {} \
             AND {} \
             AND NOT EXISTS (SELECT 1 FROM file_episode_map catalog_episode_file \
@@ -5777,15 +5847,14 @@ fn title_catalog_needs_attention_predicate(dialect: TitleCatalogSqlDialect) -> S
     )
 }
 
-/// An episode that has already aired, in the terms the catalogue stores air dates.
-///
-/// The column is text and dates are compared as text elsewhere, so today's date is the
-/// bound; an announced season is not missing work yet.
+/// An episode that has already aired by today, by the rule every episode count
+/// uses: a full air date on or before the day. An announced season is not missing
+/// work yet, and neither is an episode dated only by its year or month.
 fn title_catalog_aired_episode_predicate(dialect: TitleCatalogSqlDialect, alias: &str) -> String {
     match dialect {
-        TitleCatalogSqlDialect::Sqlite => format!("{alias}.air_date <= CURRENT_DATE"),
+        TitleCatalogSqlDialect::Sqlite => episode_aired_by_sql(alias, "CURRENT_DATE"),
         TitleCatalogSqlDialect::Postgres => {
-            format!("{alias}.air_date <= CAST(CURRENT_DATE AS TEXT)")
+            episode_aired_by_sql(alias, "CAST(CURRENT_DATE AS TEXT)")
         }
     }
 }
@@ -6063,11 +6132,16 @@ const TITLE_CATALOG_SCOPED_EXTERNAL_RATING_JOIN: &str =
 const TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN: &str =
     "JOIN scoped_titles ON scoped_titles.id = mf.title_id";
 
+/// The sort's join, pushing any binds it holds onto `args`.
 fn build_title_catalog_sort_join_sql(
-    key: TitleCatalogSortKey,
+    sort: &TitleCatalogSort,
     dialect: TitleCatalogSqlDialect,
+    args: &mut Vec<SqlArg>,
 ) -> String {
-    match key {
+    if sort.key == TitleCatalogSortKey::Episodes {
+        args.push(title_catalog_episodes_aired_through(sort));
+    }
+    match sort.key {
         TitleCatalogSortKey::Library => " LEFT JOIN (
                 SELECT id AS sort_library_id, name AS sort_library_name
                   FROM libraries
@@ -6180,14 +6254,16 @@ fn build_title_catalog_order_sql(
                 title_catalog_ascending_tie_order_sql(dialect)
             )
         }
+        // A title with no episodes has no progress and sorts as -1; one with
+        // nothing expected yet is complete.
         TitleCatalogSortKey::Episodes => format!(
             "ORDER BY CASE
-                 WHEN COALESCE(catalog_episode_progress.total_episodes, 0) > 0
-                 THEN (catalog_episode_progress.owned_episodes * 1.0) / catalog_episode_progress.total_episodes
-                 ELSE -1.0
+                 WHEN catalog_episode_progress.title_id IS NULL THEN -1.0
+                 WHEN catalog_episode_progress.expected_episodes > 0
+                 THEN (catalog_episode_progress.on_disk_episodes * 1.0) / catalog_episode_progress.expected_episodes
+                 ELSE 1.0
              END {direction},
-             COALESCE(catalog_episode_progress.owned_episodes, 0) {direction},
-             COALESCE(catalog_episode_progress.total_episodes, 0) {direction}, {}",
+             COALESCE(catalog_episode_progress.expected_episodes, 0) {direction}, {}",
             title_catalog_ascending_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Status => {
@@ -6685,48 +6761,57 @@ fn title_catalog_media_size_subquery_scoped(
     )
 }
 
-/// `scope_join` narrows the episodes read to whole titles, and each count is per
-/// title, so a title it keeps counts exactly as it would unscoped.
+/// Per-title series progress: episodes on disk over episodes expected, where an
+/// episode is expected once it is monitored and has aired, or as soon as it has
+/// a file. Every episode counts, specials included, so the sort agrees with the
+/// progress shown on the card.
+///
+/// The aired-through day is the subquery's only bind. `scope_join` narrows the
+/// episodes read to whole titles, and each count is per title, so a title it
+/// keeps counts exactly as it would unscoped.
 fn title_catalog_episode_progress_subquery_scoped(
     dialect: TitleCatalogSqlDialect,
     scope_join: &str,
 ) -> String {
     format!(
-        // Ownership is asked as EXISTS rather than joined through
-        // `file_episode_map`. An episode can map to several files, so the join
-        // fanned each episode out and every count had to be COUNT(DISTINCT
-        // e.id) to undo it -- three temp B-trees over every episode in the
-        // library, on every page of the catalog. Without the fan-out each
-        // surviving episode is one row again: `e.id` is the primary key and
-        // the `collections` join is on its key, so COUNT(*) counts exactly the
-        // episodes COUNT(DISTINCT e.id) did, and an episode is owned exactly
-        // when the join would have found it at least one live primary file.
-        // Owned uses the same file conditions as the episode counts shown on
-        // the card, so the sort agrees with the displayed numbers.
-        "SELECT e.title_id,
-                COUNT(*) AS total_episodes,
-                COUNT(CASE WHEN {} THEN 1 END) AS monitored_episodes,
-                COUNT(CASE WHEN EXISTS (
-                         SELECT 1
-                           FROM file_episode_map fem
-                           JOIN media_files mf ON mf.id = fem.file_id
-                          WHERE fem.episode_id = e.id
-                            AND {}
-                            AND fem.role = 'primary'
-                            AND mf.scan_status <> 'review_required'
-                     ) THEN 1 END) AS owned_episodes
-           FROM episodes e
-           {scope_join}
-          INNER JOIN collections c ON c.id = e.collection_id
-          WHERE c.collection_type <> 'specials'
-            AND c.collection_index <> '0'
-            AND trim(COALESCE(e.title, '')) <> ''
-            AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
-            AND trim(COALESCE(e.air_date, '')) <> ''
-          GROUP BY e.title_id",
+        // A file is asked as EXISTS rather than joined through
+        // `file_episode_map`: an episode can map to several files, and the join
+        // would fan it out and need COUNT(DISTINCT e.id) to undo it. Without
+        // the fan-out each episode is one row, so COUNT counts episodes.
+        "SELECT episode.title_id,
+                COUNT(CASE WHEN episode.has_file = 1
+                             OR (episode.monitored = 1 AND episode.aired = 1)
+                           THEN 1 END) AS expected_episodes,
+                COUNT(CASE WHEN episode.has_file = 1 THEN 1 END) AS on_disk_episodes
+           FROM (
+                SELECT e.title_id,
+                       CASE WHEN {} THEN 1 ELSE 0 END AS monitored,
+                       CASE WHEN {aired} THEN 1 ELSE 0 END AS aired,
+                       CASE WHEN EXISTS (
+                            SELECT 1
+                              FROM file_episode_map fem
+                              JOIN media_files mf ON mf.id = fem.file_id
+                             WHERE fem.episode_id = e.id
+                               AND {}
+                               AND fem.role = 'primary'
+                               AND mf.scan_status <> 'review_required'
+                       ) THEN 1 ELSE 0 END AS has_file
+                  FROM episodes e
+                  {scope_join}
+           ) episode
+          GROUP BY episode.title_id",
         title_catalog_bool_column_is_true(dialect, "e.monitored"),
-        title_catalog_live_media_file_predicate(dialect, "mf")
+        title_catalog_live_media_file_predicate(dialect, "mf"),
+        aired = episode_aired_by_sql("e", "{}"),
     )
+}
+
+/// The day an `Episodes` sort counts episodes as aired through, as bound text.
+fn title_catalog_episodes_aired_through(sort: &TitleCatalogSort) -> SqlArg {
+    let day = sort
+        .episodes_aired_through
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    SqlArg::Text(day.format("%Y-%m-%d").to_string())
 }
 
 /// An empty `library_ids` pages every library. Otherwise a row with no library
@@ -7656,6 +7741,7 @@ async fn load_title_episode_shapes(
     };
     let monitored = title_catalog_bool_column_is_true(dialect, "e.monitored");
     let live_file = title_catalog_live_media_file_predicate(dialect, "mf");
+    let aired = episode_aired_by_sql("e", "{}");
     let mut shapes = Vec::new();
     for chunk in ids.chunks(per_statement) {
         let placeholders = std::iter::repeat_n("{}", chunk.len())
@@ -7680,9 +7766,7 @@ async fn load_title_episode_shapes(
                            {season_number} AS season_number,
                            CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
                            substr(trim(e.air_date), 1, 10) AS air_day,
-                           CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
-                                 AND substr(trim(e.air_date), 1, 10) <= {{}}
-                                THEN 1 ELSE 0 END AS aired,
+                           CASE WHEN {aired} THEN 1 ELSE 0 END AS aired,
                            CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
                                  AND substr(trim(e.air_date), 1, 10) > {{}}
                                 THEN 1 ELSE 0 END AS upcoming,
@@ -10402,7 +10486,10 @@ mod tests {
             "{partial}"
         );
         assert!(
-            partial.contains("catalog_episode.air_date <= CURRENT_DATE"),
+            partial.contains(&crate::media::episode_air::episode_aired_by_sql(
+                "catalog_episode",
+                "CURRENT_DATE"
+            )),
             "{partial}"
         );
         assert!(
@@ -10454,7 +10541,10 @@ mod tests {
         )
         .0;
         assert!(
-            postgres.contains("catalog_episode.air_date <= CAST(CURRENT_DATE AS TEXT)"),
+            postgres.contains(&crate::media::episode_air::episode_aired_by_sql(
+                "catalog_episode",
+                "CAST(CURRENT_DATE AS TEXT)"
+            )),
             "{postgres}"
         );
     }

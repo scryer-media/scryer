@@ -1,3 +1,24 @@
+export type ImportPlacement =
+  | "HARD_LINK"
+  | "COPY"
+  | "SYMLINK"
+  | "RENAMED"
+  | "ALREADY_PRESENT";
+
+export type ImportLinkFallbackCause = "FAILED" | "NOT_POSSIBLE" | "UNVERIFIABLE";
+
+export type ImportFilePlacement = {
+  path: string;
+  placement: ImportPlacement;
+  /** Set when the file was copied after a hard link was tried. */
+  linkFallback: {
+    cause: ImportLinkFallbackCause;
+    /** Stable disk reason code. */
+    reason: string;
+    osErrorCode: number | null;
+  } | null;
+};
+
 export type TitleHistoryEvent = {
   scoring?: {
     candidateScore: number;
@@ -47,6 +68,9 @@ export type TitleHistoryEvent = {
   blocklistReason: string | null;
   sourcePath: string | null;
   destPath: string | null;
+  /** How each imported file was placed; null for other events and for
+   * imports recorded before placements were. */
+  filePlacements?: ImportFilePlacement[] | null;
   dataJson: unknown;
   occurredAt: string;
   createdAt: string;

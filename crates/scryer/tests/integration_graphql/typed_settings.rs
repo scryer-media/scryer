@@ -1609,6 +1609,104 @@ async fn graphql_instance_features_readable_without_manage_system_settings() {
 }
 
 #[tokio::test]
+async fn graphql_disabled_facets_round_trip_and_freeze_the_facet() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let update_mutation = r#"
+        mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
+          updateGeneralSettings(input: $input) {
+            disabledFacets
+          }
+        }
+        "#;
+
+    let defaults = gql(
+        &ctx,
+        r#"query { generalSettings { disabledFacets } instanceFeatures { disabledFacets } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&defaults);
+    assert_eq!(
+        defaults["data"]["generalSettings"]["disabledFacets"],
+        json!([])
+    );
+    assert_eq!(
+        defaults["data"]["instanceFeatures"]["disabledFacets"],
+        json!([])
+    );
+
+    let update = gql(
+        &ctx,
+        update_mutation,
+        json!({"input": {"disabledFacets": ["ANIME", "ANIME"]}}),
+    )
+    .await;
+    assert_no_errors(&update);
+    assert_eq!(
+        update["data"]["updateGeneralSettings"]["disabledFacets"],
+        json!(["ANIME"])
+    );
+
+    let features = gql(
+        &ctx,
+        r#"query { instanceFeatures { disabledFacets } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&features);
+    assert_eq!(
+        features["data"]["instanceFeatures"]["disabledFacets"],
+        json!(["ANIME"])
+    );
+
+    let all_off = gql(
+        &ctx,
+        update_mutation,
+        json!({"input": {"disabledFacets": ["MOVIE", "SERIES", "ANIME"]}}),
+    )
+    .await;
+    assert_eq!(
+        all_off["errors"][0]["extensions"]["reason"], "SETTINGS_ALL_FACETS_DISABLED",
+        "turning every facet off is refused by reason: {all_off}"
+    );
+
+    let add_anime = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) { title { id } }
+        }"#,
+        json!({
+            "input": {
+                "name": "Synthetic Frozen Anime",
+                "facet": "ANIME",
+                "monitored": true,
+                "tags": [],
+                "externalIds": [{ "source": "tvdb", "value": "990001" }]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        add_anime["errors"][0]["extensions"]["reason"], "SETTINGS_FACET_DISABLED",
+        "a turned-off facet takes no new titles: {add_anime}"
+    );
+
+    let restore = gql(
+        &ctx,
+        update_mutation,
+        json!({"input": {"disabledFacets": []}}),
+    )
+    .await;
+    assert_no_errors(&restore);
+    assert_eq!(
+        restore["data"]["updateGeneralSettings"]["disabledFacets"],
+        json!([])
+    );
+}
+
+#[tokio::test]
 async fn graphql_instance_features_requires_a_session() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;

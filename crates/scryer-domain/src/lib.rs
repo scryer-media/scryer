@@ -732,9 +732,12 @@ impl LibraryPermissionMask {
     /// Manage Titles also implies Manage Subtitles: a title manager has always
     /// been able to delete and blocklist a title's external subtitles, so the
     /// narrower permission must never take that away from an existing grant.
+    /// Manage Titles implies View too: managing a library's titles without
+    /// seeing them is not a grant anyone can use.
     pub fn with_request_shadowing(self) -> Self {
         let mut mask = self;
         if mask.contains(Self::MANAGE_TITLES) {
+            mask.insert(Self::VIEW);
             mask.insert(Self::AUTO_APPROVE_REQUESTS);
             mask.insert(Self::REQUEST);
             mask.insert(Self::MANAGE_SUBTITLES);
@@ -744,6 +747,9 @@ impl LibraryPermissionMask {
         mask
     }
 
+    /// Strip the bits [`Self::with_request_shadowing`] adds back. View is the
+    /// exception: an explicit View stands on its own, so taking Manage Titles
+    /// away later leaves it in place.
     pub fn normalized_for_storage(self) -> Self {
         if self.contains(Self::MANAGE_TITLES) {
             Self(
@@ -871,14 +877,12 @@ impl UserAuthorization {
             LibraryPermission::AutoApproveRequests => self
                 .library_permissions(library_id)
                 .can_auto_approve_requests(),
-            // Manage Titles shadows Manage Subtitles, so the stored mask is
-            // expanded before the check; storage keeps only the broader bit.
-            LibraryPermission::ManageSubtitles => self
-                .library_permissions(library_id)
-                .with_request_shadowing()
-                .contains(LibraryPermissionMask::MANAGE_SUBTITLES),
+            // Manage Titles shadows View and Manage Subtitles, so the stored
+            // mask is expanded before the check; storage keeps only the
+            // broader bit.
             _ => self
                 .library_permissions(library_id)
+                .with_request_shadowing()
                 .contains(LibraryPermissionMask::from_permission(permission)),
         }
     }
@@ -899,21 +903,12 @@ impl UserAuthorization {
                         .values()
                         .any(|permissions| permissions.can_auto_approve_requests())
             }
-            LibraryPermission::ManageSubtitles => {
-                let shadowed = |permissions: &LibraryPermissionMask| {
-                    permissions
-                        .with_request_shadowing()
-                        .contains(LibraryPermissionMask::MANAGE_SUBTITLES)
-                };
-                shadowed(&self.default_library) || self.libraries.values().any(shadowed)
-            }
             _ => {
                 let required = LibraryPermissionMask::from_permission(permission);
-                self.default_library.contains(required)
-                    || self
-                        .libraries
-                        .values()
-                        .any(|permissions| permissions.contains(required))
+                let shadowed = |permissions: &LibraryPermissionMask| {
+                    permissions.with_request_shadowing().contains(required)
+                };
+                shadowed(&self.default_library) || self.libraries.values().any(shadowed)
             }
         }
     }
@@ -3761,6 +3756,94 @@ pub struct ImportFileResult {
     /// first. `false` on every other result and on results stored before.
     #[serde(default)]
     pub library_file_unsettled: bool,
+    /// Why a hard link was tried and the file was copied instead. `None` when
+    /// no hard link was tried or the file was not copied.
+    #[serde(default)]
+    pub link_fallback: Option<ImportLinkFallback>,
+}
+
+impl ImportFileResult {
+    /// How this import put the file at its library path.
+    pub fn placement(&self) -> ImportPlacement {
+        if self.destination_disposition == ImportDestinationDisposition::AlreadyPresent {
+            return ImportPlacement::AlreadyPresent;
+        }
+        if self.source_disposition == ImportSourceDisposition::RenamedIntoPlace {
+            return ImportPlacement::Renamed;
+        }
+        match self.strategy {
+            ImportStrategy::HardLink => ImportPlacement::HardLink,
+            ImportStrategy::Copy => ImportPlacement::Copy,
+            ImportStrategy::Symlink => ImportPlacement::Symlink,
+            ImportStrategy::Move => ImportPlacement::Renamed,
+        }
+    }
+
+    /// The placement record for this file, at the library path `path`.
+    pub fn file_placement(&self, path: String) -> ImportFilePlacement {
+        let placement = self.placement();
+        ImportFilePlacement {
+            path,
+            placement,
+            link_fallback: (placement == ImportPlacement::Copy)
+                .then(|| self.link_fallback.clone())
+                .flatten(),
+        }
+    }
+}
+
+/// How an import put a file at its library path. Stored as a stable code.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportPlacement {
+    /// A hard link to the download's file: both names are one file.
+    HardLink,
+    /// A copy of the download's file, proven before the import went on.
+    Copy,
+    /// A symbolic link, made because the download's file is itself one.
+    Symlink,
+    /// The download's file was renamed into place, so nothing is left at its
+    /// old path.
+    Renamed,
+    /// The library already held the file; nothing was placed.
+    AlreadyPresent,
+}
+
+/// Why a copy was made where a hard link was tried.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportLinkFallbackCause {
+    /// The hard link call failed with an error that does not say the
+    /// destination cannot hold a link.
+    Failed,
+    /// The destination cannot hold a hard link to the source: another volume,
+    /// or a filesystem without links or room for another.
+    NotPossible,
+    /// A link was made but could not be proven to be the source, or this
+    /// volume already showed it cannot prove one, so it was not used.
+    Unverifiable,
+}
+
+/// A hard link that was tried and not used, so the file was copied.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportLinkFallback {
+    pub cause: ImportLinkFallbackCause,
+    /// The disk service's stable reason code for the refusal.
+    pub reason: String,
+    /// The platform's own error number, when the system gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_error_code: Option<i32>,
+}
+
+/// How one imported file was placed, recorded with the import.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportFilePlacement {
+    /// The library path the file was placed at.
+    pub path: String,
+    pub placement: ImportPlacement,
+    /// Set when the file was copied after a hard link was tried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_fallback: Option<ImportLinkFallback>,
 }
 
 // ── Content verification value types (FR-040–047) ───────────────────────────
@@ -4070,6 +4153,15 @@ pub enum TitleHistoryEventType {
     /// The seeding obligation was discharged and the gate acted on the client
     /// entry. Closes the window opened by `SeedingStarted`.
     SeedingCompleted,
+    /// A subtitle was downloaded for one of the title's files, by the
+    /// automatic search or by hand.
+    SubtitleDownloaded,
+    /// An automatic subtitle download failed.
+    SubtitleFailed,
+    /// A subtitle file was deleted.
+    SubtitleDeleted,
+    /// A downloaded subtitle was deleted and its provider file blocklisted.
+    SubtitleBlocklisted,
 }
 
 impl TitleHistoryEventType {
@@ -4096,6 +4188,10 @@ impl TitleHistoryEventType {
             Self::Rematched => "rematched",
             Self::SeedingStarted => "seeding_started",
             Self::SeedingCompleted => "seeding_completed",
+            Self::SubtitleDownloaded => "subtitle_downloaded",
+            Self::SubtitleFailed => "subtitle_failed",
+            Self::SubtitleDeleted => "subtitle_deleted",
+            Self::SubtitleBlocklisted => "subtitle_blocklisted",
         }
     }
 
@@ -4122,6 +4218,10 @@ impl TitleHistoryEventType {
             "rematched" => Some(Self::Rematched),
             "seeding_started" => Some(Self::SeedingStarted),
             "seeding_completed" => Some(Self::SeedingCompleted),
+            "subtitle_downloaded" => Some(Self::SubtitleDownloaded),
+            "subtitle_failed" => Some(Self::SubtitleFailed),
+            "subtitle_deleted" => Some(Self::SubtitleDeleted),
+            "subtitle_blocklisted" => Some(Self::SubtitleBlocklisted),
             _ => None,
         }
     }
@@ -4148,6 +4248,10 @@ impl TitleHistoryEventType {
         Self::Rematched,
         Self::SeedingStarted,
         Self::SeedingCompleted,
+        Self::SubtitleDownloaded,
+        Self::SubtitleFailed,
+        Self::SubtitleDeleted,
+        Self::SubtitleBlocklisted,
     ];
 }
 
@@ -4248,6 +4352,10 @@ pub struct TitleHistoryRecord {
     /// types and for events persisted before the payload carried a size.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// How each file of an `Imported` row was placed. Empty for other event
+    /// types and for imports recorded before placements were.
+    #[serde(default)]
+    pub file_placements: Vec<ImportFilePlacement>,
     pub data_json: Option<String>,
     pub occurred_at: String,
     pub created_at: String,
@@ -4596,6 +4704,8 @@ pub enum DomainEventType {
     PostProcessingCompleted,
     SubtitleDownloaded,
     SubtitleSearchFailed,
+    SubtitleDeleted,
+    SubtitleBlocklisted,
     LibraryScanStarted,
     LibraryScanTitleDiscovered,
     LibraryScanDeltaRecorded,
@@ -4667,6 +4777,8 @@ impl DomainEventType {
             Self::PostProcessingCompleted => "post_processing_completed",
             Self::SubtitleDownloaded => "subtitle_downloaded",
             Self::SubtitleSearchFailed => "subtitle_search_failed",
+            Self::SubtitleDeleted => "subtitle_deleted",
+            Self::SubtitleBlocklisted => "subtitle_blocklisted",
             Self::LibraryScanStarted => "library_scan_started",
             Self::LibraryScanTitleDiscovered => "library_scan_title_discovered",
             Self::LibraryScanDeltaRecorded => "library_scan_delta_recorded",
@@ -4738,6 +4850,8 @@ impl DomainEventType {
             "post_processing_completed" => Some(Self::PostProcessingCompleted),
             "subtitle_downloaded" => Some(Self::SubtitleDownloaded),
             "subtitle_search_failed" => Some(Self::SubtitleSearchFailed),
+            "subtitle_deleted" => Some(Self::SubtitleDeleted),
+            "subtitle_blocklisted" => Some(Self::SubtitleBlocklisted),
             "library_scan_started" => Some(Self::LibraryScanStarted),
             "library_scan_title_discovered" => Some(Self::LibraryScanTitleDiscovered),
             "library_scan_delta_recorded" => Some(Self::LibraryScanDeltaRecorded),
@@ -5182,6 +5296,10 @@ pub struct ImportCompletedEventData {
     /// Events persisted before this field existed read back as `false`.
     #[serde(default)]
     pub upgrade: bool,
+    /// How each file of this import was placed. Empty for events persisted
+    /// before placements were recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_placements: Vec<ImportFilePlacement>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5458,12 +5576,44 @@ pub struct SubtitleDownloadedEventData {
     pub subtitle_path: Option<String>,
     pub language: Option<String>,
     pub provider: Option<String>,
+    /// The media file the subtitle belongs to. Events written before this
+    /// field existed read back as `None`.
+    #[serde(default)]
+    pub media_file_id: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+    /// Whether timing sync moved the subtitle. `None` when sync did not run
+    /// or failed.
+    #[serde(default)]
+    pub sync_applied: Option<bool>,
+    /// The offset sync applied, in milliseconds, when it applied one.
+    #[serde(default)]
+    pub sync_offset_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubtitleSearchFailedEventData {
     pub title: TitleContextSnapshot,
     pub language: Option<String>,
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub media_file_id: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+/// An external subtitle was deleted, or deleted and blocklisted.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubtitleRemovedEventData {
+    pub title: TitleContextSnapshot,
+    pub subtitle_path: String,
+    pub language: String,
+    pub provider: Option<String>,
+    pub media_file_id: String,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+    /// The operator's blocklist reason, when one was given.
+    #[serde(default)]
     pub reason: Option<String>,
 }
 
@@ -5745,6 +5895,8 @@ pub enum DomainEventPayload {
     PostProcessingCompleted(PostProcessingCompletedEventData),
     SubtitleDownloaded(SubtitleDownloadedEventData),
     SubtitleSearchFailed(SubtitleSearchFailedEventData),
+    SubtitleDeleted(SubtitleRemovedEventData),
+    SubtitleBlocklisted(SubtitleRemovedEventData),
     LibraryScanStarted(LibraryScanStartedEventData),
     LibraryScanTitleDiscovered(LibraryScanTitleDiscoveredEventData),
     LibraryScanDeltaRecorded(LibraryScanDeltaRecordedEventData),
@@ -5820,6 +5972,8 @@ impl DomainEventPayload {
             Self::PostProcessingCompleted(_) => DomainEventType::PostProcessingCompleted,
             Self::SubtitleDownloaded(_) => DomainEventType::SubtitleDownloaded,
             Self::SubtitleSearchFailed(_) => DomainEventType::SubtitleSearchFailed,
+            Self::SubtitleDeleted(_) => DomainEventType::SubtitleDeleted,
+            Self::SubtitleBlocklisted(_) => DomainEventType::SubtitleBlocklisted,
             Self::LibraryScanStarted(_) => DomainEventType::LibraryScanStarted,
             Self::LibraryScanTitleDiscovered(_) => DomainEventType::LibraryScanTitleDiscovered,
             Self::LibraryScanDeltaRecorded(_) => DomainEventType::LibraryScanDeltaRecorded,
@@ -9095,6 +9249,7 @@ mod tests {
             episode_ids: Vec::new(),
             size_bytes: None,
             upgrade: true,
+            file_placements: Vec::new(),
         };
         let mut legacy = serde_json::to_value(&data).expect("event data should serialize");
         legacy
@@ -9113,6 +9268,113 @@ mod tests {
                 ..data
             }
         );
+    }
+
+    #[test]
+    fn import_completed_file_placements_round_trip_and_read_empty_when_absent() {
+        let placement = ImportFilePlacement {
+            path: "/library/Synthetic Movie (2001)/movie.mkv".to_string(),
+            placement: ImportPlacement::Copy,
+            link_fallback: Some(ImportLinkFallback {
+                cause: ImportLinkFallbackCause::Failed,
+                reason: "DISK_OPERATION_FAILED".to_string(),
+                os_error_code: Some(22),
+            }),
+        };
+        let data = ImportCompletedEventData {
+            title: synthetic_title_context(),
+            media_updates: Vec::new(),
+            imported_count: 1,
+            import_id: None,
+            source_system: None,
+            source_ref: None,
+            source_title: None,
+            source_path: None,
+            dest_path: None,
+            quality: None,
+            episode_ids: Vec::new(),
+            size_bytes: None,
+            upgrade: false,
+            file_placements: vec![placement],
+        };
+        let stored = serde_json::to_value(&data).expect("event data should serialize");
+        assert_eq!(
+            stored["file_placements"][0],
+            serde_json::json!({
+                "path": "/library/Synthetic Movie (2001)/movie.mkv",
+                "placement": "copy",
+                "link_fallback": {
+                    "cause": "failed",
+                    "reason": "DISK_OPERATION_FAILED",
+                    "os_error_code": 22
+                }
+            })
+        );
+        let parsed: ImportCompletedEventData =
+            serde_json::from_value(stored.clone()).expect("row should parse");
+        assert_eq!(parsed, data);
+
+        let mut legacy = stored;
+        legacy
+            .as_object_mut()
+            .expect("event data serializes as an object")
+            .remove("file_placements")
+            .expect("file_placements is serialized");
+        let parsed: ImportCompletedEventData =
+            serde_json::from_value(legacy).expect("legacy row should parse");
+        assert!(parsed.file_placements.is_empty());
+    }
+
+    #[test]
+    fn import_file_result_placement_follows_what_was_done() {
+        let result = |strategy, destination, source| ImportFileResult {
+            strategy,
+            source_path: std::path::PathBuf::from("/downloads/synthetic.mkv"),
+            dest_path: std::path::PathBuf::from("/library/synthetic.mkv"),
+            size_bytes: 1,
+            destination_disposition: destination,
+            source_disposition: source,
+            source_cleanup: None,
+            verification: None,
+            library_file_unsettled: false,
+            link_fallback: Some(ImportLinkFallback {
+                cause: ImportLinkFallbackCause::NotPossible,
+                reason: "DISK_LINK_DIFFERENT_VOLUME".to_string(),
+                os_error_code: Some(18),
+            }),
+        };
+        let created = ImportDestinationDisposition::Created;
+        let retained = ImportSourceDisposition::Retained;
+        for (strategy, expected) in [
+            (ImportStrategy::HardLink, ImportPlacement::HardLink),
+            (ImportStrategy::Copy, ImportPlacement::Copy),
+            (ImportStrategy::Symlink, ImportPlacement::Symlink),
+        ] {
+            assert_eq!(result(strategy, created, retained).placement(), expected);
+        }
+        assert_eq!(
+            result(
+                ImportStrategy::Move,
+                created,
+                ImportSourceDisposition::RenamedIntoPlace
+            )
+            .placement(),
+            ImportPlacement::Renamed
+        );
+        assert_eq!(
+            result(
+                ImportStrategy::Copy,
+                ImportDestinationDisposition::AlreadyPresent,
+                retained
+            )
+            .placement(),
+            ImportPlacement::AlreadyPresent
+        );
+
+        let copied = result(ImportStrategy::Copy, created, retained).file_placement("p".into());
+        assert!(copied.link_fallback.is_some());
+        let linked = result(ImportStrategy::HardLink, created, retained).file_placement("p".into());
+        assert_eq!(linked.link_fallback, None);
     }
 
     fn synthetic_title_context() -> TitleContextSnapshot {

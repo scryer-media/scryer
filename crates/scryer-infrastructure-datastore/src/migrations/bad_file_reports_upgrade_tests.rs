@@ -1,7 +1,7 @@
 const SQLITE_MIGRATION: &str =
-    include_str!("../../../scryer/src/db/migrations/0367_bad_file_reports.sql");
+    include_str!("../../../scryer/src/db/migrations/0368_bad_file_reports.sql");
 const POSTGRES_MIGRATION: &str =
-    include_str!("../../../scryer/src/db/postgres/migrations/0367_bad_file_reports.sql");
+    include_str!("../../../scryer/src/db/postgres/migrations/0368_bad_file_reports.sql");
 
 /// The blocklist and its indexes as the migrations before this one leave them.
 const PRIOR_SCHEMA: &str = "CREATE TABLE libraries (id TEXT PRIMARY KEY NOT NULL);

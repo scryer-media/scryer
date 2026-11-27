@@ -767,8 +767,18 @@ pub mod catalog {
     pub const MOVIE_ENTITY_NOT_FOUND: &str = "CATALOG_MOVIE_ENTITY_NOT_FOUND";
     /// The title tag is invalid.
     pub const TAG_INVALID: &str = "CATALOG_TAG_INVALID";
+    /// One episode monitoring change named more distinct episodes than it
+    /// accepts. Carries [`EPISODE_MONITOR_BATCH_MAX_IDS_FACT`] and
+    /// [`EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT`].
+    pub const EPISODE_MONITOR_BATCH_TOO_LARGE: &str = "CATALOG_EPISODE_MONITOR_BATCH_TOO_LARGE";
+    /// One episode monitoring change named episodes that do not exist.
+    /// Carries [`EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT`].
+    pub const EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES: &str =
+        "CATALOG_EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        EPISODE_MONITOR_BATCH_TOO_LARGE,
+        EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES,
         TAG_INVALID,
         TITLE_NOT_FOUND,
         SEARCH_QUERY_REQUIRED,
@@ -854,6 +864,44 @@ pub mod catalog {
         SMG_NO_SERIES_NOT_FOUND,
         MOVIE_ENTITY_NOT_FOUND,
     ];
+
+    /// The most distinct episodes one monitoring change accepts.
+    pub const EPISODE_MONITOR_BATCH_MAX_IDS_FACT: &str = "maxEpisodeIds";
+    /// How many distinct episodes the refused monitoring change named.
+    pub const EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT: &str = "requestedEpisodeIds";
+    /// The requested episode ids that match no episode, in request order.
+    pub const EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT: &str = "unknownEpisodeIds";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[
+        EPISODE_MONITOR_BATCH_MAX_IDS_FACT,
+        EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT,
+        EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod security {
@@ -3663,6 +3711,12 @@ pub mod settings {
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
     /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
     pub const UI_TOUR_ID_INVALID: &str = "SETTINGS_UI_TOUR_ID_INVALID";
+    /// Hidden facets would hide every facet; at least one must stay visible.
+    pub const UI_ALL_FACETS_HIDDEN: &str = "SETTINGS_UI_ALL_FACETS_HIDDEN";
+    /// Disabled facets would turn off every facet; at least one must stay on.
+    pub const ALL_FACETS_DISABLED: &str = "SETTINGS_ALL_FACETS_DISABLED";
+    /// The work belongs to a facet an administrator turned off for this instance.
+    pub const FACET_DISABLED: &str = "SETTINGS_FACET_DISABLED";
     /// A tour progress update names no tour, or more tours than one update may record.
     pub const UI_TOUR_COUNT_OUT_OF_RANGE: &str = "SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE";
     /// The color must be a #RRGGBB hex color.
@@ -3930,6 +3984,9 @@ pub mod settings {
         DASHBOARD_PANEL_SETTINGS_INVALID,
         LANGUAGE_OUT_OF_RANGE,
         UI_TOUR_ID_INVALID,
+        UI_ALL_FACETS_HIDDEN,
+        ALL_FACETS_DISABLED,
+        FACET_DISABLED,
         UI_TOUR_COUNT_OUT_OF_RANGE,
         MUST_RRGGBB_HEX_COLOR,
         UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED,
@@ -4386,6 +4443,35 @@ pub mod indexer_caps {
             let mut unique = std::collections::HashSet::new();
             for reason in super::ALL {
                 assert!(reason.starts_with("INDEXER_CAPS_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
+/// Why an interactive search did not wait for an indexer's query budget.
+pub mod indexer_query_budget {
+    /// The indexer's next request slot lay beyond the longest wait an
+    /// interactive search allows, so nothing was sent to it.
+    pub const NOT_SEARCHED: &str = "INDEXER_QUERY_BUDGET_NOT_SEARCHED";
+    /// Some of the indexer's requests were sent; the next slot for the rest
+    /// lay beyond the longest wait an interactive search allows.
+    pub const PARTLY_SEARCHED: &str = "INDEXER_QUERY_BUDGET_PARTLY_SEARCHED";
+    /// Every reason owned by interactive query-budget pacing.
+    pub const ALL: &[&str] = &[NOT_SEARCHED, PARTLY_SEARCHED];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("INDEXER_QUERY_BUDGET_"));
                 assert!(
                     reason
                         .bytes()

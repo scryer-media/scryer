@@ -46,6 +46,7 @@ import {
   isHostlessDownloadClientType,
   normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
+import { providerConfigValuesToRecord } from "@/lib/utils/provider-config";
 import {
   buildDownloadClientConnectionTestInput,
   buildDownloadClientProxyCreateInput,
@@ -549,6 +550,14 @@ export function SettingsDownloadClientsContainer({
       ),
     [settingsDownloadClients, editingDownloadClientId],
   );
+  // The saved values a save compares against, so only a value the operator
+  // cleared is sent empty. A new client has none.
+  const editingSavedConfigValues = useMemo(() => {
+    const record = settingsDownloadClients.find(
+      (downloadClient) => downloadClient.id === editingDownloadClientId,
+    );
+    return record ? providerConfigValuesToRecord(record.config) : {};
+  }, [settingsDownloadClients, editingDownloadClientId]);
 
   const openCreateEditor = useCallback(() => {
     resetDownloadClientDraft();
@@ -575,6 +584,7 @@ export function SettingsDownloadClientsContainer({
         draft,
         selectedDownloadClientConfigFields,
         editingStoredSecretKeys,
+        editingSavedConfigValues,
       ),
       proxyConfigId: draft.proxyConfigId,
       isEnabled: draft.isEnabled,
@@ -696,6 +706,7 @@ export function SettingsDownloadClientsContainer({
         draft,
         selectedDownloadClientConfigFields,
         editingStoredSecretKeys,
+        editingSavedConfigValues,
       ),
       proxyConfigId: draft.proxyConfigId,
     };

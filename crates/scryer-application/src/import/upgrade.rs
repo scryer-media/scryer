@@ -38,6 +38,8 @@ pub struct UpgradeOutcome {
     /// Path of the replaced file when the replacement landed at a different
     /// path; `None` when the old file was replaced in place.
     pub previous_path: Option<String>,
+    /// How the replacement file was placed, for the import's record.
+    pub placement: scryer_domain::ImportFilePlacement,
     pub(crate) destination_permit: crate::import_workflow::ImportDestinationPermit,
 }
 
@@ -394,6 +396,7 @@ pub(crate) async fn execute_upgrade(
         source_cleanup: replacement.source_cleanup.map(Box::new),
         final_path_string: replacement.final_path_string,
         previous_path,
+        placement: replacement.placement,
         destination_permit: replacement.destination_permit,
     }))
 }
@@ -439,6 +442,8 @@ struct PreparedUpgradeReplacement {
     final_path_string: String,
     same_final_path: bool,
     source_cleanup: Option<ImportSourceCleanupGuard>,
+    /// How the replacement file was placed.
+    placement: scryer_domain::ImportFilePlacement,
     destination_permit: crate::import_workflow::ImportDestinationPermit,
     /// The episodes the replaced file covered, as its recycle entry records
     /// them; empty for a movie.
@@ -1347,6 +1352,7 @@ async fn prepare_replacement_before_old_removal(
         destination_created,
         new_size_bytes: file_result.size_bytes as i64,
         import_path: import_path.to_path_buf(),
+        placement: file_result.file_placement(final_path_string.clone()),
         final_path_string,
         same_final_path,
         source_cleanup: file_result.source_cleanup.clone(),

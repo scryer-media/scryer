@@ -395,6 +395,8 @@ const SERIES_SIDE_PANEL_COLLECTION_FIELDS = `
       episodesOwned
       episodesMonitored
       episodesTotal
+      episodesOnDisk
+      episodesExpected
       episodeRecordsTotal
       createdAt`;
 
@@ -592,6 +594,21 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
       }
     }`;
 
+const SAME_FILM_PAIRING_FIELDS = `
+      tmdbId
+      seriesMovieLinkId
+      seriesTitleId
+      seriesTitleName
+      seriesTitleFacet
+      movieTitleId
+      movieTitleName
+      movieTitleFacet`;
+
+export const seriesMoviesTrackingFilmQuery = `query SeriesMoviesTrackingFilm($tmdbId: String!) {
+  seriesMoviesTrackingFilm(tmdbId: $tmdbId) {${SAME_FILM_PAIRING_FIELDS}
+  }
+}`;
+
 const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     id
     name
@@ -665,6 +682,8 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     createdAt
     collections {${MOVIE_SIDE_PANEL_COLLECTION_FIELDS}
     }
+    sameFilmElsewhere {${SAME_FILM_PAIRING_FIELDS}
+    }
     wantedItems {
       items {${WANTED_ITEM_FIELDS}
       }
@@ -731,6 +750,8 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     }
     seriesMovieLinks {${SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS}
     }
+    sameFilmElsewhere {${SAME_FILM_PAIRING_FIELDS}
+    }
     certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
     }${TITLE_CAST_CREDIT_SELECTION}`;
@@ -795,8 +816,14 @@ const HISTORY_SCORING_FIELDS = `scoring {
   comparisons { fileId episodeIds previousScore delta }
 }`;
 
+const HISTORY_FILE_PLACEMENT_FIELDS = `filePlacements {
+  path placement
+  linkFallback { cause reason osErrorCode }
+}`;
+
 const TITLE_EVENT_FIELDS = `
     ${HISTORY_SCORING_FIELDS}
+    ${HISTORY_FILE_PLACEMENT_FIELDS}
     id
     titleId
     episodeId
@@ -1489,6 +1516,7 @@ function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       rateLimited
       skipReason
       skippedUntil
@@ -1527,6 +1555,9 @@ export const TITLE_LIST_FIELDS = `
     episodesOwned
     episodesMonitored
     episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal
     contentStatus
     metadataLanguage
     metadataLanguageOverride
@@ -1621,7 +1652,10 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
     fields.push(`
     episodesOwned
     episodesMonitored
-    episodesTotal`);
+    episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal`);
   }
   if (projection.runtime) {
     fields.push(`
@@ -2553,7 +2587,7 @@ export const acquisitionSearchJobQuery = `query AcquisitionSearchJob($id: ID!) {
   }
 }`;
 
-export const usersQuery = `query Users {
+export const usersQuery = `query Users($includeLinkedMediaServers: Boolean! = false) {
   users {
     id
     username
@@ -2564,6 +2598,7 @@ export const usersQuery = `query Users {
     hasMfa
     hasPasskey
     accountKind
+    linkedMediaServers @include(if: $includeLinkedMediaServers)
     appPermissions
     libraryPermissions {
       libraryId
@@ -3273,8 +3308,15 @@ export const libraryDefaultMovieAvailabilityQuery = `query LibraryDefaultMovieAv
   }
 }`;
 
+export const libraryAnimeMonitorSpecialsQuery = `query LibraryAnimeMonitorSpecials($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    monitorSpecials
+  }
+}`;
+
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    disabledFacets
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
@@ -3308,6 +3350,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -3931,6 +3974,7 @@ export const instanceFeaturesQuery = `query InstanceFeatures {
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    disabledFacets
   }
 }`;
 
@@ -5199,6 +5243,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
   titleHistory(filter: $filter) {
     items {
       ${HISTORY_SCORING_FIELDS}
+      ${HISTORY_FILE_PLACEMENT_FIELDS}
       id
       titleId
       titleName
@@ -5464,6 +5509,7 @@ export const dashboardStorageQuery = `query DashboardStorage {
     facet
     usedBytes
     totalBytes
+    libraryBytes
   }
 }`;
 

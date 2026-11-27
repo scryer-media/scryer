@@ -731,6 +731,9 @@ pub fn from_interactive_release_search_snapshot(
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
             failure_reason_code: indexer.failure_reason_code.map(str::to_owned),
+            retry_after_seconds: indexer
+                .retry_after
+                .map(|delay| delay.as_secs().min(i32::MAX as u64) as i32),
             caps_source: indexer.caps.map(|caps| {
                 use scryer_application::IndexerCapsSource as Source;
                 match caps.source {
@@ -762,6 +765,7 @@ pub fn from_interactive_release_search_snapshot(
                     Reason::MonthlyLimit { .. } => {
                         InteractiveReleaseSearchSkipReasonValue::MonthlyLimit
                     }
+                    Reason::QueryBudget => InteractiveReleaseSearchSkipReasonValue::QueryBudget,
                 }
             }),
             skipped_until: indexer.skipped_until,
@@ -1690,12 +1694,37 @@ impl CatalogQueries {
             .collect())
     }
 
-    /// List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
+    /// List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem and, when selected, each owning library's own size; refuses callers with no such library.
     async fn storage_roots(&self, ctx: &Context<'_>) -> GqlResult<Vec<StorageRootUsagePayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let roots = app.storage_root_usage(&actor).await.map_err(to_gql_error)?;
-        Ok(roots.into_iter().map(from_storage_root_usage).collect())
+        let mut payloads = roots
+            .into_iter()
+            .map(from_storage_root_usage)
+            .collect::<Vec<_>>();
+        if ctx.look_ahead().field("libraryBytes").exists() && !payloads.is_empty() {
+            let library_ids = payloads
+                .iter()
+                .map(|root| root.library_id.to_string())
+                .collect::<Vec<_>>();
+            let managed_bytes = app
+                .library_managed_bytes(&actor, &library_ids)
+                .await
+                .map_err(to_gql_error)?
+                .into_iter()
+                .map(|library| (library.library_id, library.managed_bytes))
+                .collect::<std::collections::HashMap<_, _>>();
+            for root in &mut payloads {
+                // A library with no tracked media file holds no bytes.
+                let bytes = managed_bytes
+                    .get(root.library_id.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                root.library_bytes = Some(Long::from(bytes));
+            }
+        }
+        Ok(payloads)
     }
 
     /// List media requests visible to the caller, optionally filtered by facet, libraries, and status.
@@ -1844,6 +1873,22 @@ impl CatalogQueries {
         }
         .map_err(to_gql_error)?;
         Ok(title.map(|title| from_title(&app, title)))
+    }
+
+    /// Series movies of visible shows that already track the film with this
+    /// TMDB movie id, for a movie that is about to be added.
+    async fn series_movies_tracking_film(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "TMDB movie id of the film.")] tmdb_id: String,
+    ) -> GqlResult<Vec<SameFilmPairingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let pairings = app
+            .series_movies_tracking_tmdb_movie(&actor, &tmdb_id)
+            .await
+            .map_err(to_gql_error)?;
+        scryer_interface_media::same_film_pairing_payloads(&app, &actor, pairings).await
     }
 
     /// Fetch locally cached movie metadata through a visible title relationship.
@@ -2466,11 +2511,23 @@ impl CatalogQueries {
             season,
             episode,
             limit,
+            query,
             ..
         } = input;
 
         // One-shot search is title-anchored only; a query subject is a job
-        // (`startInteractiveReleaseSearch`), never a blocking resolver.
+        // (`startInteractiveReleaseSearch`), never a blocking resolver. A
+        // query is refused rather than ignored, so a caller never mistakes
+        // title results for results of its query.
+        if query
+            .as_deref()
+            .is_some_and(|query| !query.trim().is_empty())
+        {
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED,
+                "searchReleases does not take a query; run a free-text search with startInteractiveReleaseSearch",
+            )));
+        }
         let Some(title_id) = title_id else {
             return Err(to_gql_error(AppError::validation_refused(
                 scryer_interface_core::refusal::INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED,
@@ -3762,6 +3819,11 @@ impl SystemQueries {
             api_explorer_enabled: features.api_explorer_enabled,
             experimental_features_enabled: features.experimental_features_enabled,
             personalized_discovery_enabled: features.personalized_discovery_enabled,
+            disabled_facets: features
+                .disabled_facets
+                .into_iter()
+                .map(MediaFacetValue::from_domain)
+                .collect(),
         })
     }
 

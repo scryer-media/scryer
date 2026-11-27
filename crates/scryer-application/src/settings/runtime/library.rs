@@ -821,6 +821,27 @@ impl AppUseCase {
         Ok(effective_default_monitor_type(&library.facet, saved.as_deref()))
     }
 
+    /// The library's default monitoring as a `scryer:monitor-type:` tag
+    /// value, for a new series or anime title whose add names no monitor
+    /// type. Movies are monitored by the add's own `monitored` flag, so they
+    /// have none.
+    pub(crate) async fn new_title_default_monitor_type_tag_value(
+        &self,
+        library_id: &str,
+        facet: &MediaFacet,
+    ) -> AppResult<Option<String>> {
+        if *facet == MediaFacet::Movie {
+            return Ok(None);
+        }
+        let saved = self
+            .read_setting_string_value_explicit(DEFAULT_MONITOR_TYPE_KEY, Some(library_id))
+            .await?;
+        crate::media_requests::normalize_requested_monitor_type(
+            facet,
+            Some(effective_default_monitor_type(facet, saved.as_deref())),
+        )
+    }
+
     pub async fn title_quality_profile_id_for_library(
         &self,
         actor: &User,

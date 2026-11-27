@@ -1795,6 +1795,10 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     /// A local monthly limit on the indexer refused the search, or its usage
     /// could not be checked. `failureReasonCode` carries the reason code.
     MonthlyLimit,
+    /// The indexer's next query slot lies further out than an interactive
+    /// search waits, so it sent no request. `retryAfterSeconds` carries the
+    /// delay to that slot.
+    QueryBudget,
 }
 
 /// How Scryer obtained the capabilities it used to search an indexer.
@@ -1839,9 +1843,15 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     /// Stable code for a failure the operator must act on, such as
     /// `ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
     /// not loaded, or the monthly limit reason when `skipReason` is
-    /// `MONTHLY_LIMIT`; null for other failures and when the indexer did not
-    /// fail.
+    /// `MONTHLY_LIMIT`. `INDEXER_QUERY_BUDGET_NOT_SEARCHED` marks an indexer
+    /// skipped for its query budget, and `INDEXER_QUERY_BUDGET_PARTLY_SEARCHED`
+    /// a completed indexer that sent some of its requests before its budget
+    /// stopped the rest; its results are kept. Null for other failures and
+    /// when the indexer did not fail.
     pub failure_reason_code: Option<String>,
+    /// Seconds until the indexer can be asked again, when its query budget or
+    /// a rate limit stopped the search and the delay is known.
+    pub retry_after_seconds: Option<i32>,
     /// How the capabilities used for this indexer were obtained, or null
     /// before they were resolved.
     pub caps_source: Option<IndexerCapsSourceValue>,

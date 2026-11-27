@@ -40,6 +40,7 @@ import {
   type EpisodeMediaAvailability,
 } from "@/lib/utils/episode-media-availability";
 import { episodeTitleOrTba } from "@/lib/utils/episode-title";
+import { useFacets } from "@/lib/facets/use-facets";
 
 export type CalendarEpisodeItem = {
   id: string;
@@ -189,6 +190,7 @@ function calendarEventClass(arg: EventDisplayInfo): string {
 }
 
 // Handoff orders the filter pills Anime · Movie · Series.
+// eslint-disable-next-line no-restricted-syntax -- display order only; every use goes through useFacets().values
 const FACET_ORDER = ["anime", "movie", "series"] as const;
 
 const FACET_LABELS: Record<string, string> = {
@@ -213,6 +215,7 @@ function CalendarLibraryFacetFilters({
   onFacetFilterChange: (value: string[]) => void;
 }) {
   const t = useTranslate();
+  const { values: visibleFacetValues } = useFacets();
   return (
     <div className="fc-scryer-calendar-filters flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
       <LibraryMultiSelect
@@ -233,7 +236,7 @@ function CalendarLibraryFacetFilters({
         aria-label={t("uiAttr.Calendar_media_types")}
         className="w-full sm:w-auto"
       >
-        {FACET_ORDER.map((facet) => {
+        {visibleFacetValues(FACET_ORDER).map((facet) => {
           const active = facetFilter.includes(facet);
           const color = FACET_COLORS[facet];
           return (
@@ -530,11 +533,15 @@ export function CalendarView({
   const t = useTranslate();
   const isMobile = useIsMobile();
   const [initialCalendarView] = useState(readStoredCalendarViewMode);
-  const [facetFilter, setFacetFilter] = useState<string[]>([
-    "anime",
-    "movie",
-    "series",
+  const [selectedFacetFilter, setFacetFilter] = useState<string[]>([
+    ...FACET_ORDER,
   ]);
+  // A hidden facet's chip is gone, so its titles leave the calendar with it.
+  const { values: visibleFacetValues } = useFacets();
+  const facetFilter = useMemo(() => {
+    const visible = visibleFacetValues(selectedFacetFilter);
+    return visible.length > 0 ? visible : visibleFacetValues(FACET_ORDER);
+  }, [selectedFacetFilter, visibleFacetValues]);
   const [visibleMonitoringStatuses, setVisibleMonitoringStatuses] = useState<
     CalendarMonitoringStatus[]
   >(["monitored", "unmonitored"]);

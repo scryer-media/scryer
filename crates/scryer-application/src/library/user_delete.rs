@@ -1197,6 +1197,7 @@ impl AppUseCase {
         self.require_delete_context_permission(actor, &context)
             .await?;
         self.remove_external_subtitle(
+            actor,
             external_subtitle_id,
             ExternalSubtitleRemovalMode::DeleteOnly,
             preview_fingerprint,
@@ -1219,6 +1220,7 @@ impl AppUseCase {
         self.require_delete_context_permission(actor, &context)
             .await?;
         self.remove_external_subtitle(
+            actor,
             external_subtitle_id,
             ExternalSubtitleRemovalMode::DeleteAndBlocklist {
                 reason: reason.map(str::to_string),
@@ -1231,6 +1233,7 @@ impl AppUseCase {
 
     async fn remove_external_subtitle(
         &self,
+        actor: &User,
         external_subtitle_id: &str,
         mode: ExternalSubtitleRemovalMode,
         preview_fingerprint: &str,
@@ -1279,7 +1282,7 @@ impl AppUseCase {
                 subtitle_download_id: subtitle.id.clone(),
                 file_path: subtitle.file_path.clone(),
                 root_folders,
-                facet: title.facet,
+                facet: title.facet.clone(),
             }),
             preview_fingerprint,
             DeleteConfirmationAuthority::Human { typed_confirmation },
@@ -1307,19 +1310,39 @@ impl AppUseCase {
                 .await?;
         }
 
-        if let ExternalSubtitleRemovalMode::DeleteAndBlocklist { reason } = mode {
-            self.services
-                .workflow
-                .subtitle_downloads
-                .blocklist(
-                    &deleted.media_file_id,
-                    deleted.provider.as_deref().unwrap_or_default(),
-                    deleted.provider_file_id.as_deref().unwrap_or_default(),
-                    &deleted.language,
-                    reason.as_deref(),
-                )
-                .await?;
-        }
+        let blocklist_reason = match &mode {
+            ExternalSubtitleRemovalMode::DeleteAndBlocklist { reason } => {
+                self.services
+                    .workflow
+                    .subtitle_downloads
+                    .blocklist(
+                        &deleted.media_file_id,
+                        deleted.provider.as_deref().unwrap_or_default(),
+                        deleted.provider_file_id.as_deref().unwrap_or_default(),
+                        &deleted.language,
+                        reason.as_deref(),
+                    )
+                    .await?;
+                Some(reason.clone())
+            }
+            ExternalSubtitleRemovalMode::DeleteOnly => None,
+        };
+
+        self.emit_subtitle_removed_event(
+            actor,
+            &title,
+            blocklist_reason.is_some(),
+            scryer_domain::SubtitleRemovedEventData {
+                title: crate::domain_events::title_context_snapshot(&title),
+                subtitle_path: deleted.file_path.clone(),
+                language: deleted.language.clone(),
+                provider: deleted.provider.clone(),
+                media_file_id: deleted.media_file_id.clone(),
+                episode_ids: deleted.episode_id.iter().cloned().collect(),
+                reason: blocklist_reason.flatten(),
+            },
+        )
+        .await;
 
         Ok(())
     }

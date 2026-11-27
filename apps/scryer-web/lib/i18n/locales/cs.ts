@@ -500,6 +500,9 @@ const cs: LocaleDictionary = {
   "dashboard.storageFree": "volno {{size}}",
   "dashboard.storageUnavailable": "Využití nedostupné",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} v této knihovně",
+  "dashboard.storageLibraryUsageHint":
+    "Knihovna zabírá {{library}} TB; na svazku je obsazeno {{used}} TB",
   "dashboard.storageLegend": "OK · 65 %+ · 80 %+ · 90 %+",
   "dashboard.tagLow": "NÍZKÉ",
   "dashboard.tagCrit": "KRIT",
@@ -1529,6 +1532,10 @@ const cs: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Šablona složky obsahuje nepovolený znak souborového systému: {{character}}",
   "settings.renameTemplateLabel": "Šablona přejmenování",
+  "settings.renameTemplateNoExtensionTitle": "Uložit bez {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "Tato šablona přejmenování neobsahuje token {ext}. Scryer přidá příponu každého souboru na konec názvu.",
+  "settings.renameTemplateNoExtensionConfirm": "Přesto uložit",
   "settings.renameTemplatePlaceholder": "Zástupný symbol",
   "settings.renameTemplateRequired": "Šablona přejmenování je povinná.",
   "settings.renameCollisionPolicyLabel": "Zásada kolizí",
@@ -1947,6 +1954,13 @@ const cs: LocaleDictionary = {
   "title.contextTitleList": "Seznam titulů",
   "title.contextListDisclosure": "Seznam",
   "title.showTitleList": "Zobrazit seznam",
+  "title.sortBy": "Řadit podle",
+  "title.sortAscending": "Vzestupně",
+  "title.sortDescending": "Sestupně",
+  "title.sameFilmAsSeriesMovie": "Sledováno také jako film seriálu {{titles}}.",
+  "title.sameFilmAsMovieTitle": "Sledováno také jako film: {{titles}}.",
+  "title.sameFilmBeforeAdd": "Již sledováno jako film seriálu {{titles}}.",
+  "title.sameFilmMarker": "Sledováno také jako film",
   "title.hideTitleList": "Skrýt seznam",
   "title.contextForYouTitle": "Objevovat",
   "title.contextForYouTop": "Nejlepší",
@@ -1992,8 +2006,8 @@ const cs: LocaleDictionary = {
   "title.table.runtime": "Délka",
   "title.table.avgRuntime": "Prům. délka",
   "title.table.episodeProgressTooltip": "Epizody: {{owned}} / {{total}}",
-  "title.table.episodeProgressTooltipWithTotal":
-    "Epizody: {{owned}} / {{total}} (sledováno: {{monitored}})",
+  "title.table.episodeProgressExpectedTooltip":
+    "Epizody: {{onDisk}} / {{expected}} (celkem: {{total}})",
   "title.table.status": "Stav",
   "title.table.root": "Kořen",
   "title.table.popularity": "Popularita",
@@ -2102,6 +2116,10 @@ const cs: LocaleDictionary = {
     "Selhalo indexerů: {{count}} ({{names}})",
   "title.contextReleaseSearchIndexerSkipped":
     "Vynecháno indexerů: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "Částečně prohledáno indexerů kvůli limitu dotazů: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: znovu za {{seconds}} s",
   "title.noReleasesFound": "Pro {{name}} nebyla nalezena žádná vydání.",
   "title.searchNeedsDownloadClientTitle":
     "Vyhledávání vyžaduje klienta pro stahování",
@@ -2659,6 +2677,10 @@ const cs: LocaleDictionary = {
     "Obnovit ověřovací faktory pro {{name}}? Všechny aktivní relace a registrované ověřovací faktory budou zrušeny. Uživatel bude muset znovu zadat primární přihlašovací údaje. Pokud zásady přihlašování vyžadují MFA, bude muset zaregistrovat nový přístupový klíč nebo autentikátor; jinak se jeho příští přihlášení heslem podaří i bez registrace.",
   "settings.loginEnabled": "Přihlašování zapnuto",
   "settings.loginDisabled": "Přihlašování vypnuto",
+  "settings.accountOrigin.scryer": "Účet Scryer",
+  "settings.accountOrigin.mediaServerLogin": "Vytvořeno přihlášením přes {{provider}}",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Vytvořeno přihlášením přes mediální server",
+  "settings.linkedMediaServer": "Propojeno s {{provider}}",
   "settings.enableLogin": "Zapnout přihlašování",
   "settings.disableLogin": "Vypnout přihlašování",
   "settings.disableLoginConfirm":
@@ -4636,6 +4658,10 @@ const cs: LocaleDictionary = {
   "history.rematched": "Přiřazeno znovu",
   "history.seedingStarted": "Seedování",
   "history.seedingCompleted": "Seedování dokončeno",
+  "history.subtitleDownloaded": "Titulky staženy",
+  "history.subtitleFailed": "Titulky selhaly",
+  "history.subtitleDeleted": "Titulky smazány",
+  "history.subtitleBlocklisted": "Titulky na černé listině",
   "history.downloadIgnored": "Ignorováno",
   "history.facet": "Oblast",
   "history.actions": "Akce",
@@ -6878,6 +6904,13 @@ const cs: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "V ústupu po nedávných selháních",
   "indexerSearch.skipReason.backedOffUntil": "V ústupu do {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Nepodporuje textové vyhledávání",
+  "indexerSearch.skipReason.queryBudget": "Překročen limit dotazů",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Překročen limit dotazů do {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Překročen limit dotazů, znovu za {{seconds}} s",
+  "indexerSearch.queryBudget.partlySearched":
+    "Prohledáno částečně: limit dotazů zastavil zbývající požadavky. Výsledky odeslaných požadavků zůstávají.",
   "indexerSearch.refine.title": "Upřesnit",
   "indexerSearch.refine.reset": "Obnovit výchozí",
   "indexerSearch.facet.protocol": "Protokol",

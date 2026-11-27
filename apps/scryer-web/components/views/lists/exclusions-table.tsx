@@ -35,6 +35,7 @@ import {
 } from "@/lib/utils/lists";
 
 import { ExclusionTitleSearch } from "./exclusion-title-search";
+import { useFacets } from "@/lib/facets/use-facets";
 
 const ALL_LISTS = "__all__";
 
@@ -58,9 +59,10 @@ export function ExclusionsTable({
 }: ExclusionsTableProps) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
+  const { values: visibleFacetValues, visibleOr } = useFacets();
   const [title, setTitle] = React.useState("");
   const [year, setYear] = React.useState("");
-  const [kind, setKind] = React.useState<Facet>("MOVIE");
+  const [kind, setKind] = React.useState<Facet>(() => visibleOr("MOVIE"));
   const [ids, setIds] = React.useState("");
   const [scope, setScope] = React.useState(ALL_LISTS);
   const [adding, setAdding] = React.useState(false);
@@ -107,7 +109,7 @@ export function ExclusionsTable({
             id="list-exclusion-kind"
             label={t("lists.exclusions.kindLabel")}
             value={kind}
-            options={LIST_KINDS.map((value) => ({
+            options={visibleFacetValues(LIST_KINDS, [kind]).map((value) => ({
               value,
               label: t(listKindLabelKey(value)),
             }))}

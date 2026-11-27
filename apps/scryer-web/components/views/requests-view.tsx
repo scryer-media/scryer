@@ -150,6 +150,7 @@ import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { HelpLabel, InfoHelp } from "@/components/common/info-help";
+import { useFacets } from "@/lib/facets/use-facets";
 
 type QualityProfileOption = {
   id: string;
@@ -810,6 +811,7 @@ export function RequestsView({
   claimActionId,
 }: RequestsViewProps) {
   const t = useTranslate();
+  const { isVisible: isFacetVisible } = useFacets();
   const dateTimeFormat = useUiDateTimeFormat();
   const showModeSwitch = canShowAdminMode && canShowRequesterMode;
   const HeadingIcon = mode === "admin" ? Inbox : Clock;
@@ -1680,21 +1682,29 @@ export function RequestsView({
                     ["SERIES", t("search.facetSeries")],
                     ["ANIME", t("search.facetAnime")],
                   ] as Array<[RequestFacetFilter, string]>
-                ).map(([facet, label]) => (
-                  <UnderlineFilterButton
-                    key={facet}
-                    selected={adminFacetFilters[facet]}
-                    label={label}
-                    count={requestCountByFacet(statusRequests, facet)}
-                    aria-pressed={adminFacetFilters[facet]}
-                    onClick={() =>
-                      setAdminFacetFilters((current) => ({
-                        ...current,
-                        [facet]: !current[facet],
-                      }))
-                    }
-                  />
-                ))
+                )
+                  // A hidden facet keeps its toggle only while requests for it
+                  // exist: those are records to act on, not a choice.
+                  .filter(
+                    ([facet]) =>
+                      isFacetVisible(facet) ||
+                      requestCountByFacet(statusRequests, facet) > 0,
+                  )
+                  .map(([facet, label]) => (
+                    <UnderlineFilterButton
+                      key={facet}
+                      selected={adminFacetFilters[facet]}
+                      label={label}
+                      count={requestCountByFacet(statusRequests, facet)}
+                      aria-pressed={adminFacetFilters[facet]}
+                      onClick={() =>
+                        setAdminFacetFilters((current) => ({
+                          ...current,
+                          [facet]: !current[facet],
+                        }))
+                      }
+                    />
+                  ))
               : null}
             {filters.map((filter) => (
               <UnderlineFilterButton

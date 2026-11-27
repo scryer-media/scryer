@@ -6,6 +6,7 @@ use std::time::Duration;
 use chrono::Utc;
 use tracing::{debug, info, warn};
 
+use crate::domain_events::title_context_snapshot;
 use crate::media::release_labels::resolve_release_labels_from_analysis;
 use crate::normalize::normalize_imdb_id;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
@@ -30,7 +31,8 @@ use crate::{
 };
 use scryer_domain::{
     AnimeNumberingBridge, ExternalSubtitleSourceKind, NumberingBridgeSource,
-    SubtitleBlocklistEntry, SubtitleDownload, SubtitleProviderConfig, Title, User,
+    SubtitleBlocklistEntry, SubtitleDownload, SubtitleDownloadedEventData, SubtitleProviderConfig,
+    SubtitleSearchFailedEventData, Title, User,
 };
 use scryer_outbound_http::{DestinationKey, HostKey};
 use scryer_plugin_sdk::{
@@ -1338,6 +1340,20 @@ impl AppUseCase {
             sync_summary = %sync_summary_suffix(sync_result.as_ref()),
             "manual subtitle download completed"
         );
+        self.emit_subtitle_downloaded_event(
+            Some(actor),
+            &title,
+            subtitle_downloaded_event_data(
+                &title,
+                media_file.id.as_str(),
+                media_file.episode_id.as_deref(),
+                &dest_path,
+                record.language.clone(),
+                record.provider.clone().unwrap_or_default(),
+                sync_result.as_ref(),
+            ),
+        )
+        .await;
 
         Ok(())
     }
@@ -2336,6 +2352,31 @@ impl SubtitleSearchBackoffCache {
     }
 }
 
+/// The history payload for a downloaded subtitle, with the sync outcome
+/// when sync ran.
+fn subtitle_downloaded_event_data(
+    title: &Title,
+    media_file_id: &str,
+    episode_id: Option<&str>,
+    dest_path: &Path,
+    language: String,
+    provider: String,
+    sync_result: Option<&sync::SyncResult>,
+) -> SubtitleDownloadedEventData {
+    SubtitleDownloadedEventData {
+        title: title_context_snapshot(title),
+        subtitle_path: Some(dest_path.display().to_string()),
+        language: Some(language),
+        provider: Some(provider),
+        media_file_id: Some(media_file_id.to_string()),
+        episode_ids: episode_id.map(str::to_string).into_iter().collect(),
+        sync_applied: sync_result.map(|result| result.applied),
+        sync_offset_ms: sync_result
+            .filter(|result| result.applied)
+            .map(|result| result.offset_ms),
+    }
+}
+
 fn subtitle_sync_warning(result: Option<&sync::SyncResult>) -> Option<&'static str> {
     match result {
         None => Some("sync_failed"),
@@ -2791,10 +2832,17 @@ async fn search_automatic_subtitles_for_file(
                 );
                 let _ = event_msg;
                 app.emit_subtitle_downloaded_event(
+                    actor,
                     title,
-                    Some(dest_path.display().to_string()),
-                    Some(lang_pref.code.clone()),
-                    Some(best.provider.clone()),
+                    subtitle_downloaded_event_data(
+                        title,
+                        mf.id.as_str(),
+                        mf.episode_id.as_deref(),
+                        &dest_path,
+                        lang_pref.code.clone(),
+                        best.provider.clone(),
+                        sync_result.as_ref(),
+                    ),
                 )
                 .await;
             }
@@ -2813,8 +2861,13 @@ async fn search_automatic_subtitles_for_file(
                 let _ = event_msg;
                 app.emit_subtitle_search_failed_event(
                     title,
-                    Some(lang_pref.code.clone()),
-                    Some(err.to_string()),
+                    SubtitleSearchFailedEventData {
+                        title: title_context_snapshot(title),
+                        language: Some(lang_pref.code.clone()),
+                        reason: Some(err.to_string()),
+                        media_file_id: Some(mf.id.clone()),
+                        episode_ids: mf.episode_id.iter().cloned().collect(),
+                    },
                 )
                 .await;
             }
@@ -2873,7 +2926,13 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
         circuit,
         ..Default::default()
     };
-    'titles: for title in titles.iter().filter(|title| title.monitored) {
+    // A facet turned off for the instance is frozen: no subtitles are fetched
+    // for its titles.
+    let disabled_facets = app.disabled_facets().await?;
+    'titles: for title in titles
+        .iter()
+        .filter(|title| title.monitored && !disabled_facets.contains(&title.facet))
+    {
         let media_files = app
             .services
             .library

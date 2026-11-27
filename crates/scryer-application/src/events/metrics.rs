@@ -496,6 +496,7 @@ mod tests {
             episode_ids: Vec::new(),
             size_bytes,
             upgrade: false,
+            file_placements: Vec::new(),
         }
     }
 
@@ -1024,6 +1025,10 @@ mod tests {
                     subtitle_path: None,
                     language: None,
                     provider: None,
+                    media_file_id: None,
+                    episode_ids: Vec::new(),
+                    sync_applied: None,
+                    sync_offset_ms: None,
                 },
             )),
             event(DomainEventPayload::SubtitleSearchFailed(
@@ -1031,6 +1036,8 @@ mod tests {
                     title: title_snapshot(MediaFacet::Series),
                     language: None,
                     reason: None,
+                    media_file_id: None,
+                    episode_ids: Vec::new(),
                 },
             )),
             event(DomainEventPayload::ReleaseBlocklisted(
@@ -1294,11 +1301,17 @@ mod tests {
                 subtitle_path: None,
                 language: None,
                 provider: None,
+                media_file_id: None,
+                episode_ids: Vec::new(),
+                sync_applied: None,
+                sync_offset_ms: None,
             }),
             DomainEventPayload::SubtitleSearchFailed(SubtitleSearchFailedEventData {
                 title: title.clone(),
                 language: None,
                 reason: None,
+                media_file_id: None,
+                episode_ids: Vec::new(),
             }),
             DomainEventPayload::LibraryScanStarted(LibraryScanStartedEventData {
                 session_id: "session-1".to_string(),

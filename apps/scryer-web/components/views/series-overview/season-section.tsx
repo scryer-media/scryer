@@ -68,8 +68,12 @@ import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
 import { seasonHasSelectableEpisodes } from "@/lib/utils/season-selection";
 import {
+  countEpisodeProgress,
+  episodeProgressCounts,
+  utcCalendarDay,
+} from "@/lib/utils/episode-progress";
+import {
   formatFileSize,
-  isEpisodeCountableForProgress,
   isSpecialsCollection,
   seasonHeading,
 } from "./helpers";
@@ -446,69 +450,26 @@ function SeasonSectionImpl({
     });
   }, [collection.firstEpisodeNumber, collection.lastEpisodeNumber, t]);
 
-  const collectionMetrics = React.useMemo(() => {
-    const aggregateTotalEpisodes =
-      typeof collection.episodesTotal === "number" &&
-      collection.episodesTotal >= 0
-        ? collection.episodesTotal
-        : null;
-    const aggregateMonitoredEpisodes =
-      typeof collection.episodesMonitored === "number" &&
-      collection.episodesMonitored >= 0
-        ? collection.episodesMonitored
-        : null;
-    const aggregateOwnedEpisodes =
-      typeof collection.episodesOwned === "number" &&
-      collection.episodesOwned >= 0
-        ? collection.episodesOwned
-        : null;
-    let totalEpisodes = 0;
-    let monitoredEpisodes = 0;
-    let ownedEpisodes = 0;
-
-    for (const episode of episodes) {
-      if (!isEpisodeCountableForProgress(episode)) {
-        continue;
-      }
-
-      totalEpisodes += 1;
-
-      if (episode.monitored) {
-        monitoredEpisodes += 1;
-      }
-
-      const episodeFiles =
-        mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES;
-      if (episodeFiles.length > 0) {
-        ownedEpisodes += 1;
-      }
-    }
-
-    return {
-      totalEpisodes: aggregateTotalEpisodes ?? totalEpisodes,
-      monitoredEpisodes: aggregateMonitoredEpisodes ?? monitoredEpisodes,
-      ownedEpisodes: aggregateOwnedEpisodes ?? ownedEpisodes,
-    };
-  }, [
-    collection.episodesMonitored,
-    collection.episodesOwned,
-    collection.episodesTotal,
-    episodes,
-    mediaFilesByEpisode,
-  ]);
-
   const collectionEpisodeProgress = React.useMemo(() => {
-    if (!collectionMetrics || collectionMetrics.totalEpisodes <= 0) {
+    // The season's counts come with the response; before they do, the loaded
+    // episodes are counted the same way.
+    const counts =
+      episodeProgressCounts(collection) ??
+      countEpisodeProgress(
+        episodes.map((episode) => ({
+          monitored: episode.monitored,
+          airDate: episode.airDate,
+          hasFile:
+            (mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES).length > 0,
+        })),
+        utcCalendarDay(new Date()),
+      );
+    if (counts.total === 0) {
       return null;
     }
 
-    return getCollectionEpisodeProgressPresentation({
-      ownedEpisodes: collectionMetrics.ownedEpisodes,
-      totalEpisodes: collectionMetrics.totalEpisodes,
-      monitoredEpisodes: collectionMetrics.monitoredEpisodes,
-      t,
-    });
-  }, [collectionMetrics, t]);
+    return getCollectionEpisodeProgressPresentation(counts, t);
+  }, [collection, episodes, mediaFilesByEpisode, t]);
 
   const collectionSizeLabel = React.useMemo(() => {
     if (typeof collection.sizeBytes === "number" && collection.sizeBytes >= 0) {

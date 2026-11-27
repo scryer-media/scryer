@@ -7,7 +7,9 @@ import { useLocation } from "react-router";
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   ChevronDown,
+  Clock,
   Columns3,
   Eye,
   EyeOff,
@@ -74,10 +76,16 @@ import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { TitleCastStrip } from "@/components/views/title-cast-strip";
+import {
+  SAME_FILM_TITLES_SLOT,
+  SameFilmNotice,
+} from "@/components/common/same-film-notice";
+import { seriesMoviePlaces } from "@/lib/utils/same-film";
 import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { movieAvailabilityHold } from "@/lib/utils/movie-availability-hold";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
 import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import type {
@@ -93,6 +101,7 @@ import type {
   DownloadClientRoutingEntry,
   IndexerCategoryRoutingSettings,
   IndexerRecord,
+  JobRun,
   LibraryScanSummary,
   LibraryRecord,
   LibrarySettingsDraft,
@@ -171,7 +180,7 @@ import {
   selectedSeriesSidePanelTitleId,
 } from "@/lib/utils/selected-overview-policy";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
-import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
+import { useDiscoveryItemFacet } from "@/lib/facets/use-facets";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
 import { discoveryRailLabelTitle } from "@/lib/utils/discovery-sections";
 import {
@@ -587,6 +596,7 @@ function TitleContextMoreLikeThisStrip({
   onAction: (item: CatalogDiscoveryItem) => void;
 }) {
   const t = useTranslate();
+  const itemFacet = useDiscoveryItemFacet();
 
   if (items.length === 0) {
     if (!loading) {
@@ -630,7 +640,7 @@ function TitleContextMoreLikeThisStrip({
               : null;
           const titleLabel = discoveryItemDisplayTitle(item);
           const owned = item.ownedInInput;
-          const facet = discoveryItemFacet(item);
+          const facet = itemFacet(item);
           const addable =
             !owned && facet !== null && manageableFacets.has(facet);
           const requestable =
@@ -1197,10 +1207,11 @@ function TitleContextPanel({
     "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1024px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
   );
+  const itemFacet = useDiscoveryItemFacet();
   const moreLikeThisItems = React.useMemo(
     () =>
       (title?.moreLikeThis ?? []).filter((item) => {
-        const facet = discoveryItemFacet(item);
+        const facet = itemFacet(item);
         return (
           facet !== null &&
           (manageableDiscoveryFacets.has(facet) ||
@@ -1208,6 +1219,7 @@ function TitleContextPanel({
         );
       }),
     [
+      itemFacet,
       manageableDiscoveryFacets,
       requestableDiscoveryFacets,
       title?.moreLikeThis,
@@ -1339,6 +1351,13 @@ function TitleContextPanel({
   const statusLabel = localizedTitleStatus(t, title.contentStatus);
   const addedAtLabel =
     formatTitleDate(title.createdAt, dateTimeFormat) ?? t("label.unknown");
+  const availabilityHold =
+    title.facet === "MOVIE"
+      ? movieAvailabilityHold(title.movieAvailability, t, {
+          monitored: title.monitored,
+          hasFile: titleMediaFiles.length > 0,
+        })
+      : null;
   const unknownLabel = t("label.unknown");
   const qualityLabel = resolveDisplayedQualityLabel(title, unknownLabel);
   const overviewText =
@@ -1474,6 +1493,26 @@ function TitleContextPanel({
                   </span>
                 ))}
               </div>
+              {availabilityHold ? (
+                <p
+                  id={selectorId("title-hero-movie-availability", title.id)}
+                  data-ui="title-movie-availability"
+                  data-status={availabilityHold.status}
+                  title={t("settings.movieAvailability")}
+                  className="mt-2 inline-flex max-w-full items-start gap-1.5 self-start rounded-[7px] bg-[var(--scry-warning-bg-strong)] px-2.5 py-1 text-[11px] font-semibold leading-4 text-[var(--scry-warning-text)]"
+                >
+                  <Clock className="mt-px h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 break-words">
+                    {[
+                      availabilityHold.statusLabel,
+                      availabilityHold.dateLabel,
+                      availabilityHold.reasonLabel,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </p>
+              ) : null}
               {heroGenreLabels.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {heroGenreLabels.map((genre) => (
@@ -1493,6 +1532,17 @@ function TitleContextPanel({
                 titleId={title.id}
                 variant="hero"
                 className="mt-2"
+              />
+              <SameFilmNotice
+                places={seriesMoviePlaces(
+                  title.sameFilmElsewhere?.filter(
+                    (pairing) => pairing.movieTitleId === title.id,
+                  ),
+                )}
+                sentence={t("title.sameFilmAsSeriesMovie", {
+                  titles: SAME_FILM_TITLES_SLOT,
+                })}
+                className="mt-2 text-[#b7c0dd]"
               />
               <p className="mt-3 min-h-[6.25rem] line-clamp-5 text-[12.5px] leading-5 text-[#b7c0dd]">
                 {overviewText}
@@ -1923,6 +1973,8 @@ export function MediaContentView({
     titleFilter: string;
     setTitleFilter: (value: string) => void;
     refreshTitles: (query?: string) => Promise<void> | void;
+    /** Re-read only these rows, keeping every other loaded page in place. */
+    refetchCatalogTitles: (titleIds: readonly string[]) => Promise<unknown>;
     titleLoading: boolean;
     catalogTotalTitleCount: number;
     catalogBulkLoadedCount: number;
@@ -2099,6 +2151,11 @@ export function MediaContentView({
     ) => Promise<void> | void;
     refreshMovieTitleOptions: (title: TitleRecord) => Promise<void> | void;
     deleteCatalogTitle: (title: TitleRecord) => void;
+    /** Hides titles whose deletion was queued from an overview. */
+    trackQueuedTitleDeletion: (
+      acceptedTitleIds: readonly string[],
+      run: JobRun,
+    ) => void;
     isDeletingCatalogTitleById: Record<string, boolean>;
     isMobile: boolean;
     viewMode: ContentViewMode;
@@ -2214,6 +2271,7 @@ export function MediaContentView({
     titleFilter,
     setTitleFilter,
     refreshTitles,
+    refetchCatalogTitles,
     titleLoading,
     catalogTotalTitleCount,
     catalogBulkLoadedCount,
@@ -2310,6 +2368,7 @@ export function MediaContentView({
     updateMovieTitleOptions,
     refreshMovieTitleOptions,
     deleteCatalogTitle,
+    trackQueuedTitleDeletion,
     isDeletingCatalogTitleById,
     viewMode,
     viewModePending,
@@ -2437,9 +2496,11 @@ export function MediaContentView({
       return;
     }
     const columnKey = titleCatalogSortKey as TitleTableColumnKey;
+    // The poster view has no columns: it sorts by any supported key.
+    const needsVisibleColumn = viewMode !== "poster";
     if (
       !isTitleTableColumnSupported(columnKey) ||
-      visibleTitleTableColumns[columnKey] !== true
+      (needsVisibleColumn && visibleTitleTableColumns[columnKey] !== true)
     ) {
       updateTitleCatalogSort("name");
     }
@@ -2447,8 +2508,21 @@ export function MediaContentView({
     isTitleTableColumnSupported,
     titleCatalogSortKey,
     updateTitleCatalogSort,
+    viewMode,
     visibleTitleTableColumns,
   ]);
+  const posterSortKeys = React.useMemo(
+    () => [
+      "name" as const,
+      ...titleTableColumnGroups
+        .flatMap((group) => group.columns)
+        .filter(
+          (key): key is Exclude<TitleTableColumnKey, "actions"> =>
+            key !== "actions",
+        ),
+    ],
+    [titleTableColumnGroups],
+  );
 
   React.useEffect(() => {
     setTitleFilterInputValue((current) =>
@@ -3182,10 +3256,15 @@ export function MediaContentView({
     void refreshTitles(nextQuery);
   }, [refreshTitles, setTitleFilter, titleFilter, titleFilterInputValue]);
 
+  // A title that is gone leaves only its own row; reloading the whole list
+  // would drop every page past the first and move the scroll position.
   const handleOverviewTitleNotFound = React.useCallback(() => {
+    const missingTitleId = seriesSidePanelTitleId;
     onCloseOverview();
-    void refreshTitles(titleFilterInputValue);
-  }, [onCloseOverview, refreshTitles, titleFilterInputValue]);
+    if (missingTitleId) {
+      void refetchCatalogTitles([missingTitleId]);
+    }
+  }, [onCloseOverview, refetchCatalogTitles, seriesSidePanelTitleId]);
 
   React.useEffect(() => {
     if (
@@ -3341,6 +3420,78 @@ export function MediaContentView({
                   })}
                 </div>
               ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      ) : effectiveViewMode === "poster" &&
+        !selectedTitleCompactDrawerActive ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 w-9 rounded-[10px] border !border-[rgba(var(--scry-accent-rgb),0.55)] bg-[var(--scry-inset)] px-0 text-[var(--scry-muted2)] shadow-none transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+              aria-label={t("title.sortBy")}
+              title={t("title.sortBy")}
+            >
+              <ArrowUpDown className="!size-4" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            className="w-[236px] rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-soft)] p-[7px] shadow-[0_18px_44px_rgba(0,0,0,0.55)]"
+          >
+            <div className="px-2 pb-2 pt-1 text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]">
+              {t("title.sortBy")}
+            </div>
+            <div
+              role="radiogroup"
+              aria-label={t("title.sortBy")}
+              className="max-h-[min(32rem,70vh)] overflow-y-auto pr-1"
+            >
+              {posterSortKeys.map((sortKey) => {
+                const active = titleCatalogSortKey === sortKey;
+                const label =
+                  sortKey === "name"
+                    ? t("label.name")
+                    : titleTableColumnLabel(sortKey, t, view);
+                const directionLabel =
+                  titleCatalogSortDirection === "asc"
+                    ? t("title.sortAscending")
+                    : t("title.sortDescending");
+                return (
+                  <button
+                    key={sortKey}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => updateTitleCatalogSort(sortKey)}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2.5 rounded-[8px] px-2 py-[7px] text-left text-[13px] text-[var(--scry-text2)] transition hover:bg-[var(--scry-hover)]",
+                      active &&
+                        "bg-[var(--scry-hover)] text-[var(--scry-ink2)]",
+                    )}
+                  >
+                    <span className="min-w-0 truncate">{label}</span>
+                    {active ? (
+                      <span
+                        className="flex shrink-0 items-center"
+                        title={directionLabel}
+                      >
+                        {titleCatalogSortDirection === "asc" ? (
+                          <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <ArrowDown
+                            className="h-3.5 w-3.5"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span className="sr-only">{directionLabel}</span>
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </PopoverContent>
         </Popover>
@@ -4282,6 +4433,7 @@ export function MediaContentView({
                         initialEpisodeId={routeOverviewEpisodeId}
                         onTitleNotFound={handleOverviewTitleNotFound}
                         onBackToList={onCloseOverview}
+                        onTitleDeletionQueued={trackQueuedTitleDeletion}
                         onTitleResolved={(resolvedTitle) => {
                           if (resolvedTitle.id !== seriesSidePanelTitleId) {
                             onOpenOverview(view, resolvedTitle);

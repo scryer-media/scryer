@@ -16,6 +16,53 @@ use crate::types::*;
 
 const RELATION_PAGE_MAX_LIMIT: i32 = 300;
 
+/// Name both sides of each pairing from one batched title read.
+pub async fn same_film_pairing_payloads(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    pairings: Vec<scryer_application::SameFilmPairing>,
+) -> GqlResult<Vec<SameFilmPairingPayload>> {
+    if pairings.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut ids = pairings
+        .iter()
+        .flat_map(|pairing| {
+            std::iter::once(pairing.series_title_id.clone()).chain(pairing.movie_title_id.clone())
+        })
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    let titles = app
+        .get_titles_by_ids(actor, &ids)
+        .await
+        .map_err(to_gql_error)?
+        .into_iter()
+        .map(|title| (title.id.clone(), title))
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(pairings
+        .into_iter()
+        .filter_map(|pairing| {
+            let series = titles.get(&pairing.series_title_id)?;
+            let movie = match pairing.movie_title_id.as_ref() {
+                Some(id) => Some(titles.get(id)?),
+                None => None,
+            };
+            Some(SameFilmPairingPayload {
+                tmdb_id: pairing.tmdb_id,
+                series_movie_link_id: ID::from(pairing.series_movie_link_id),
+                series_title_id: ID::from(series.id.clone()),
+                series_title_name: series.name.clone(),
+                series_title_facet: MediaFacetValue::from_domain(series.facet.clone()),
+                movie_title_id: movie.map(|movie| ID::from(movie.id.clone())),
+                movie_title_name: movie.map(|movie| movie.name.clone()),
+                movie_title_facet: movie
+                    .map(|movie| MediaFacetValue::from_domain(movie.facet.clone())),
+            })
+        })
+        .collect())
+}
+
 /// What a release-decisions page query reads: the total is counted only for
 /// `totalCount` or `hasMore`, and explanations are parsed only for the item
 /// fields that read them.
@@ -84,6 +131,62 @@ async fn title_content_ratings(
         .next()
         .map(|(_, ratings)| ratings)
         .unwrap_or_default())
+}
+
+/// A title's episode progress counts, through the request's loader when there is
+/// one, so sibling count fields and titles in a list share one read.
+async fn title_episode_progress(
+    ctx: &Context<'_>,
+    title_id: &str,
+) -> GqlResult<Option<scryer_application::TitleEpisodeProgressSummary>> {
+    if let Some(loaders) = loaders_from_ctx(ctx) {
+        return Ok(loaders
+            .episode_progress_summary
+            .load_one(title_id.to_string())
+            .await?);
+    }
+    let app = app_from_ctx(ctx)?;
+    let actor = actor_from_ctx(ctx)?;
+    Ok(app
+        .list_title_episode_progress_summaries(&actor, &[title_id.to_string()])
+        .await
+        .map_err(to_gql_error)?
+        .into_iter()
+        .find(|summary| summary.title_id == title_id))
+}
+
+/// A title's countable episode counts: specials and unnamed, TBA or undated
+/// placeholder episodes left out. Null when the title has none.
+async fn title_countable_episode_progress(
+    ctx: &Context<'_>,
+    title_id: &str,
+) -> GqlResult<Option<scryer_application::TitleEpisodeProgressSummary>> {
+    Ok(title_episode_progress(ctx, title_id)
+        .await?
+        .filter(|summary| summary.total_episodes > 0))
+}
+
+/// A collection's episode progress counts, through the request's loader when
+/// there is one.
+async fn collection_episode_progress(
+    ctx: &Context<'_>,
+    title_id: &str,
+    collection_id: &str,
+) -> GqlResult<Option<scryer_application::CollectionEpisodeProgressSummary>> {
+    if let Some(loaders) = loaders_from_ctx(ctx) {
+        return Ok(loaders
+            .collection_episode_progress
+            .load_one((title_id.to_string(), collection_id.to_string()))
+            .await?);
+    }
+    let app = app_from_ctx(ctx)?;
+    let actor = actor_from_ctx(ctx)?;
+    Ok(app
+        .list_collection_episode_progress_summaries(&actor, &[title_id.to_string()])
+        .await
+        .map_err(to_gql_error)?
+        .into_iter()
+        .find(|summary| summary.collection_id == collection_id))
 }
 
 /// Whether the caller holds privileged access to `library_id`. Nested fields
@@ -303,6 +406,36 @@ impl TitlePayload {
 }
 
 #[ComplexObject]
+impl UserPayload {
+    /// Media servers this user has an active, verified account link to, such
+    /// as the server whose login created the account. Pending invites and
+    /// disabled links are not listed.
+    async fn linked_media_servers(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ExternalAccountProviderValue>> {
+        let providers = match loaders_from_ctx(ctx) {
+            Some(loaders) => {
+                loaders
+                    .linked_media_servers
+                    .load_one(self.id.to_string())
+                    .await?
+            }
+            None => app_from_ctx(ctx)?
+                .users_linked_media_servers(std::slice::from_ref(&*self.id))
+                .await
+                .map_err(to_gql_error)?
+                .remove(self.id.as_str()),
+        };
+        Ok(providers
+            .unwrap_or_default()
+            .into_iter()
+            .map(ExternalAccountProviderValue::from_domain)
+            .collect())
+    }
+}
+
+#[ComplexObject]
 impl TitlePayload {
     /// Effective movie availability for the instance's configured market and delay.
     async fn movie_availability(
@@ -422,79 +555,49 @@ impl TitlePayload {
         .await
     }
 
-    /// Owned-vs-total episode progress, excluding specials.
+    /// Episodes with a file, excluding specials and unnamed, TBA or undated placeholder episodes.
     async fn episodes_owned(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .episode_progress_summary
-                .load_one(self.id.to_string())
-                .await?;
-            return Ok(summary.map(|summary| summary.owned_episodes));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let id = self.id.to_string();
-            let summaries = app
-                .list_title_episode_progress_summaries(&actor, std::slice::from_ref(&id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.title_id == id)
-                .map(|summary| summary.owned_episodes))
-        })
-        .await
+        Ok(title_countable_episode_progress(ctx, self.id.as_str())
+            .await?
+            .map(|summary| summary.owned_episodes))
     }
 
-    /// Monitored episode count, excluding specials.
+    /// Monitored episodes, excluding specials and unnamed, TBA or undated placeholder episodes.
     async fn episodes_monitored(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .episode_progress_summary
-                .load_one(self.id.to_string())
-                .await?;
-            return Ok(summary.map(|summary| summary.monitored_episodes));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let id = self.id.to_string();
-            let summaries = app
-                .list_title_episode_progress_summaries(&actor, std::slice::from_ref(&id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.title_id == id)
-                .map(|summary| summary.monitored_episodes))
-        })
-        .await
+        Ok(title_countable_episode_progress(ctx, self.id.as_str())
+            .await?
+            .map(|summary| summary.monitored_episodes))
     }
 
-    /// Total episode count, excluding specials.
+    /// Episodes, excluding specials and unnamed, TBA or undated placeholder episodes.
     async fn episodes_total(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .episode_progress_summary
-                .load_one(self.id.to_string())
-                .await?;
-            return Ok(summary.map(|summary| summary.total_episodes));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let id = self.id.to_string();
-            let summaries = app
-                .list_title_episode_progress_summaries(&actor, std::slice::from_ref(&id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.title_id == id)
-                .map(|summary| summary.total_episodes))
-        })
-        .await
+        Ok(title_countable_episode_progress(ctx, self.id.as_str())
+            .await?
+            .map(|summary| summary.total_episodes))
+    }
+
+    /// Episodes with a file, specials included. The numerator of the series
+    /// progress, over `episodesExpected`.
+    async fn episodes_on_disk(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
+        Ok(title_episode_progress(ctx, self.id.as_str())
+            .await?
+            .map(|summary| summary.episodes_on_disk))
+    }
+
+    /// Episodes expected on disk, specials included: each episode that has a
+    /// file, or that is monitored and has aired. Progress is
+    /// `episodesOnDisk / episodesExpected`, complete when this is 0.
+    async fn episodes_expected(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
+        Ok(title_episode_progress(ctx, self.id.as_str())
+            .await?
+            .map(|summary| summary.episodes_expected))
+    }
+
+    /// Every episode record of the title, specials and placeholders included.
+    async fn episode_records_total(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
+        Ok(title_episode_progress(ctx, self.id.as_str())
+            .await?
+            .map(|summary| summary.episode_records_total))
     }
 
     /// Primary movie media resolution.
@@ -1104,6 +1207,23 @@ impl TitlePayload {
         .await
     }
 
+    /// Where this title's film is tracked twice, matched by TMDB movie id: for
+    /// a movie, the series movies of shows that hold the same film; for a
+    /// series, the movie titles that hold one of its series movies. Titles the
+    /// caller cannot view are left out.
+    async fn same_film_elsewhere(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<SameFilmPairingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let pairings = app
+            .same_film_pairings_for_title(&actor, self.id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        same_film_pairing_payloads(&app, &actor, pairings).await
+    }
+
     /// Media files for this title that are visible to the caller, or an empty list when none are available.
     async fn media_files(&self, ctx: &Context<'_>) -> GqlResult<Vec<TitleMediaFilePayload>> {
         if let Some(loaders) = loaders_from_ctx(ctx) {
@@ -1332,106 +1452,57 @@ impl CollectionPayload {
 
     /// Owned-vs-total episode progress for this collection, populated when requested.
     async fn episodes_owned(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .collection_episode_progress
-                .load_one((self.title_id.to_string(), self.id.to_string()))
-                .await?;
-            return Ok(summary.map(|summary| summary.owned_episodes));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let title_id = self.title_id.to_string();
-            let collection_id = self.id.to_string();
-            let summaries = app
-                .list_collection_episode_progress_summaries(&actor, std::slice::from_ref(&title_id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.collection_id == collection_id)
-                .map(|summary| summary.owned_episodes))
-        })
-        .await
+        Ok(
+            collection_episode_progress(ctx, self.title_id.as_str(), self.id.as_str())
+                .await?
+                .map(|summary| summary.owned_episodes),
+        )
     }
 
     /// Monitored episode count for this collection, populated when requested.
     async fn episodes_monitored(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .collection_episode_progress
-                .load_one((self.title_id.to_string(), self.id.to_string()))
-                .await?;
-            return Ok(summary.map(|summary| summary.monitored_episodes));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let title_id = self.title_id.to_string();
-            let collection_id = self.id.to_string();
-            let summaries = app
-                .list_collection_episode_progress_summaries(&actor, std::slice::from_ref(&title_id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.collection_id == collection_id)
-                .map(|summary| summary.monitored_episodes))
-        })
-        .await
+        Ok(
+            collection_episode_progress(ctx, self.title_id.as_str(), self.id.as_str())
+                .await?
+                .map(|summary| summary.monitored_episodes),
+        )
     }
 
     /// Total countable episode count for this collection, populated when requested.
     async fn episodes_total(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .collection_episode_progress
-                .load_one((self.title_id.to_string(), self.id.to_string()))
-                .await?;
-            return Ok(summary.map(|summary| summary.total_episodes));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let title_id = self.title_id.to_string();
-            let collection_id = self.id.to_string();
-            let summaries = app
-                .list_collection_episode_progress_summaries(&actor, std::slice::from_ref(&title_id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.collection_id == collection_id)
-                .map(|summary| summary.total_episodes))
-        })
-        .await
+        Ok(
+            collection_episode_progress(ctx, self.title_id.as_str(), self.id.as_str())
+                .await?
+                .map(|summary| summary.total_episodes),
+        )
     }
 
     /// Total episode records in this collection including uncountable placeholders (TBA/undated), populated when requested.
     async fn episode_records_total(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
-        if let Some(loaders) = loaders_from_ctx(ctx) {
-            let summary = loaders
-                .collection_episode_progress
-                .load_one((self.title_id.to_string(), self.id.to_string()))
-                .await?;
-            return Ok(summary.map(|summary| summary.episode_records_total));
-        }
-        Box::pin(async move {
-            let app = app_from_ctx(ctx)?;
-            let actor = actor_from_ctx(ctx)?;
-            let title_id = self.title_id.to_string();
-            let collection_id = self.id.to_string();
-            let summaries = app
-                .list_collection_episode_progress_summaries(&actor, std::slice::from_ref(&title_id))
-                .await
-                .map_err(to_gql_error)?;
-            Ok(summaries
-                .into_iter()
-                .find(|summary| summary.collection_id == collection_id)
-                .map(|summary| summary.episode_records_total))
-        })
-        .await
+        Ok(
+            collection_episode_progress(ctx, self.title_id.as_str(), self.id.as_str())
+                .await?
+                .map(|summary| summary.episode_records_total),
+        )
+    }
+
+    /// Episodes in this collection with a file.
+    async fn episodes_on_disk(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
+        Ok(
+            collection_episode_progress(ctx, self.title_id.as_str(), self.id.as_str())
+                .await?
+                .map(|summary| summary.episodes_on_disk),
+        )
+    }
+
+    /// Episodes in this collection expected on disk: each episode that has a
+    /// file, or that is monitored and has aired.
+    async fn episodes_expected(&self, ctx: &Context<'_>) -> GqlResult<Option<i64>> {
+        Ok(
+            collection_episode_progress(ctx, self.title_id.as_str(), self.id.as_str())
+                .await?
+                .map(|summary| summary.episodes_expected),
+        )
     }
 
     /// Parent title for this collection, or null if the title is no longer available to the caller.

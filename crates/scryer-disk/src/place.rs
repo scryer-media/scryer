@@ -344,6 +344,19 @@ pub struct PlaceRefusal {
     detail: io::Error,
 }
 
+impl PlaceRefusal {
+    /// The kind of the failure's own I/O error.
+    pub fn error_kind(&self) -> io::ErrorKind {
+        self.detail.kind()
+    }
+
+    /// The platform's own error number for the failure, when the system
+    /// gave one.
+    pub fn raw_os_error(&self) -> Option<i32> {
+        self.detail.raw_os_error()
+    }
+}
+
 /// A failed step, classified where it failed.
 pub(crate) struct Fail {
     pub(crate) refused: Refused,

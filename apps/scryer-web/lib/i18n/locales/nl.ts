@@ -426,6 +426,9 @@ const nl: LocaleDictionary = {
   "dashboard.storageFree": "{{size}} vrij",
   "dashboard.storageUnavailable": "Gebruik niet beschikbaar",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} in deze bibliotheek",
+  "dashboard.storageLibraryUsageHint":
+    "Deze bibliotheek beslaat {{library}} TB; {{used}} TB van het volume is in gebruik",
   "dashboard.storageLegend": "OK · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "LAAG",
   "dashboard.tagCrit": "KRITIEK",
@@ -1262,6 +1265,10 @@ const nl: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Maptemplate bevat een ongeldig teken: {{character}}",
   "settings.renameTemplateLabel": "Template voor hernoemen",
+  "settings.renameTemplateNoExtensionTitle": "Opslaan zonder {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "Deze template voor hernoemen bevat geen {ext}-token. Scryer voegt de extensie van elk bestand toe aan het einde van de naam.",
+  "settings.renameTemplateNoExtensionConfirm": "Toch opslaan",
   "settings.renameTemplatePlaceholder": "Voorbeeld",
   "settings.renameTemplateRequired": "Template voor hernoemen is verplicht.",
   "settings.renameCollisionPolicyLabel": "Conflictbeleid",
@@ -1585,6 +1592,13 @@ const nl: LocaleDictionary = {
   "title.contextTitleList": "Titellijst",
   "title.contextListDisclosure": "Lijst",
   "title.showTitleList": "Lijst tonen",
+  "title.sortBy": "Sorteren op",
+  "title.sortAscending": "Oplopend",
+  "title.sortDescending": "Aflopend",
+  "title.sameFilmAsSeriesMovie": "Wordt ook gevolgd als film van de serie {{titles}}.",
+  "title.sameFilmAsMovieTitle": "Wordt ook gevolgd als film: {{titles}}.",
+  "title.sameFilmBeforeAdd": "Wordt al gevolgd als film van de serie {{titles}}.",
+  "title.sameFilmMarker": "Wordt ook gevolgd als film",
   "title.hideTitleList": "Lijst verbergen",
   "title.contextForYouTitle": "Ontdekken",
   "title.contextForYouTop": "Top",
@@ -1627,8 +1641,8 @@ const nl: LocaleDictionary = {
   "title.table.runtime": "Speelduur",
   "title.table.avgRuntime": "Gem. speelduur",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} afleveringen",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} afleveringen ({{monitored}} gemonitord)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} afleveringen (totaal: {{total}})",
   "title.table.status": "Status",
   "title.table.root": "Root",
   "title.table.popularity": "Populariteit",
@@ -1736,6 +1750,17 @@ const nl: LocaleDictionary = {
     "{{count}} indexer(s) mislukt: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) overgeslagen: {{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} indexer(s) deels doorzocht, boven hun querylimiet: {{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: kan over {{seconds}} s opnieuw worden gevraagd",
+  "indexerSearch.skipReason.queryBudget": "Boven de querylimiet",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Boven de querylimiet tot {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Boven de querylimiet, opnieuw over {{seconds}} s",
+  "indexerSearch.queryBudget.partlySearched":
+    "Deels doorzocht: de querylimiet hield de overige verzoeken tegen. Resultaten van de verzonden verzoeken blijven behouden.",
   "title.noReleasesFound": "Geen releases gevonden voor {{name}}.",
   "title.searchNeedsDownloadClientTitle": "Zoeken vereist een downloadclient",
   "title.searchNeedsDownloadClientDescription":
@@ -2207,6 +2232,10 @@ const nl: LocaleDictionary = {
     "Authenticatiefactoren resetten voor {{name}}? Alle actieve sessies en geregistreerde authenticatiefactoren worden ingetrokken. Ze hebben hun primaire credentials opnieuw nodig. Als het loginbeleid MFA vereist, moeten ze een nieuwe passkey of authenticator registreren; anders slaagt hun volgende wachtwoordlogin zonder registratie.",
   "settings.loginEnabled": "Login ingeschakeld",
   "settings.loginDisabled": "Login uitgeschakeld",
+  "settings.accountOrigin.scryer": "Scryer-account",
+  "settings.accountOrigin.mediaServerLogin": "Aangemaakt via {{provider}}-login",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Aangemaakt via mediaserver-login",
+  "settings.linkedMediaServer": "Gekoppeld aan {{provider}}",
   "settings.enableLogin": "Login inschakelen",
   "settings.disableLogin": "Login uitschakelen",
   "settings.disableLoginConfirm":
@@ -3914,6 +3943,10 @@ const nl: LocaleDictionary = {
   "history.rematched": "Opnieuw gematcht",
   "history.seedingStarted": "Seeden",
   "history.seedingCompleted": "Seeden voltooid",
+  "history.subtitleDownloaded": "Ondertitel gedownload",
+  "history.subtitleFailed": "Ondertitel mislukt",
+  "history.subtitleDeleted": "Ondertitel verwijderd",
+  "history.subtitleBlocklisted": "Ondertitel geblokkeerd",
   "history.downloadIgnored": "Genegeerd",
   "history.downloadMissing": "Niet zichtbaar in client",
   "history.facet": "Facet",

@@ -12,7 +12,7 @@ use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
     ApiKeyRecord, CollectionMediaSizeSummary, EpisodeMediaAvailability, EpisodeMediaSizeSummary,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
-    IndexerSearchStrategyEventSink, LoginVerificationChallengeRecord,
+    IndexerSearchStrategyEventSink, LibraryManagedBytes, LoginVerificationChallengeRecord,
     OAuthClientRegistrationRecord, PendingReleaseObservation, PendingReleaseRole,
     TitleCatalogFilterCounts,
 };
@@ -208,6 +208,14 @@ pub struct TitleExternalIdLookupMatch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeriesMovieExternalIdLookupMatch {
     pub lookup_index: usize,
+}
+
+/// A series-movie link whose movie carries one of the TMDB ids asked about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeriesMovieTmdbMatch {
+    pub series_movie_link_id: String,
+    pub series_title_id: String,
+    pub tmdb_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2313,6 +2321,17 @@ pub trait TitleRepository: Send + Sync {
             // Non-SQL test repositories do not expose media-file aggregates.
             managed_bytes: 0,
         })
+    }
+    /// The managed bytes of each library in `library_ids`, read in one pass
+    /// over the catalog: the same figure each library's unfiltered catalog
+    /// reports. A library with no tracked media file is left out.
+    async fn list_library_managed_bytes(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<Vec<LibraryManagedBytes>> {
+        // Non-SQL test repositories do not expose media-file aggregates.
+        let _ = library_ids;
+        Ok(Vec::new())
     }
     async fn title_catalog_filter_options(
         &self,
@@ -4455,6 +4474,16 @@ pub trait ShowRepository: Send + Sync {
         library_ids: &[String],
         lookups: &[TitleExternalIdLookup],
     ) -> AppResult<Vec<SeriesMovieExternalIdLookupMatch>>;
+    /// The series-movie links, in every library, whose movie has one of
+    /// `tmdb_ids`. The default holds no links; SQL stores override it with a
+    /// read served by the movie TMDB id index.
+    async fn list_series_movie_links_by_movie_tmdb_ids(
+        &self,
+        tmdb_ids: &[String],
+    ) -> AppResult<Vec<SeriesMovieTmdbMatch>> {
+        let _ = tmdb_ids;
+        Ok(Vec::new())
+    }
     async fn get_series_movie_link_by_id(
         &self,
         link_id: &str,
@@ -10353,6 +10382,14 @@ pub trait MediaFileRepository: Send + Sync {
 
     async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>>;
 
+    /// Whether the title owns any live media file, the files
+    /// [`Self::list_media_files_for_title`] would list. SQL stores answer
+    /// with one indexed existence read; the default supports in-memory
+    /// repositories.
+    async fn title_has_media_files(&self, title_id: &str) -> AppResult<bool> {
+        Ok(!self.list_media_files_for_title(title_id).await?.is_empty())
+    }
+
     /// Compact ownership/cutoff facts for live primary links. SQL stores select
     /// only these columns; the default supports in-memory repositories.
     async fn list_primary_file_cutoffs_for_title(
@@ -10517,9 +10554,12 @@ pub trait MediaFileRepository: Send + Sync {
         self.list_missing_scope_candidates_for_title(title_id).await
     }
 
+    /// Episode progress per title. An episode counts as aired when its air
+    /// date is on or before `aired_through`.
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>>;
 
     /// Compact row data for episode availability. Implementations must not
@@ -10541,9 +10581,12 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Episode progress per collection of these titles, counting aired
+    /// episodes the way [`Self::list_title_episode_progress_summaries`] does.
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>>;
 
     async fn update_media_file_analysis(
@@ -11052,6 +11095,20 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn delete_acquisition_scope_states_for_episode(&self, episode_id: &str) -> AppResult<()>;
+
+    /// [`Self::delete_acquisition_scope_states_for_episode`] for every episode
+    /// in `episode_ids`. The default issues one call per episode and stops at
+    /// the first failure; SQL stores delete the rows in one transaction.
+    async fn delete_acquisition_scope_states_for_episodes(
+        &self,
+        episode_ids: &[String],
+    ) -> AppResult<()> {
+        for episode_id in episode_ids {
+            self.delete_acquisition_scope_states_for_episode(episode_id)
+                .await?;
+        }
+        Ok(())
+    }
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String>;
 

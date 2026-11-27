@@ -816,12 +816,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // External rule imports report through `externalRuleImportStatus`:
     // 204->205.
     assert!(query_field_names.contains(&"externalRuleImportStatus"));
+    // A film tracked both as a movie and as a series movie is looked up by
+    // its TMDB id through `seriesMoviesTrackingFilm`: 205->206.
+    assert!(query_field_names.contains(&"seriesMoviesTrackingFilm"));
     // Bad-media review adds the report queue and the recycle preview of a
-    // report: 205->207.
+    // report: 206->208.
     assert!(query_field_names.contains(&"mediaIssueRecyclePreview"));
     assert!(query_field_names.contains(&"mediaIssues"));
     assert_eq!(
-        query_field_count, 207,
+        query_field_count, 208,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -954,8 +957,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Staging a request subject's metadata adds `stageMyRequestMetadata`:
     // 300->301.
     assert!(mutation_field_names.contains(&"stageMyRequestMetadata"));
+    // Changing monitoring for a selection of episodes adds
+    // `setEpisodesMonitored`, one call instead of one per episode: 301->302.
+    assert!(mutation_field_names.contains(&"setEpisodesMonitored"));
     // Bad-media reports are submitted, approved, approved for recycle and
-    // rejected: 301->305.
+    // rejected: 302->306.
     for name in [
         "submitMediaIssue",
         "approveMediaIssue",
@@ -968,7 +974,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         );
     }
     assert_eq!(
-        mutation_field_count, 305,
+        mutation_field_count, 306,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1605,25 +1611,43 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Import placements in title history add ImportFilePlacementPayload,
+    // ImportLinkFallbackPayload, ImportPlacementValue and
+    // ImportLinkFallbackCauseValue: OBJECT 578->580, ENUM 219->221, public
+    // types 1062->1066.
+    for name in [
+        "ImportFilePlacementPayload",
+        "ImportLinkFallbackPayload",
+        "ImportPlacementValue",
+        "ImportLinkFallbackCauseValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // A film tracked both as a movie and as a series movie adds
+    // SameFilmPairingPayload: OBJECT 580->581, public types 1066->1067.
+    assert!(public_type_names.contains(&"SameFilmPairingPayload"));
+    // Episode monitoring for a selection adds SetEpisodesMonitoredInput:
+    // INPUT_OBJECT 253->254, public types 1067->1068.
+    assert!(public_type_names.contains(&"SetEpisodesMonitoredInput"));
     assert_eq!(
         public_types.len(),
-        1071,
+        1077,
         "public types: {public_type_names:?}"
     );
     // Bad-media reports add MediaIssuePayload and
-    // MediaIssueRecyclePreviewPayload: OBJECT 578->580.
-    assert_eq!(kind_count("OBJECT"), 580);
+    // MediaIssueRecyclePreviewPayload: OBJECT 581->583.
+    assert_eq!(kind_count("OBJECT"), 583);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
     assert!(public_type_names.contains(&"SetLibraryFullHashBackfillInput"));
-    assert_eq!(kind_count("INPUT_OBJECT"), 255);
+    assert_eq!(kind_count("INPUT_OBJECT"), 256);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     // Bad-media reports add three report enums and the two report rule
-    // outcome enums: ENUM 219->224.
-    assert_eq!(kind_count("ENUM"), 224);
+    // outcome enums: ENUM 221->226.
+    assert_eq!(kind_count("ENUM"), 226);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
@@ -5186,6 +5210,7 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
           fixTitleMatch: __type(name: "FixTitleMatchInput") { inputFields { name type { ...TypeRef } } }
           setCollectionMonitored: __type(name: "SetCollectionMonitoredInput") { inputFields { name type { ...TypeRef } } }
           setEpisodeMonitored: __type(name: "SetEpisodeMonitoredInput") { inputFields { name type { ...TypeRef } } }
+          setEpisodesMonitored: __type(name: "SetEpisodesMonitoredInput") { inputFields { name type { ...TypeRef } } }
           setSeriesMovieMonitored: __type(name: "SetSeriesMovieMonitoredInput") { inputFields { name type { ...TypeRef } } }
           deleteMediaFile: __type(name: "DeleteMediaFileInput") { inputFields { name type { ...TypeRef } } }
           reassignEpisodeFile: __type(name: "ReassignEpisodeFileInput") { inputFields { name type { ...TypeRef } } }
@@ -5332,6 +5357,7 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     }
 
     assert_non_null_id_list("deleteTitlesPreview", "titleIds");
+    assert_non_null_id_list("setEpisodesMonitored", "episodeIds");
     assert_non_null_id_list("deleteEpisodeFiles", "episodeIds");
     assert_non_null_id_list("deleteEpisodeFilesPreview", "episodeIds");
     assert_non_null_id_list("bindPendingImport", "episodeIds");

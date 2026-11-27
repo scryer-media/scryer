@@ -3864,6 +3864,10 @@ async fn execute_manual_import_with_release_evidence_inner(
     // Indexes into `results` of files whose importer already emitted Import
     // Complete for them; the manual-level event covers only the rest.
     let mut self_notified_results: HashSet<usize> = HashSet::new();
+    // How each file this manual import landed was placed, by its index into
+    // `results`.
+    let mut result_placements: HashMap<usize, scryer_domain::ImportFilePlacement> =
+        HashMap::new();
     let placed_files =
         DownloadPlacedFiles::load_for_manual_import(app, import_id, completed).await?;
     let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
@@ -4207,6 +4211,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                 size_bytes,
                 source_cleanup,
                 previous_path,
+                placement,
                 destination_permit: _destination_permit,
                 ..
             }) => {
@@ -4260,6 +4265,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     imported_size_bytes =
                         Some(imported_size_bytes.unwrap_or(0).saturating_add(size_bytes));
                 }
+                result_placements.insert(results.len(), placement);
                 results.push(manual_import_file_result(
                     mapping,
                     true,
@@ -4469,6 +4475,12 @@ async fn execute_manual_import_with_release_evidence_inner(
                 episode_ids,
                 size_bytes: imported_size_bytes,
                 upgrade: upgrade_imported,
+                file_placements: (0..results.len())
+                    .filter(|index| {
+                        results[*index].success && !self_notified_results.contains(index)
+                    })
+                    .filter_map(|index| result_placements.remove(&index))
+                    .collect(),
             }),
         ))
         .await?;

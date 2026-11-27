@@ -4466,23 +4466,6 @@ file = "postgres/migrations/0366_media_request_staged_metadata.sql"
 engine = "postgres"
 scope = "all"
 
-[[migration]]
-version = 367
-description = "bad file reports"
-checksum_algo = "blake3"
-
-[[migration.steps]]
-kind = "sql"
-file = "migrations/0367_bad_file_reports.sql"
-engine = "sqlite"
-scope = "all"
-
-[[migration.steps]]
-kind = "sql"
-file = "postgres/migrations/0367_bad_file_reports.sql"
-engine = "postgres"
-scope = "all"
-
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"
@@ -4492,3 +4475,37 @@ engine = "sqlite"
 through_version = 341
 file = "postgres/baselines/0341_baseline.sql"
 engine = "postgres"
+
+[[migration]]
+version = 367
+description = "user ui hidden facets"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0367_user_ui_hidden_facets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0367_user_ui_hidden_facets.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 368
+description = "bad file reports"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0368_bad_file_reports.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0368_bad_file_reports.sql"
+engine = "postgres"
+scope = "all"

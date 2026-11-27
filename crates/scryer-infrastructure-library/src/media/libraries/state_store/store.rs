@@ -1617,6 +1617,22 @@ impl AcquisitionScopeStateRepository for WantedStore {
         Ok(())
     }
 
+    async fn delete_acquisition_scope_states_for_episodes(
+        &self,
+        episode_ids: &[String],
+    ) -> AppResult<()> {
+        delete_for_column_ids_shared(
+            &self.datastore,
+            "delete_acquisition_scope_states_for_episodes",
+            "wanted_items",
+            "episode_id",
+            episode_ids,
+            ID_LIST_CHUNK,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
         let prepared = PreparedReleaseDecision::of(&self.datastore, decision)?;
         self.write_prepared_release_decision(Arc::new(prepared))
@@ -2060,28 +2076,43 @@ async fn delete_for_title_ids_shared(
     table: &'static str,
     title_ids: &[String],
 ) -> AppResult<u32> {
-    if title_ids.is_empty() {
+    delete_for_column_ids_shared(
+        datastore,
+        op_name,
+        table,
+        "title_id",
+        title_ids,
+        HOUSEKEEPING_TITLE_ID_CHUNK,
+    )
+    .await
+}
+
+/// Deletes every row of `table` whose `column` is one of `ids`, in one
+/// transaction. A list longer than one statement accepts is split across
+/// statements inside it, `chunk` ids each.
+async fn delete_for_column_ids_shared(
+    datastore: &StoreDatastore,
+    op_name: &'static str,
+    table: &'static str,
+    column: &'static str,
+    ids: &[String],
+    chunk: usize,
+) -> AppResult<u32> {
+    if ids.is_empty() {
         return Ok(0);
     }
 
-    // One transaction as before; a list longer than one statement accepts is
-    // split across statements inside it.
-    let title_ids = title_ids.to_vec();
+    let ids = ids.to_vec();
     let rows_affected = SqlRuntime::run_in_transaction(datastore, op_name, move |tx| {
-        let title_ids = title_ids.clone();
+        let ids = ids.clone();
         Box::pin(async move {
             let limit = crate::media::id_list_statements::max_binds(&SqlExec::Tx(tx));
-            let (title_ids, per_statement) = crate::media::id_list_statements::id_list_statements(
-                &title_ids,
-                1,
-                0,
-                limit,
-                HOUSEKEEPING_TITLE_ID_CHUNK,
-            );
+            let (ids, per_statement) =
+                crate::media::id_list_statements::id_list_statements(&ids, 1, 0, limit, chunk);
             let mut deleted = 0u64;
-            for chunk in title_ids.chunks(per_statement) {
+            for chunk in ids.chunks(per_statement) {
                 let sql = format!(
-                    "DELETE FROM {table} WHERE title_id IN ({})",
+                    "DELETE FROM {table} WHERE {column} IN ({})",
                     placeholders(chunk.len())
                 );
                 let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();

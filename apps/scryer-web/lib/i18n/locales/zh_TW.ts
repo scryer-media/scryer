@@ -406,6 +406,9 @@ const zh_TW: LocaleDictionary = {
   "dashboard.storageFree": "剩餘 {{size}}",
   "dashboard.storageUnavailable": "無法獲取使用量",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "此媒體庫佔 {{size}}",
+  "dashboard.storageLibraryUsageHint":
+    "此媒體庫佔用 {{library}} TB；磁碟區已使用 {{used}} TB",
   "dashboard.storageLegend": "正常 · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "偏低",
   "dashboard.tagCrit": "緊急",
@@ -1300,6 +1303,10 @@ const zh_TW: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "資料夾範本包含非法的檔案系統字元：{{character}}",
   "settings.renameTemplateLabel": "重新命名模板",
+  "settings.renameTemplateNoExtensionTitle": "不含 {ext} 仍要儲存？",
+  "settings.renameTemplateNoExtensionDescription":
+    "此重新命名範本沒有 {ext} 標記。Scryer 會將每個檔案的副檔名加到名稱結尾。",
+  "settings.renameTemplateNoExtensionConfirm": "仍要儲存",
   "settings.renameTemplatePlaceholder": "佔位符",
   "settings.renameTemplateRequired": "重新命名模板為必填項。",
   "settings.renameCollisionPolicyLabel": "衝突策略",
@@ -1659,6 +1666,13 @@ const zh_TW: LocaleDictionary = {
   "title.contextTitleList": "作品清單",
   "title.contextListDisclosure": "清單",
   "title.showTitleList": "顯示清單",
+  "title.sortBy": "排序方式",
+  "title.sortAscending": "遞增",
+  "title.sortDescending": "遞減",
+  "title.sameFilmAsSeriesMovie": "也作為影集 {{titles}} 的電影追蹤。",
+  "title.sameFilmAsMovieTitle": "也作為電影追蹤：{{titles}}。",
+  "title.sameFilmBeforeAdd": "已作為影集 {{titles}} 的電影追蹤。",
+  "title.sameFilmMarker": "也作為電影追蹤",
   "title.hideTitleList": "隱藏清單",
   "title.contextForYouTitle": "從你的資料庫推薦",
   "title.contextForYouTop": "熱門",
@@ -1701,8 +1715,8 @@ const zh_TW: LocaleDictionary = {
   "title.table.runtime": "片長",
   "title.table.avgRuntime": "平均片長",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} 集",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} 集 ({{monitored}} 集已監控)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} 集（共 {{total}} 集）",
   "title.table.status": "狀態",
   "title.table.root": "根目錄",
   "title.table.popularity": "熱門度",
@@ -1803,6 +1817,10 @@ const zh_TW: LocaleDictionary = {
     "{{count}} 個索引器失敗：{{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} 個索引器已略過：{{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} 個索引器只搜尋了部分，已超出查詢配額：{{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}：{{seconds}} 秒後可再次查詢",
   "title.noReleasesFound": "未找到 {{name}} 的釋出資源。",
   "title.searchNeedsDownloadClientTitle": "搜尋需要下載使用者端",
   "title.searchNeedsDownloadClientDescription":
@@ -2307,6 +2325,10 @@ const zh_TW: LocaleDictionary = {
     "確定要重設 {{name}} 的身分驗證要素嗎？所有使用中登入階段與已註冊的驗證要素都將被撤銷。他們將需要再次使用其主要憑證。若登入政策要求 MFA，他們將需要註冊新的通行密鑰或驗證器；否則下次密碼登入將無需註冊即可成功。",
   "settings.loginEnabled": "已啟用登入",
   "settings.loginDisabled": "已停用登入",
+  "settings.accountOrigin.scryer": "Scryer 帳號",
+  "settings.accountOrigin.mediaServerLogin": "由 {{provider}} 登入建立",
+  "settings.accountOrigin.mediaServerLoginUnknown": "由媒體伺服器登入建立",
+  "settings.linkedMediaServer": "已連結 {{provider}}",
   "settings.enableLogin": "啟用登入",
   "settings.disableLogin": "停用登入",
   "settings.disableLoginConfirm":
@@ -3999,6 +4021,10 @@ const zh_TW: LocaleDictionary = {
   "history.rematched": "重新匹配",
   "history.seedingStarted": "做種中",
   "history.seedingCompleted": "做種完成",
+  "history.subtitleDownloaded": "字幕已下載",
+  "history.subtitleFailed": "字幕失敗",
+  "history.subtitleDeleted": "字幕已刪除",
+  "history.subtitleBlocklisted": "字幕已封鎖",
   "history.downloadIgnored": "已忽略",
   "history.downloadMissing": "用戶端中不可見",
   "history.facet": "分類",
@@ -5982,6 +6008,13 @@ const zh_TW: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "因近期失敗而暫停",
   "indexerSearch.skipReason.backedOffUntil": "暫停至 {{time}}",
   "indexerSearch.skipReason.noTextSearch": "不支援文字搜尋",
+  "indexerSearch.skipReason.queryBudget": "已超出查詢配額",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "已超出查詢配額，至 {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "已超出查詢配額，{{seconds}} 秒後可再次查詢",
+  "indexerSearch.queryBudget.partlySearched":
+    "只搜尋了部分：查詢配額停止了其餘請求。已送出請求的結果會保留。",
   "indexerSearch.health.retryFailed": "重試失敗項",
   "indexerSearch.refine.title": "篩選",
   "indexerSearch.refine.reset": "重設",

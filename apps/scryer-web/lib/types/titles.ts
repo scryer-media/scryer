@@ -103,6 +103,8 @@ export type TitleCollectionRecord = {
   episodesOwned?: number | null;
   episodesMonitored?: number | null;
   episodesTotal?: number | null;
+  episodesOnDisk?: number | null;
+  episodesExpected?: number | null;
   episodes?: TitleCollectionEpisodeRecord[] | null;
   createdAt?: string | null;
 };
@@ -208,6 +210,18 @@ export type MovieAvailabilityRecord = {
   minimumAvailability: string;
 };
 
+/** One film tracked twice: as a series movie of a show and as a movie title. */
+export type SameFilmPairing = {
+  tmdbId: string;
+  seriesMovieLinkId: string;
+  seriesTitleId: string;
+  seriesTitleName: string;
+  seriesTitleFacet: Facet;
+  movieTitleId: string | null;
+  movieTitleName: string | null;
+  movieTitleFacet: Facet | null;
+};
+
 export type TitleRecord = {
   id: string;
   name: string;
@@ -225,12 +239,16 @@ export type TitleRecord = {
   slug?: string | null;
   imdbId?: string | null;
   externalIds?: ExternalId[] | null;
+  sameFilmElsewhere?: SameFilmPairing[];
   qualityTier?: string | null;
   currentQualityTier?: string | null;
   sizeBytes?: number | null;
   episodesOwned?: number | null;
   episodesMonitored?: number | null;
   episodesTotal?: number | null;
+  episodesOnDisk?: number | null;
+  episodesExpected?: number | null;
+  episodeRecordsTotal?: number | null;
   contentStatus?: string | null;
   posterUrl?: string | null;
   posterSourceUrl?: string | null;

@@ -3,6 +3,8 @@ import {
   ArrowDownToLine,
   Ban,
   ArchiveRestore,
+  Captions,
+  CaptionsOff,
   EyeOff,
   FileEdit,
   Gavel,
@@ -37,7 +39,19 @@ export const TITLE_HISTORY_FILTERS = [
   "rematched",
   "seeding_started",
   "seeding_completed",
+  "subtitle_downloaded",
+  "subtitle_failed",
+  "subtitle_deleted",
+  "subtitle_blocklisted",
 ] as const;
+
+/** History event types that describe a subtitle rather than a release. */
+export const SUBTITLE_HISTORY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "subtitle_downloaded",
+  "subtitle_failed",
+  "subtitle_deleted",
+  "subtitle_blocklisted",
+]);
 
 export const WANTED_HISTORY_FILTERS = [
   "grabbed",
@@ -187,6 +201,34 @@ const eventMeta: Record<string, EventMeta> = {
     badgeClassName:
       "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
   },
+  subtitle_downloaded: {
+    icon: Captions,
+    iconClassName: "text-[var(--scry-success-text-soft)]",
+    labelKey: "history.subtitleDownloaded",
+    badgeClassName:
+      "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
+  },
+  subtitle_failed: {
+    icon: CaptionsOff,
+    iconClassName: "text-[var(--scry-danger-text-soft)]",
+    labelKey: "history.subtitleFailed",
+    badgeClassName:
+      "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  },
+  subtitle_deleted: {
+    icon: Trash2,
+    iconClassName: "text-[var(--scry-danger-text-soft)]",
+    labelKey: "history.subtitleDeleted",
+    badgeClassName:
+      "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  },
+  subtitle_blocklisted: {
+    icon: Ban,
+    iconClassName: "text-[var(--scry-warning-text)]",
+    labelKey: "history.subtitleBlocklisted",
+    badgeClassName:
+      "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  },
   rematched: {
     icon: RefreshCcw,
     iconClassName: "text-[var(--scry-accent-text)]",
@@ -244,6 +286,10 @@ const DOMAIN_EVENT_TYPES_BY_HISTORY_EVENT: Record<string, readonly string[]> = {
   rematched: ["MEDIA_FILE_REASSIGNED", "TITLE_REMATCHED"],
   seeding_started: ["SEEDING_STARTED"],
   seeding_completed: ["SEEDING_COMPLETED"],
+  subtitle_downloaded: ["SUBTITLE_DOWNLOADED"],
+  subtitle_failed: ["SUBTITLE_SEARCH_FAILED"],
+  subtitle_deleted: ["SUBTITLE_DELETED"],
+  subtitle_blocklisted: ["SUBTITLE_BLOCKLISTED"],
 };
 
 /** The domain event types that can add a row to a history view showing `historyEventTypes`. */

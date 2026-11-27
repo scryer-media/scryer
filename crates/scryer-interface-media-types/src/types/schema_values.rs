@@ -850,6 +850,10 @@ pub enum DomainEventTypeValue {
     SubtitleDownloaded,
     /// A subtitle search failed.
     SubtitleSearchFailed,
+    /// A subtitle file was deleted.
+    SubtitleDeleted,
+    /// A subtitle was deleted and its provider file blocklisted.
+    SubtitleBlocklisted,
     /// A library scan started.
     LibraryScanStarted,
     /// A title was discovered during a library scan.
@@ -954,6 +958,8 @@ impl DomainEventTypeValue {
             DomainEventType::PostProcessingCompleted => Self::PostProcessingCompleted,
             DomainEventType::SubtitleDownloaded => Self::SubtitleDownloaded,
             DomainEventType::SubtitleSearchFailed => Self::SubtitleSearchFailed,
+            DomainEventType::SubtitleDeleted => Self::SubtitleDeleted,
+            DomainEventType::SubtitleBlocklisted => Self::SubtitleBlocklisted,
             DomainEventType::LibraryScanStarted => Self::LibraryScanStarted,
             DomainEventType::LibraryScanTitleDiscovered => Self::LibraryScanTitleDiscovered,
             DomainEventType::LibraryScanDeltaRecorded => Self::LibraryScanDeltaRecorded,
@@ -1025,6 +1031,8 @@ impl DomainEventTypeValue {
             Self::PostProcessingCompleted => DomainEventType::PostProcessingCompleted,
             Self::SubtitleDownloaded => DomainEventType::SubtitleDownloaded,
             Self::SubtitleSearchFailed => DomainEventType::SubtitleSearchFailed,
+            Self::SubtitleDeleted => DomainEventType::SubtitleDeleted,
+            Self::SubtitleBlocklisted => DomainEventType::SubtitleBlocklisted,
             Self::LibraryScanStarted => DomainEventType::LibraryScanStarted,
             Self::LibraryScanTitleDiscovered => DomainEventType::LibraryScanTitleDiscovered,
             Self::LibraryScanDeltaRecorded => DomainEventType::LibraryScanDeltaRecorded,

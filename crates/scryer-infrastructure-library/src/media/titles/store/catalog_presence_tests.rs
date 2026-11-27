@@ -411,6 +411,104 @@ async fn title_ids_narrow_the_page_under_the_other_filters() {
     );
 }
 
+/// Progress, the episode shape and the outstanding filter share one meaning of
+/// aired: a full past day has aired, a year or a month alone has not. Each
+/// title holds one episode on disk and one monitored episode without a file
+/// whose air date has the given form.
+#[tokio::test]
+async fn progress_shape_and_outstanding_filter_agree_on_partial_air_dates() {
+    use scryer_application::MediaFileRepository;
+
+    let store = seeded_catalogue().await;
+    let datastore = &store.datastore;
+    // (title, air date of the monitored episode without a file, has it aired)
+    let cases = [
+        ("series-dated-year", "2001", false),
+        ("series-dated-month", "2001-02", false),
+        ("series-dated-day", "2001-02-03", true),
+        ("series-dated-day-time", "2001-02-03T20:00:00Z", true),
+    ];
+    for (title_id, air_date, _) in cases {
+        insert_title(datastore, title_id, "series").await;
+        let season = insert_season(datastore, title_id, &format!("{title_id}-s1"), "1").await;
+        add_owned_episode(
+            datastore,
+            EpisodeFixture {
+                title_id,
+                collection_id: &season,
+                episode_id: &format!("{title_id}-e1"),
+                file_id: &format!("{title_id}-f1"),
+                number: "1",
+                air_date: AIRED,
+                monitored: true,
+                scan_status: "complete",
+                path: &format!("/media/Series/{title_id}/S01E01.mkv"),
+            },
+        )
+        .await;
+        insert_episode(
+            datastore,
+            &format!("{title_id}-e2"),
+            title_id,
+            &season,
+            "2",
+            air_date,
+            true,
+        )
+        .await;
+    }
+
+    // The outstanding filter reads the database's current day, so the other
+    // reads use the same day.
+    let today = chrono::Utc::now().date_naive();
+    let ids = cases
+        .iter()
+        .map(|(id, _, _)| (*id).to_string())
+        .collect::<Vec<_>>();
+    let files = crate::media::search::media_file_store::MediaFileStore::new(datastore.clone());
+    let progress = files
+        .list_title_episode_progress_summaries(&ids, today)
+        .await
+        .expect("progress should load")
+        .into_iter()
+        .map(|summary| (summary.title_id.clone(), summary.episodes_expected))
+        .collect::<std::collections::HashMap<_, _>>();
+    let shapes = store
+        .list_title_episode_shapes(&ids, today)
+        .await
+        .expect("shapes should load")
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    let partial = names_for(
+        &store,
+        TitleCatalogFilter {
+            title_ids: ids.clone(),
+            presences: vec![TitleCatalogPresence::Partial],
+            ..TitleCatalogFilter::default()
+        },
+    )
+    .await;
+
+    for (title_id, air_date, aired) in cases {
+        let shape = &shapes[title_id];
+        assert_eq!(
+            (
+                progress[title_id],
+                shape.aired_episode_count,
+                shape.unaired_episode_count,
+                shape.missing_episode_count,
+                partial.contains(&title_id.to_string()),
+            ),
+            if aired {
+                (2, 2, 0, 1, true)
+            } else {
+                (1, 1, 1, 0, false)
+            },
+            "air date {air_date}"
+        );
+    }
+}
+
 /// The single counts statement has to give the numbers the per-dimension COUNT
 /// queries gave: each count is the page predicate with one dimension swapped.
 #[tokio::test]
@@ -1191,14 +1289,20 @@ async fn batch_readers_split_across_statements_match_one_statement() {
         rows
     }
 
+    let progress_day = chrono::NaiveDate::from_ymd_opt(2026, 6, 1).expect("fixed day");
     let files = crate::media::search::media_file_store::MediaFileStore::new(datastore.clone());
     let shows = crate::media::shows::store::ShowStore::new(datastore.clone());
     macro_rules! same {
-        ($store:ident, $read:ident, $shape:ident, $ids:expr, $padded:expr) => {{
-            let one = $shape(&$store.$read($ids).await.expect("one statement should run"));
+        ($store:ident, $read:ident, $shape:ident, $ids:expr, $padded:expr $(, $extra:expr)*) => {{
+            let one = $shape(
+                &$store
+                    .$read($ids $(, $extra)*)
+                    .await
+                    .expect("one statement should run"),
+            );
             let split = $shape(
                 &$store
-                    .$read($padded)
+                    .$read($padded $(, $extra)*)
                     .await
                     .expect("split statements should run"),
             );
@@ -1248,7 +1352,8 @@ async fn batch_readers_split_across_statements_match_one_statement() {
         list_title_episode_progress_summaries,
         sorted,
         &seeded,
-        &padded
+        &padded,
+        progress_day
     );
     same!(
         files,
@@ -1262,7 +1367,8 @@ async fn batch_readers_split_across_statements_match_one_statement() {
         list_collection_episode_progress_summaries,
         sorted,
         &seeded,
-        &padded
+        &padded,
+        progress_day
     );
     same!(
         files,

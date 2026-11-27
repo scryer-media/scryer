@@ -847,6 +847,7 @@ pub(crate) fn parse_split_video_codec(token: &str, next: Option<&str>) -> Option
         ("H", Some("266")) => Some("VVC"),
         ("VC", Some("1")) => Some("VC1"),
         ("MPEG", Some("2")) => Some("MPEG-2"),
+        ("MPEG", Some("4")) => Some("MPEG-4"),
         _ => None,
     }
 }

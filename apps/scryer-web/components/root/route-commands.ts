@@ -36,12 +36,16 @@ import type {
   ViewId,
   WantedSection,
 } from "@/components/root/types";
+// eslint-disable-next-line no-restricted-imports -- pure builder: the shell passes useFacets().facets; the registry is only the default for tests
 import { FACET_REGISTRY } from "../../lib/facets/registry.ts";
+import type { FacetDefinition } from "../../lib/facets/registry.ts";
 import { buildListsPath } from "../../lib/utils/routing.ts";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  canManageCatalogSettingsPages,
+  canManageLibrarySettingsPage,
   hasAnyAppPermission,
   hasAnyLibraryPermission,
   hasAnyPrivilegedLibraryAccess,
@@ -66,6 +70,8 @@ export type RouteCommand = {
 type BuildRouteCommandsArgs = {
   t: Translate;
   user: AuthUser;
+  /** Facets to offer commands for: the visible ones from `useFacets()`. */
+  facets?: readonly FacetDefinition[];
   /** The member's own lists are not allowed, so Lists offers them nothing. */
   personalListsRefused?: boolean;
   activityImportCount?: number;
@@ -112,6 +118,7 @@ function buildNavigate(
 export function buildRouteCommands({
   t,
   user,
+  facets = FACET_REGISTRY,
   personalListsRefused = false,
   activityImportCount = 0,
   onNavigatePath,
@@ -156,10 +163,9 @@ export function buildRouteCommands({
   const canManageLists = hasAnyAppPermission(user, [
     APP_PERMISSIONS.manageLists,
   ]);
-  const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
-  const canManageLibrarySettings =
-    canManageConfig ||
-    hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageLibrary);
+  // A facet's settings pages follow what their saves need on the server.
+  const canManageConfig = canManageCatalogSettingsPages(user);
+  const canManageLibrarySettings = canManageLibrarySettingsPage(user);
   const automationGroupLabel = t("nav.group.automation");
   const catalogsGroupLabel = t("nav.group.catalogs");
   const overviewGroupLabel = t("nav.group.overview");
@@ -169,7 +175,7 @@ export function buildRouteCommands({
   const systemGroupLabel = t("nav.group.system");
   const logsGroupLabel = t("nav.logs");
   const mediaOverviewCommands = canViewCatalog
-    ? FACET_REGISTRY.map(
+    ? facets.map(
         (f) =>
           ({
             id: `${f.viewId}-overview`,
@@ -196,7 +202,7 @@ export function buildRouteCommands({
     : [];
   const mediaDetailCommands =
     canResolveImports || canManageConfig || canManageLibrarySettings
-      ? FACET_REGISTRY.flatMap((f) => {
+      ? facets.flatMap((f) => {
           const commands: RouteCommand[] = [];
 
           if (canResolveImports) {
@@ -337,9 +343,7 @@ export function buildRouteCommands({
           {
             id: "requests",
             label: t("nav.requests"),
-            description: FACET_REGISTRY.map((f) => t(f.navLabelKey)).join(
-              " / ",
-            ),
+            description: facets.map((f) => t(f.navLabelKey)).join(" / "),
             groupLabel: requestsGroupLabel,
             keywords: [
               "requests",
@@ -347,6 +351,7 @@ export function buildRouteCommands({
               "media requests",
               "movies",
               "series",
+              // eslint-disable-next-line no-restricted-syntax -- search keywords for the requests command, not facet choices
               "anime",
               "library",
             ],

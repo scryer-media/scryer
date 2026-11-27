@@ -150,6 +150,7 @@ impl FileImporter for CopyingFileImporter {
             source_cleanup: None,
             verification: None,
             library_file_unsettled: false,
+            link_fallback: None,
         })
     }
 
@@ -526,7 +527,19 @@ impl MediaFileRepository for MockMediaFileRepo {
         file.episode_id = associations.episode_ids.first().cloned();
         file.series_movie_link_ids = associations.series_movie_link_ids.clone();
         file.content_hashes = hashes.cloned();
+        // Like the store, every episode is linked: one row per link, the way
+        // the title listing returns a file spanning several episodes.
+        let further_links = associations
+            .episode_ids
+            .iter()
+            .skip(1)
+            .map(|episode_id| TitleMediaFile {
+                episode_id: Some(episode_id.clone()),
+                ..file.clone()
+            })
+            .collect::<Vec<_>>();
         files.push(file);
+        files.extend(further_links);
         self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(crate::ClaimedMediaFile {
             media_file_id: id,
@@ -971,6 +984,7 @@ impl MediaFileRepository for MockMediaFileRepo {
     async fn list_title_episode_progress_summaries(
         &self,
         _title_ids: &[String],
+        _aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         Ok(Vec::new())
     }
@@ -978,6 +992,7 @@ impl MediaFileRepository for MockMediaFileRepo {
     async fn list_collection_episode_progress_summaries(
         &self,
         _title_ids: &[String],
+        _aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         Ok(Vec::new())
     }

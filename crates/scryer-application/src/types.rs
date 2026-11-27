@@ -949,6 +949,9 @@ pub struct MediaFileCutoffSummary {
     pub episode_id: Option<String>,
     pub series_movie_link_ids: Vec<String>,
     pub quality_label: Option<String>,
+    /// The scanned resolution, which stands for the quality when the file
+    /// has no quality label.
+    pub resolution: Option<String>,
     pub created_at: String,
 }
 
@@ -963,6 +966,7 @@ impl From<&TitleMediaFile> for MediaFileCutoffSummary {
             episode_id: file.episode_id.clone(),
             series_movie_link_ids: file.series_movie_link_ids.clone(),
             quality_label: file.quality_label.clone(),
+            resolution: file.resolution.clone(),
             created_at: file.created_at.clone(),
         }
     }
@@ -1294,6 +1298,10 @@ pub struct TitleCatalogSort {
     /// Effective profile names a `Profile` sort orders by. Resolved by the
     /// caller because they live in settings, not on the title rows.
     pub profile_names: Option<TitleCatalogProfileNames>,
+    /// Last day an `Episodes` sort counts an episode as aired. Resolved by the
+    /// caller from the application clock, so the sort agrees with the episode
+    /// progress shown for the same titles.
+    pub episodes_aired_through: Option<chrono::NaiveDate>,
 }
 
 impl TitleCatalogSort {
@@ -1302,6 +1310,7 @@ impl TitleCatalogSort {
             key,
             direction,
             profile_names: None,
+            episodes_aired_through: None,
         }
     }
 }
@@ -1518,6 +1527,14 @@ pub struct TitleCatalogAggregates {
     /// when `filter_counts` is set; they are zero otherwise.
     pub file_state_counts: bool,
     pub managed_bytes: bool,
+}
+
+/// The bytes of a library's tracked media files: the figure the library's
+/// unfiltered catalog reports as its managed bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryManagedBytes {
+    pub library_id: String,
+    pub managed_bytes: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -3019,6 +3036,10 @@ pub enum IndexerSearchIncompleteReason {
     /// An interactive search skipped the indexer instead of waiting out its
     /// query budget. Nothing was sent and none of the budget was spent.
     QueryBudgetExhausted,
+    /// An interactive search sent some of the indexer's requests, then
+    /// stopped instead of waiting out its query budget for the rest. The
+    /// results of the requests that were sent are kept.
+    QueryBudgetPartial,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4342,13 +4363,25 @@ pub struct MissingScopeCandidates {
     pub series_movie_links: Vec<MissingSeriesMovieLinkCandidate>,
 }
 
-/// Aggregated episode progress counts per title, excluding specials.
+/// Aggregated episode progress counts per title.
+///
+/// `owned_episodes`, `monitored_episodes` and `total_episodes` exclude specials
+/// and unnamed, TBA or undated placeholder episodes. The `episodes_*` and
+/// `episode_records_total` counts read every episode of the title, specials
+/// included, and follow the series progress definition: progress is
+/// `episodes_on_disk / episodes_expected`.
 #[derive(Clone, Debug)]
 pub struct TitleEpisodeProgressSummary {
     pub title_id: String,
     pub owned_episodes: i64,
     pub monitored_episodes: i64,
     pub total_episodes: i64,
+    /// Episodes with a live primary file.
+    pub episodes_on_disk: i64,
+    /// Episodes that are monitored and have aired, plus any episode on disk.
+    pub episodes_expected: i64,
+    /// Every episode record of the title.
+    pub episode_records_total: i64,
 }
 
 /// Compact availability information for an episode row. This intentionally
@@ -4385,11 +4418,19 @@ pub fn derive_primary_quality_label(
         }
         None => {}
     }
+    stored_quality_label(quality_label, resolution).map(ToOwned::to_owned)
+}
+
+/// A stored file's quality from its stored labels alone: its quality label,
+/// or its scanned resolution when it has none.
+pub(crate) fn stored_quality_label<'a>(
+    quality_label: Option<&'a str>,
+    resolution: Option<&'a str>,
+) -> Option<&'a str> {
     quality_label
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .or_else(|| resolution.map(str::trim).filter(|label| !label.is_empty()))
-        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
@@ -4477,6 +4518,10 @@ mod primary_quality_label_tests {
 }
 
 /// Aggregated episode progress counts per collection.
+///
+/// `owned_episodes`, `monitored_episodes` and `total_episodes` exclude
+/// unnamed, TBA or undated placeholder episodes; `episodes_on_disk`,
+/// `episodes_expected` and `episode_records_total` read every episode.
 #[derive(Clone, Debug)]
 pub struct CollectionEpisodeProgressSummary {
     pub collection_id: String,
@@ -4484,6 +4529,10 @@ pub struct CollectionEpisodeProgressSummary {
     pub monitored_episodes: i64,
     pub total_episodes: i64,
     pub episode_records_total: i64,
+    /// Episodes with a live primary file.
+    pub episodes_on_disk: i64,
+    /// Episodes that are monitored and have aired, plus any episode on disk.
+    pub episodes_expected: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -4885,6 +4934,9 @@ pub enum UiSettingsFacet {
 }
 
 impl UiSettingsFacet {
+    /// Every facet, in registry order.
+    pub const ALL: [Self; 3] = [Self::Movies, Self::Series, Self::Anime];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Movies => "movies",
@@ -5180,6 +5232,9 @@ pub struct UiSettings {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
+    /// Facets the user hid from navigation, discovery and pickers. Never all
+    /// of them; registry order, no duplicates.
+    pub hidden_facets: Vec<UiSettingsFacet>,
     /// Interface language code chosen by the user; `None` follows the browser.
     pub language: Option<String>,
     pub table_columns: Vec<UiTableColumnSetting>,
@@ -5209,6 +5264,8 @@ pub struct UiSettingsUpdate {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
+    /// Facets hidden from navigation, discovery and pickers.
+    pub hidden_facets: Vec<UiSettingsFacet>,
     /// `None` keeps the stored language; `Some(None)` clears it.
     pub language: Option<Option<String>>,
     /// `None` keeps the stored columns; a list replaces all of them.
@@ -5232,6 +5289,7 @@ impl UiSettings {
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),
+            hidden_facets: Vec::new(),
             language: None,
             table_columns: Vec::new(),
             catalog_views: Vec::new(),

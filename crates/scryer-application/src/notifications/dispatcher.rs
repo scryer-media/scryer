@@ -2655,6 +2655,7 @@ mod tests {
                     episode_ids: vec!["episode-1".to_string()],
                     size_bytes: Some(3_221_225_472),
                     upgrade: false,
+                    file_placements: Vec::new(),
                 }),
             },
             DomainEvent {
@@ -2808,6 +2809,10 @@ mod tests {
                     subtitle_path: Some("/library/Subtitle Show/S01E01.en.srt".to_string()),
                     language: Some("English".to_string()),
                     provider: Some("opensubtitles".to_string()),
+                    media_file_id: None,
+                    episode_ids: Vec::new(),
+                    sync_applied: None,
+                    sync_offset_ms: None,
                 }),
             },
             DomainEvent {
@@ -2827,6 +2832,8 @@ mod tests {
                     title: title_context("Subtitle Failure", MediaFacet::Series),
                     language: Some("English".to_string()),
                     reason: Some("provider timeout".to_string()),
+                    media_file_id: None,
+                    episode_ids: Vec::new(),
                 }),
             },
             DomainEvent {

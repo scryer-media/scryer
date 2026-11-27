@@ -74,7 +74,7 @@ test("failed and skipped indexers count as finished and are each reported", () =
   assert.equal(presentation.totalIndexerCount, 2);
   assert.deepEqual(presentation.failedIndexerNames, ["Broken"]);
   assert.deepEqual(presentation.skippedIndexers, [
-    { name: "Disabled", reason: null },
+    { name: "Disabled", reason: null, skipReason: null, skippedUntil: null, failureReasonCode: null, retryAfterSeconds: null },
   ]);
 });
 
@@ -102,6 +102,39 @@ test("the final summary counts indexers that searched, not sources that returned
   assert.equal(presentation.totalIndexerCount, 4);
   assert.deepEqual(presentation.failedIndexerNames, ["Broken"]);
   assert.deepEqual(presentation.skippedIndexers, [
-    { name: "Cooling", reason: "temporarily disabled" },
+    { name: "Cooling", reason: "temporarily disabled", skipReason: null, skippedUntil: null, failureReasonCode: null, retryAfterSeconds: null },
   ]);
+});
+
+test("an indexer its query budget stopped part way is listed as searched in part", () => {
+  const partial: InteractiveSearchIndexerProgress = {
+    ...indexer("Budgeted", "COMPLETED"),
+    resultCount: 2,
+    failureReasonCode: "INDEXER_QUERY_BUDGET_PARTLY_SEARCHED",
+    retryAfterSeconds: 45,
+    rateLimited: true,
+  };
+  const skipped: InteractiveSearchIndexerProgress = {
+    ...indexer("Unasked", "SKIPPED"),
+    failureReasonCode: "INDEXER_QUERY_BUDGET_NOT_SEARCHED",
+    skipReason: "QUERY_BUDGET",
+    retryAfterSeconds: 50,
+    rateLimited: true,
+  };
+  const presentation = deriveInteractiveSearchPresentation({
+    hasSnapshot: true,
+    loading: false,
+    resultCount: 2,
+    indexers: [partial, skipped, indexer("Plain", "COMPLETED")],
+  });
+
+  assert.deepEqual(presentation.partlySearchedIndexers, [
+    { name: "Budgeted", retryAfterSeconds: 45 },
+  ]);
+  assert.equal(presentation.searchedIndexerCount, 2);
+  assert.deepEqual(
+    presentation.skippedIndexers.map((entry) => entry.name),
+    ["Unasked"],
+  );
+  assert.deepEqual(presentation.failedIndexerNames, []);
 });

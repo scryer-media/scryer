@@ -146,11 +146,13 @@ function toSeriesMovieChoices(
 
 function defaultSelection(
   choices: SeriesMonitorChoices,
+  includeSpecials = false,
 ): MonitorSelectionDraft {
   return normalizeMonitorSelection({
-    // Specials stay off by default, matching the non-advanced default.
+    // Specials (season 0) start selected only when the caller's specials
+    // setting monitors them, matching the non-advanced add.
     seasonNumbers: choices.seasons
-      .filter((season) => season.number !== 0)
+      .filter((season) => includeSpecials || season.number !== 0)
       .map((season) => season.number),
     seriesMovies: choices.seriesMovies
       .filter((movie) => movie.canon)
@@ -169,6 +171,12 @@ type MonitorSelectionPickerProps = {
   disabled?: boolean;
   idPrefix: string;
   className?: string;
+  /**
+   * Start with specials (season 0) selected when nothing is picked yet. Null
+   * while the caller is still reading its specials setting: the defaults are
+   * seeded only once it is known.
+   */
+  includeSpecialsByDefault?: boolean | null;
 };
 
 export function MonitorSelectionPicker({
@@ -181,6 +189,7 @@ export function MonitorSelectionPicker({
   disabled = false,
   idPrefix,
   className,
+  includeSpecialsByDefault = false,
 }: MonitorSelectionPickerProps) {
   const t = useTranslate();
   const client = useClient();
@@ -195,6 +204,8 @@ export function MonitorSelectionPicker({
   const [choices, setChoices] = React.useState<SeriesMonitorChoices | null>(
     null,
   );
+  // The series and language the loaded choices belong to.
+  const [choicesKey, setChoicesKey] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [retryCount, setRetryCount] = React.useState(0);
@@ -227,6 +238,7 @@ export function MonitorSelectionPicker({
     let active = true;
     const language = getGraphqlLanguage();
     const cacheKey = `${seriesIdentityKey}|${language}`;
+    setChoicesKey(null);
     setLoading(true);
     setLoadError(null);
     onLoadingChangeRef.current?.(true);
@@ -261,16 +273,7 @@ export function MonitorSelectionPicker({
       .then((loaded) => {
         if (!active) return;
         setChoices(loaded);
-        // Only seed defaults when the caller opened with nothing picked; a
-        // prefilled draft (an existing request being approved or edited) is the
-        // user's own selection and must survive.
-        if (
-          !hasSelectionRef.current &&
-          seededSelectionRef.current !== cacheKey
-        ) {
-          seededSelectionRef.current = cacheKey;
-          onChangeRef.current(defaultSelection(loaded));
-        }
+        setChoicesKey(cacheKey);
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -296,6 +299,19 @@ export function MonitorSelectionPicker({
     seriesIdentityKey,
     t,
   ]);
+
+  // Seed the defaults once the choices are loaded and the caller knows its
+  // specials setting. Only seed when the caller opened with nothing picked; a
+  // prefilled draft (an existing request being approved or edited) is the
+  // user's own selection and must survive.
+  React.useEffect(() => {
+    if (!choices || !choicesKey || includeSpecialsByDefault == null) return;
+    if (hasSelectionRef.current || seededSelectionRef.current === choicesKey) {
+      return;
+    }
+    seededSelectionRef.current = choicesKey;
+    onChangeRef.current(defaultSelection(choices, includeSpecialsByDefault));
+  }, [choices, choicesKey, includeSpecialsByDefault]);
 
   const selectedSeasons = React.useMemo(
     () => new Set(value.seasonNumbers),

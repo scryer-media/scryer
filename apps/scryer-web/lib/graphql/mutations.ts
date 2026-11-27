@@ -952,6 +952,7 @@ export const updateMovieAvailabilitySettingsMutation = `mutation UpdateMovieAvai
 
 export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
   updateGeneralSettings(input: $input) {
+    disabledFacets
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
@@ -985,6 +986,7 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -1033,6 +1035,7 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -1080,6 +1083,7 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -2013,6 +2017,7 @@ function startInteractiveReleaseSearchMutationWith(
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       skipReason
       skippedUntil
       rateLimited
@@ -2063,6 +2068,7 @@ function continueInteractiveReleaseSearchMutationWith(
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       skipReason
       skippedUntil
       rateLimited

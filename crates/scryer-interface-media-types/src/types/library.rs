@@ -558,6 +558,11 @@ pub struct StorageRootUsagePayload {
     pub used_bytes: Option<Long>,
     /// Total bytes on the backing filesystem; null when it cannot be inspected.
     pub total_bytes: Option<Long>,
+    /// Bytes of the tracked media files of the library that owns this root
+    /// folder, across all of its root folders: the managed bytes its catalog
+    /// reports. Read from the catalog, not the filesystem, and only when
+    /// selected.
+    pub library_bytes: Option<Long>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1359,6 +1364,15 @@ pub struct SetEpisodeMonitoredInput {
     /// Episode identity to update.
     pub episode_id: ID,
     /// Whether the episode is monitored.
+    pub monitored: bool,
+}
+
+#[derive(InputObject, Clone)]
+/// Monitoring state change for several episodes at once.
+pub struct SetEpisodesMonitoredInput {
+    /// Episode identities to update. A repeated id counts once.
+    pub episode_ids: Vec<ID>,
+    /// Whether the episodes are monitored.
     pub monitored: bool,
 }
 

@@ -28,6 +28,7 @@ import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { CATALOG_TITLES_REFRESH_EVENT } from "@/lib/events/catalog-titles";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useSearchContext } from "@/lib/context/search-context";
+import { useDiscoveryItemFacet, useFacets } from "@/lib/facets/use-facets";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
   uiSettingsInputFromSettings,
@@ -36,10 +37,7 @@ import {
 import type { LocaleCode } from "@/lib/i18n";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import {
-  discoveryItemFacet,
-  externalIdsFromDiscoverySignals,
-} from "@/lib/utils/discovery-actions";
+import { externalIdsFromDiscoverySignals } from "@/lib/utils/discovery-actions";
 import {
   appendDiscoverySectionPage,
   discoveryBrowseSectionId,
@@ -70,7 +68,6 @@ import type {
   DiscoverySectionPagePayload,
   DiscoverySectionSort,
   ExternalId,
-  Facet,
 } from "@/lib/types";
 
 type DiscoveryContainerProps = {
@@ -89,8 +86,6 @@ const DISCOVERY_HOME_INPUT: DiscoveryHomeInput = {
   includeUnresolved: true,
   limitPerSection: DISCOVERY_HOME_LIMIT_PER_SECTION,
 };
-
-const DISCOVERY_FACETS: Facet[] = ["MOVIE", "SERIES", "ANIME"];
 
 function externalIdsForDiscoveryItem(item: DiscoveryItem): ExternalId[] {
   return externalIdsFromDiscoverySignals(item);
@@ -157,20 +152,23 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     requestableLibrariesByFacet,
     resolveDefaultQualityProfileIdForFacet,
     rootFoldersByFacet,
+    animeCatalogDefaults,
   } = useSearchContext();
+  const { ids: visibleFacetIds } = useFacets();
+  const itemFacet = useDiscoveryItemFacet();
   const manageableFacets = useMemo(
     () =>
-      DISCOVERY_FACETS.filter(
+      visibleFacetIds.filter(
         (facet) => (librariesByFacet[facet] ?? []).length > 0,
       ),
-    [librariesByFacet],
+    [librariesByFacet, visibleFacetIds],
   );
   const requestableFacets = useMemo(
     () =>
-      DISCOVERY_FACETS.filter(
+      visibleFacetIds.filter(
         (facet) => (requestableLibrariesByFacet[facet] ?? []).length > 0,
       ),
-    [requestableLibrariesByFacet],
+    [requestableLibrariesByFacet, visibleFacetIds],
   );
   const [home, setHome] = useState<DiscoveryHomePayload | null>(null);
   // The home input the shown home answers; a refresh of it skips the cache.
@@ -647,7 +645,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
   }, [authorizationSignature, client, uiLanguage, userId]);
 
   const selectedFacet = selectedItem
-    ? (discoveryItemFacet(selectedItem) ?? "MOVIE")
+    ? (itemFacet(selectedItem) ?? "MOVIE")
     : "MOVIE";
   const selectedResult = selectedItem
     ? metadataResultForDiscoveryItem(selectedItem)
@@ -659,7 +657,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
       if (item.ownedInInput) {
         return;
       }
-      const facet = discoveryItemFacet(item);
+      const facet = itemFacet(item);
       if (!facet) {
         setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
@@ -704,7 +702,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
         if (!detail) {
           throw new Error(t("status.permissionDenied"));
         }
-        const detailFacet = discoveryItemFacet(detail);
+        const detailFacet = itemFacet(detail);
         if (!detailFacet || detailFacet !== facet) {
           throw new Error(t("status.permissionDenied"));
         }
@@ -732,6 +730,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
       authorizationSignature,
       client,
       ensureCatalogConfigReady,
+      itemFacet,
       librariesByFacet,
       requestableLibrariesByFacet,
       setGlobalStatus,
@@ -780,6 +779,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           )}
           manageableLibraries={librariesByFacet[selectedFacet] ?? []}
           rootFolderOptions={rootFoldersByFacet[selectedFacet] ?? []}
+          animeMonitorSpecials={animeCatalogDefaults.monitorSpecials}
           onAdd={(result, facet, options) =>
             // The rails reload on the catalog-titles event, same as an add made
             // from global search.

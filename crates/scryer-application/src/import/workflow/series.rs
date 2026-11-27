@@ -112,6 +112,7 @@ async fn import_series_download(
     let mut last_skipped_message: Option<String> = None;
     let mut last_skipped_skip_reason: Option<ImportSkipReason> = None;
     let mut imported_updates: Vec<scryer_domain::MediaPathUpdate> = Vec::new();
+    let mut imported_placements: Vec<scryer_domain::ImportFilePlacement> = Vec::new();
     let mut imported_upgrade = false;
     // Total bytes across every file this import brought in. Stays `None` until
     // at least one file reports a size, so a legacy-shaped import that knows no
@@ -188,8 +189,10 @@ async fn import_series_download(
                 size_bytes,
                 reason_code,
                 previous_path,
+                placement,
                 ..
             }) => {
+                imported_placements.push(placement);
                 subtitle_deliveries.push((
                     source_video.path().to_path_buf(),
                     stored_path_to_path_buf(&dest_path),
@@ -352,6 +355,7 @@ async fn import_series_download(
                 episode_ids: imported_episode_ids,
                 size_bytes: imported_size_bytes,
                 upgrade: imported_upgrade,
+                file_placements: imported_placements,
             }),
         ))
         .await?;
@@ -366,6 +370,8 @@ enum EpisodeImportOutcome {
         imported_media_file_id: Option<String>,
         reason_code: Option<String>,
         link_type: Option<scryer_domain::ImportStrategy>,
+        /// How the file was placed, for the import's record.
+        placement: scryer_domain::ImportFilePlacement,
         source_cleanup: Option<Box<scryer_domain::ImportSourceCleanupGuard>>,
         destination_permit: ImportDestinationPermit,
         /// Bytes written for this file, so multi-file imports can report a
