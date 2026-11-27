@@ -3298,6 +3298,12 @@ export const libraryDefaultMovieAvailabilityQuery = `query LibraryDefaultMovieAv
   }
 }`;
 
+export const libraryAnimeMonitorSpecialsQuery = `query LibraryAnimeMonitorSpecials($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    monitorSpecials
+  }
+}`;
+
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
     disabledFacets

@@ -39,6 +39,7 @@ import {
 } from "@/lib/utils/catalog-add-quality-profile";
 import { LoadingMark } from "@/components/common/loading-mark";
 import {
+  libraryAnimeMonitorSpecialsQuery,
   libraryDefaultMovieAvailabilityQuery,
   seriesMoviesTrackingFilmQuery,
 } from "@/lib/graphql/queries";
@@ -48,6 +49,7 @@ import {
 } from "@/components/common/same-film-notice";
 import type { SameFilmPairing } from "@/lib/types/titles";
 import { filmTmdbIdForAdd, seriesMoviePlaces } from "@/lib/utils/same-film";
+import { advancedSpecialsDefault } from "@/lib/utils/anime-add-options";
 import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
 import {
   catalogAudioLanguagesForSubmit,
@@ -74,8 +76,12 @@ type AddToCatalogDialogProps = {
     facet: Facet,
     options: MetadataCatalogAddOptions,
   ) => Promise<string | null>;
-  /** The anime "Monitor Specials & OVAs" setting, which seeds Advanced. */
-  animeMonitorSpecials?: boolean;
+  /**
+   * The instance's anime "Monitor Specials & OVAs" setting, or null while it
+   * is unread. Advanced seeds from the chosen library's resolved value and
+   * uses this only when that cannot be read.
+   */
+  animeMonitorSpecials?: boolean | null;
 };
 
 /** Sentinel used by callers when the dialog is closed so they don't need to pass null. */
@@ -139,7 +145,7 @@ export function AddToCatalogDialog({
   manageableLibraries,
   rootFolderOptions,
   onAdd,
-  animeMonitorSpecials = false,
+  animeMonitorSpecials = null,
 }: AddToCatalogDialogProps) {
   const t = useTranslate();
   const client = useClient();
@@ -239,6 +245,43 @@ export function AddToCatalogDialog({
       current = false;
     };
   }, [client, facet, open, selectedLibraryId]);
+  // The chosen library's resolved specials setting seeds Advanced, as the
+  // server resolves it for the add. Reading it needs permission to manage the
+  // library; without it, or on an error, the instance's setting stands in.
+  const [loadedLibrarySpecials, setLoadedLibrarySpecials] = React.useState<{
+    libraryId: string;
+    value: boolean | null;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!open || facet !== "ANIME" || !selectedLibraryId) return;
+    let current = true;
+    void client
+      .query<{
+        librarySettings?: { monitorSpecials?: boolean | null } | null;
+      }>(libraryAnimeMonitorSpecialsQuery, { libraryId: selectedLibraryId })
+      .toPromise()
+      .then(({ data }) => {
+        const value = data?.librarySettings?.monitorSpecials;
+        if (current) {
+          setLoadedLibrarySpecials({
+            libraryId: selectedLibraryId,
+            value: typeof value === "boolean" ? value : null,
+          });
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, facet, open, selectedLibraryId]);
+  const includeSpecialsByDefault = advancedSpecialsDefault({
+    facet,
+    libraryId: selectedLibraryId,
+    librarySpecials:
+      loadedLibrarySpecials?.libraryId === selectedLibraryId
+        ? loadedLibrarySpecials.value
+        : undefined,
+    instanceSpecials: animeMonitorSpecials,
+  });
   // A film another show already holds as a series movie is named before the
   // add, so the user knows it would be tracked twice.
   const filmTmdbId = filmTmdbIdForAdd(result, facet);
@@ -709,9 +752,7 @@ export function AddToCatalogDialog({
               onLoadingChange={setMonitorSelectionLoading}
               disabled={isSubmitting}
               idPrefix="add-to-catalog"
-              includeSpecialsByDefault={
-                facet === "ANIME" && animeMonitorSpecials
-              }
+              includeSpecialsByDefault={includeSpecialsByDefault}
             />
           ) : null}
 
