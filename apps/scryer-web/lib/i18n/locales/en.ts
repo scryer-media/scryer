@@ -11948,6 +11948,8 @@ const en: LocaleDictionary = {
   "indexerSearch.skipReason.queryBudget": "Over its query budget",
   "indexerSearch.skipReason.queryBudgetUntil":
     "Over its query budget until {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Over its query budget, can be asked again in {{seconds}} s",
   "indexerSearch.queryBudget.partlySearched":
     "Searched in part: its query budget stopped the remaining requests. Results from the requests it sent are kept.",
   "indexerSearch.caps.fresh": "Capabilities from cached snapshot",

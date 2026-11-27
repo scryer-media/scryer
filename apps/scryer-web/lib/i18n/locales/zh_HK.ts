@@ -1806,6 +1806,10 @@ const zh_HK: LocaleDictionary = {
     "{{count}} 個索引器失敗：{{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} 個索引器已略過：{{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} 個索引器只搜尋了部分，已超出查詢配額：{{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}：{{seconds}} 秒後可再次查詢",
   "title.noReleasesFound": "未找到 {{name}} 的發佈資源。",
   "title.searchNeedsDownloadClientTitle": "搜尋需要下載客戶端",
   "title.searchNeedsDownloadClientDescription":
@@ -5980,6 +5984,13 @@ const zh_HK: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "因近期失敗而暫停",
   "indexerSearch.skipReason.backedOffUntil": "暫停至 {{time}}",
   "indexerSearch.skipReason.noTextSearch": "不支援文字搜尋",
+  "indexerSearch.skipReason.queryBudget": "已超出查詢配額",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "已超出查詢配額，至 {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "已超出查詢配額，{{seconds}} 秒後可再次查詢",
+  "indexerSearch.queryBudget.partlySearched":
+    "只搜尋了部分：查詢配額停止了其餘請求。已送出請求的結果會保留。",
   "indexerSearch.health.retryFailed": "重試失敗項",
   "indexerSearch.refine.title": "篩選",
   "indexerSearch.refine.reset": "重設",

@@ -74,7 +74,7 @@ test("failed and skipped indexers count as finished and are each reported", () =
   assert.equal(presentation.totalIndexerCount, 2);
   assert.deepEqual(presentation.failedIndexerNames, ["Broken"]);
   assert.deepEqual(presentation.skippedIndexers, [
-    { name: "Disabled", reason: null },
+    { name: "Disabled", reason: null, skipReason: null, skippedUntil: null, failureReasonCode: null, retryAfterSeconds: null },
   ]);
 });
 
@@ -102,7 +102,7 @@ test("the final summary counts indexers that searched, not sources that returned
   assert.equal(presentation.totalIndexerCount, 4);
   assert.deepEqual(presentation.failedIndexerNames, ["Broken"]);
   assert.deepEqual(presentation.skippedIndexers, [
-    { name: "Cooling", reason: "temporarily disabled" },
+    { name: "Cooling", reason: "temporarily disabled", skipReason: null, skippedUntil: null, failureReasonCode: null, retryAfterSeconds: null },
   ]);
 });
 
