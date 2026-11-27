@@ -120,9 +120,25 @@ function readSavedScrollAnchors(storageKey: string) {
   );
 }
 
-function captureScrollAnchors(element: HTMLElement, anchorAttribute: string) {
-  const rows = element.querySelectorAll<HTMLElement>(`[${anchorAttribute}]`);
-  const viewportTop = element.getBoundingClientRect().top;
+/** Where anchored rows are looked up, and the top edge they are measured from. */
+function anchorFrame(target: ScrollTarget, kind: ScrollTargetKind) {
+  if (kind === "window") {
+    return { root: document as ParentNode, viewportTop: 0 };
+  }
+  const element = target as HTMLElement;
+  return {
+    root: element as ParentNode,
+    viewportTop: element.getBoundingClientRect().top,
+  };
+}
+
+function captureScrollAnchors(
+  target: ScrollTarget,
+  kind: ScrollTargetKind,
+  anchorAttribute: string,
+) {
+  const { root, viewportTop } = anchorFrame(target, kind);
+  const rows = root.querySelectorAll<HTMLElement>(`[${anchorAttribute}]`);
   return pickScrollAnchors(
     rows.length,
     (index) => {
@@ -139,17 +155,18 @@ function captureScrollAnchors(element: HTMLElement, anchorAttribute: string) {
 }
 
 function anchoredScrollTop(
-  element: HTMLElement,
+  target: ScrollTarget,
+  kind: ScrollTargetKind,
   anchorAttribute: string,
   anchors: readonly ScrollAnchor[],
 ) {
-  const viewportTop = element.getBoundingClientRect().top;
+  const { root, viewportTop } = anchorFrame(target, kind);
   return resolveAnchoredScrollTop(
     anchors,
-    element.scrollTop,
+    readScrollTop(target, kind),
     viewportTop,
     (key) =>
-      element
+      root
         .querySelector<HTMLElement>(`[${anchorAttribute}="${CSS.escape(key)}"]`)
         ?.getBoundingClientRect().top ?? null,
   );
@@ -295,7 +312,7 @@ function useOverviewScrollRestoration({
   getTarget: () => ScrollTarget | null;
   getMaxScrollTop?: (target: ScrollTarget) => number;
   restoreScrollTop?: (nextTop: number) => void;
-  /** Element targets only: the attribute whose value keys each row. */
+  /** The attribute whose value keys each row. */
   anchorAttribute?: string;
 }) {
   const location = useLocation();
@@ -349,17 +366,14 @@ function useOverviewScrollRestoration({
     let anchorTimer = 0;
     const persistAnchors = () => {
       anchorTimer = 0;
-      if (!anchorAttribute || kind !== "element") {
+      if (!anchorAttribute) {
         return;
       }
       // A restore still in flight owns the saved anchors.
       if (pendingScrollTopRef.current != null) {
         return;
       }
-      const anchors = captureScrollAnchors(
-        target as HTMLElement,
-        anchorAttribute,
-      );
+      const anchors = captureScrollAnchors(target, kind, anchorAttribute);
       overviewScrollAnchorMemory.set(storageKey, anchors);
       window.sessionStorage.setItem(
         anchorStorageKey(storageKey),
@@ -381,14 +395,25 @@ function useOverviewScrollRestoration({
 
     // Rows can still settle after the last scroll event, so the anchors are
     // taken again at the moment the user acts on a row.
-    const persistAnchorsNow = () => {
+    const persistAnchorsNow = (event: Event) => {
+      // Only a key that opens a row counts, and only where this target is
+      // the one that scrolls.
+      if (
+        event instanceof KeyboardEvent &&
+        event.key !== "Enter" &&
+        event.key !== " "
+      ) {
+        return;
+      }
+      if (maxScrollTop(target, kind) <= 0) {
+        return;
+      }
       if (anchorTimer !== 0) {
         window.clearTimeout(anchorTimer);
       }
       persistAnchors();
     };
-    const anchorElement =
-      anchorAttribute && kind === "element" ? (target as HTMLElement) : null;
+    const anchorElement = anchorAttribute ? target : null;
     anchorElement?.addEventListener("pointerdown", persistAnchorsNow, {
       capture: true,
       passive: true,
@@ -444,8 +469,8 @@ function useOverviewScrollRestoration({
         : maxScrollTop(target, kind);
       const anchors = pendingAnchorsRef.current;
       const anchoredTop =
-        anchorAttribute && anchors && kind === "element"
-          ? anchoredScrollTop(target as HTMLElement, anchorAttribute, anchors)
+        anchorAttribute && anchors
+          ? anchoredScrollTop(target, kind, anchorAttribute, anchors)
           : null;
       if (anchoredTop != null) {
         // Rows above the anchor take their real height as they render, some
@@ -453,7 +478,7 @@ function useOverviewScrollRestoration({
         // was until the layout stays put or the user takes over.
         const now = window.performance.now();
         if (!releaseHold) {
-          const element = target as HTMLElement;
+          const element = target;
           const onInput = () => finishAnchoredRestore();
           for (const type of ANCHOR_RELEASE_EVENTS) {
             element.addEventListener(type, onInput, { passive: true });
@@ -541,10 +566,16 @@ export function useOverviewWindowScrollRestoration({
   enabled,
   ready,
   storageKeySuffix = "window",
+  anchorAttribute,
 }: {
   enabled: boolean;
   ready: boolean;
   storageKeySuffix?: string;
+  /**
+   * The attribute whose value keys each row. When given, the position is
+   * restored to the same row instead of the same pixel offset.
+   */
+  anchorAttribute?: string;
 }) {
   const getTarget = React.useCallback(
     () => (typeof window === "undefined" ? null : window),
@@ -556,6 +587,7 @@ export function useOverviewWindowScrollRestoration({
     ready,
     storageKeySuffix,
     kind: "window",
+    anchorAttribute,
     getTarget,
   });
 }

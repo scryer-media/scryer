@@ -1483,6 +1483,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     enabled: shouldLoadCatalogTitles && effectiveViewMode === "poster",
     ready: !titleLoading && visibleTitles.length > 0,
     storageKeySuffix: "window",
+    // Narrow screens scroll the page instead of the grid.
+    anchorAttribute: "data-catalog-title-id",
   });
 
   React.useLayoutEffect(() => {
