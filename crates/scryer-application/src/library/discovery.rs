@@ -1678,18 +1678,36 @@ pub(crate) async fn ensure_existing_title_boundary(
     path: &Path,
     episode_folders: &[regex::Regex],
 ) -> AppResult<()> {
+    ensure_title_boundary_holding_media_unless(path, episode_folders, false)
+        .await
+        .map(|_| ())
+}
+
+/// Refuse a selected folder that is not one title's folder holding its media.
+///
+/// With `empty_allowed`, a folder holding no media and no other titles'
+/// folders is accepted too. The answer is whether the folder holds media.
+pub(crate) async fn ensure_title_boundary_holding_media_unless(
+    path: &Path,
+    episode_folders: &[regex::Regex],
+    empty_allowed: bool,
+) -> AppResult<bool> {
     let content = inspect_title_boundary_content(
         path,
         &EpisodeFolderBoundaryPolicy::Configured(episode_folders),
     )
     .await?;
-    if !content.has_media || content.has_child_titles {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
-            "selected folder is an organizing folder or mixed title layout; select the title folder containing its media",
-        ));
+    if content.has_child_titles || !(content.has_media || empty_allowed) {
+        return Err(existing_title_boundary_refusal());
     }
-    Ok(())
+    Ok(content.has_media)
+}
+
+pub(crate) fn existing_title_boundary_refusal() -> AppError {
+    AppError::validation_refused(
+        crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        "selected folder is an organizing folder or mixed title layout; select the title folder containing its media",
+    )
 }
 
 /// An import may reserve a destination that already holds stray files or

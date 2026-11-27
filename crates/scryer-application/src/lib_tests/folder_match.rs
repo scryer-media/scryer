@@ -1688,6 +1688,286 @@ async fn folders_outside_the_titles_library_roots_are_rejected() {
     ));
 }
 
+/// A title recorded outside every root of its library, as a root change can
+/// leave it, with no files and an empty folder waiting for it in the root.
+struct StaleRecordedTitle {
+    fixture: FolderMatchFixture,
+    title: Title,
+    stale_folder: std::path::PathBuf,
+    empty_folder: std::path::PathBuf,
+    _outside: tempfile::TempDir,
+}
+
+impl StaleRecordedTitle {
+    async fn seed() -> Self {
+        let fixture = FolderMatchFixture::new().await;
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let stale_folder = outside.path().join("Stale Record Title (2020)");
+        let title = fixture
+            .create_title_with_folder("Stale Record Title", &stale_folder)
+            .await;
+        let empty_folder = fixture.folder("Stale Record Title (2020)");
+        Self {
+            fixture,
+            title,
+            stale_folder,
+            empty_folder,
+            _outside: outside,
+        }
+    }
+
+    async fn assign(
+        &self,
+        folder: &Path,
+    ) -> AppResult<crate::location::folder_match::ChangeTitleFolderResult> {
+        self.fixture
+            .app
+            .apply_title_folder_change(
+                &self.fixture.user,
+                &self.title.id,
+                &folder.to_string_lossy(),
+                FolderMatchResolution::Assign,
+            )
+            .await
+    }
+
+    async fn assert_refused_and_unchanged(&self, folder: &Path, reason: &str) {
+        let before = snapshot_tree(self.fixture.root.path());
+        let error = self
+            .assign(folder)
+            .await
+            .expect_err("the folder change is refused");
+        assert_eq!(error.validation_reason(), Some(reason), "{error:?}");
+        let error = self
+            .fixture
+            .app
+            .change_title_folder_preview(
+                &self.fixture.user,
+                &self.title.id,
+                &folder.to_string_lossy(),
+            )
+            .await
+            .expect_err("the preview is refused");
+        assert_eq!(error.validation_reason(), Some(reason), "{error:?}");
+        assert_eq!(
+            self.fixture.folder_path_of(&self.title.id).await.as_deref(),
+            Some(self.stale_folder.to_string_lossy().as_ref()),
+            "the recorded folder is unchanged"
+        );
+        assert_eq!(snapshot_tree(self.fixture.root.path()), before);
+    }
+}
+
+#[tokio::test]
+async fn a_title_recorded_outside_its_library_with_no_files_can_take_an_empty_folder() {
+    let seeded = StaleRecordedTitle::seed().await;
+    let fixture = &seeded.fixture;
+    let refused = crate::folder_ownership::ensure_title_folder_is_not_a_library_root(
+        &fixture.app,
+        &seeded.title,
+    )
+    .await
+    .expect_err("imports refuse the stale record");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::folder_ownership::PATH_OUTSIDE_LIBRARY_ROOT)
+    );
+    let before = snapshot_tree(fixture.root.path());
+
+    let preview = fixture
+        .app
+        .change_title_folder_preview(
+            &fixture.user,
+            &seeded.title.id,
+            &seeded.empty_folder.to_string_lossy(),
+        )
+        .await
+        .expect("the empty folder can be previewed");
+    assert_eq!(preview.ownership, FolderMatchOwnership::Unowned);
+    assert_eq!(
+        preview.available_resolutions,
+        vec![FolderMatchResolution::Assign]
+    );
+    assert!(!preview.files_will_move);
+
+    let result = seeded
+        .assign(&seeded.empty_folder)
+        .await
+        .expect("the empty folder is assigned");
+    assert_eq!(result.outcome, FolderMatchOutcome::Assigned);
+    assert_eq!(
+        result.previous_folder_path.as_deref(),
+        Some(seeded.stale_folder.to_string_lossy().as_ref())
+    );
+    assert_eq!(result.detached_media_file_count, 0);
+    let recorded = fixture.folder_path_of(&seeded.title.id).await;
+    assert_eq!(
+        recorded.as_deref(),
+        Some(seeded.empty_folder.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        snapshot_tree(fixture.root.path()),
+        before,
+        "nothing on disk changes"
+    );
+    assert!(
+        !seeded.stale_folder.exists(),
+        "the stale folder is not created"
+    );
+
+    let repaired = fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&seeded.title.id)
+        .await
+        .unwrap()
+        .unwrap();
+    crate::folder_ownership::ensure_title_folder_is_not_a_library_root(&fixture.app, &repaired)
+        .await
+        .expect("imports accept the repaired record");
+}
+
+#[tokio::test]
+async fn a_title_with_tracked_files_cannot_take_an_empty_folder() {
+    let seeded = StaleRecordedTitle::seed().await;
+    seeded
+        .fixture
+        .seed_media_row(
+            &seeded.title.id,
+            &seeded
+                .stale_folder
+                .join("Stale.Record.Title.2020.1080p.mkv"),
+        )
+        .await;
+    seeded
+        .assert_refused_and_unchanged(
+            &seeded.empty_folder,
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn a_title_recorded_inside_its_library_cannot_take_an_empty_folder() {
+    let fixture = FolderMatchFixture::new().await;
+    let current = fixture.folder("Current Record Title (2020)");
+    let title = fixture
+        .create_title_with_folder("Current Record Title", &current)
+        .await;
+    let empty = fixture.folder("Current Record Title (2020) Elsewhere");
+    let before = snapshot_tree(fixture.root.path());
+    let error = fixture
+        .app
+        .apply_title_folder_change(
+            &fixture.user,
+            &title.id,
+            &empty.to_string_lossy(),
+            FolderMatchResolution::Assign,
+        )
+        .await
+        .expect_err("an empty folder is refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT)
+    );
+    assert_eq!(
+        fixture.folder_path_of(&title.id).await.as_deref(),
+        Some(current.to_string_lossy().as_ref())
+    );
+    assert_eq!(snapshot_tree(fixture.root.path()), before);
+}
+
+#[tokio::test]
+async fn a_title_recorded_outside_its_library_cannot_take_a_folder_outside_it() {
+    let seeded = StaleRecordedTitle::seed().await;
+    let elsewhere = tempfile::tempdir().expect("elsewhere tempdir");
+    seeded
+        .assert_refused_and_unchanged(
+            elsewhere.path(),
+            crate::error_reasons::location::FOLDER_NOT_INSIDE_ROOT_LIBRARY,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn an_empty_folder_another_title_owns_is_never_taken() {
+    let seeded = StaleRecordedTitle::seed().await;
+    let fixture = &seeded.fixture;
+    let owned = fixture.folder("Owner Record Title (2021)");
+    let owner = fixture
+        .create_title_with_folder("Owner Record Title", &owned)
+        .await;
+    seeded
+        .assert_refused_and_unchanged(
+            &owned,
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        )
+        .await;
+    for resolution in [FolderMatchResolution::TakeOver, FolderMatchResolution::Swap] {
+        let error = fixture
+            .app
+            .apply_title_folder_change(
+                &fixture.user,
+                &seeded.title.id,
+                &owned.to_string_lossy(),
+                resolution,
+            )
+            .await
+            .expect_err("the owned folder is not taken");
+        assert_eq!(
+            error.validation_reason(),
+            Some(
+                crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT
+            )
+        );
+    }
+    assert_eq!(
+        fixture.folder_path_of(&owner.id).await.as_deref(),
+        Some(owned.to_string_lossy().as_ref()),
+        "the owner keeps its folder"
+    );
+    assert!(fixture.unmatched_items.items().await.is_empty());
+}
+
+#[tokio::test]
+async fn an_empty_folder_inside_or_around_another_titles_folder_is_never_taken() {
+    let seeded = StaleRecordedTitle::seed().await;
+    let fixture = &seeded.fixture;
+    let owned = fixture.folder("Owner Record Title (2021)");
+    let owner = fixture
+        .create_title_with_folder("Owner Record Title", &owned)
+        .await;
+    let nested = fixture.folder("Owner Record Title (2021)/Nested");
+    seeded
+        .assert_refused_and_unchanged(
+            &nested,
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        )
+        .await;
+
+    let around = fixture.folder("Around");
+    let inner = fixture.folder("Around/Inner Record Title (2022)");
+    let inner_owner = fixture
+        .create_title_with_folder("Inner Record Title", &inner)
+        .await;
+    seeded
+        .assert_refused_and_unchanged(
+            &around,
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        )
+        .await;
+    assert_eq!(
+        fixture.folder_path_of(&owner.id).await.as_deref(),
+        Some(owned.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fixture.folder_path_of(&inner_owner.id).await.as_deref(),
+        Some(inner.to_string_lossy().as_ref())
+    );
+}
+
 /// A folder spelled with `..` can read as inside a root while naming somewhere
 /// else entirely, so dotted spellings are refused before any root check.
 #[tokio::test]
