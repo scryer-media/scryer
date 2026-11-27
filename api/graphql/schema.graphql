@@ -2093,16 +2093,6 @@ type ClearExternalImportSetupSecretDraftPayload {
 }
 
 """
-The result of clearing one library content block.
-"""
-type ClearLibraryContentBlockPayload {
-	"""
-	ID of the cleared block.
-	"""
-	id: ID!
-}
-
-"""
 Accepted request to clear cached title images.
 """
 type ClearTitleImageCachePayload {
@@ -2945,10 +2935,6 @@ input CreateRequestRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
-	"""
-	Which kinds of requests this rule handles. Omitted means acquisition only.
-	"""
-	applicability: RequestRuleApplicabilityValue
 	"""
 	The visual builder's document, stored as given: a JSON object of at
 	most 64 KiB. Omitted or null stores none.
@@ -5503,6 +5489,10 @@ enum DomainEventTypeValue {
 	A recycle-and-search execution state changed.
 	"""
 	MEDIA_ISSUE_RECYCLE_EXECUTION
+	"""
+	A file marked bad was unmarked; the report stays approved.
+	"""
+	MEDIA_ISSUE_UNMARKED
 	"""
 	A sync of a list ended and its run was recorded, whatever the outcome.
 	"""
@@ -11069,61 +11059,6 @@ enum JobTriggerSourceValue {
 	Started internally by the system.
 	"""
 	SYSTEM_INTERNAL
-}
-
-"""
-A confirmed library-scoped sampled-content block. A match means the
-sampled bytes and size agree, not that the complete files are identical.
-"""
-type LibraryContentBlockPayload {
-	"""
-	ID of the content block.
-	"""
-	id: ID!
-	"""
-	Library in which matching content is blocked.
-	"""
-	libraryId: ID!
-	"""
-	Versioned identity scheme; sampled content and release hashes are distinct.
-	"""
-	scheme: String!
-	"""
-	Total size of the file that supplied the sample.
-	"""
-	sizeBytes: Int!
-	"""
-	Number of bytes included in the sample.
-	"""
-	sampleBytes: Int!
-	"""
-	BLAKE3 digest of the sampled bytes, not a full-file digest.
-	"""
-	sampleBlake3: String!
-	"""
-	Reason recorded for the block, when supplied.
-	"""
-	reason: String
-	"""
-	ID of the user who approved the block, if approved by a user.
-	"""
-	approvingActorId: ID
-	"""
-	ID of the report that produced the block, when known.
-	"""
-	sourceReportId: ID
-	"""
-	ID of the file that supplied the sample, when known.
-	"""
-	sourceMediaFileId: ID
-	"""
-	Recorded origin of the block, encoded as JSON.
-	"""
-	provenanceJson: String
-	"""
-	When the block was created, in UTC.
-	"""
-	createdAt: DateTime!
 }
 
 """
@@ -17870,7 +17805,7 @@ enum MediaIssueExecutionStatusValue {
 	"""
 	NONE
 	"""
-	Matching content is blocked.
+	The file is marked bad.
 	"""
 	BLOCKED
 	"""
@@ -17890,21 +17825,14 @@ enum MediaIssueExecutionStatusValue {
 	"""
 	DOWNLOAD_QUEUED
 	"""
-	A replacement has been imported.
+	A file not marked bad was imported for the report's media after the
+	report last changed.
 	"""
 	REPLACEMENT_IMPORTED
 	"""
 	A replacement search is underway.
 	"""
 	SEARCHING
-	"""
-	The approved remediation finished.
-	"""
-	COMPLETE
-	"""
-	The approved remediation failed.
-	"""
-	FAILED
 }
 
 """
@@ -17960,37 +17888,14 @@ type MediaIssuePayload {
 	"""
 	affectedSeriesMovieLinkIds: [ID!]!
 	"""
-	ID of the recorded request-rule decision, when evaluated.
+	ID of the request-rule decision that explains the outcome, when
+	report rules ran.
 	"""
 	ruleDecisionId: ID
 	"""
-	Version of the input contract used for the recorded decision.
+	ID of the title blocklist entry that marks the file bad, while it exists.
 	"""
-	ruleInputSchemaVersion: Int
-	"""
-	Digest of the rule input used for the recorded decision.
-	"""
-	ruleInputHash: String
-	"""
-	Rule revision and evaluation snapshot, encoded as JSON.
-	"""
-	ruleSnapshotJson: String
-	"""
-	Individual rule votes, each encoded as JSON.
-	"""
-	ruleVotesJson: [String!]!
-	"""
-	Decision that took effect after applying policy safeguards.
-	"""
-	ruleEffectiveOutcome: String
-	"""
-	Decision produced by the rules before applying policy safeguards.
-	"""
-	rulePolicyOutcome: String
-	"""
-	Reason codes explaining why the rule decision was held for review.
-	"""
-	ruleHoldReasons: [String!]!
+	blocklistEntryId: ID
 	"""
 	ID of the user who reviewed the report, if reviewed by a user.
 	"""
@@ -18018,15 +17923,33 @@ type MediaIssuePayload {
 }
 
 """
+What approving a bad-file report's recycle-and-search would move.
+"""
+type MediaIssueRecyclePreviewPayload {
+	"""
+	The files the recycle moves, and the fingerprint approval must send.
+	"""
+	preview: DeletePreviewPayload!
+	"""
+	`MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY` when the reported file's only
+	other name is its copy in the download folder: approval must then set
+	`recycleBothNames` to recycle both names, or be cancelled. Null
+	otherwise.
+	"""
+	hardLinkReason: String
+}
+
+"""
 What a media issue requests after confirmation.
 """
 enum MediaIssueRemediationValue {
 	"""
-	Block matching content and leave the file in place.
+	Mark the file bad on its title's blocklist and leave it in place.
 	"""
 	MARK_BAD
 	"""
-	Block matching content, recycle the affected file, and search for a replacement.
+	Mark the file bad, recycle it, and search for a replacement. Recycling
+	needs an operator's confirmation.
 	"""
 	RECYCLE_AND_SEARCH
 }
@@ -21928,10 +21851,15 @@ type MutationRoot {
 		"""
 		Typed confirmation required by the preview.
 		"""
-		typedConfirmation: String
+		typedConfirmation: String,
+		"""
+		Recycle both names of a reported file hard-linked to its download copy. Required when the preview's `hardLinkReason` is set, and refused otherwise.
+		"""
+		recycleBothNames: Boolean
 	): MediaIssuePayload!
 	"""
-	Confirm a sampled content block for a pending report without moving any files.
+	Confirm a pending report: mark the file bad on its title's blocklist
+	and leave it in place.
 	"""
 	approveMediaIssue(
 		"""
@@ -21940,7 +21868,7 @@ type MutationRoot {
 		issueId: ID!
 	): MediaIssuePayload!
 	"""
-	Reject a pending media issue without creating or changing content blocks.
+	Reject a pending media issue without marking the file bad.
 	"""
 	rejectMediaIssue(
 		"""
@@ -21948,16 +21876,6 @@ type MutationRoot {
 		"""
 		issueId: ID!
 	): MediaIssuePayload!
-	"""
-	Explicitly clear a library's confirmed sampled-content block.
-	Clearing does not restore recycled files or remove a separate release block.
-	"""
-	clearLibraryContentBlock(
-		"""
-		Confirmed content-block identity.
-		"""
-		blockId: ID!
-	): ClearLibraryContentBlockPayload!
 	"""
 	Preview survivor selection and every file disposition before settling conflicts.
 	"""
@@ -23108,7 +23026,11 @@ type MutationRoot {
 		"""
 		Recycled-item identity to restore to its original path.
 		"""
-		id: ID!
+		id: ID!,
+		"""
+		Confirms restoring a file marked bad for its title and clears that mark.
+		"""
+		clearBadFile: Boolean! = false
 	): RestoreRecycledItemPayload!
 	"""
 	Restore selected recycled items using one background job.
@@ -26617,6 +26539,20 @@ type QueryRoot {
 		fileId: ID!
 	): DeletePreviewPayload!
 	"""
+	Preview what approving a bad-file report's recycle-and-search would
+	move into the recycle bin: the reported file, and a copy of the same
+	content still in the download folder it was imported from. A copy that
+	is the reported file's other hard-linked name is reported with
+	`hardLinkReason`. Changes nothing; approval must send this preview's
+	fingerprint.
+	"""
+	mediaIssueRecyclePreview(
+		"""
+		Bad-file report whose recycle would be previewed.
+		"""
+		issueId: ID!
+	): MediaIssueRecyclePreviewPayload!
+	"""
 	Preview deleting one external subtitle file without changing files.
 	"""
 	deleteExternalSubtitlePreview(
@@ -26700,19 +26636,6 @@ type QueryRoot {
 		"""
 		limit: Int
 	): [TitleReleaseBlocklistEntryPayload!]!
-	"""
-	List bounded confirmed bad-media content blocks for a library.
-	"""
-	libraryContentBlocks(
-		"""
-		Library identity whose content blocks are returned.
-		"""
-		libraryId: ID!,
-		"""
-		Maximum entries to return; defaults to 100 and clamps to 1 through 1000.
-		"""
-		limit: Int
-	): [LibraryContentBlockPayload!]!
 	"""
 	List bounded bad-media reports for a library.
 	"""
@@ -28691,6 +28614,11 @@ type RecycleRestorePreviewItemPayload {
 	Whether the destination is currently occupied.
 	"""
 	destinationOccupied: Boolean!
+	"""
+	The title blocklist entry this file was marked bad by. Restoring it
+	needs `clearBadFile` and clears that entry.
+	"""
+	badFileEntryId: ID
 }
 
 """
@@ -29256,6 +29184,14 @@ enum RequestActionHead {
 	Add this text to the notification sent when the request is submitted.
 	"""
 	NOTIFY
+	"""
+	Mark the file in a bad-file report bad. A report rule only.
+	"""
+	MARK_BAD
+	"""
+	Reject a bad-file report. A report rule only.
+	"""
+	REJECT_REPORT
 }
 
 """
@@ -29318,25 +29254,6 @@ type RequestDeclaredActions {
 }
 
 """
-A bad-media report used as a rule preview sample. No action is taken.
-"""
-input RequestMediaIssuePreviewInput {
-	"""
-	Existing file resolved in the sample library. All associations and
-	provenance come from the server, as on submission.
-	"""
-	mediaFileId: ID!
-	"""
-	Reason the hypothetical report gives for marking the file bad.
-	"""
-	reasonCode: String!
-	"""
-	Hypothetical action: `mark_bad` or `recycle_and_search`.
-	"""
-	remediation: String!
-}
-
-"""
 Requester-side pre-flight: what would happen if this draft were submitted
 now.
 
@@ -29396,21 +29313,44 @@ type RequestPreflightReason {
 }
 
 """
-Which kinds of requests a rule can evaluate.
+What submitting a bad-file report would do.
 """
-enum RequestRuleApplicabilityValue {
+enum RequestReportOutcomeValue {
 	"""
-	Acquisition requests only.
+	An operator reviews the report.
 	"""
-	ACQUISITION
+	REVIEW
 	"""
-	Bad-media reports only.
+	The report is rejected.
 	"""
-	MEDIA_ISSUE
+	REJECT
 	"""
-	Both acquisition requests and bad-media reports.
+	The file is marked bad. A requested recycle and search still waits for
+	an operator.
 	"""
-	ACQUISITION_AND_MEDIA_ISSUE
+	MARK_BAD
+}
+
+"""
+What one report rule said about a sample bad-file report.
+"""
+enum RequestReportVoteValue {
+	"""
+	Neither `mark_bad` nor `reject_report` fired.
+	"""
+	ABSTAIN
+	"""
+	`mark_bad` fired.
+	"""
+	MARK_BAD
+	"""
+	`reject_report` fired.
+	"""
+	REJECT
+	"""
+	Both fired, so the report goes to review.
+	"""
+	CONFLICT
 }
 
 """
@@ -29520,6 +29460,45 @@ type RequestRulePreviewPayload {
 	The exact document the rule saw.
 	"""
 	inputDocument: JSON!
+	"""
+	What a report rule said about the sample report; null for a request
+	rule.
+	"""
+	reportVote: RequestReportVoteValue
+	"""
+	What submitting the sample report would do if this were the only
+	report rule; null for a request rule.
+	"""
+	reportOutcome: RequestReportOutcomeValue
+}
+
+"""
+A hypothetical bad-file report for previewing a report rule. No file is
+read and nothing is submitted.
+"""
+input RequestRuleReportSampleInput {
+	"""
+	Report reason: `corrupted`, `wrong_content`, `wrong_language`,
+	`audio_out_of_sync`, `poor_quality` or `other`.
+	"""
+	reasonCode: String!
+	"""
+	The action the sample report asks for.
+	"""
+	remediation: MediaIssueRemediationValue!
+	"""
+	True for a file from a known grab. Defaults to true.
+	"""
+	grabbed: Boolean
+	"""
+	Whether the sample report carries details. Defaults to true.
+	"""
+	hasDetails: Boolean
+	"""
+	Whether the reporter asked for the media. Null previews the fact as
+	unknown.
+	"""
+	reporterRequestedMedia: Boolean
 }
 
 """
@@ -29559,8 +29538,12 @@ type RequestRuleRevision {
 }
 
 """
-The hypothetical request an author-side preview evaluates against a real
-user and library, without saving a request or report.
+The hypothetical request an author-side preview is evaluated against.
+
+It names a real user and a real library on purpose: the question a preview
+answers is "what would this rule do to *this person* asking for *this
+title*", and a synthetic requester would exercise none of the permission,
+history, or linked-provider facts that make request rules useful.
 """
 input RequestRuleSampleInput {
 	"""
@@ -29571,14 +29554,6 @@ input RequestRuleSampleInput {
 	Library to evaluate against.
 	"""
 	libraryId: ID!
-	"""
-	`acquisition_request` or `media_issue`. Omit to infer from the supplied fields.
-	"""
-	kind: String
-	"""
-	Report details for a bad-media sample. Omit for an acquisition sample.
-	"""
-	mediaIssue: RequestMediaIssuePreviewInput
 	"""
 	Provider identifiers of the sample title. An empty list is a legitimate
 	preview of requester facts alone, and leaves every metadata fact
@@ -29612,6 +29587,12 @@ input RequestRuleSampleInput {
 	leave it to the library.
 	"""
 	preferredAudioLanguages: [String!]
+	"""
+	The bad-file report a report rule is previewed against. A request rule
+	ignores it. Omitted, a report rule sees a `corrupted` report asking to
+	mark a grabbed file bad, with details.
+	"""
+	report: RequestRuleReportSampleInput
 }
 
 """
@@ -29635,10 +29616,6 @@ type RequestRuleSet {
 	Whether the rule set takes part in deciding requests.
 	"""
 	enabled: Boolean!
-	"""
-	Kinds of requests evaluated by this rule.
-	"""
-	applicability: RequestRuleApplicabilityValue!
 	"""
 	Libraries the rule is confined to. Empty means every library.
 	"""
@@ -30037,6 +30014,11 @@ input RestoreRecycledItemsInput {
 	Fingerprint returned by the current restore preview.
 	"""
 	previewFingerprint: String!
+	"""
+	Confirms restoring files marked bad for their title and clears those
+	marks. Without it, such a file is refused.
+	"""
+	clearBadFiles: Boolean! = false
 }
 
 """
@@ -32678,7 +32660,9 @@ input SubmitMediaIssueInput {
 	"""
 	mediaFileId: ID!
 	"""
-	Reason for reporting the file.
+	Reason for reporting the file: `corrupted`, `wrong_content`,
+	`wrong_language`, `audio_out_of_sync`, `poor_quality` or `other`.
+	`other` needs details.
 	"""
 	reasonCode: String!
 	"""
@@ -35025,6 +35009,15 @@ type TitleReleaseBlocklistEntryPayload {
 	UTC time when the release was attempted.
 	"""
 	attemptedAt: DateTime!
+	"""
+	True when the entry marks a file bad by its sampled content rather
+	than blocking a release by name. Clearing it unmarks the file.
+	"""
+	markedBadFile: Boolean!
+	"""
+	The marked file's size in bytes, for a bad-file entry.
+	"""
+	contentSizeBytes: Long
 }
 
 """
@@ -37058,10 +37051,6 @@ input UpdateRequestRuleMetadataInput {
 	Replacement library scope. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
-	"""
-	Replacement request kinds. Omit to keep the current applicability.
-	"""
-	applicability: RequestRuleApplicabilityValue
 }
 
 """

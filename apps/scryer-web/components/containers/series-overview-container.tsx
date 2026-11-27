@@ -260,12 +260,8 @@ export type SeriesMovieLink = {
 import type { TitleHistoryEvent } from "@/lib/types";
 export type { TitleHistoryEvent };
 
-export type TitleReleaseBlocklistEntry = {
-  id: string;
-  releaseName: string;
-  errorMessage: string | null;
-  attemptedAt: string;
-};
+import type { TitleReleaseBlocklistEntry } from "@/lib/types/titles";
+export type { TitleReleaseBlocklistEntry };
 
 export type CollectionEpisode = {
   id: string;

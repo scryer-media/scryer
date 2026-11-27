@@ -83,6 +83,10 @@ pub struct RestoreRecycledItemsInput {
     pub conflict_policy: RecycleRestoreConflictPolicyValue,
     /// Fingerprint returned by the current restore preview.
     pub preview_fingerprint: String,
+    /// Confirms restoring files marked bad for their title and clears those
+    /// marks. Without it, such a file is refused.
+    #[graphql(default)]
+    pub clear_bad_files: bool,
 }
 
 #[derive(InputObject)]
@@ -101,6 +105,9 @@ pub struct RecycleRestorePreviewItemPayload {
     pub original_path: String,
     /// Whether the destination is currently occupied.
     pub destination_occupied: bool,
+    /// The title blocklist entry this file was marked bad by. Restoring it
+    /// needs `clearBadFile` and clears that entry.
+    pub bad_file_entry_id: Option<async_graphql::ID>,
 }
 
 #[derive(SimpleObject, Clone)]

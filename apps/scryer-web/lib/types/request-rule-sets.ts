@@ -3,9 +3,6 @@
 /// requester's library permission does. A rule is created disabled, so
 /// enabling one is always a deliberate second step.
 
-export type RequestRuleApplicability =
-  "ACQUISITION" | "MEDIA_ISSUE" | "ACQUISITION_AND_MEDIA_ISSUE";
-
 /// What a decision came to. `MANUAL_REVIEW` is the domain default, so an
 /// unreadable verdict never reads back as an approval or a denial.
 export type RequestDecisionOutcome = "AUTO_APPROVE" | "MANUAL_REVIEW" | "DENY";
@@ -74,7 +71,6 @@ export type RequestRuleSetRecord = {
   name: string;
   description: string;
   enabled: boolean;
-  applicability: RequestRuleApplicability;
   libraryIds: string[];
   /// Absent on payloads that do not select it.
   declaredActions?: RequestDeclaredActions;
@@ -169,6 +165,12 @@ export type RequestRulePreviewResult = {
   /// The document the matcher actually saw, or null when it could not be
   /// re-parsed. The "why did this not match" affordance.
   inputDocument: unknown;
+  /// What a report rule said about the sample report; null for a request
+  /// rule.
+  reportVote?: "ABSTAIN" | "MARK_BAD" | "REJECT" | "CONFLICT" | null;
+  /// What submitting the sample report would do with this rule alone; null
+  /// for a request rule.
+  reportOutcome?: "REVIEW" | "REJECT" | "MARK_BAD" | null;
 };
 
 /// What the requester's own pre-flight returns. It has no field a vote could
@@ -235,7 +237,6 @@ export type RequestRuleSetDraft = {
   description: string;
   regoSource: string;
   libraryIds: string[];
-  applicability: RequestRuleApplicability;
   /// Set while the draft is still exactly what the builder writes.
   builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
@@ -251,12 +252,6 @@ export type RequestRuleUserOption = {
 export type RequestRulePreviewSample = {
   userId: string;
   libraryId: string;
-  kind: "ACQUISITION_REQUEST" | "MEDIA_ISSUE";
-  mediaIssue: {
-    reasonCode: string;
-    remediation: "mark_bad" | "recycle_and_search";
-    mediaFileId: string;
-  };
   externalIds: Array<{ source: string; value: string }>;
   titleLabel: string;
   qualityProfileId: string;

@@ -18,11 +18,16 @@ impl RecycleBinMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Recycled-item identity to restore to its original path.")] id: ID,
+        #[graphql(
+            default,
+            desc = "Confirms restoring a file marked bad for its title and clears that mark."
+        )]
+        clear_bad_file: bool,
     ) -> GqlResult<RestoreRecycledItemPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let accepted = app
-            .start_restore_recycled_item_job(&actor, id.as_str())
+            .start_restore_recycled_item_job(&actor, id.as_str(), clear_bad_file)
             .await
             .map_err(to_gql_error)?;
         Ok(RestoreRecycledItemPayload {
@@ -56,6 +61,7 @@ impl RecycleBinMutations {
                 input.ids.iter().map(|id| id.as_str().to_string()).collect(),
                 conflict_policy,
                 &input.preview_fingerprint,
+                input.clear_bad_files,
             )
             .await
             .map_err(to_gql_error)?;

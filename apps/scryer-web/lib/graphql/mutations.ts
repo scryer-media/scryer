@@ -2904,6 +2904,8 @@ export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: P
     metadataPartial
     undefinedTags
     inputDocument
+    reportVote
+    reportOutcome
     decision {${REQUEST_RULE_DECISION_FIELDS}
       shaping {${REQUEST_SHAPING_FIELDS}
       }
@@ -3277,11 +3279,12 @@ export const approveMediaIssueMutation = `mutation ApproveMediaIssue($issueId: I
   }
 }`;
 
-export const approveMediaIssueRecycleSearchMutation = `mutation ApproveMediaIssueRecycleSearch($issueId: ID!, $previewFingerprint: String!, $typedConfirmation: String!) {
+export const approveMediaIssueRecycleSearchMutation = `mutation ApproveMediaIssueRecycleSearch($issueId: ID!, $previewFingerprint: String!, $typedConfirmation: String!, $recycleBothNames: Boolean) {
   approveMediaIssueRecycleSearch(
     issueId: $issueId
     previewFingerprint: $previewFingerprint
     typedConfirmation: $typedConfirmation
+    recycleBothNames: $recycleBothNames
   ) {
     id
     status
@@ -3294,12 +3297,6 @@ export const rejectMediaIssueMutation = `mutation RejectMediaIssue($issueId: ID!
   rejectMediaIssue(issueId: $issueId) {
     id
     status
-  }
-}`;
-
-export const clearLibraryContentBlockMutation = `mutation ClearLibraryContentBlock($blockId: ID!) {
-  clearLibraryContentBlock(blockId: $blockId) {
-    id
   }
 }`;
 

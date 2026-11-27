@@ -26,7 +26,7 @@ use scryer_application::request_rules::{
 use scryer_application::{MediaRequestMetadataSnapshot, RequestPreflight};
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleApplicability, RequestRuleDecisionRecord,
+    RequestDecisionOutcome, RequestRuleDecisionRecord,
 };
 use scryer_rules::request::{
     REQUEST_INPUT_SCHEMA_VERSION, RequestVote, certification_rank_for_label,
@@ -40,30 +40,6 @@ fn to_graphql_int(value: i64) -> i32 {
 }
 
 // ── Enum projections ────────────────────────────────────────────────────────
-
-pub fn request_rule_applicability_value(
-    applicability: RequestRuleApplicability,
-) -> RequestRuleApplicabilityValue {
-    match applicability {
-        RequestRuleApplicability::Acquisition => RequestRuleApplicabilityValue::Acquisition,
-        RequestRuleApplicability::MediaIssue => RequestRuleApplicabilityValue::MediaIssue,
-        RequestRuleApplicability::AcquisitionAndMediaIssue => {
-            RequestRuleApplicabilityValue::AcquisitionAndMediaIssue
-        }
-    }
-}
-
-pub fn request_rule_applicability_into_application(
-    applicability: RequestRuleApplicabilityValue,
-) -> RequestRuleApplicability {
-    match applicability {
-        RequestRuleApplicabilityValue::Acquisition => RequestRuleApplicability::Acquisition,
-        RequestRuleApplicabilityValue::MediaIssue => RequestRuleApplicability::MediaIssue,
-        RequestRuleApplicabilityValue::AcquisitionAndMediaIssue => {
-            RequestRuleApplicability::AcquisitionAndMediaIssue
-        }
-    }
-}
 
 pub fn request_decision_outcome_value(
     outcome: RequestDecisionOutcome,
@@ -110,6 +86,8 @@ pub fn request_action_head_value(head: RequestActionHead) -> RequestActionHeadVa
         }
         RequestActionHead::AddTags => RequestActionHeadValue::AddTags,
         RequestActionHead::Notify => RequestActionHeadValue::Notify,
+        RequestActionHead::MarkBad => RequestActionHeadValue::MarkBad,
+        RequestActionHead::RejectReport => RequestActionHeadValue::RejectReport,
     }
 }
 
@@ -150,7 +128,6 @@ pub fn from_request_rule_set(
         name: rule_set.name.clone(),
         description: rule_set.description.clone(),
         enabled: rule_set.enabled,
-        applicability: request_rule_applicability_value(rule_set.applicability),
         library_ids: rule_set.library_ids.clone(),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         decision_count: to_graphql_int(i64::try_from(decision_count).unwrap_or(i64::MAX)),
@@ -455,6 +432,7 @@ fn preview_fallback_reason(result: &AppPreviewResult) -> Option<String> {
         _ => None,
     }
 }
+
 pub fn from_request_rule_preview_result(
     result: AppPreviewResult,
     rule_set_name: String,
@@ -509,6 +487,23 @@ pub fn from_request_rule_preview_result(
         input_document: async_graphql::Json(
             serde_json::from_str(&result.input_json).unwrap_or(serde_json::Value::Null),
         ),
+        report_vote: result.report_vote.map(|vote| match vote {
+            scryer_rules::request::RequestReportVote::Abstain => RequestReportVoteValue::Abstain,
+            scryer_rules::request::RequestReportVote::MarkBad => RequestReportVoteValue::MarkBad,
+            scryer_rules::request::RequestReportVote::Reject => RequestReportVoteValue::Reject,
+            scryer_rules::request::RequestReportVote::Conflict => RequestReportVoteValue::Conflict,
+        }),
+        report_outcome: result.report_outcome.map(|outcome| match outcome {
+            scryer_application::request_rules::ReportVerdict::Review => {
+                RequestReportOutcomeValue::Review
+            }
+            scryer_application::request_rules::ReportVerdict::Reject => {
+                RequestReportOutcomeValue::Reject
+            }
+            scryer_application::request_rules::ReportVerdict::MarkBad => {
+                RequestReportOutcomeValue::MarkBad
+            }
+        }),
     }
 }
 
@@ -731,31 +726,9 @@ pub fn request_rule_sample_into_application(
         (None, true) => Some(None),
         (None, false) => None,
     };
-    let media_issue = sample
-        .media_issue
-        .map(|issue| {
-            let remediation = scryer_domain::MediaIssueRemediation::parse(&issue.remediation)
-                .ok_or_else(|| {
-                    scryer_application::AppError::validation_refused(
-                        scryer_application::error_reasons::request_rules::RULE_VALIDATION_FAILED,
-                        "The sample remediation must be mark_bad or recycle_and_search",
-                    )
-                })?;
-            Ok::<_, scryer_application::AppError>(
-                scryer_application::media_issues::SubmitMediaIssueInput {
-                    media_file_id: String::from(issue.media_file_id),
-                    reason_code: issue.reason_code,
-                    remediation,
-                    details: None,
-                },
-            )
-        })
-        .transpose()?;
     Ok(scryer_application::RequestRuleSample {
         user_id: String::from(sample.user_id),
         library_id: String::from(sample.library_id),
-        kind: sample.kind,
-        media_issue,
         external_ids: sample
             .external_ids
             .into_iter()
@@ -768,6 +741,20 @@ pub fn request_rule_sample_into_application(
         lease_days,
         required_audio_languages: sample.required_audio_languages,
         preferred_audio_languages: sample.preferred_audio_languages,
+        report: sample
+            .report
+            .map(|report| -> Result<_, scryer_application::AppError> {
+                Ok(scryer_application::RequestRuleReportSample {
+                    reason: scryer_application::media_issues::parse_media_issue_reason(
+                        &report.reason_code,
+                    )?,
+                    remediation: report.remediation.into(),
+                    grabbed: report.grabbed.unwrap_or(true),
+                    has_details: report.has_details.unwrap_or(true),
+                    reporter_requested_media: report.reporter_requested_media,
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -859,6 +846,21 @@ mod tests {
         );
         assert_eq!(decision.votes.len(), 1);
         assert_eq!(decision.votes[0].vote, None);
+    }
+
+    #[test]
+    fn preview_outcomes_never_approve_on_uncertainty() {
+        assert_eq!(
+            preview_outcome(Some(RequestVote::Approve)),
+            RequestDecisionOutcome::AutoApprove
+        );
+        assert_eq!(
+            preview_outcome(Some(RequestVote::Deny)),
+            RequestDecisionOutcome::Deny
+        );
+        for vote in [Some(RequestVote::Manual), Some(RequestVote::Abstain), None] {
+            assert_eq!(preview_outcome(vote), RequestDecisionOutcome::ManualReview);
+        }
     }
 
     #[test]

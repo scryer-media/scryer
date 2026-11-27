@@ -828,23 +828,21 @@ impl LibraryMutations {
                 scryer_domain::MediaIssueRemediation::RecycleAndSearch
             }
         };
-        let mut issue = app
+        let issue = app
             .submit_media_issue(
                 &actor,
                 scryer_application::media_issues::SubmitMediaIssueInput {
                     media_file_id: input.media_file_id.to_string(),
-                    reason_code: input.reason_code,
+                    reason: scryer_application::media_issues::parse_media_issue_reason(
+                        &input.reason_code,
+                    )
+                    .map_err(to_gql_error)?,
                     details: input.details,
                     remediation,
                 },
             )
             .await
             .map_err(to_gql_error)?;
-        // The operator review queue may expose the rule trace. A submission
-        // response must not expose internal facts or rule diagnostics.
-        issue.rule_snapshot_json = None;
-        issue.rule_votes_json.clear();
-        issue.rule_hold_reasons.clear();
         crate::types::MediaIssuePayload::from_domain(issue)
     }
 
@@ -859,6 +857,10 @@ impl LibraryMutations {
         #[graphql(desc = "Typed confirmation required by the preview.")] typed_confirmation: Option<
             String,
         >,
+        #[graphql(
+            desc = "Recycle both names of a reported file hard-linked to its download copy. Required when the preview's `hardLinkReason` is set, and refused otherwise."
+        )]
+        recycle_both_names: Option<bool>,
     ) -> GqlResult<crate::types::MediaIssuePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -868,13 +870,15 @@ impl LibraryMutations {
                 issue_id.as_ref(),
                 &preview_fingerprint,
                 typed_confirmation.as_deref(),
+                recycle_both_names.unwrap_or(false),
             )
             .await
             .map_err(to_gql_error)?;
         crate::types::MediaIssuePayload::from_domain(issue)
     }
 
-    /// Confirm a sampled content block for a pending report without moving any files.
+    /// Confirm a pending report: mark the file bad on its title's blocklist
+    /// and leave it in place.
     async fn approve_media_issue(
         &self,
         ctx: &Context<'_>,
@@ -889,7 +893,7 @@ impl LibraryMutations {
         crate::types::MediaIssuePayload::from_domain(issue)
     }
 
-    /// Reject a pending media issue without creating or changing content blocks.
+    /// Reject a pending media issue without marking the file bad.
     async fn reject_media_issue(
         &self,
         ctx: &Context<'_>,
@@ -902,20 +906,5 @@ impl LibraryMutations {
             .await
             .map_err(to_gql_error)?;
         crate::types::MediaIssuePayload::from_domain(issue)
-    }
-
-    /// Explicitly clear a library's confirmed sampled-content block.
-    /// Clearing does not restore recycled files or remove a separate release block.
-    async fn clear_library_content_block(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(desc = "Confirmed content-block identity.")] block_id: ID,
-    ) -> GqlResult<crate::types::ClearLibraryContentBlockPayload> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        app.clear_library_content_block(&actor, block_id.as_ref())
-            .await
-            .map_err(to_gql_error)?;
-        Ok(crate::types::ClearLibraryContentBlockPayload { id: block_id })
     }
 }

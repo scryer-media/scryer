@@ -2389,6 +2389,29 @@ impl CatalogQueries {
         Ok(from_delete_preview(preview))
     }
 
+    /// Preview what approving a bad-file report's recycle-and-search would
+    /// move into the recycle bin: the reported file, and a copy of the same
+    /// content still in the download folder it was imported from. A copy that
+    /// is the reported file's other hard-linked name is reported with
+    /// `hardLinkReason`. Changes nothing; approval must send this preview's
+    /// fingerprint.
+    async fn media_issue_recycle_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Bad-file report whose recycle would be previewed.")] issue_id: ID,
+    ) -> GqlResult<MediaIssueRecyclePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .preview_media_issue_recycle(&actor, issue_id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(MediaIssueRecyclePreviewPayload {
+            preview: from_delete_preview(preview.preview),
+            hard_link_reason: preview.hard_link_reason.map(str::to_string),
+        })
+    }
+
     /// Preview deleting one external subtitle file without changing files.
     async fn delete_external_subtitle_preview(
         &self,
@@ -2636,32 +2659,6 @@ impl CatalogQueries {
             .into_iter()
             .map(from_title_release_blocklist_entry)
             .collect())
-    }
-
-    /// List bounded confirmed bad-media content blocks for a library.
-    async fn library_content_blocks(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(desc = "Library identity whose content blocks are returned.")] library_id: ID,
-        #[graphql(
-            desc = "Maximum entries to return; defaults to 100 and clamps to 1 through 1000."
-        )]
-        limit: Option<i32>,
-    ) -> GqlResult<Vec<scryer_interface_media::types::LibraryContentBlockPayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let blocks = app
-            .list_library_content_blocks(
-                &actor,
-                library_id.as_ref(),
-                limit.unwrap_or(100).clamp(1, 1_000) as usize,
-            )
-            .await
-            .map_err(to_gql_error)?;
-        blocks
-            .into_iter()
-            .map(scryer_interface_media::types::LibraryContentBlockPayload::from_domain)
-            .collect::<GqlResult<Vec<_>>>()
     }
 
     /// List bounded bad-media reports for a library.
@@ -3944,6 +3941,7 @@ impl SystemQueries {
                     id: ID::from(item.id),
                     original_path: item.original_path,
                     destination_occupied: item.destination_occupied,
+                    bad_file_entry_id: item.bad_file_entry_id.map(ID::from),
                 })
                 .collect(),
         })

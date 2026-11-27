@@ -19,26 +19,23 @@ import { useTranslate } from "@/lib/context/translate-context";
 import {
   approveMediaIssueMutation,
   approveMediaIssueRecycleSearchMutation,
-  clearLibraryContentBlockMutation,
   rejectMediaIssueMutation,
 } from "@/lib/graphql/mutations";
 import {
-  deleteMediaFilePreviewQuery,
-  libraryContentBlocksQuery,
+  mediaIssueRecyclePreviewQuery,
   mediaIssueRecycleSettingsQuery,
   mediaIssuesQuery,
   mediaIssueTitleQuery,
 } from "@/lib/graphql/queries";
 import {
   graphQlErrorExtension,
-  hasGraphQlErrorReason,
   userFacingGraphQlErrorMessage,
 } from "@/lib/graphql/error-message";
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 import type {
-  LibraryContentBlock,
   MediaIssue,
   MediaIssueExecutionStatus,
+  MediaIssueRecyclePreviewPayload,
   MediaIssueRemediation,
   MediaIssueStatus,
 } from "@/lib/types/media-issues";
@@ -46,13 +43,19 @@ import type { LibraryRecord } from "@/lib/types/titles";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { deleteErrorMessage } from "@/lib/utils/delete-error-message";
 import {
-  confirmedContentBlockRemoval,
+  MEDIA_ISSUE_HARD_LINKED_COPY_REASON,
+  mediaIssueReasonKey,
+  mediaIssueRefusalKey,
   mediaIssueRecycleApprovalVariables,
 } from "@/lib/utils/media-issue-review";
-import { formatMediaFileSize } from "@/lib/utils/media-info-format";
+
+function selectMediaIssueRecyclePreview(
+  payload: MediaIssueRecyclePreviewPayload,
+) {
+  return payload.preview;
+}
 
 const PAGE_SIZE = 25;
-const BLOCK_LIMIT = 100;
 const selectClass =
   "h-9 max-w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-ring";
 
@@ -72,28 +75,12 @@ const executionKeys = {
   DOWNLOAD_QUEUED: "mediaIssue.downloadQueued",
   REPLACEMENT_IMPORTED: "mediaIssue.replacementImported",
   SEARCHING: "mediaIssue.searching",
-  COMPLETE: "mediaIssue.complete",
-  FAILED: "mediaIssue.failed",
 } as const satisfies Record<MediaIssueExecutionStatus, string>;
 
 const remediationKeys = {
   MARK_BAD: "mediaFile.markBadOnly",
   RECYCLE_AND_SEARCH: "mediaFile.markBadRecycleSearch",
 } as const satisfies Record<MediaIssueRemediation, string>;
-
-const mediaIssueRefusalKeys: Readonly<Record<string, string>> = {
-  MEDIA_REMEDIATION_NOT_AVAILABLE: "mediaIssue.remediationUnavailable",
-  MEDIA_REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION:
-    "mediaIssue.reportedFileChanged",
-  MEDIA_SOURCE_CHANGED_DURING_INSPECTION: "mediaIssue.reportedFileChanged",
-  MEDIA_RECYCLE_FAILED: "mediaIssue.recycleFailed",
-};
-
-function mediaIssueRefusalKey(reason: string | null): string | undefined {
-  return reason && Object.hasOwn(mediaIssueRefusalKeys, reason)
-    ? mediaIssueRefusalKeys[reason]
-    : undefined;
-}
 
 type ReviewAction = "approve" | "recycle" | "reject";
 
@@ -151,7 +138,6 @@ export function MediaIssueReview({
 function LibraryIssueReview({ libraryId }: { libraryId: string }) {
   const t = useTranslate();
   const dateFormat = useUiDateTimeFormat();
-  const [surface, setSurface] = useState<"reports" | "blocks">("reports");
   const [pendingOnly, setPendingOnly] = useState(true);
   const [page, setPage] = useState(0);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
@@ -165,7 +151,6 @@ function LibraryIssueReview({ libraryId }: { libraryId: string }) {
       limit: PAGE_SIZE + 1,
       offset: page * PAGE_SIZE,
     },
-    pause: surface !== "reports",
     requestPolicy: "network-only",
   });
   const issues = data?.mediaIssues?.slice(0, PAGE_SIZE) ?? [];
@@ -176,28 +161,10 @@ function LibraryIssueReview({ libraryId }: { libraryId: string }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-2 border-b border-border pb-3">
-        <Button
-          size="sm"
-          variant={surface === "reports" ? "secondary" : "ghost"}
-          aria-pressed={surface === "reports"}
-          onClick={() => setSurface("reports")}
-        >
-          {t("mediaIssue.reports")}
-        </Button>
-        <Button
-          size="sm"
-          variant={surface === "blocks" ? "secondary" : "ghost"}
-          aria-pressed={surface === "blocks"}
-          onClick={() => setSurface("blocks")}
-        >
-          {t("mediaFile.confirmedContentBlocks")}
-        </Button>
-      </div>
-      {surface === "blocks" ? (
-        <LibraryContentBlocks libraryId={libraryId} />
-      ) : (
-        <>
+      <p className="max-w-lg text-sm text-muted-foreground">
+        {t("mediaIssue.unmarkHint")}
+      </p>
+      <>
           <div className="flex flex-wrap items-center gap-2">
             <select
               className={selectClass}
@@ -238,6 +205,8 @@ function LibraryIssueReview({ libraryId }: { libraryId: string }) {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold">
+                      {t(mediaIssueReasonKey(issue.reasonCode))}
+                      {" · "}
                       {t(remediationKeys[issue.remediation])}
                     </p>
                     <p className="text-xs text-muted-foreground">
@@ -309,8 +278,7 @@ function LibraryIssueReview({ libraryId }: { libraryId: string }) {
               </Button>
             </div>
           ) : null}
-        </>
-      )}
+      </>
     </div>
   );
 }
@@ -451,17 +419,25 @@ function ReviewConfirmation({
     !settingsError &&
     settings?.recycleBinSettings.enabled === true &&
     !settings.recycleBinSettings.validationError;
-  const { preview, loading, error } = useDeletePreview(
-    deleteMediaFilePreviewQuery,
-    "deleteMediaFilePreview",
-    recycle ? { fileId: issue.mediaFileId } : null,
+  const { preview, payload, loading, error } = useDeletePreview<
+    { issueId: string },
+    MediaIssueRecyclePreviewPayload
+  >(
+    mediaIssueRecyclePreviewQuery,
+    "mediaIssueRecyclePreview",
+    recycle ? { issueId: issue.id } : null,
     recycle && canRecycle,
+    selectMediaIssueRecyclePreview,
   );
+  const hardLinkReason =
+    loading || error ? null : (payload?.hardLinkReason ?? null);
+  const linkedPair = hardLinkReason === MEDIA_ISSUE_HARD_LINKED_COPY_REASON;
   const recycleVariables = mediaIssueRecycleApprovalVariables(
     issue,
     loading || error ? null : preview,
     typed,
     canRecycle,
+    hardLinkReason,
   );
   const title = t(
     action === "recycle"
@@ -526,7 +502,7 @@ function ReviewConfirmation({
             : "mediaIssue.rejectHint",
       )}
       cancelLabel={t("label.cancel")}
-      confirmLabel={title}
+      confirmLabel={linkedPair ? t("mediaIssue.recycleBothNames") : title}
       confirmButtonVariant={action === "approve" ? "default" : "destructive"}
       isBusy={busy}
       confirmDisabled={
@@ -562,6 +538,11 @@ function ReviewConfirmation({
         ) : null}
         {recycle && canRecycle ? (
           <>
+            {linkedPair ? (
+              <p role="alert" className="text-sm text-destructive">
+                {t("mediaIssue.hardLinkedPair")}
+              </p>
+            ) : null}
             {preview && !loading && !error ? (
               <dl className="rounded-md border border-border bg-muted/50 p-3">
                 <dt className="text-xs text-muted-foreground">
@@ -572,7 +553,10 @@ function ReviewConfirmation({
                 </dd>
               </dl>
             ) : null}
-            {preview && !loading && !error && preview.mediaCount !== 1 ? (
+            {preview &&
+            !loading &&
+            !error &&
+            (preview.mediaCount < 1 || preview.mediaCount > 2) ? (
               <ReviewError message={t("mediaIssue.unexpectedPreviewScope")} />
             ) : null}
             <DeletePreviewSummary
@@ -595,152 +579,6 @@ function ReviewConfirmation({
         {failure ? <ReviewError message={failure} /> : null}
       </div>
     </ConfirmDialog>
-  );
-}
-
-function LibraryContentBlocks({ libraryId }: { libraryId: string }) {
-  const t = useTranslate();
-  const client = useClient();
-  const dateFormat = useUiDateTimeFormat();
-  const [target, setTarget] = useState<LibraryContentBlock | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [clearedBlockId, setClearedBlockId] = useState<string | null>(null);
-  const [{ data, fetching, error }, refresh] = useQuery<{
-    libraryContentBlocks: LibraryContentBlock[];
-  }>({
-    query: libraryContentBlocksQuery,
-    variables: { libraryId, limit: 1000 },
-    requestPolicy: "network-only",
-  });
-  const blocks =
-    data?.libraryContentBlocks
-      ?.filter((block) => block.id !== clearedBlockId)
-      .slice(0, 1000) ?? [];
-
-  function reload() {
-    refresh({ requestPolicy: "network-only" });
-  }
-
-  async function clearBlock() {
-    if (!target || busy) return;
-    setBusy(true);
-    setFailure(null);
-    try {
-      const result = await client
-        .mutation<{ clearLibraryContentBlock?: { id: string } | null }>(
-          clearLibraryContentBlockMutation,
-          { blockId: target.id },
-        )
-        .toPromise();
-      if (!confirmedContentBlockRemoval(target.id, result)) {
-        throw result.error ?? new Error(t("mediaIssue.clearFailed"));
-      }
-      setClearedBlockId(target.id);
-      setTarget(null);
-      reload();
-    } catch (mutationError) {
-      setFailure(
-        hasGraphQlErrorReason(
-          mutationError,
-          "MEDIA_CONTENT_BLOCK_NOT_FOUND",
-          "NOT_FOUND",
-        )
-          ? t("mediaIssue.blockNotFound")
-          : userFacingGraphQlErrorMessage(
-              mutationError,
-              t("mediaIssue.clearFailed"),
-              t,
-            ),
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="max-w-lg text-sm text-muted-foreground">
-          {t("mediaIssue.blocksHint")}
-        </p>
-        <RefreshButton busy={fetching} onClick={reload} />
-      </div>
-      {error ? (
-        <ReviewError
-          message={userFacingGraphQlErrorMessage(
-            error,
-            t("mediaIssue.blocksFailed"),
-            t,
-          )}
-        />
-      ) : null}
-      {fetching && blocks.length === 0 ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          {t("label.loading")}
-        </p>
-      ) : !error && blocks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t("mediaIssue.noBlocks")}
-        </p>
-      ) : null}
-      {(data?.libraryContentBlocks?.length ?? 0) > BLOCK_LIMIT ? (
-        <p className="text-xs text-muted-foreground">
-          {t("mediaIssue.blockLimit", { count: BLOCK_LIMIT })}
-        </p>
-      ) : null}
-      <ul className="divide-y divide-border rounded-md border border-border empty:hidden">
-        {blocks.map((block) => (
-          <li
-            key={block.id}
-            className="flex flex-wrap items-center justify-between gap-2 p-3"
-          >
-            <div className="min-w-0 space-y-1">
-              <p className="break-words text-sm font-medium">
-                {!block.reason || block.reason === "bad_media"
-                  ? t("mediaFile.badMedia")
-                  : block.reason}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {formatMediaFileSize(block.sizeBytes)}
-                {" · "}
-                {formatUiDateTime(block.createdAt, dateFormat)}
-              </p>
-              <p className="break-all font-mono text-xs text-muted-foreground">
-                {block.sampleBlake3}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setFailure(null);
-                setTarget(block);
-              }}
-            >
-              {t("mediaFile.clearContentBlock")}
-            </Button>
-          </li>
-        ))}
-      </ul>
-      <ConfirmDialog
-        open={target !== null}
-        title={t("mediaFile.clearContentBlock")}
-        description={t("mediaIssue.clearHint")}
-        confirmLabel={t("mediaFile.clearContentBlock")}
-        cancelLabel={t("label.cancel")}
-        onConfirm={clearBlock}
-        onCancel={() => {
-          if (!busy) setTarget(null);
-        }}
-        isBusy={busy}
-      >
-        {target ? (
-          <p className="break-all font-mono text-xs">{target.sampleBlake3}</p>
-        ) : null}
-        {failure ? <ReviewError message={failure} /> : null}
-      </ConfirmDialog>
-    </div>
   );
 }
 

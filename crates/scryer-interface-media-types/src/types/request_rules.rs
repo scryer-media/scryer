@@ -17,18 +17,6 @@ use super::{DiscoveryContentRatingPayload, ExternalIdInput, MonitorTypeValue};
 
 // ── Enums ──────────────────────────────────────────────────────────────────
 
-#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-/// Which kinds of requests a rule can evaluate.
-pub enum RequestRuleApplicabilityValue {
-    /// Acquisition requests only.
-    Acquisition,
-    /// Bad-media reports only.
-    MediaIssue,
-    /// Both acquisition requests and bad-media reports.
-    AcquisitionAndMediaIssue,
-}
-
 /// What a request evaluation concluded.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -91,6 +79,66 @@ pub enum RequestActionHeadValue {
     AddTags,
     /// Add this text to the notification sent when the request is submitted.
     Notify,
+    /// Mark the file in a bad-file report bad. A report rule only.
+    MarkBad,
+    /// Reject a bad-file report. A report rule only.
+    RejectReport,
+}
+
+/// What a media issue requests after confirmation.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MediaIssueRemediationValue {
+    /// Mark the file bad on its title's blocklist and leave it in place.
+    MarkBad,
+    /// Mark the file bad, recycle it, and search for a replacement. Recycling
+    /// needs an operator's confirmation.
+    RecycleAndSearch,
+}
+
+impl From<scryer_domain::MediaIssueRemediation> for MediaIssueRemediationValue {
+    fn from(value: scryer_domain::MediaIssueRemediation) -> Self {
+        match value {
+            scryer_domain::MediaIssueRemediation::MarkBad => Self::MarkBad,
+            scryer_domain::MediaIssueRemediation::RecycleAndSearch => Self::RecycleAndSearch,
+        }
+    }
+}
+
+impl From<MediaIssueRemediationValue> for scryer_domain::MediaIssueRemediation {
+    fn from(value: MediaIssueRemediationValue) -> Self {
+        match value {
+            MediaIssueRemediationValue::MarkBad => Self::MarkBad,
+            MediaIssueRemediationValue::RecycleAndSearch => Self::RecycleAndSearch,
+        }
+    }
+}
+
+/// What one report rule said about a sample bad-file report.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestReportVoteValue {
+    /// Neither `mark_bad` nor `reject_report` fired.
+    Abstain,
+    /// `mark_bad` fired.
+    MarkBad,
+    /// `reject_report` fired.
+    Reject,
+    /// Both fired, so the report goes to review.
+    Conflict,
+}
+
+/// What submitting a bad-file report would do.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestReportOutcomeValue {
+    /// An operator reviews the report.
+    Review,
+    /// The report is rejected.
+    Reject,
+    /// The file is marked bad. A requested recycle and search still waits for
+    /// an operator.
+    MarkBad,
 }
 
 /// What a lifecycle claim is.
@@ -134,8 +182,6 @@ pub struct RequestRuleSet {
     pub description: String,
     /// Whether the rule set takes part in deciding requests.
     pub enabled: bool,
-    /// Kinds of requests evaluated by this rule.
-    pub applicability: RequestRuleApplicabilityValue,
     /// Libraries the rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Revision number of the source currently in force.
@@ -396,6 +442,12 @@ pub struct RequestRulePreviewPayload {
     pub undefined_tags: Vec<String>,
     /// The exact document the rule saw.
     pub input_document: Json<serde_json::Value>,
+    /// What a report rule said about the sample report; null for a request
+    /// rule.
+    pub report_vote: Option<RequestReportVoteValue>,
+    /// What submitting the sample report would do if this were the only
+    /// report rule; null for a request rule.
+    pub report_outcome: Option<RequestReportOutcomeValue>,
 }
 
 /// Requester-side pre-flight: what would happen if this draft were submitted
@@ -531,8 +583,6 @@ pub struct CreateRequestRuleSetInput {
     pub rego_source: String,
     /// Libraries to confine the rule to. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
-    /// Which kinds of requests this rule handles. Omitted means acquisition only.
-    pub applicability: Option<RequestRuleApplicabilityValue>,
     /// The visual builder's document, stored as given: a JSON object of at
     /// most 64 KiB. Omitted or null stores none.
     pub builder_model: Option<Json<serde_json::Value>>,
@@ -562,8 +612,6 @@ pub struct UpdateRequestRuleMetadataInput {
     pub description: Option<String>,
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
-    /// Replacement request kinds. Omit to keep the current applicability.
-    pub applicability: Option<RequestRuleApplicabilityValue>,
 }
 
 /// Validates request rule source without saving it.
@@ -576,30 +624,18 @@ pub struct ValidateRequestRuleInput {
     pub library_ids: Option<Vec<String>>,
 }
 
-/// A bad-media report used as a rule preview sample. No action is taken.
-#[derive(InputObject, Clone)]
-pub struct RequestMediaIssuePreviewInput {
-    /// Existing file resolved in the sample library. All associations and
-    /// provenance come from the server, as on submission.
-    pub media_file_id: ID,
-    /// Reason the hypothetical report gives for marking the file bad.
-    pub reason_code: String,
-    /// Hypothetical action: `mark_bad` or `recycle_and_search`.
-    pub remediation: String,
-}
-
-/// The hypothetical request an author-side preview evaluates against a real
-/// user and library, without saving a request or report.
+/// The hypothetical request an author-side preview is evaluated against.
+///
+/// It names a real user and a real library on purpose: the question a preview
+/// answers is "what would this rule do to *this person* asking for *this
+/// title*", and a synthetic requester would exercise none of the permission,
+/// history, or linked-provider facts that make request rules useful.
 #[derive(InputObject, Clone)]
 pub struct RequestRuleSampleInput {
     /// User to evaluate as.
     pub user_id: ID,
     /// Library to evaluate against.
     pub library_id: ID,
-    /// `acquisition_request` or `media_issue`. Omit to infer from the supplied fields.
-    pub kind: Option<String>,
-    /// Report details for a bad-media sample. Omit for an acquisition sample.
-    pub media_issue: Option<RequestMediaIssuePreviewInput>,
     /// Provider identifiers of the sample title. An empty list is a legitimate
     /// preview of requester facts alone, and leaves every metadata fact
     /// unknown.
@@ -619,6 +655,28 @@ pub struct RequestRuleSampleInput {
     /// Audio languages the sample prefers, in order. Omit or send null to
     /// leave it to the library.
     pub preferred_audio_languages: Option<Vec<String>>,
+    /// The bad-file report a report rule is previewed against. A request rule
+    /// ignores it. Omitted, a report rule sees a `corrupted` report asking to
+    /// mark a grabbed file bad, with details.
+    pub report: Option<RequestRuleReportSampleInput>,
+}
+
+/// A hypothetical bad-file report for previewing a report rule. No file is
+/// read and nothing is submitted.
+#[derive(InputObject, Clone)]
+pub struct RequestRuleReportSampleInput {
+    /// Report reason: `corrupted`, `wrong_content`, `wrong_language`,
+    /// `audio_out_of_sync`, `poor_quality` or `other`.
+    pub reason_code: String,
+    /// The action the sample report asks for.
+    pub remediation: MediaIssueRemediationValue,
+    /// True for a file from a known grab. Defaults to true.
+    pub grabbed: Option<bool>,
+    /// Whether the sample report carries details. Defaults to true.
+    pub has_details: Option<bool>,
+    /// Whether the reporter asked for the media. Null previews the fact as
+    /// unknown.
+    pub reporter_requested_media: Option<bool>,
 }
 
 /// Runs one rule against one hypothetical request without saving anything.

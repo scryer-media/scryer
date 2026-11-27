@@ -5,8 +5,20 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
+import { graphQlErrorExtension } from "@/lib/graphql/error-message";
 import { submitMediaIssueMutation } from "@/lib/graphql/mutations";
-import type { MediaIssueRemediation } from "@/lib/types/media-issues";
+import type {
+  MediaIssueReason,
+  MediaIssueRemediation,
+} from "@/lib/types/media-issues";
+import {
+  MEDIA_ISSUE_REASONS,
+  mediaIssueReasonKey,
+  mediaIssueRefusalKey,
+} from "@/lib/utils/media-issue-review";
+
+const selectClass =
+  "h-9 max-w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-ring";
 
 export function ReportMediaIssueDialog({
   file,
@@ -21,14 +33,25 @@ export function ReportMediaIssueDialog({
   const choiceId = useId();
   const [remediation, setRemediation] =
     useState<MediaIssueRemediation>("MARK_BAD");
+  const [reason, setReason] = useState<MediaIssueReason>("corrupted");
   const [details, setDetails] = useState("");
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const detailsRequired = reason === "other" && details.trim() === "";
+
+  function fail(error?: unknown) {
+    // The raw server error can contain a path to the reported file, so only
+    // a known refusal code is shown.
+    const key = mediaIssueRefusalKey(
+      error ? graphQlErrorExtension(error, "VALIDATION_ERROR", "reason") : null,
+    );
+    setFailure(t(key ?? "mediaFile.markBadSubmitFailed"));
+  }
 
   async function submit() {
-    if (busy) return;
+    if (busy || detailsRequired) return;
     setBusy(true);
-    setFailed(false);
+    setFailure(null);
     try {
       const { data, error } = await client
         .mutation<{ submitMediaIssue?: { id: string } }>(
@@ -36,7 +59,7 @@ export function ReportMediaIssueDialog({
           {
             input: {
               mediaFileId: file.id,
-              reasonCode: "bad_media",
+              reasonCode: reason,
               details: details.trim() || null,
               remediation,
             },
@@ -44,14 +67,13 @@ export function ReportMediaIssueDialog({
         )
         .toPromise();
       if (error || !data?.submitMediaIssue?.id) {
-        setFailed(true);
+        fail(error);
         return;
       }
       setGlobalStatus(t("mediaFile.markBadSubmitted"), { level: "SUCCESS" });
       onClose();
-    } catch {
-      // The raw server error can contain a path to the reported file.
-      setFailed(true);
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
@@ -66,12 +88,30 @@ export function ReportMediaIssueDialog({
       confirmButtonVariant="default"
       cancelLabel={t("label.cancel")}
       isBusy={busy}
+      confirmDisabled={detailsRequired}
       onConfirm={submit}
       onCancel={() => {
         if (!busy) onClose();
       }}
     >
       <div className="space-y-4">
+        <label className="grid gap-1.5 text-sm font-medium">
+          {t("mediaIssue.reasonLabel")}
+          <select
+            className={selectClass}
+            value={reason}
+            disabled={busy}
+            onChange={(event) =>
+              setReason(event.target.value as MediaIssueReason)
+            }
+          >
+            {MEDIA_ISSUE_REASONS.map((value) => (
+              <option key={value} value={value}>
+                {t(mediaIssueReasonKey(value))}
+              </option>
+            ))}
+          </select>
+        </label>
         <fieldset disabled={busy} className="space-y-2">
           <legend className="mb-2 text-sm font-medium">
             {t("mediaIssue.requestedAction")}
@@ -118,9 +158,14 @@ export function ReportMediaIssueDialog({
             disabled={busy}
           />
         </label>
-        {failed ? (
+        {detailsRequired ? (
+          <p className="text-xs text-muted-foreground">
+            {t("error.reason.MEDIA_REASON_REQUIRES_DETAILS")}
+          </p>
+        ) : null}
+        {failure ? (
           <p role="alert" className="text-sm text-destructive">
-            {t("mediaFile.markBadSubmitFailed")}
+            {failure}
           </p>
         ) : null}
       </div>

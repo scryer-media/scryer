@@ -97,8 +97,6 @@ function initialPreviewSample(): RequestRulePreviewSample {
   return {
     userId: "",
     libraryId: "",
-    kind: "ACQUISITION_REQUEST",
-    mediaIssue: { mediaFileId: "", reasonCode: "", remediation: "mark_bad" },
     externalIds: [],
     titleLabel: "",
     qualityProfileId: "",
@@ -722,26 +720,17 @@ export function SettingsRequestRulesContainer({
         .mutation(previewRequestRuleMutation, {
           input: {
             ruleSetId: previewRuleSetId,
-            sample:
-              previewSample.kind === "MEDIA_ISSUE"
-                ? {
-                    userId: previewSample.userId,
-                    libraryId: previewSample.libraryId,
-                    kind: "media_issue",
-                    externalIds: [],
-                    mediaIssue: previewSample.mediaIssue,
-                  }
-                : {
-                    userId: previewSample.userId,
-                    libraryId: previewSample.libraryId,
-                    externalIds: previewSample.externalIds,
-                    qualityProfileId: previewSample.qualityProfileId || null,
-                    monitorType: previewSample.monitorType || null,
-                    leaseForever: previewSample.leaseForever ? true : null,
-                    leaseDays: previewSample.leaseForever
-                      ? null
-                      : clampRequestLeaseDays(previewSample.leaseDays),
-                  },
+            sample: {
+              userId: previewSample.userId,
+              libraryId: previewSample.libraryId,
+              externalIds: previewSample.externalIds,
+              qualityProfileId: previewSample.qualityProfileId || null,
+              monitorType: previewSample.monitorType || null,
+              leaseForever: previewSample.leaseForever ? true : null,
+              leaseDays: previewSample.leaseForever
+                ? null
+                : clampRequestLeaseDays(previewSample.leaseDays),
+            },
           },
         })
         .toPromise();

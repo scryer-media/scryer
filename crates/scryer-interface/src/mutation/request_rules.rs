@@ -91,15 +91,6 @@ impl RequestRuleMutations {
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
                     library_ids: input.library_ids.unwrap_or_default(),
-                    applicability: match input.applicability {
-                        Some(crate::types::RequestRuleApplicabilityValue::MediaIssue) => {
-                            scryer_domain::RequestRuleApplicability::MediaIssue
-                        }
-                        Some(
-                            crate::types::RequestRuleApplicabilityValue::AcquisitionAndMediaIssue,
-                        ) => scryer_domain::RequestRuleApplicability::AcquisitionAndMediaIssue,
-                        _ => scryer_domain::RequestRuleApplicability::Acquisition,
-                    },
                     builder_model: input.builder_model.map(|model| model.0),
                 },
             )
@@ -178,17 +169,6 @@ impl RequestRuleMutations {
                 input.name,
                 input.description.unwrap_or_default(),
                 input.library_ids.unwrap_or_default(),
-                input.applicability.map(|value| match value {
-                    crate::types::RequestRuleApplicabilityValue::MediaIssue => {
-                        scryer_domain::RequestRuleApplicability::MediaIssue
-                    }
-                    crate::types::RequestRuleApplicabilityValue::AcquisitionAndMediaIssue => {
-                        scryer_domain::RequestRuleApplicability::AcquisitionAndMediaIssue
-                    }
-                    crate::types::RequestRuleApplicabilityValue::Acquisition => {
-                        scryer_domain::RequestRuleApplicability::Acquisition
-                    }
-                }),
             )
             .await
             .map_err(to_gql_error)?;

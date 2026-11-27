@@ -898,6 +898,8 @@ pub enum DomainEventTypeValue {
     MediaIssueRejected,
     /// A recycle-and-search execution state changed.
     MediaIssueRecycleExecution,
+    /// A file marked bad was unmarked; the report stays approved.
+    MediaIssueUnmarked,
     /// A sync of a list ended and its run was recorded, whatever the outcome.
     ListSyncFinished,
     /// A list was followed, changed, turned on or off, or unfollowed.
@@ -921,6 +923,7 @@ impl DomainEventTypeValue {
             DomainEventType::MediaIssueApproved => Self::MediaIssueApproved,
             DomainEventType::MediaIssueRejected => Self::MediaIssueRejected,
             DomainEventType::MediaIssueRecycleExecution => Self::MediaIssueRecycleExecution,
+            DomainEventType::MediaIssueUnmarked => Self::MediaIssueUnmarked,
             DomainEventType::TitleAdded => Self::TitleAdded,
             DomainEventType::TitleUpdated => Self::TitleUpdated,
             DomainEventType::TitleRematched => Self::TitleRematched,
@@ -991,6 +994,7 @@ impl DomainEventTypeValue {
             Self::MediaIssueApproved => DomainEventType::MediaIssueApproved,
             Self::MediaIssueRejected => DomainEventType::MediaIssueRejected,
             Self::MediaIssueRecycleExecution => DomainEventType::MediaIssueRecycleExecution,
+            Self::MediaIssueUnmarked => DomainEventType::MediaIssueUnmarked,
             Self::TitleAdded => DomainEventType::TitleAdded,
             Self::TitleUpdated => DomainEventType::TitleUpdated,
             Self::TitleRematched => DomainEventType::TitleRematched,

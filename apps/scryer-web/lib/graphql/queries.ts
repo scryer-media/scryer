@@ -818,7 +818,9 @@ const TITLE_RELEASE_BLOCKLIST_FIELDS = `
     id
     releaseName
     errorMessage
-    attemptedAt`;
+    attemptedAt
+    markedBadFile
+    contentSizeBytes`;
 
 const EXTERNAL_SUBTITLE_FIELDS = `
     id
@@ -1296,6 +1298,14 @@ ${fields}
 
 export const deleteMediaFilePreviewQuery = `query DeleteMediaFilePreview($fileId: ID!) {
   deleteMediaFilePreview(fileId: $fileId) {${DELETE_PREVIEW_FIELDS}
+  }
+}`;
+
+export const mediaIssueRecyclePreviewQuery = `query MediaIssueRecyclePreview($issueId: ID!) {
+  mediaIssueRecyclePreview(issueId: $issueId) {
+    preview {${DELETE_PREVIEW_FIELDS}
+    }
+    hardLinkReason
   }
 }`;
 
@@ -4157,6 +4167,7 @@ export const previewRestoreRecycledItemsQuery = `query PreviewRestoreRecycledIte
       id
       originalPath
       destinationOccupied
+      badFileEntryId
     }
   }
 }`;
@@ -4497,7 +4508,6 @@ export const REQUEST_RULE_SET_FIELDS = `
     name
     description
     enabled
-    applicability
     libraryIds
     declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
     }
@@ -4583,22 +4593,13 @@ export const requestRuleDecisionsQuery = `query RequestRuleDecisions($limit: Int
   }
 }`;
 
-export const libraryContentBlocksQuery = `query LibraryContentBlocks($libraryId: ID!, $limit: Int) {
-  libraryContentBlocks(libraryId: $libraryId, limit: $limit) {
-    id
-    sizeBytes
-    sampleBlake3
-    reason
-    createdAt
-  }
-}`;
-
 export const mediaIssuesQuery = `query MediaIssues($libraryId: ID!, $status: MediaIssueStatusValue, $limit: Int, $offset: Int) {
   mediaIssues(libraryId: $libraryId, status: $status, limit: $limit, offset: $offset) {
     id
     titleId
     mediaFileId
     affectedEpisodeIds
+    reasonCode
     remediation
     authorizedRemediation
     status

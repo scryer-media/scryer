@@ -53,6 +53,10 @@ type PendingAction =
       fingerprint: string;
       occupiedCount: number;
       conflictPolicy: RestoreConflictPolicy;
+      /** How many items are copies of a file marked bad for its title. */
+      badFileCount: number;
+      /** Restore those too, clearing their bad-file marks. */
+      clearBadFiles: boolean;
     }
   | { type: "delete"; items: RecycledItem[] }
   | { type: "empty"; count: number };
@@ -83,7 +87,11 @@ type RecycledItemsQueryResult = {
 type RestorePreviewResult = {
   previewRestoreRecycledItems?: {
     fingerprint: string;
-    items: Array<{ id: string; destinationOccupied: boolean }>;
+    items: Array<{
+      id: string;
+      destinationOccupied: boolean;
+      badFileEntryId: string | null;
+    }>;
   } | null;
 };
 
@@ -373,6 +381,9 @@ export function SettingsRecycleBinContainer() {
         occupiedCount: preview.items.filter((item) => item.destinationOccupied)
           .length,
         conflictPolicy: "KEEP_BOTH",
+        badFileCount: preview.items.filter((item) => item.badFileEntryId)
+          .length,
+        clearBadFiles: false,
       });
     } catch (error) {
       setGlobalStatus(
@@ -402,6 +413,7 @@ export function SettingsRecycleBinContainer() {
             ids: pendingAction.items.map((item) => item.id),
             conflictPolicy: pendingAction.conflictPolicy,
             previewFingerprint: pendingAction.fingerprint,
+            clearBadFiles: pendingAction.clearBadFiles,
           },
         })
         .toPromise();
@@ -608,8 +620,39 @@ export function SettingsRecycleBinContainer() {
               ? confirmEmpty
               : confirmDelete
         }
+        confirmDisabled={
+          pendingAction?.type === "restore" &&
+          pendingAction.badFileCount > 0 &&
+          !pendingAction.clearBadFiles
+        }
         onCancel={() => setPendingAction(null)}
       >
+        {pendingAction?.type === "restore" && pendingAction.badFileCount > 0 ? (
+          <div className="space-y-2 rounded-md border border-[var(--scry-danger-text)]/40 bg-[var(--scry-danger-bg)] p-3 text-sm">
+            <p>
+              {t(
+                pendingAction.badFileCount === 1
+                  ? "settings.recycleBinRestoreBadFileOne"
+                  : "settings.recycleBinRestoreBadFileOther",
+                { count: pendingAction.badFileCount },
+              )}
+            </p>
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                id="settings-recycle-bin-clear-bad-files"
+                type="checkbox"
+                checked={pendingAction.clearBadFiles}
+                onChange={(event) =>
+                  setPendingAction({
+                    ...pendingAction,
+                    clearBadFiles: event.target.checked,
+                  })
+                }
+              />
+              <span>{t("settings.recycleBinRestoreClearBadFiles")}</span>
+            </label>
+          </div>
+        ) : null}
         {pendingAction?.type === "restore" &&
         pendingAction.occupiedCount > 0 ? (
           <div className="space-y-2 text-sm">

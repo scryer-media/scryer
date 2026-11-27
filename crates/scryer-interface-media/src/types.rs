@@ -958,25 +958,6 @@ pub struct FixTitleMatchPayload {
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-/// What a media issue requests after confirmation.
-pub enum MediaIssueRemediationValue {
-    /// Block matching content and leave the file in place.
-    MarkBad,
-    /// Block matching content, recycle the affected file, and search for a replacement.
-    RecycleAndSearch,
-}
-
-impl From<scryer_domain::MediaIssueRemediation> for MediaIssueRemediationValue {
-    fn from(value: scryer_domain::MediaIssueRemediation) -> Self {
-        match value {
-            scryer_domain::MediaIssueRemediation::MarkBad => Self::MarkBad,
-            scryer_domain::MediaIssueRemediation::RecycleAndSearch => Self::RecycleAndSearch,
-        }
-    }
-}
-
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 /// Review state of a media issue.
 pub enum MediaIssueStatusValue {
     /// Awaiting a decision.
@@ -1006,7 +987,7 @@ impl From<scryer_domain::MediaIssueStatus> for MediaIssueStatusValue {
 pub enum MediaIssueExecutionStatusValue {
     /// No remediation has started.
     None,
-    /// Matching content is blocked.
+    /// The file is marked bad.
     Blocked,
     /// The reviewed file is being moved to the recycle bin.
     Recycling,
@@ -1016,14 +997,11 @@ pub enum MediaIssueExecutionStatusValue {
     NoEligibleRelease,
     /// A replacement download is queued.
     DownloadQueued,
-    /// A replacement has been imported.
+    /// A file not marked bad was imported for the report's media after the
+    /// report last changed.
     ReplacementImported,
     /// A replacement search is underway.
     Searching,
-    /// The approved remediation finished.
-    Complete,
-    /// The approved remediation failed.
-    Failed,
 }
 
 impl From<scryer_domain::MediaIssueExecutionStatus> for MediaIssueExecutionStatusValue {
@@ -1039,72 +1017,7 @@ impl From<scryer_domain::MediaIssueExecutionStatus> for MediaIssueExecutionStatu
                 Self::ReplacementImported
             }
             scryer_domain::MediaIssueExecutionStatus::Searching => Self::Searching,
-            scryer_domain::MediaIssueExecutionStatus::Complete => Self::Complete,
-            scryer_domain::MediaIssueExecutionStatus::Failed => Self::Failed,
         }
-    }
-}
-
-#[derive(SimpleObject, Clone)]
-/// A confirmed library-scoped sampled-content block. A match means the
-/// sampled bytes and size agree, not that the complete files are identical.
-pub struct LibraryContentBlockPayload {
-    /// ID of the content block.
-    pub id: ID,
-    /// Library in which matching content is blocked.
-    pub library_id: ID,
-    /// Versioned identity scheme; sampled content and release hashes are distinct.
-    pub scheme: String,
-    /// Total size of the file that supplied the sample.
-    pub size_bytes: i64,
-    /// Number of bytes included in the sample.
-    pub sample_bytes: i64,
-    /// BLAKE3 digest of the sampled bytes, not a full-file digest.
-    pub sample_blake3: String,
-    /// Reason recorded for the block, when supplied.
-    pub reason: Option<String>,
-    /// ID of the user who approved the block, if approved by a user.
-    pub approving_actor_id: Option<ID>,
-    /// ID of the report that produced the block, when known.
-    pub source_report_id: Option<ID>,
-    /// ID of the file that supplied the sample, when known.
-    pub source_media_file_id: Option<ID>,
-    /// Recorded origin of the block, encoded as JSON.
-    pub provenance_json: Option<String>,
-    /// When the block was created, in UTC.
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(SimpleObject, Clone)]
-/// The result of clearing one library content block.
-pub struct ClearLibraryContentBlockPayload {
-    /// ID of the cleared block.
-    pub id: ID,
-}
-
-impl LibraryContentBlockPayload {
-    pub fn from_domain(block: scryer_domain::LibraryContentBlock) -> async_graphql::Result<Self> {
-        let created_at = DateTime::parse_from_rfc3339(&block.created_at)
-            .map(|value| value.with_timezone(&Utc))
-            .map_err(|error| {
-                async_graphql::Error::new(format!(
-                    "invalid library content block timestamp: {error}"
-                ))
-            })?;
-        Ok(Self {
-            id: block.id.into(),
-            library_id: block.library_id.into(),
-            scheme: block.scheme,
-            size_bytes: i64::try_from(block.size_bytes).unwrap_or(i64::MAX),
-            sample_bytes: i64::try_from(block.sample_bytes).unwrap_or(i64::MAX),
-            sample_blake3: block.sample_blake3,
-            reason: block.reason,
-            approving_actor_id: block.approving_actor_id.map(ID::from),
-            source_report_id: block.source_report_id.map(ID::from),
-            source_media_file_id: block.source_media_file_id.map(ID::from),
-            provenance_json: block.provenance_json,
-            created_at,
-        })
     }
 }
 
@@ -1113,7 +1026,9 @@ impl LibraryContentBlockPayload {
 pub struct SubmitMediaIssueInput {
     /// ID of the existing library file being reported.
     pub media_file_id: ID,
-    /// Reason for reporting the file.
+    /// Reason for reporting the file: `corrupted`, `wrong_content`,
+    /// `wrong_language`, `audio_out_of_sync`, `poor_quality` or `other`.
+    /// `other` needs details.
     pub reason_code: String,
     /// Optional explanation from the reporter.
     pub details: Option<String>,
@@ -1148,22 +1063,11 @@ pub struct MediaIssuePayload {
     pub affected_episode_ids: Vec<ID>,
     /// IDs of series-to-movie links associated with the reported file.
     pub affected_series_movie_link_ids: Vec<ID>,
-    /// ID of the recorded request-rule decision, when evaluated.
+    /// ID of the request-rule decision that explains the outcome, when
+    /// report rules ran.
     pub rule_decision_id: Option<ID>,
-    /// Version of the input contract used for the recorded decision.
-    pub rule_input_schema_version: Option<i32>,
-    /// Digest of the rule input used for the recorded decision.
-    pub rule_input_hash: Option<String>,
-    /// Rule revision and evaluation snapshot, encoded as JSON.
-    pub rule_snapshot_json: Option<String>,
-    /// Individual rule votes, each encoded as JSON.
-    pub rule_votes_json: Vec<String>,
-    /// Decision that took effect after applying policy safeguards.
-    pub rule_effective_outcome: Option<String>,
-    /// Decision produced by the rules before applying policy safeguards.
-    pub rule_policy_outcome: Option<String>,
-    /// Reason codes explaining why the rule decision was held for review.
-    pub rule_hold_reasons: Vec<String>,
+    /// ID of the title blocklist entry that marks the file bad, while it exists.
+    pub blocklist_entry_id: Option<ID>,
     /// ID of the user who reviewed the report, if reviewed by a user.
     pub reviewed_by_user_id: Option<ID>,
     /// When the report was reviewed, in UTC.
@@ -1193,7 +1097,7 @@ impl MediaIssuePayload {
             title_id: issue.title_id.into(),
             media_file_id: issue.media_file_id.into(),
             reporter_user_id: issue.reporter_user_id.into(),
-            reason_code: issue.reason_code,
+            reason_code: issue.reason.as_str().to_string(),
             details: issue.details,
             remediation: issue.remediation.into(),
             authorized_remediation: issue.authorized_remediation.map(Into::into),
@@ -1209,13 +1113,7 @@ impl MediaIssuePayload {
                 .map(ID::from)
                 .collect(),
             rule_decision_id: issue.rule_decision_id.map(ID::from),
-            rule_input_schema_version: issue.rule_input_schema_version,
-            rule_input_hash: issue.rule_input_hash,
-            rule_snapshot_json: issue.rule_snapshot_json,
-            rule_votes_json: issue.rule_votes_json,
-            rule_effective_outcome: issue.rule_effective_outcome,
-            rule_policy_outcome: issue.rule_policy_outcome,
-            rule_hold_reasons: issue.rule_hold_reasons,
+            blocklist_entry_id: issue.blocklist_id.map(ID::from),
             reviewed_by_user_id: issue.reviewed_by_user_id.map(ID::from),
             reviewed_at: issue
                 .reviewed_at
