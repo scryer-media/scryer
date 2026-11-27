@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Clock,
   Columns3,
   Eye,
   EyeOff,
@@ -78,6 +79,7 @@ import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { movieAvailabilityHold } from "@/lib/utils/movie-availability-hold";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
 import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import type {
@@ -1343,6 +1345,10 @@ function TitleContextPanel({
   const statusLabel = localizedTitleStatus(t, title.contentStatus);
   const addedAtLabel =
     formatTitleDate(title.createdAt, dateTimeFormat) ?? t("label.unknown");
+  const availabilityHold =
+    title.facet === "MOVIE"
+      ? movieAvailabilityHold(title.movieAvailability, t)
+      : null;
   const unknownLabel = t("label.unknown");
   const qualityLabel = resolveDisplayedQualityLabel(title, unknownLabel);
   const overviewText =
@@ -1478,6 +1484,26 @@ function TitleContextPanel({
                   </span>
                 ))}
               </div>
+              {availabilityHold ? (
+                <p
+                  id={selectorId("title-hero-movie-availability", title.id)}
+                  data-ui="title-movie-availability"
+                  data-status={availabilityHold.status}
+                  title={t("settings.movieAvailability")}
+                  className="mt-2 inline-flex max-w-full items-start gap-1.5 self-start rounded-[7px] bg-[var(--scry-warning-bg-strong)] px-2.5 py-1 text-[11px] font-semibold leading-4 text-[var(--scry-warning-text)]"
+                >
+                  <Clock className="mt-px h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 break-words">
+                    {[
+                      availabilityHold.statusLabel,
+                      availabilityHold.dateLabel,
+                      availabilityHold.reasonLabel,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </p>
+              ) : null}
               {heroGenreLabels.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {heroGenreLabels.map((genre) => (
