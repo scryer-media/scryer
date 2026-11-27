@@ -5507,6 +5507,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           titleFilter,
           setTitleFilter,
           refreshTitles,
+          refetchCatalogTitles: refetchCatalogTitlesById,
           titleLoading,
           catalogTotalTitleCount: catalogPaginationState.totalCount,
           catalogBulkLoadedCount,

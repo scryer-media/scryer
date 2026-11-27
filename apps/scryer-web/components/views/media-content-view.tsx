@@ -1926,6 +1926,8 @@ export function MediaContentView({
     titleFilter: string;
     setTitleFilter: (value: string) => void;
     refreshTitles: (query?: string) => Promise<void> | void;
+    /** Re-read only these rows, keeping every other loaded page in place. */
+    refetchCatalogTitles: (titleIds: readonly string[]) => Promise<unknown>;
     titleLoading: boolean;
     catalogTotalTitleCount: number;
     catalogBulkLoadedCount: number;
@@ -2217,6 +2219,7 @@ export function MediaContentView({
     titleFilter,
     setTitleFilter,
     refreshTitles,
+    refetchCatalogTitles,
     titleLoading,
     catalogTotalTitleCount,
     catalogBulkLoadedCount,
@@ -3185,10 +3188,15 @@ export function MediaContentView({
     void refreshTitles(nextQuery);
   }, [refreshTitles, setTitleFilter, titleFilter, titleFilterInputValue]);
 
+  // A title that is gone leaves only its own row; reloading the whole list
+  // would drop every page past the first and move the scroll position.
   const handleOverviewTitleNotFound = React.useCallback(() => {
+    const missingTitleId = seriesSidePanelTitleId;
     onCloseOverview();
-    void refreshTitles(titleFilterInputValue);
-  }, [onCloseOverview, refreshTitles, titleFilterInputValue]);
+    if (missingTitleId) {
+      void refetchCatalogTitles([missingTitleId]);
+    }
+  }, [onCloseOverview, refetchCatalogTitles, seriesSidePanelTitleId]);
 
   React.useEffect(() => {
     if (

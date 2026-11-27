@@ -279,6 +279,25 @@ test("an id-scoped refetch settles only the requested rows", () => {
   assert.equal(next[0], kept);
 });
 
+test("refetching a title that is gone keeps every loaded page", () => {
+  // Three pages' worth of rows, as after scrolling far down the catalog.
+  const current = Array.from({ length: 200 }, (_, index) => ({
+    ...loadedTitle,
+    id: `title-${index}`,
+    name: `Placeholder ${index}`,
+  }));
+  const gone = current[150];
+
+  const next = applyCatalogTitlesById(current, [gone.id], [], false);
+
+  assert.equal(next.length, current.length - 1);
+  assert.deepEqual(
+    next.map((title) => title.id),
+    current.filter((title) => title.id !== gone.id).map((title) => title.id),
+  );
+  assert.equal(next[199 - 1], current[199]);
+});
+
 test("an id-scoped refetch inserts a new title only when told it is new", () => {
   const current = [loadedTitle];
   const added = { ...listRefreshTitle, id: "title-added" };
