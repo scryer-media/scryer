@@ -2341,7 +2341,7 @@ const de: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Keine Benachrichtigungs-Plugins installiert. Installiere zuerst ein Benachrichtigungs-Plugin auf der Plugins-Seite.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Release geholt",
   "settings.notificationEvent.download": "Download gescheitert",
   "settings.notificationEvent.upgrade": "Upgrade importiert",
@@ -4051,10 +4051,10 @@ const de: LocaleDictionary = {
     "Regeln bewerten Releases, damit Scryer die bevorzugt, die du willst, und die übergeht, die du nicht willst.",
   "tours.onboarding.mediaServers.title": "Medienserver",
   "tours.onboarding.mediaServers.body":
-    "Verbinde Jellyfin, Plex oder Emby, damit Scryer weiß, was du gesehen hast. Damit sich dein Server nach jedem Import von Scryer aktualisiert, installiere zusätzlich das Plugin dieses Servers unter Plugins.",
+    "Verbinde Jellyfin / Silo, Plex oder Emby, damit Scryer weiß, was du gesehen hast. Damit sich dein Server nach jedem Import von Scryer aktualisiert, installiere zusätzlich das Plugin dieses Servers unter Plugins.",
   "tours.onboarding.notifications.title": "Benachrichtigungen",
   "tours.onboarding.notifications.body":
-    "Erfahre von Grabs, Importen und allem, was Aufmerksamkeit braucht, dort, wo du es möchtest. Dienste fügst du über diese Plugin-Leiste hinzu. Auch Jellyfin, Plex und Emby sind hier: Dein Server aktualisiert sich nach einem Import erst, wenn sein Plugin aus dieser Leiste installiert ist, selbst wenn er unter Medienserver schon verbunden ist.",
+    "Erfahre von Grabs, Importen und allem, was Aufmerksamkeit braucht, dort, wo du es möchtest. Dienste fügst du über diese Plugin-Leiste hinzu. Auch Jellyfin / Silo, Plex und Emby sind hier: Dein Server aktualisiert sich nach einem Import erst, wenn sein Plugin aus dieser Leiste installiert ist, selbst wenn er unter Medienserver schon verbunden ist.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins fügen Indexer, Download-Clients und Benachrichtigungsdienste hinzu. Hier installierst und aktualisierst du sie.",

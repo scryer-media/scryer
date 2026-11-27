@@ -3431,7 +3431,7 @@ const zh_HK: LocaleDictionary = {
   "profile.linkedAccountConnection": "連線",
   "profile.linkedAccountUnknownConnection": "未知連線",
   "profile.linkedAccountStatus": "狀態",
-  "profile.linkJellyfinAccount": "連結 Jellyfin",
+  "profile.linkJellyfinAccount": "連結 Jellyfin / Silo",
   "profile.linkPlexAccount": "連結 Plex",
   "profile.linkAccountConnection": "連線",
   "profile.linkAccountUsername": "用戶名稱",
@@ -3458,7 +3458,7 @@ const zh_HK: LocaleDictionary = {
   "auth.signInRateLimited": "登入嘗試次數過多。請稍候再試。",
   "auth.signInWithScryerPassword": "使用 Scryer 密碼登入",
   "auth.signInWithPasskey": "使用通行密鑰登入",
-  "auth.signInWithJellyfin": "使用 Jellyfin 登入",
+  "auth.signInWithJellyfin": "使用 Jellyfin / Silo 登入",
   "auth.jellyfinFailed": "Jellyfin 登入失敗。",
   "auth.signInWithPlex": "使用 Plex 登入",
   "auth.plexFailed": "Plex 登入失敗。",
@@ -3658,7 +3658,7 @@ const zh_HK: LocaleDictionary = {
   "settings.notificationNoProviders":
     "未安裝通知插件。請先在插件頁面安裝通知插件。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "已抓取發佈",
   "settings.notificationEvent.download": "下載失敗",
   "settings.notificationEvent.upgrade": "升級進口",
@@ -6702,10 +6702,10 @@ const zh_HK: LocaleDictionary = {
     "規則為發佈評分，讓 Scryer 優先選擇你想要的，略過你不想要的。",
   "tours.onboarding.mediaServers.title": "媒體伺服器",
   "tours.onboarding.mediaServers.body":
-    "連接 Jellyfin、Plex 或 Emby，Scryer 便能知道你看過甚麼。如要在 Scryer 匯入後重新整理伺服器，亦需在「插件」中安裝該伺服器的插件。",
+    "連接 Jellyfin / Silo、Plex 或 Emby，Scryer 便能知道你看過甚麼。如要在 Scryer 匯入後重新整理伺服器，亦需在「插件」中安裝該伺服器的插件。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「插件」面板加入。Jellyfin、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連接，亦需從這個面板安裝該伺服器的插件，匯入後伺服器才會重新整理。",
+    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「插件」面板加入。Jellyfin / Silo、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連接，亦需從這個面板安裝該伺服器的插件，匯入後伺服器才會重新整理。",
   "tours.onboarding.plugins.title": "插件",
   "tours.onboarding.plugins.body":
     "插件可加入索引器、下載客戶端和通知服務。在這裏安裝和更新它們。",

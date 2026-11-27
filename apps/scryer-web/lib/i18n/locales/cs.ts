@@ -4018,7 +4018,7 @@ const cs: LocaleDictionary = {
   "profile.linkedAccountConnection": "Připojení",
   "profile.linkedAccountUnknownConnection": "Neznámé připojení",
   "profile.linkedAccountStatus": "Stav",
-  "profile.linkJellyfinAccount": "Propojit s Jellyfin",
+  "profile.linkJellyfinAccount": "Propojit s Jellyfin / Silo",
   "profile.linkPlexAccount": "Propojit s Plex",
   "profile.linkAccountConnection": "Připojení",
   "profile.linkAccountUsername": "Uživatelské jméno",
@@ -4048,7 +4048,7 @@ const cs: LocaleDictionary = {
     "Příliš mnoho pokusů o přihlášení. Počkejte chvíli a zkuste to znovu.",
   "auth.signInWithScryerPassword": "Přihlásit se heslem Scryer",
   "auth.signInWithPasskey": "Přihlásit se přístupovým klíčem",
-  "auth.signInWithJellyfin": "Přihlásit se přes Jellyfin",
+  "auth.signInWithJellyfin": "Přihlásit se přes Jellyfin / Silo",
   "auth.jellyfinFailed": "Přihlášení přes Jellyfin se nezdařilo.",
   "auth.signInWithPlex": "Přihlásit se přes Plex",
   "auth.plexFailed": "Přihlášení přes Plex se nezdařilo.",
@@ -4260,7 +4260,7 @@ const cs: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Nejsou nainstalovány žádné pluginy pro oznámení. Nejdřív nainstalujte plugin pro oznámení na stránce Pluginy.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import dokončen je obvyklý spouštěč skenování Jellyfin po importu. Zde jsou k dispozici pouze události Jellyfin, které mohou obnovit knihovnu.",
+    "Import dokončen je obvyklý spouštěč skenování Jellyfin / Silo po importu. Zde jsou k dispozici pouze události Jellyfin / Silo, které mohou obnovit knihovnu.",
   "settings.notificationEvent.grab": "Vydání zařazeno ke stažení",
   "settings.notificationEvent.download": "Stahování selhalo",
   "settings.notificationEvent.upgrade": "Upgrade importován",
@@ -8221,10 +8221,10 @@ const cs: LocaleDictionary = {
     "Pravidla hodnotí vydání, aby Scryer upřednostnil ta, která chcete, a vynechal ta, která nechcete.",
   "tours.onboarding.mediaServers.title": "Mediální servery",
   "tours.onboarding.mediaServers.body":
-    "Připojte Jellyfin, Plex nebo Emby, aby Scryer věděl, co jste viděli. Aby se server obnovil po každém importu ve Scryeru, nainstalujte také plugin daného serveru v Pluginech.",
+    "Připojte Jellyfin / Silo, Plex nebo Emby, aby Scryer věděl, co jste viděli. Aby se server obnovil po každém importu ve Scryeru, nainstalujte také plugin daného serveru v Pluginech.",
   "tours.onboarding.notifications.title": "Oznámení",
   "tours.onboarding.notifications.body":
-    "Dozvíte se o stažených vydáních, importech a všem, co vyžaduje pozornost, tam, kde chcete. Služby přidáte z tohoto panelu Pluginy. Jsou tu i Jellyfin, Plex a Emby: server se po importu obnoví, až když z tohoto panelu nainstalujete jeho plugin, i když je už připojený v Mediálních serverech.",
+    "Dozvíte se o stažených vydáních, importech a všem, co vyžaduje pozornost, tam, kde chcete. Služby přidáte z tohoto panelu Pluginy. Jsou tu i Jellyfin / Silo, Plex a Emby: server se po importu obnoví, až když z tohoto panelu nainstalujete jeho plugin, i když je už připojený v Mediálních serverech.",
   "tours.onboarding.plugins.title": "Pluginy",
   "tours.onboarding.plugins.body":
     "Pluginy přidávají indexery, klienty pro stahování a služby oznámení. Zde je instalujete a aktualizujete.",

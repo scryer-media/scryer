@@ -25,7 +25,7 @@ const providerIconSrc: Record<MediaServerPlaybackLink["provider"], string> = {
 };
 
 const providerLabel: Record<MediaServerPlaybackLink["provider"], string> = {
-  JELLYFIN: "Jellyfin",
+  JELLYFIN: "Jellyfin / Silo",
   PLEX: "Plex",
   EMBY: "Emby",
 };

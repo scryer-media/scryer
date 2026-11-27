@@ -2369,7 +2369,7 @@ const it: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Nessun plugin di notifica installato. Installa prima un plugin di notifica dalla pagina Plugin.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Release acquisita",
   "settings.notificationEvent.download": "Download Fallito",
   "settings.notificationEvent.upgrade": "Aggiornamento importato",
@@ -4082,10 +4082,10 @@ const it: LocaleDictionary = {
     "Le regole assegnano un punteggio alle release, così Scryer preferisce quelle che vuoi e scarta le altre.",
   "tours.onboarding.mediaServers.title": "Media server",
   "tours.onboarding.mediaServers.body":
-    "Collega Jellyfin, Plex o Emby perché Scryer sappia cosa hai guardato. Perché il server si aggiorni quando Scryer importa qualcosa, installa anche il plugin di quel server in Plugin.",
+    "Collega Jellyfin / Silo, Plex o Emby perché Scryer sappia cosa hai guardato. Perché il server si aggiorni quando Scryer importa qualcosa, installa anche il plugin di quel server in Plugin.",
   "tours.onboarding.notifications.title": "Notifiche",
   "tours.onboarding.notifications.body":
-    "Ricevi avvisi su acquisizioni, importazioni e tutto ciò che richiede attenzione, dove preferisci. Aggiungi i servizi da questo pannello Plugin. Ci sono anche Jellyfin, Plex ed Emby: il server si aggiorna dopo un'importazione solo quando installi il suo plugin da questo pannello, anche se è già collegato in Media server.",
+    "Ricevi avvisi su acquisizioni, importazioni e tutto ciò che richiede attenzione, dove preferisci. Aggiungi i servizi da questo pannello Plugin. Ci sono anche Jellyfin / Silo, Plex ed Emby: il server si aggiorna dopo un'importazione solo quando installi il suo plugin da questo pannello, anche se è già collegato in Media server.",
   "tours.onboarding.plugins.title": "Plugin",
   "tours.onboarding.plugins.body":
     "I plugin aggiungono indexer, client di download e servizi di notifica. Installali e aggiornali qui.",

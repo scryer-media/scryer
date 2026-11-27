@@ -2111,7 +2111,7 @@ const zh_CN: LocaleDictionary = {
   "settings.notificationNoProviders":
     "未安装通知插件。请先在插件页面安装通知插件。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "已抓取发布",
   "settings.notificationEvent.download": "下载失败",
   "settings.notificationEvent.upgrade": "升级进口",
@@ -3669,10 +3669,10 @@ const zh_CN: LocaleDictionary = {
     "规则为发布打分，让 Scryer 优先选择你想要的，跳过你不想要的。",
   "tours.onboarding.mediaServers.title": "媒体服务器",
   "tours.onboarding.mediaServers.body":
-    "连接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看过什么。若要在 Scryer 导入后刷新服务器，还需在“插件”中安装该服务器的插件。",
+    "连接 Jellyfin / Silo、Plex 或 Emby，Scryer 就能知道你看过什么。若要在 Scryer 导入后刷新服务器，还需在“插件”中安装该服务器的插件。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你希望的地方获知抓取、导入以及需要处理的事项。服务可从这个“插件”面板添加。Jellyfin、Plex 和 Emby 也在这里：即使已在“媒体服务器”中连接，也要从这个面板安装该服务器的插件，导入后服务器才会刷新。",
+    "在你希望的地方获知抓取、导入以及需要处理的事项。服务可从这个“插件”面板添加。Jellyfin / Silo、Plex 和 Emby 也在这里：即使已在“媒体服务器”中连接，也要从这个面板安装该服务器的插件，导入后服务器才会刷新。",
   "tours.onboarding.plugins.title": "插件",
   "tours.onboarding.plugins.body":
     "插件可添加索引器、下载客户端和通知服务。在这里安装和更新它们。",

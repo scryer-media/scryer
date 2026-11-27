@@ -2246,7 +2246,7 @@ const ko: LocaleDictionary = {
   "settings.notificationNoProviders":
     "알림 플러그인이 설치되지 않았습니다. 먼저 플러그인 페이지에서 알림 플러그인을 설치하세요.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "릴리스 가져옴",
   "settings.notificationEvent.download": "다운로드 실패함",
   "settings.notificationEvent.upgrade": "업그레이드 가져옴",
@@ -3901,10 +3901,10 @@ const ko: LocaleDictionary = {
     "규칙은 릴리스에 점수를 매겨 Scryer가 원하는 것은 우선하고 원하지 않는 것은 건너뛰게 합니다.",
   "tours.onboarding.mediaServers.title": "미디어 서버",
   "tours.onboarding.mediaServers.body":
-    "Jellyfin, Plex 또는 Emby를 연결하면 Scryer가 시청한 항목을 알 수 있습니다. Scryer가 가져올 때 서버가 새로 고쳐지게 하려면 플러그인에서 해당 서버의 플러그인도 설치하세요.",
+    "Jellyfin / Silo, Plex 또는 Emby를 연결하면 Scryer가 시청한 항목을 알 수 있습니다. Scryer가 가져올 때 서버가 새로 고쳐지게 하려면 플러그인에서 해당 서버의 플러그인도 설치하세요.",
   "tours.onboarding.notifications.title": "알림",
   "tours.onboarding.notifications.body":
-    "가져오기, 다운로드 시작, 확인이 필요한 일을 원하는 곳에서 알려 드립니다. 서비스는 이 플러그인 패널에서 추가합니다. Jellyfin, Plex, Emby도 여기 있습니다. 미디어 서버에 이미 연결되어 있어도, 이 패널에서 해당 서버의 플러그인을 설치해야 가져온 뒤 서버가 새로 고쳐집니다.",
+    "가져오기, 다운로드 시작, 확인이 필요한 일을 원하는 곳에서 알려 드립니다. 서비스는 이 플러그인 패널에서 추가합니다. Jellyfin / Silo, Plex, Emby도 여기 있습니다. 미디어 서버에 이미 연결되어 있어도, 이 패널에서 해당 서버의 플러그인을 설치해야 가져온 뒤 서버가 새로 고쳐집니다.",
   "tours.onboarding.plugins.title": "플러그인",
   "tours.onboarding.plugins.body":
     "플러그인은 인덱서, 다운로드 클라이언트, 알림 서비스를 추가합니다. 여기서 설치하고 업데이트하세요.",

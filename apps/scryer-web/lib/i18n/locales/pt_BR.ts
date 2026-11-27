@@ -2360,7 +2360,7 @@ const pt_BR: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Nenhum plugin de notificação instalado. Instale um plugin de notificação na página de Plugins.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Lançamento obtido",
   "settings.notificationEvent.download": "Falha no download",
   "settings.notificationEvent.upgrade": "Atualização importada",
@@ -4063,10 +4063,10 @@ const pt_BR: LocaleDictionary = {
     "As regras pontuam os lançamentos para que o Scryer prefira os que você quer e ignore os que não quer.",
   "tours.onboarding.mediaServers.title": "Servidores de mídia",
   "tours.onboarding.mediaServers.body":
-    "Conecte Jellyfin, Plex ou Emby para que o Scryer saiba o que você já assistiu. Para que o servidor atualize quando o Scryer importar algo, instale também o plugin desse servidor em Plugins.",
+    "Conecte Jellyfin / Silo, Plex ou Emby para que o Scryer saiba o que você já assistiu. Para que o servidor atualize quando o Scryer importar algo, instale também o plugin desse servidor em Plugins.",
   "tours.onboarding.notifications.title": "Notificações",
   "tours.onboarding.notifications.body":
-    "Saiba de capturas, importações e tudo que precisa de atenção, onde preferir. Adicione serviços por este painel de Plugins. Jellyfin, Plex e Emby também estão aqui: o servidor só atualiza depois de uma importação quando o plugin dele é instalado por este painel, mesmo que já esteja conectado em Servidores de mídia.",
+    "Saiba de capturas, importações e tudo que precisa de atenção, onde preferir. Adicione serviços por este painel de Plugins. Jellyfin / Silo, Plex e Emby também estão aqui: o servidor só atualiza depois de uma importação quando o plugin dele é instalado por este painel, mesmo que já esteja conectado em Servidores de mídia.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins adicionam indexadores, clientes de download e serviços de notificação. Instale e atualize-os aqui.",

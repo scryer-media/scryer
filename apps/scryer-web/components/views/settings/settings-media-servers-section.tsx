@@ -100,7 +100,7 @@ type SettingsMediaServersSectionProps = {
 };
 
 const PROVIDERS: Array<{ value: VisibleMediaServerProvider; label: string }> = [
-  { value: "JELLYFIN", label: "Jellyfin" },
+  { value: "JELLYFIN", label: "Jellyfin / Silo" },
   { value: "PLEX", label: "Plex" },
   { value: "EMBY", label: "Emby" },
 ];
@@ -112,7 +112,7 @@ const DEFAULT_BASE_URL_BY_PROVIDER: Record<MediaServerProvider, string> = {
 };
 
 const DEFAULT_NAME_BY_PROVIDER: Record<MediaServerProvider, string> = {
-  JELLYFIN: "Jellyfin",
+  JELLYFIN: "Jellyfin / Silo",
   PLEX: "Plex",
   EMBY: "Emby",
 };

@@ -2293,7 +2293,7 @@ const ja: LocaleDictionary = {
   "settings.notificationNoProviders":
     "通知プラグインがインストールされていません。先にプラグインページから通知プラグインをインストールしてください。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "リリース取得",
   "settings.notificationEvent.download": "ダウンロードに失敗しました",
   "settings.notificationEvent.upgrade": "インポートされたアップグレード",
@@ -3981,10 +3981,10 @@ const ja: LocaleDictionary = {
     "ルールはリリースを採点し、Scryer が望むものを優先し、望まないものを見送れるようにします。",
   "tours.onboarding.mediaServers.title": "メディアサーバー",
   "tours.onboarding.mediaServers.body":
-    "Jellyfin、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
+    "Jellyfin / Silo、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。サービスはこの「プラグイン」パネルから追加します。Jellyfin、Plex、Emby もここにあります。「メディアサーバー」で接続済みでも、このパネルからそのサーバーのプラグインをインストールするまで、インポート後にサーバーは更新されません。",
+    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。サービスはこの「プラグイン」パネルから追加します。Jellyfin / Silo、Plex、Emby もここにあります。「メディアサーバー」で接続済みでも、このパネルからそのサーバーのプラグインをインストールするまで、インポート後にサーバーは更新されません。",
   "tours.onboarding.plugins.title": "プラグイン",
   "tours.onboarding.plugins.body":
     "プラグインはインデクサー、ダウンロードクライアント、通知サービスを追加します。ここでインストールと更新ができます。",
