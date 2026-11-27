@@ -1356,7 +1356,10 @@ function TitleContextPanel({
     formatTitleDate(title.createdAt, dateTimeFormat) ?? t("label.unknown");
   const availabilityHold =
     title.facet === "MOVIE"
-      ? movieAvailabilityHold(title.movieAvailability, t)
+      ? movieAvailabilityHold(title.movieAvailability, t, {
+          monitored: title.monitored,
+          hasFile: titleMediaFiles.length > 0,
+        })
       : null;
   const unknownLabel = t("label.unknown");
   const qualityLabel = resolveDisplayedQualityLabel(title, unknownLabel);
