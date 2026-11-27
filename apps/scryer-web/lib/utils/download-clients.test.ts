@@ -5,6 +5,7 @@ import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
   buildDownloadClientTypeOptions,
+  defaultDownloadClientConfigValuesForFields,
   downloadClientConfigFieldValue,
   downloadClientConnectionTestBlocker,
   isFileBackedDownloadClientConfigField,
@@ -129,7 +130,7 @@ test("blank optional descriptor secrets are omitted", () => {
   assert.equal(values.has("password"), false);
 });
 
-test("a cleared descriptor text field is sent as an empty string and shows empty again", () => {
+test("a cleared saved descriptor text field is sent as an empty string and shows empty again", () => {
   const fields = [
     configField({ key: "category", defaultValue: "synthetic-default" }),
     configField({ key: "directory", fieldType: "PATH" }),
@@ -149,6 +150,8 @@ test("a cleared descriptor text field is sent as an empty string and shows empty
         },
       }),
       fields,
+      new Set(),
+      { category: "synthetic-saved", directory: "/synthetic/saved", limit: "3" },
     ),
   );
 
@@ -180,6 +183,61 @@ test("a cleared descriptor text field is sent as an empty string and shows empty
     downloadClientConfigFieldValue(reloaded, fields[2]),
     "synthetic-tag",
   );
+});
+
+test("a new client omits blank descriptor fields, defaults filled or not", () => {
+  const fields = [
+    configField({ key: "category" }),
+    configField({
+      key: "priority",
+      fieldType: "SELECT",
+      options: [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+      ],
+    }),
+    configField({ key: "directory", fieldType: "PATH" }),
+    configField({ key: "tag", defaultValue: "synthetic-tag" }),
+  ];
+  const values = valuesByKey(
+    buildDownloadClientConfigValues(
+      draft({
+        clientType: "transmission",
+        configValues: defaultDownloadClientConfigValuesForFields(fields),
+      }),
+      fields,
+    ),
+  );
+
+  assert.equal(values.has("category"), false);
+  assert.equal(values.has("priority"), false);
+  assert.equal(values.has("directory"), false);
+  assert.equal(values.get("tag")?.stringValue, "synthetic-tag");
+});
+
+test("an edit sends empty only for a saved value the operator cleared", () => {
+  const fields = [
+    configField({ key: "category" }),
+    configField({ key: "directory", fieldType: "PATH" }),
+  ];
+  const values = valuesByKey(
+    buildDownloadClientConfigValues(
+      draft({
+        clientType: "transmission",
+        configValues: { category: "", directory: "" },
+      }),
+      fields,
+      new Set(),
+      { category: "synthetic-saved", directory: "" },
+    ),
+  );
+
+  assert.deepEqual(values.get("category"), {
+    key: "category",
+    stringValue: "",
+  });
+  // Saved empty, still empty: nothing changed, nothing sent.
+  assert.equal(values.has("directory"), false);
 });
 
 test("stored descriptor secrets can be explicitly cleared", () => {

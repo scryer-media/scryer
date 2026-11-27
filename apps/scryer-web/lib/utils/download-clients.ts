@@ -189,14 +189,18 @@ const CLEARABLE_TEXT_FIELD_TYPES = new Set([
 ]);
 
 /**
- * Descriptor text fields the operator cleared. They are sent as an empty
- * string so the host stores the choice; omitting them would let the plugin
- * fall back to its default. Secret fields keep their own clear path.
+ * Descriptor text fields the operator cleared: a saved non-empty value that
+ * is now blank. They are sent as an empty string so the host stores the
+ * choice; omitting them would keep the saved value. A key with no saved
+ * value, including every key of a new client, is omitted as before, so the
+ * plugin still falls back to its own default. Secret fields keep their own
+ * clear path.
  */
 function clearedTextConfigValues(
   draft: DownloadClientDraft,
   fields: ConfigFieldDef[],
   sentKeys: ReadonlySet<string>,
+  savedConfigValues: Readonly<Record<string, string>>,
 ): ProviderConfigValueInput[] {
   return fields
     .filter(
@@ -206,7 +210,8 @@ function clearedTextConfigValues(
         !looksLikeSecretConfigKey(field.key) &&
         !sentKeys.has(field.key) &&
         Object.hasOwn(draft.configValues, field.key) &&
-        String(draft.configValues[field.key] ?? "").trim() === "",
+        String(draft.configValues[field.key] ?? "").trim() === "" &&
+        String(savedConfigValues[field.key] ?? "").trim() !== "",
     )
     .map((field): ProviderConfigValueInput => ({
       key: field.key,
@@ -506,6 +511,7 @@ export function buildDownloadClientConfigValues(
   rawDraft: DownloadClientDraft,
   fields: ConfigFieldDef[] = [],
   storedSecretKeys: ReadonlySet<string> = new Set(),
+  savedConfigValues: Readonly<Record<string, string>> = {},
 ) {
   const draft = normalizeDownloadClientDraft(rawDraft);
   const normalizedClientType = normalizeDownloadClientType(draft.clientType);
@@ -559,6 +565,7 @@ export function buildDownloadClientConfigValues(
     draft,
     fields,
     new Set(Object.keys(cleaned)),
+    savedConfigValues,
   );
   return [...values, ...clearedText, ...explicitSecretClears];
 }

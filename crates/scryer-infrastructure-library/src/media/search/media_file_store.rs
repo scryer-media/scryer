@@ -19,6 +19,7 @@ use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use crate::media::episode_air::episode_aired_by_sql;
 use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
@@ -1134,9 +1135,7 @@ fn episode_progress_rows_sql(
     format!(
         "SELECT {owner} AS owner_id,
                 CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
-                CASE WHEN length(trim(COALESCE(e.air_date, ''))) >= 10
-                      AND substr(trim(e.air_date), 1, 10) <= {{}}
-                     THEN 1 ELSE 0 END AS aired,
+                CASE WHEN {aired} THEN 1 ELSE 0 END AS aired,
                 CASE WHEN EXISTS (
                      SELECT 1
                        FROM file_episode_map fem
@@ -1154,6 +1153,7 @@ fn episode_progress_rows_sql(
            {join}
           WHERE {scope}",
         monitored = bool_column_is_true(dialect, "e.monitored"),
+        aired = episode_aired_by_sql("e", "{}"),
         live_file = live_media_file_predicate(dialect, "mf"),
     )
 }
