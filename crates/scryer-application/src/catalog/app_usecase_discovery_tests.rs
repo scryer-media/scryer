@@ -571,7 +571,7 @@ fn an_infohash_block_ignores_both_the_indexer_and_the_name() {
 }
 
 #[test]
-fn structured_dispatch_queries_collapse_equivalent_episode_variants() {
+fn structured_dispatch_queries_collapse_only_the_title_into_the_episode_request() {
     let queries = vec![
         "Synthetic Atlas 035".to_string(),
         "Synthetic Atlas S02E11".to_string(),
@@ -581,7 +581,14 @@ fn structured_dispatch_queries_collapse_equivalent_episode_variants() {
 
     let deduped = dedupe_structured_dispatch_queries(queries, Some(2), Some(11), Some(35));
 
-    assert_eq!(deduped, vec!["Synthetic Atlas 035".to_string()]);
+    assert_eq!(
+        deduped,
+        vec![
+            "Synthetic Atlas 035".to_string(),
+            "Synthetic Atlas S02E11".to_string(),
+            "Synthetic Atlas S02".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -626,11 +633,13 @@ fn structured_dispatch_queries_keep_a_contradicting_season_episode_token() {
 
     let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), Some(53));
 
-    // The forms that merely restate season=1&ep=53 still collapse.
+    // Only the plain title, sent as the S01E53 request, collapses.
     assert_eq!(
         deduped,
         vec![
             "Synthetic Atlas 053".to_string(),
+            "Synthetic Atlas S01E53".to_string(),
+            "Synthetic Atlas S01".to_string(),
             "Synthetic Atlas S04E17".to_string(),
         ]
     );
@@ -651,8 +660,8 @@ fn text_safe_dispatch_queries_keep_a_contradicting_season_episode_token() {
     assert_eq!(deduped, queries);
 }
 
-/// A bare `Sxx` that names a different season is kept for the same reason,
-/// while the one matching the dispatch still collapses.
+/// A bare `Sxx` asks for the season alone, so it is kept whether or not it
+/// names the dispatch's season.
 #[test]
 fn structured_dispatch_queries_keep_a_contradicting_season_token() {
     let queries = vec![
@@ -661,15 +670,9 @@ fn structured_dispatch_queries_keep_a_contradicting_season_token() {
         "Synthetic Atlas S04".to_string(),
     ];
 
-    let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), None);
+    let deduped = dedupe_structured_dispatch_queries(queries.clone(), Some(1), Some(53), None);
 
-    assert_eq!(
-        deduped,
-        vec![
-            "Synthetic Atlas".to_string(),
-            "Synthetic Atlas S04".to_string(),
-        ]
-    );
+    assert_eq!(deduped, queries);
 }
 
 #[test]

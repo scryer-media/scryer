@@ -1152,33 +1152,19 @@ fn structured_dispatch_query_shape(
     StructuredDispatchQueryShape::Other
 }
 
+/// The dedupe for a search whose every indexer dispatches season and episode
+/// as nab parameters. Only forms that go out as the same request merge: the
+/// nab dispatch strips a trailing `SxxEyy` that restates the parameters, so
+/// `{title} S01E05` and the plain `{title}` both send `q={title}&season=1&ep=5`.
+/// `{title} S01` asks for the season alone, and `{title} 005` keeps its
+/// absolute number in the text; each is a request of its own.
 fn dedupe_structured_dispatch_queries(
     queries: Vec<String>,
     season: Option<u32>,
     episode: Option<u32>,
     absolute_episode: Option<u32>,
 ) -> Vec<String> {
-    if season.is_none() && episode.is_none() && absolute_episode.is_none() {
-        return queries;
-    }
-
-    let mut deduped = Vec::with_capacity(queries.len());
-    let mut seen = std::collections::HashSet::new();
-
-    for query in queries {
-        let normalized =
-            normalize_structured_dispatch_query(&query, season, episode, absolute_episode);
-        let key_source = if normalized.is_empty() {
-            query.trim()
-        } else {
-            normalized.as_str()
-        };
-        if seen.insert(key_source.to_ascii_lowercase()) {
-            deduped.push(query);
-        }
-    }
-
-    deduped
+    dedupe_structured_dispatch_queries_by_shape(queries, season, episode, absolute_episode, true)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1432,6 +1418,19 @@ fn dedupe_text_safe_structured_dispatch_queries(
     episode: Option<u32>,
     absolute_episode: Option<u32>,
 ) -> Vec<String> {
+    dedupe_structured_dispatch_queries_by_shape(queries, season, episode, absolute_episode, false)
+}
+
+/// Keep one query per title and dispatch shape. `title_is_episode_request`
+/// counts a plain title as the `SxxEyy` request, which holds only when
+/// season and episode travel as parameters.
+fn dedupe_structured_dispatch_queries_by_shape(
+    queries: Vec<String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+    title_is_episode_request: bool,
+) -> Vec<String> {
     if season.is_none() && episode.is_none() && absolute_episode.is_none() {
         return queries;
     }
@@ -1447,10 +1446,13 @@ fn dedupe_text_safe_structured_dispatch_queries(
         } else {
             normalized.as_str()
         };
-        let key = (
-            key_source.to_ascii_lowercase(),
-            structured_dispatch_query_shape(&query, absolute_episode),
-        );
+        let shape = match structured_dispatch_query_shape(&query, absolute_episode) {
+            StructuredDispatchQueryShape::Other if title_is_episode_request => {
+                StructuredDispatchQueryShape::SeasonEpisode
+            }
+            shape => shape,
+        };
+        let key = (key_source.to_ascii_lowercase(), shape);
         if seen.insert(key) {
             deduped.push(query);
         }
@@ -2299,6 +2301,13 @@ impl AppUseCase {
             SearchMode::Auto => queries.into_iter().take(1).collect(),
             SearchMode::Interactive => queries,
         };
+        if search_subject_kind == ReleaseSearchSubjectKind::Episode {
+            debug!(
+                collapsed = collapse_structured_queries,
+                query_count = effective_queries.len(),
+                "release search: structured episode query collapse"
+            );
+        }
         let effective_queries = if collapse_structured_queries {
             dedupe_structured_dispatch_queries(effective_queries, season, episode, absolute_episode)
         } else if mode == SearchMode::Auto
@@ -3959,7 +3968,7 @@ mod structured_dispatch_query_tests {
     }
 
     #[test]
-    fn broad_structured_dedupe_still_collapses_equivalent_parameterized_queries() {
+    fn parameterized_dedupe_merges_only_queries_sent_as_the_same_request() {
         let queries = vec![
             "Silver Horizon 033".to_string(),
             "Silver Horizon S02E05".to_string(),
@@ -3969,7 +3978,28 @@ mod structured_dispatch_query_tests {
 
         let deduped = dedupe_structured_dispatch_queries(queries, Some(2), Some(5), Some(33));
 
-        assert_eq!(deduped, vec!["Silver Horizon 033".to_string()]);
+        // The plain title goes out as the `S02E05` request; the absolute and
+        // season-only forms are requests of their own.
+        assert_eq!(
+            deduped,
+            vec![
+                "Silver Horizon 033".to_string(),
+                "Silver Horizon S02E05".to_string(),
+                "Silver Horizon S02".to_string(),
+            ]
+        );
+
+        // A plain title listed first stands for the episode request.
+        let deduped = dedupe_structured_dispatch_queries(
+            vec![
+                "Silver Horizon".to_string(),
+                "Silver Horizon S02E05".to_string(),
+            ],
+            Some(2),
+            Some(5),
+            None,
+        );
+        assert_eq!(deduped, vec!["Silver Horizon".to_string()]);
     }
 
     #[test]
