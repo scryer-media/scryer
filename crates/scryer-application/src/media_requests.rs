@@ -759,13 +759,12 @@ impl AppUseCase {
         .await?;
         let (approved_quality_profile_id, approved_quality_profile_name) =
             self.quality_profile_snapshot(quality_profile_id).await?;
-        let approved_monitor_type = match monitor_type {
-            Some(value) => normalize_requested_monitor_type(&request.facet, Some(value))?,
-            None => normalize_requested_monitor_type(
-                &request.facet,
-                request.requested_monitor_type.clone(),
-            )?,
-        };
+        let approved_monitor_type = self
+            .approved_monitor_type_or_library_default(
+                &request,
+                monitor_type.or_else(|| request.requested_monitor_type.clone()),
+            )
+            .await?;
         // An approver override replaces the requester's picks; without one the
         // request's stored selection is what gets applied.
         let approved_monitor_selection = normalize_requested_monitor_selection(
@@ -1230,6 +1229,22 @@ impl AppUseCase {
         Ok(resolution.updated)
     }
 
+    /// The monitor type an approval grants: the chosen one when there is one,
+    /// else the library's default monitoring for a series or anime.
+    async fn approved_monitor_type_or_library_default(
+        &self,
+        request: &MediaRequest,
+        chosen: Option<String>,
+    ) -> AppResult<Option<String>> {
+        match normalize_requested_monitor_type(&request.facet, chosen)? {
+            Some(monitor_type) => Ok(Some(monitor_type)),
+            None => {
+                self.new_title_default_monitor_type_tag_value(&request.library_id, &request.facet)
+                    .await
+            }
+        }
+    }
+
     async fn auto_approve_submitted_media_request(
         &self,
         actor: &User,
@@ -1248,13 +1263,15 @@ impl AppUseCase {
         // the same validators an approver's override goes through. Without one
         // the requester's own pick is what the approval grants.
         let shaping = &provenance.shaping;
-        let approved_monitor_type = normalize_requested_monitor_type(
-            &request.facet,
-            shaping
-                .monitor_type
-                .clone()
-                .or_else(|| request.requested_monitor_type.clone()),
-        )?;
+        let approved_monitor_type = self
+            .approved_monitor_type_or_library_default(
+                &request,
+                shaping
+                    .monitor_type
+                    .clone()
+                    .or_else(|| request.requested_monitor_type.clone()),
+            )
+            .await?;
         // A shaped monitor type is never `advanced`, so the requester's season
         // or movie picks only survive when the rules left monitoring alone.
         let approved_monitor_selection = normalize_requested_monitor_selection(
