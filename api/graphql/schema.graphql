@@ -5403,6 +5403,14 @@ enum DomainEventTypeValue {
 	"""
 	SUBTITLE_SEARCH_FAILED
 	"""
+	A subtitle file was deleted.
+	"""
+	SUBTITLE_DELETED
+	"""
+	A subtitle was deleted and its provider file blocklisted.
+	"""
+	SUBTITLE_BLOCKLISTED
+	"""
 	A library scan started.
 	"""
 	LIBRARY_SCAN_STARTED
@@ -33869,6 +33877,22 @@ enum TitleHistoryEventTypeValue {
 	Torrent's seeding obligation was discharged.
 	"""
 	SEEDING_COMPLETED
+	"""
+	A subtitle was downloaded, automatically or by hand.
+	"""
+	SUBTITLE_DOWNLOADED
+	"""
+	An automatic subtitle download failed.
+	"""
+	SUBTITLE_FAILED
+	"""
+	A subtitle file was deleted.
+	"""
+	SUBTITLE_DELETED
+	"""
+	A subtitle was deleted and its provider file blocklisted.
+	"""
+	SUBTITLE_BLOCKLISTED
 }
 
 """

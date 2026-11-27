@@ -53,6 +53,7 @@ import {
 import {
   getTitleHistoryEventLabel,
   getTitleHistoryEventMeta,
+  SUBTITLE_HISTORY_EVENT_TYPES,
 } from "./title-history-event-meta";
 import { LoadingMark } from "@/components/common/loading-mark";
 
@@ -82,6 +83,13 @@ function primarySourceLabel(event: TitleHistoryEvent): string {
 function historySource(
   event: TitleHistoryEvent,
 ): { label: string; to: string } | null {
+  if (SUBTITLE_HISTORY_EVENT_TYPES.has(event.eventType)) {
+    // A subtitle row's source is the subtitle provider that served it.
+    const provider = event.sourceSystem;
+    return provider?.trim()
+      ? { label: redactHistoryApiKeys(provider), to: "/automation/subtitles" }
+      : null;
+  }
   const isGrab = event.eventType === "grabbed";
   const label = isGrab
     ? (event.sourceProvider ?? event.sourceHint ?? event.sourceSystem)
