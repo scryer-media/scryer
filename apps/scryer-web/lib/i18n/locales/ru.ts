@@ -3847,7 +3847,7 @@ const ru: LocaleDictionary = {
   "profile.linkedAccountConnection": "Подключение",
   "profile.linkedAccountUnknownConnection": "Неизвестное подключение",
   "profile.linkedAccountStatus": "Статус",
-  "profile.linkJellyfinAccount": "Подключить Jellyfin",
+  "profile.linkJellyfinAccount": "Подключить Jellyfin / Silo",
   "profile.linkPlexAccount": "Подключить Plex",
   "profile.linkAccountConnection": "Подключение",
   "profile.linkAccountUsername": "Имя пользователя",
@@ -3883,7 +3883,7 @@ const ru: LocaleDictionary = {
     "Слишком много попыток входа. Подождите немного и повторите попытку.",
   "auth.signInWithScryerPassword": "Войти с помощью пароля Scryer",
   "auth.signInWithPasskey": "Войти с помощью ключа доступа",
-  "auth.signInWithJellyfin": "Войти через Jellyfin",
+  "auth.signInWithJellyfin": "Войти через Jellyfin / Silo",
   "auth.jellyfinFailed": "Не удалось выполнить вход через Jellyfin.",
   "auth.signInWithPlex": "Войти через Plex",
   "auth.plexFailed": "Не удалось выполнить вход через Plex.",
@@ -4081,7 +4081,7 @@ const ru: LocaleDictionary = {
   "settings.notificationJellyfinChannelHint":
     "Сопоставления путей должны связывать папки Scryer с путями к папкам, доступным Jellyfin. Оставьте их пустыми, если оба сервиса используют одинаковые пути.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Завершение импорта — стандартный триггер для запуска сканирования Jellyfin после импорта. Здесь доступны только события Jellyfin, способные обновить библиотеку.",
+    "Завершение импорта — стандартный триггер для запуска сканирования Jellyfin / Silo после импорта. Здесь доступны только события Jellyfin / Silo, способные обновить библиотеку.",
   "settings.notificationEvent.grab": "Релиз получен",
   "settings.notificationEvent.download": "Ошибка загрузки",
   "settings.notificationEvent.upgrade": "Обновление импортировано",
@@ -14654,10 +14654,10 @@ const ru: LocaleDictionary = {
     "Правила оценивают релизы, чтобы Scryer выбирал нужные вам и пропускал ненужные.",
   "tours.onboarding.mediaServers.title": "Медиасерверы",
   "tours.onboarding.mediaServers.body":
-    "Подключите Jellyfin, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
+    "Подключите Jellyfin / Silo, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
   "tours.onboarding.notifications.title": "Уведомления",
   "tours.onboarding.notifications.body":
-    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
+    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin / Silo, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
   "tours.onboarding.plugins.title": "Плагины",
   "tours.onboarding.plugins.body":
     "Плагины добавляют индексаторы, клиенты загрузки и службы уведомлений. Устанавливайте и обновляйте их здесь.",

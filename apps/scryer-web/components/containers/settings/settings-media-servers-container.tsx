@@ -66,7 +66,7 @@ type PendingMediaServerEditorAction =
 
 const DEFAULT_MEDIA_SERVER_DRAFT: MediaServerConnectionDraft = {
   provider: "JELLYFIN",
-  displayName: "Jellyfin",
+  displayName: "Jellyfin / Silo",
   baseUrl: "",
   externalUrl: "",
   enabled: true,

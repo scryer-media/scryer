@@ -8882,7 +8882,7 @@ const en: LocaleDictionary = {
   "profile.linkedAccountConnection": "Connection",
   "profile.linkedAccountUnknownConnection": "Unknown connection",
   "profile.linkedAccountStatus": "Status",
-  "profile.linkJellyfinAccount": "Link Jellyfin",
+  "profile.linkJellyfinAccount": "Link Jellyfin / Silo",
   "profile.linkPlexAccount": "Link Plex",
   "profile.linkAccountConnection": "Connection",
   "profile.linkAccountUsername": "Username",
@@ -8912,7 +8912,7 @@ const en: LocaleDictionary = {
     "Too many sign-in attempts. Please wait a moment and try again.",
   "auth.signInWithScryerPassword": "Sign in with Scryer password",
   "auth.signInWithPasskey": "Sign in with passkey",
-  "auth.signInWithJellyfin": "Sign in with Jellyfin",
+  "auth.signInWithJellyfin": "Sign in with Jellyfin / Silo",
   "auth.jellyfinFailed": "Jellyfin sign-in failed.",
   "auth.signInWithPlex": "Sign in with Plex",
   "auth.plexFailed": "Plex sign-in failed.",
@@ -9137,7 +9137,7 @@ const en: LocaleDictionary = {
   "settings.notificationNoProviders":
     "No notification plugins installed. Install a notification plugin from the Plugins page first.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Grabbed Release",
   "settings.notificationEvent.download": "Download Failed",
   "settings.notificationEvent.upgrade": "Upgrade Imported",
@@ -13738,10 +13738,10 @@ const en: LocaleDictionary = {
     "Rules score releases, so Scryer prefers the ones you want and passes over the ones you don't.",
   "tours.onboarding.mediaServers.title": "Media servers",
   "tours.onboarding.mediaServers.body":
-    "Connect Jellyfin, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
+    "Connect Jellyfin / Silo, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
   "tours.onboarding.notifications.title": "Notifications",
   "tours.onboarding.notifications.body":
-    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
+    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin / Silo, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins add indexers, download clients and notification services. Install and update them here.",

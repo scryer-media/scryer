@@ -46,7 +46,7 @@ export function externalAccountProviderLabel(
     case "PLEX":
       return "Plex";
     case "JELLYFIN":
-      return "Jellyfin";
+      return "Jellyfin / Silo";
     case "EMBY":
       return "Emby";
     default:

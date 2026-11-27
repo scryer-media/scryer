@@ -2449,7 +2449,7 @@ const fr: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Aucun plugin de notification installé. Installez d'abord un plugin de notification depuis la page Plugins.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Version récupérée",
   "settings.notificationEvent.download": "Échec du téléchargement",
   "settings.notificationEvent.upgrade": "Mise à niveau importée",
@@ -4162,10 +4162,10 @@ const fr: LocaleDictionary = {
     "Les règles notent les releases, pour que Scryer privilégie celles que vous voulez et écarte les autres.",
   "tours.onboarding.mediaServers.title": "Serveurs multimédias",
   "tours.onboarding.mediaServers.body":
-    "Connectez Jellyfin, Plex ou Emby pour que Scryer sache ce que vous avez regardé. Pour que votre serveur s'actualise quand Scryer importe quelque chose, installez aussi le plugin de ce serveur dans Plugins.",
+    "Connectez Jellyfin / Silo, Plex ou Emby pour que Scryer sache ce que vous avez regardé. Pour que votre serveur s'actualise quand Scryer importe quelque chose, installez aussi le plugin de ce serveur dans Plugins.",
   "tours.onboarding.notifications.title": "Notifications",
   "tours.onboarding.notifications.body":
-    "Soyez prévenu des captures, des importations et de tout ce qui demande votre attention, là où vous le souhaitez. Ajoutez des services depuis ce panneau Plugins. Jellyfin, Plex et Emby s'y trouvent aussi : votre serveur ne s'actualise après une importation qu'une fois son plugin installé depuis ce panneau, même s'il est déjà connecté dans Serveurs multimédias.",
+    "Soyez prévenu des captures, des importations et de tout ce qui demande votre attention, là où vous le souhaitez. Ajoutez des services depuis ce panneau Plugins. Jellyfin / Silo, Plex et Emby s'y trouvent aussi : votre serveur ne s'actualise après une importation qu'une fois son plugin installé depuis ce panneau, même s'il est déjà connecté dans Serveurs multimédias.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Les plugins ajoutent des indexeurs, des clients de téléchargement et des services de notification. Installez-les et mettez-les à jour ici.",
