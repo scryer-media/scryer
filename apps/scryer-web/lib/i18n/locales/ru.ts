@@ -1478,6 +1478,11 @@ const ru: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Персонализированные рекомендации",
   "settings.personalizedDiscoveryHelp":
     "Отправляет сводку вашей библиотеки в шлюз метаданных, чтобы рекомендации могли предлагать тайтлы на основе того, что у вас есть. Отключите, чтобы ограничить рекомендации только публичными лентами.",
+  "settings.disabledFacetsLabel": "Типы медиа",
+  "settings.disabledFacetsHelp":
+    "Отключите тип медиа для всех. Он пропадёт из навигации, подборок, поиска и списков выбора, а его поиски, сканирования и обновления остановятся. Уже добавленные тайтлы остаются доступны.",
+  "settings.disabledFacetsLastEnabled":
+    "Хотя бы один тип медиа должен оставаться включённым.",
   "settings.srrdbFilenameRecoveryLabel":
     "Восстанавливать запутанные имена файлов через srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
@@ -3725,6 +3730,8 @@ const ru: LocaleDictionary = {
     "Выберите, какие типы медиа показывать в навигации, подборках, поиске и списках выбора. Уже добавленные тайтлы остаются доступны.",
   "profile.facetVisibilityLastVisible":
     "Хотя бы один тип медиа должен оставаться видимым.",
+  "profile.facetVisibilityDisabledByAdmin":
+    "Администратор отключил этот тип медиа для всех.",
   "profile.facetVisibilitySaved": "Настройка типов медиа сохранена.",
   "profile.appearanceDescription":
     "Настройте внешний вид Scryer для своей учётной записи.",
@@ -11066,6 +11073,10 @@ const ru: LocaleDictionary = {
     "Набор доверенных сертификатов может содержать только блоки PEM сертификатов X.509.",
   "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
     "Хотя бы один тип медиа должен оставаться видимым.",
+  "error.reason.SETTINGS_ALL_FACETS_DISABLED":
+    "Хотя бы один тип медиа должен оставаться включённым.",
+  "error.reason.SETTINGS_FACET_DISABLED":
+    "Этот тип медиа отключён на этом сервере.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "В настройках столбцов таблицы один и тот же столбец указан несколько раз.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":

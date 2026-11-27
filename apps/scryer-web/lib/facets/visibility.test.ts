@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { discoveryItemFacet } from "../utils/discovery-actions.ts";
 import {
+  combineHiddenFacets,
   filterVisibleFacets,
   hiddenFacetsFromUiSettings,
   hiddenFacetsToUiSettings,
@@ -97,5 +98,33 @@ test("an anime series stays Anime, and is filtered out, while Anime is hidden", 
       ANIME_HIDDEN,
     ),
     "MOVIE",
+  );
+});
+
+test("instance-disabled facets add to the user's hidden ones without hiding all", () => {
+  assert.equal(combineHiddenFacets(ANIME_HIDDEN, []), ANIME_HIDDEN);
+  assert.deepEqual(
+    [...combineHiddenFacets(NO_HIDDEN_FACETS, ["ANIME", "bogus"])],
+    ["ANIME"],
+  );
+  assert.deepEqual(
+    [
+      ...combineHiddenFacets(hiddenFacetsFromUiSettings(["MOVIES"]), ["ANIME"]),
+    ].sort(),
+    ["ANIME", "MOVIE"],
+  );
+  // The user hid the two facets the instance left on: only the instance's stand.
+  assert.deepEqual(
+    [
+      ...combineHiddenFacets(hiddenFacetsFromUiSettings(["MOVIES", "SERIES"]), [
+        "ANIME",
+      ]),
+    ],
+    ["ANIME"],
+  );
+  // A stored list that turns every facet off turns none off.
+  assert.equal(
+    combineHiddenFacets(ANIME_HIDDEN, ["MOVIE", "SERIES", "ANIME"]),
+    ANIME_HIDDEN,
   );
 });

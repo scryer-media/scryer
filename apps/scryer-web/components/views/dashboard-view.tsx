@@ -1619,13 +1619,18 @@ export function DownloadClientsPanel({
 // ── Storage ─────────────────────────────────────────────────────────────────
 
 export function StoragePanel({
-  roots,
+  roots: allRoots,
   tier,
 }: {
   roots: DashboardStorageRoot[];
   tier: DashboardTier;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
+  const roots = React.useMemo(
+    () => visibleFacetItems(allRoots, (root) => root.facet),
+    [allRoots, visibleFacetItems],
+  );
   const groups = React.useMemo(
     () => groupStorageRootsByLibrary(roots),
     [roots],

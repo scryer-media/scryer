@@ -57,9 +57,14 @@ An error's sentence is for people. Code never decides anything from it. Any cond
 - **The web translates codes.** Map each reason to an i18n key in the area's `*_REFUSAL_KEYS`-style table, and show the server sentence only as the fallback for a code the client does not know. Do not add text fallbacks behind a code check. Do not hardcode English for a server condition.
 - **Leave it better.** When you touch code that matches error text, or raises a sentence-only error a client acts on, convert that site to a code in the same change. Do this only when it is within the task's scope. Otherwise report it.
 
-## Facet visibility (web)
+## Facet visibility
 
 Each user can hide facets (Movies, Series, Anime) in Settings → Profile. The choice is saved in `UiSettings.hiddenFacets`, and at least one facet always stays visible. Hiding is a UI preference only. The API, libraries and stored data stay the same.
+
+An administrator can also turn a facet off for the whole instance in Settings → General (`ui.disabled_facets`, read with `AppUseCase::disabled_facets()`). The facet is then hidden for every user, and it is frozen: its titles, files and history stay reachable, but nothing new is done for it.
+
+- **Server work skips a disabled facet.** A background pass that acts on titles reads `disabled_facets()` once per pass and leaves that facet out: the wanted walk, RSS, title hydration, subtitle search and pending releases do this today. Scans and refreshes of the facet are refused with `SETTINGS_FACET_DISABLED`, and so are new titles in it, through `ensure_facet_enabled`. A new job or pass that works per facet follows the same rule. Do not read the setting once per title.
+- **The web merges both.** `useFacets()` hides the instance's disabled facets as well as the user's own, so every rule below covers both.
 
 - **Hide choices, not facts.** A hidden facet leaves everything that offers it as a choice or destination: nav entries, tabs, filter chips, pickers, search sections, discovery content and command palette entries. Facts about records the user already has stay as they are: a title's facet badge, its detail page, history and activity rows, and requests waiting on someone.
 - **Ask `useFacets()` which facets to offer** (`apps/scryer-web/lib/facets/use-facets.tsx`). Use `facets`/`ids`/`viewIds` to enumerate, `filter(items, facetOf)` for lists of things, `values(fixedValues, keep)` for a fixed set of option values, `isVisible` for a single check and `visibleOr` for a default. Use `<ForEachFacet>` to render once per facet and `<FacetGate facet>` to wrap one facet's option. Pure modules take the visible facets or the `HiddenFacets` set as an argument; they never read settings themselves.

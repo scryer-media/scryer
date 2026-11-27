@@ -2873,7 +2873,13 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
         circuit,
         ..Default::default()
     };
-    'titles: for title in titles.iter().filter(|title| title.monitored) {
+    // A facet turned off for the instance is frozen: no subtitles are fetched
+    // for its titles.
+    let disabled_facets = app.disabled_facets().await?;
+    'titles: for title in titles
+        .iter()
+        .filter(|title| title.monitored && !disabled_facets.contains(&title.facet))
+    {
         let media_files = app
             .services
             .library

@@ -117,6 +117,11 @@ fn from_general_settings(settings: scryer_application::GeneralSettings) -> Gener
     GeneralSettingsPayload {
         api_explorer_enabled: settings.api_explorer_enabled,
         experimental_features_enabled: settings.experimental_features_enabled,
+        disabled_facets: settings
+            .disabled_facets
+            .into_iter()
+            .map(MediaFacetValue::from_domain)
+            .collect(),
         personalized_discovery_enabled: settings.personalized_discovery_enabled,
         srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
         keep_history_forever: settings.keep_history_forever,
@@ -1102,6 +1107,12 @@ impl SettingsMutations {
                 AppUpdateGeneralSettings {
                     api_explorer_enabled: input.api_explorer_enabled,
                     experimental_features_enabled: input.experimental_features_enabled,
+                    disabled_facets: input.disabled_facets.map(|facets| {
+                        facets
+                            .into_iter()
+                            .map(MediaFacetValue::into_domain)
+                            .collect()
+                    }),
                     personalized_discovery_enabled: input.personalized_discovery_enabled,
                     srrdb_filename_recovery_enabled: input.srrdb_filename_recovery_enabled,
                     keep_history_forever: input.keep_history_forever,

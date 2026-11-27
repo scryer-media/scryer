@@ -322,6 +322,11 @@ fn from_general_settings(settings: scryer_application::GeneralSettings) -> Gener
     GeneralSettingsPayload {
         api_explorer_enabled: settings.api_explorer_enabled,
         experimental_features_enabled: settings.experimental_features_enabled,
+        disabled_facets: settings
+            .disabled_facets
+            .into_iter()
+            .map(MediaFacetValue::from_domain)
+            .collect(),
         personalized_discovery_enabled: settings.personalized_discovery_enabled,
         srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
         keep_history_forever: settings.keep_history_forever,

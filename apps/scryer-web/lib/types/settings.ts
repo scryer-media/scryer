@@ -1,3 +1,5 @@
+import type { Facet } from "./titles";
+
 export type SubtitleLanguagePreference = {
   code: string;
   hearingImpaired: boolean;
@@ -63,11 +65,14 @@ export type GeneralSettings = {
   imageCacheMaxSizeEnvOverrideActive: boolean;
   pluginHttpCaBundlePem: string;
   pluginHttpTrustedCertificates: TrustedCertificateEntry[];
+  /** Facets turned off for every user; they run no background work. */
+  disabledFacets: Facet[];
 };
 
 export type GeneralSettingsUpdate = Partial<
   Pick<
     GeneralSettings,
+    | "disabledFacets"
     | "apiExplorerEnabled"
     | "experimentalFeaturesEnabled"
     | "personalizedDiscoveryEnabled"
@@ -89,6 +94,8 @@ export type InstanceFeatures = {
   apiExplorerEnabled: boolean;
   experimentalFeaturesEnabled: boolean;
   personalizedDiscoveryEnabled: boolean;
+  /** Facets an administrator turned off for every user of the instance. */
+  disabledFacets: Facet[];
 };
 
 export type UiDateTimeFormat = "LOCALE" | "ISO24H";

@@ -3705,6 +3705,11 @@ impl SystemQueries {
             api_explorer_enabled: features.api_explorer_enabled,
             experimental_features_enabled: features.experimental_features_enabled,
             personalized_discovery_enabled: features.personalized_discovery_enabled,
+            disabled_facets: features
+                .disabled_facets
+                .into_iter()
+                .map(MediaFacetValue::from_domain)
+                .collect(),
         })
     }
 

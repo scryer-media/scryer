@@ -73,6 +73,7 @@ import {
   hiddenFacetsFromUiSettings,
   hiddenFacetsToUiSettings,
 } from "@/lib/facets/visibility";
+import { useInstanceDisabledFacets } from "@/lib/facets/use-facets";
 import type { UiSettingsFacet } from "@/lib/types/settings";
 
 const TOTP_CODE_LENGTH = 6;
@@ -1539,7 +1540,11 @@ function ProfileFacetVisibility({
 }) {
   const t = useTranslate();
   const hidden = hiddenFacetsFromUiSettings(hiddenFacets);
-  const visibleCount = FACET_REGISTRY.length - hidden.size;
+  // A facet an administrator turned off shows as off and cannot be turned on.
+  const instanceDisabled = useInstanceDisabledFacets();
+  const visibleCount = FACET_REGISTRY.filter(
+    (facet) => !hidden.has(facet.id) && !instanceDisabled.has(facet.id),
+  ).length;
   return (
     <div className={PROFILE_ROW_CARD_CLASS}>
       <div className="space-y-1">
@@ -1552,16 +1557,19 @@ function ProfileFacetVisibility({
       </div>
       <div className="flex flex-col items-end gap-2">
         {FACET_REGISTRY.map((facet) => {
-          const visible = !hidden.has(facet.id);
+          const disabledByInstance = instanceDisabled.has(facet.id);
+          const visible = !hidden.has(facet.id) && !disabledByInstance;
           const lastVisible = visible && visibleCount <= 1;
           return (
             <div
               key={facet.id}
               className="flex items-center gap-2"
               title={
-                lastVisible
-                  ? t("profile.facetVisibilityLastVisible")
-                  : undefined
+                disabledByInstance
+                  ? t("profile.facetVisibilityDisabledByAdmin")
+                  : lastVisible
+                    ? t("profile.facetVisibilityLastVisible")
+                    : undefined
               }
             >
               <span className="text-sm text-[var(--scry-body)]">
@@ -1570,7 +1578,7 @@ function ProfileFacetVisibility({
               <SettingsToggleSwitch
                 id={`settings-profile-facet-${facet.viewId}`}
                 checked={visible}
-                disabled={saving || lastVisible}
+                disabled={saving || lastVisible || disabledByInstance}
                 onChange={(show) => {
                   const next = new Set(hidden);
                   if (show) next.delete(facet.id);

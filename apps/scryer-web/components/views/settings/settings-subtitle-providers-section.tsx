@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useFacets } from "@/lib/facets/use-facets";
 import {
   CircleAlert,
   Edit,
@@ -394,6 +395,7 @@ export function SettingsSubtitleProvidersSection({
   startCreateProvider,
 }: Props) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
   const normalizedProviderType = providerDraft.providerType
     .trim()
     .toLowerCase();
@@ -767,7 +769,10 @@ export function SettingsSubtitleProvidersSection({
                   {t("settings.subtitleProviderFacets")}
                 </Label>
                 <div className="flex flex-wrap gap-3">
-                  {SUBTITLE_FACETS.map((facet) => (
+                  {visibleFacetItems(
+                    SUBTITLE_FACETS,
+                    (facet) => facet.value,
+                  ).map((facet) => (
                     <label
                       key={facet.value}
                       className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-sm text-[var(--scry-ink2)]"

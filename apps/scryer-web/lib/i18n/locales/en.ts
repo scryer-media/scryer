@@ -3971,6 +3971,10 @@ const en: LocaleDictionary = {
     "Trusted certificate bundle may only contain X.509 certificate PEM blocks.",
   "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
     "At least one media type must stay visible.",
+  "error.reason.SETTINGS_ALL_FACETS_DISABLED":
+    "At least one media type must stay on.",
+  "error.reason.SETTINGS_FACET_DISABLED":
+    "This media type is turned off for this instance.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "A table's column settings list the same column more than once.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
@@ -6271,6 +6275,10 @@ const en: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Personalized discovery",
   "settings.personalizedDiscoveryHelp":
     "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
+  "settings.disabledFacetsLabel": "Media types",
+  "settings.disabledFacetsHelp":
+    "Turn a media type off for everyone. It leaves navigation, discovery, search and pickers, and its searches, scans and refreshes stop. Titles you already have stay reachable.",
+  "settings.disabledFacetsLastEnabled": "At least one media type must stay on.",
   "settings.srrdbFilenameRecoveryLabel":
     "Recover obfuscated filenames from srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
@@ -8753,6 +8761,8 @@ const en: LocaleDictionary = {
     "Choose which media types appear in navigation, discovery, search and pickers. Titles you already have stay reachable.",
   "profile.facetVisibilityLastVisible":
     "At least one media type must stay visible.",
+  "profile.facetVisibilityDisabledByAdmin":
+    "An administrator turned this media type off for everyone.",
   "profile.facetVisibilitySaved": "Media type preference saved.",
   "profile.appearanceDescription":
     "Personalize how Scryer looks for your account.",

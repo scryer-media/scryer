@@ -1,8 +1,10 @@
 import * as React from "react";
 
+import { useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { useUiSettings } from "@/lib/context/ui-settings-context";
 import type { FacetDefinition } from "@/lib/facets/registry";
 import {
+  combineHiddenFacets,
   filterVisibleFacets,
   hiddenFacetsFromUiSettings,
   isFacetVisible,
@@ -56,14 +58,32 @@ export function facetVisibility(hidden: HiddenFacets): FacetVisibility {
 /**
  * The one way UI code learns which facets to offer. Any list, tab, chip,
  * picker, nav entry or search section that enumerates facets reads it here so
- * the user's hidden facets apply everywhere at once.
+ * the facets an administrator turned off and the ones the user hid apply
+ * everywhere at once.
  */
 export function useFacets(): FacetVisibility {
   const { hiddenFacets } = useUiSettings().uiSettings;
+  const { disabledFacets } = useInstanceFeatures();
   const key = hiddenFacets.join(",");
+  const disabledKey = disabledFacets.join(",");
   return React.useMemo(
     () =>
-      facetVisibility(hiddenFacetsFromUiSettings(key ? key.split(",") : [])),
+      facetVisibility(
+        combineHiddenFacets(
+          hiddenFacetsFromUiSettings(key ? key.split(",") : []),
+          disabledKey ? disabledKey.split(",") : [],
+        ),
+      ),
+    [key, disabledKey],
+  );
+}
+
+/** Facets an administrator turned off for the whole instance. */
+export function useInstanceDisabledFacets(): ReadonlySet<Facet> {
+  const { disabledFacets } = useInstanceFeatures();
+  const key = disabledFacets.join(",");
+  return React.useMemo(
+    () => combineHiddenFacets(new Set(), key ? key.split(",") : []),
     [key],
   );
 }

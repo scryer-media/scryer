@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { localizedFacetLabel } from "@/components/views/overview-localization";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useFacets } from "@/lib/facets/use-facets";
 import { cn } from "@/lib/utils";
 
 // eslint-disable-next-line no-restricted-syntax -- orders the libraries the user has; a library is a record, not a facet choice
@@ -44,9 +45,12 @@ export function LibrarySingleSelect({
   className,
 }: LibrarySingleSelectProps) {
   const t = useTranslate();
+  // A hidden facet's libraries are not offered, unless one is the value.
+  const { isVisible } = useFacets();
   const groups = React.useMemo(() => {
     const byFacet = new Map<string, LibraryOption[]>();
     for (const library of libraries) {
+      if (!isVisible(library.facet) && library.id !== value) continue;
       const facet = library.facet.trim().toUpperCase();
       const group = byFacet.get(facet);
       if (group) group.push(library);
@@ -59,7 +63,7 @@ export function LibrarySingleSelect({
     return [...byFacet.entries()]
       .sort(([a], [b]) => rank(a) - rank(b))
       .map(([facet, members]) => ({ facet, libraries: members }));
-  }, [libraries]);
+  }, [isVisible, libraries, value]);
   const showFacetGroups = groups.length > 1;
   const isDisabled = disabled || libraries.length === 0;
 

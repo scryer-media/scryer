@@ -952,6 +952,7 @@ export const updateMovieAvailabilitySettingsMutation = `mutation UpdateMovieAvai
 
 export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
   updateGeneralSettings(input: $input) {
+    disabledFacets
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled

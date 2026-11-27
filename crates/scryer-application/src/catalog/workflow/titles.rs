@@ -1001,6 +1001,10 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<AddTitleOutcome> {
+        // A facet turned off for the instance is frozen: its existing titles
+        // stay, but no new ones are added to it.
+        self.ensure_facet_enabled(&request.facet, "Adding a title")
+            .await?;
         // An add that names no monitor type takes the library's default
         // monitoring. A title the add reuses keeps its own tags, since the
         // store returns the existing row rather than this one.

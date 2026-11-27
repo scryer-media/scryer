@@ -204,6 +204,10 @@ impl ListActions for AppListActions<'_> {
         route: &ListRoute,
         item: &ResolvedItem,
     ) -> AppResult<AddedTitle> {
+        // A facet turned off for the instance takes no new titles from a list.
+        self.app
+            .ensure_facet_enabled(&route.kind, "Adding a title")
+            .await?;
         if subscription.is_personal() {
             let owner = self.list_owner(subscription).await?;
             self.app

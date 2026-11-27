@@ -40,6 +40,26 @@ export function hiddenFacetsFromUiSettings(
   return hidden.size >= FACET_REGISTRY.length ? NO_HIDDEN_FACETS : hidden;
 }
 
+/**
+ * The facets to hide for this viewer: the ones an administrator turned off for
+ * the instance and the ones the user hid. A user may not hide every facet, so
+ * when the two together would cover them all only the instance's stand.
+ */
+export function combineHiddenFacets(
+  userHidden: HiddenFacets,
+  instanceDisabled: readonly string[] | null | undefined,
+): HiddenFacets {
+  const disabled = new Set<Facet>();
+  for (const value of instanceDisabled ?? []) {
+    const facet = resolveFacetId(value);
+    if (facet) disabled.add(facet);
+  }
+  if (disabled.size === 0) return userHidden;
+  if (disabled.size >= FACET_REGISTRY.length) return userHidden;
+  const combined = new Set<Facet>([...userHidden, ...disabled]);
+  return combined.size >= FACET_REGISTRY.length ? disabled : combined;
+}
+
 /** The save form of a hidden set, in registry order. */
 export function hiddenFacetsToUiSettings(
   hidden: HiddenFacets,

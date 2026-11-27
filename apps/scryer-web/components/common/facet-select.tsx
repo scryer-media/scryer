@@ -125,12 +125,18 @@ export function LibrarySelect({
   disabled,
   className,
 }: LibrarySelectProps) {
-  if (libraries.length === 0) {
+  // A hidden facet's libraries are not offered, unless one is already
+  // selected: it stays so the selection can be seen and cleared.
+  const { isVisible } = useFacets();
+  const offered = libraries.filter(
+    (library) => isVisible(library.facet) || selected.includes(library.id),
+  );
+  if (offered.length === 0) {
     return <p className="text-xs text-muted-foreground">{emptyLabel}</p>;
   }
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
-      {libraries.map((library) => {
+      {offered.map((library) => {
         const facet = facetById(library.facet.trim().toUpperCase());
         const Icon = facet?.icon;
         const checked = selected.includes(library.id);

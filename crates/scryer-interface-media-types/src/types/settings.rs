@@ -177,6 +177,8 @@ pub struct GeneralSettingsPayload {
     pub api_explorer_enabled: bool,
     /// Whether surfaces that are still being finished are shown on this instance.
     pub experimental_features_enabled: bool,
+    /// Facets turned off for the whole instance. They are hidden for every user and their background work does not run; their titles and files stay.
+    pub disabled_facets: Vec<MediaFacetValue>,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
     pub personalized_discovery_enabled: bool,
     /// Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames.
@@ -1526,6 +1528,8 @@ pub struct UpdateGeneralSettingsInput {
     pub api_explorer_enabled: Option<bool>,
     /// Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
     pub experimental_features_enabled: Option<bool>,
+    /// Facets to turn off for the whole instance; at least one must stay on. Omission preserves the saved list.
+    pub disabled_facets: Option<Vec<MediaFacetValue>>,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
     pub personalized_discovery_enabled: Option<bool>,
     /// Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames. Omission preserves the saved setting.
