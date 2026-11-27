@@ -24,6 +24,9 @@ const CLOCK_NOTICE_REFRESH_INTERVAL_MS = 30_000;
 const SMG_VERSION_COMPATIBILITY_NOTICE_KEY = "smg.version_compatibility_notice";
 const SMG_SCRYER_UPDATE_NOTICE_KEY = "smg.scryer_update_notice";
 const SMG_SCRYER_UPDATE_DISMISSED_KEY = "scryer.smgUpdate.dismissed";
+// Dismissing the update reminder only hides it for this long. It then comes
+// back, for the same release, until the instance is upgraded.
+const SMG_SCRYER_UPDATE_SNOOZE_MS = 24 * 60 * 60 * 1_000;
 const SMG_NOTICE_SESSION_CACHE_KEY = "scryer.smgNotices.session.v1";
 const SMG_NOTICE_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 
@@ -88,6 +91,37 @@ function buildSmgScryerUpdateDismissalValue(
   return `${latest}:${notice.latestVersion.trim()}`;
 }
 
+type SmgScryerUpdateDismissal = { value: string; dismissedAt: number };
+
+// The stored dismissal while its snooze still runs, else null. A dismissal
+// written before the reminder became a snooze is a bare string: it carries no
+// time, so it reads as expired and the reminder returns.
+function readSmgScryerUpdateDismissal(): SmgScryerUpdateDismissal | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(SMG_SCRYER_UPDATE_DISMISSED_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<SmgScryerUpdateDismissal>;
+    if (
+      typeof parsed?.value !== "string" ||
+      typeof parsed.dismissedAt !== "number"
+    ) {
+      return null;
+    }
+    const elapsed = Date.now() - parsed.dismissedAt;
+    if (elapsed < 0 || elapsed >= SMG_SCRYER_UPDATE_SNOOZE_MS) {
+      return null;
+    }
+    return { value: parsed.value, dismissedAt: parsed.dismissedAt };
+  } catch {
+    return null;
+  }
+}
+
 export function useSmgNotices({
   t,
   settingsSubscriptionEnabled = true,
@@ -120,14 +154,8 @@ export function useSmgNotices({
   const lastRoutineSmgNoticeRefreshAtRef = useRef(
     initialSessionCache?.refreshedAt ?? 0,
   );
-  const [dismissedSmgScryerUpdate, setDismissedSmgScryerUpdate] = useState(
-    () => {
-      if (typeof window === "undefined") {
-        return "";
-      }
-      return window.localStorage.getItem(SMG_SCRYER_UPDATE_DISMISSED_KEY) ?? "";
-    },
-  );
+  const [dismissedSmgScryerUpdate, setDismissedSmgScryerUpdate] =
+    useState<SmgScryerUpdateDismissal | null>(readSmgScryerUpdateDismissal);
 
   const refreshSmgVersionCompatibilityNotice = useCallback(async () => {
     try {
@@ -295,22 +323,45 @@ export function useSmgNotices({
     () => buildSmgScryerUpdateDismissalValue(smgScryerUpdateNotice),
     [smgScryerUpdateNotice],
   );
+  // The snooze ends on its own timer, so the reminder returns in a tab that
+  // stays open as well as on the next load.
+  useEffect(() => {
+    if (!dismissedSmgScryerUpdate) {
+      return;
+    }
+    const remaining =
+      dismissedSmgScryerUpdate.dismissedAt +
+      SMG_SCRYER_UPDATE_SNOOZE_MS -
+      Date.now();
+    const timeoutId = window.setTimeout(
+      () => setDismissedSmgScryerUpdate(null),
+      Math.max(0, remaining),
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [dismissedSmgScryerUpdate]);
+
   const showSmgScryerUpdateReminder =
     !smgVersionCompatibilityNotice &&
     Boolean(smgScryerUpdateNotice?.available) &&
     Boolean(smgScryerUpdateDismissalValue) &&
-    dismissedSmgScryerUpdate !== smgScryerUpdateDismissalValue;
+    dismissedSmgScryerUpdate?.value !== smgScryerUpdateDismissalValue;
 
   const dismissSmgScryerUpdateReminder = useCallback(() => {
     if (!smgScryerUpdateDismissalValue) {
       return;
     }
-    setDismissedSmgScryerUpdate(smgScryerUpdateDismissalValue);
-    if (typeof window !== "undefined") {
+    const dismissal = {
+      value: smgScryerUpdateDismissalValue,
+      dismissedAt: Date.now(),
+    };
+    setDismissedSmgScryerUpdate(dismissal);
+    try {
       window.localStorage.setItem(
         SMG_SCRYER_UPDATE_DISMISSED_KEY,
-        smgScryerUpdateDismissalValue,
+        JSON.stringify(dismissal),
       );
+    } catch {
+      // Best effort only; without storage the reminder returns on reload.
     }
   }, [smgScryerUpdateDismissalValue]);
 
