@@ -3857,7 +3857,7 @@ fn parse_identity_at(
     }
     // Likewise the number of a split video codec (`MPEG-2`, `H-264`) names the
     // video track, never an episode.
-    if family != ParseFamily::Movie && is_split_video_codec_number(tokens, index) {
+    if family != ParseFamily::Movie && is_split_codec_number(tokens, index) {
         return None;
     }
     // An episode-shaped revision inside an exact known title remains title text.
@@ -4667,9 +4667,10 @@ fn is_audio_channel_layout_digit(tokens: &[Token], index: usize) -> bool {
         && token_has_audio_codec(previous.normalized.as_str())
 }
 
-/// Whether the token is the number of a video codec the lexer split from its
-/// name at a hyphen or a dot (`MPEG-2`, `H-264`, `X.265`, `VC-1`).
-fn is_split_video_codec_number(tokens: &[Token], index: usize) -> bool {
+/// Whether the token is the number of a codec the lexer split from its name at
+/// a hyphen or a dot: a video codec (`MPEG-2`, `MPEG-4`, `H-264`, `X.265`,
+/// `VC-1`) or an audio codec (`AC-3`, `E-AC-3`, `EAC.3`).
+fn is_split_codec_number(tokens: &[Token], index: usize) -> bool {
     let Some(token) = tokens.get(index) else {
         return false;
     };
@@ -4680,11 +4681,15 @@ fn is_split_video_codec_number(tokens: &[Token], index: usize) -> bool {
         token.separator_before,
         SeparatorKind::Hyphen | SeparatorKind::Dot
     ) && same_technical_scope(previous, token)
-        && parse_split_video_codec(
+        && (parse_split_video_codec(
             previous.normalized.as_str(),
             Some(token.normalized.as_str()),
         )
         .is_some()
+            || matches!(
+                (previous.normalized.as_str(), token.normalized.as_str()),
+                ("AC" | "EAC" | "EC", "3")
+            ))
 }
 
 /// [`audio_channel_has_audio_context`] for a two-token layout, confined to the
@@ -5955,7 +5960,7 @@ fn absolute_companion_allowed(
     value: u32,
     context: &ContextIndex,
 ) -> bool {
-    if value > 2000 || is_split_video_codec_number(tokens, index) {
+    if value > 2000 || is_split_codec_number(tokens, index) {
         return false;
     }
     let Some(token) = tokens.get(index) else {

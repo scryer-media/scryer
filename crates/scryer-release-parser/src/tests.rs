@@ -5870,6 +5870,13 @@ fn hyphenated_video_codec_number_is_not_an_episode() {
             "Show A 1987 S01 1080p BluRay REMUX H-265 DD 5.1-GRP",
             "Show A 1987 S01 1080p BluRay REMUX X-264 DD 2.0-GRP",
             "Show A 1987 S01 1080p BluRay REMUX VC-1 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-4 DD 2.0-GRP",
+            "Show.A.1987.S01.576i.DVD.REMUX.MPEG-4.DD.2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG2 AC-3 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 AC-3 2.0-GRP",
+            "Show.A.1987.S01.576i.DVD.REMUX.MPEG2.AC-3.2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX H-264 E-AC-3 5.1-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-4 AC-3 2.0-GRP",
         ] {
             let parsed = crate::best_parse_for_target(raw, &target);
             let episode = parsed.episode.expect(raw);
