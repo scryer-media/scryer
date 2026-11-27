@@ -1001,6 +1001,10 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<AddTitleOutcome> {
+        // A facet turned off for the instance is frozen: its existing titles
+        // stay, but no new ones are added to it.
+        self.ensure_facet_enabled(&request.facet, "Adding a title")
+            .await?;
         self.apply_library_default_monitor_type(&mut request, &library_id)
             .await?;
         // Creation is the third door into `titles.tags`, alongside the tag patch

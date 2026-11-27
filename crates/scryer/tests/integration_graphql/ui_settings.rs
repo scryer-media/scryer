@@ -1135,3 +1135,77 @@ async fn graphql_dashboard_panel_settings_round_trip_and_are_refused_when_malfor
     .await;
     assert_eq!(after["data"]["myUiSettings"]["dashboardLayouts"], expected);
 }
+
+#[tokio::test]
+async fn graphql_hidden_facets_persist_until_changed_and_one_facet_stays_visible() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "ui_hidden_facets").await;
+    let save = |hidden: &str| {
+        format!(
+            r#"
+            mutation SetMyUiSettings {{
+              setMyUiSettings(input: {{
+                theme: DARK
+                highContrastMode: false
+                reduceMotion: false
+                hideSponsorButton: false
+                density: COMFORTABLE
+                sidebarMode: EXPANDED
+                defaultLandingView: MOVIES
+                {hidden}
+              }}) {{ hiddenFacets }}
+            }}
+            "#
+        )
+    };
+
+    let hidden = schema_exec(
+        &ctx,
+        &save("hiddenFacets: [ANIME, ANIME]"),
+        Some(user.clone()),
+    )
+    .await;
+    assert_no_errors(&hidden);
+    assert_eq!(
+        hidden["data"]["setMyUiSettings"]["hiddenFacets"],
+        json!(["ANIME"])
+    );
+
+    // A save that leaves the field out keeps the saved list.
+    let kept = schema_exec(&ctx, &save(""), Some(user.clone())).await;
+    assert_no_errors(&kept);
+    assert_eq!(
+        kept["data"]["setMyUiSettings"]["hiddenFacets"],
+        json!(["ANIME"])
+    );
+
+    let refused = schema_exec(
+        &ctx,
+        &save("hiddenFacets: [MOVIES, SERIES, ANIME]"),
+        Some(user.clone()),
+    )
+    .await;
+    assert_eq!(
+        refused["errors"][0]["extensions"]["reason"],
+        json!("SETTINGS_UI_ALL_FACETS_HIDDEN")
+    );
+
+    let read = schema_exec(
+        &ctx,
+        "query MyUiSettings { myUiSettings { hiddenFacets } }",
+        Some(user.clone()),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["myUiSettings"]["hiddenFacets"],
+        json!(["ANIME"])
+    );
+
+    let cleared = schema_exec(&ctx, &save("hiddenFacets: []"), Some(user)).await;
+    assert_no_errors(&cleared);
+    assert_eq!(
+        cleared["data"]["setMyUiSettings"]["hiddenFacets"],
+        json!([])
+    );
+}

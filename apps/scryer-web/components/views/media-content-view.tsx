@@ -174,7 +174,7 @@ import {
   selectedSeriesSidePanelTitleId,
 } from "@/lib/utils/selected-overview-policy";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
-import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
+import { useDiscoveryItemFacet } from "@/lib/facets/use-facets";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
 import { discoveryRailLabelTitle } from "@/lib/utils/discovery-sections";
 import {
@@ -590,6 +590,7 @@ function TitleContextMoreLikeThisStrip({
   onAction: (item: CatalogDiscoveryItem) => void;
 }) {
   const t = useTranslate();
+  const itemFacet = useDiscoveryItemFacet();
 
   if (items.length === 0) {
     if (!loading) {
@@ -633,7 +634,7 @@ function TitleContextMoreLikeThisStrip({
               : null;
           const titleLabel = discoveryItemDisplayTitle(item);
           const owned = item.ownedInInput;
-          const facet = discoveryItemFacet(item);
+          const facet = itemFacet(item);
           const addable =
             !owned && facet !== null && manageableFacets.has(facet);
           const requestable =
@@ -1200,10 +1201,11 @@ function TitleContextPanel({
     "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1024px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
   );
+  const itemFacet = useDiscoveryItemFacet();
   const moreLikeThisItems = React.useMemo(
     () =>
       (title?.moreLikeThis ?? []).filter((item) => {
-        const facet = discoveryItemFacet(item);
+        const facet = itemFacet(item);
         return (
           facet !== null &&
           (manageableDiscoveryFacets.has(facet) ||
@@ -1211,6 +1213,7 @@ function TitleContextPanel({
         );
       }),
     [
+      itemFacet,
       manageableDiscoveryFacets,
       requestableDiscoveryFacets,
       title?.moreLikeThis,

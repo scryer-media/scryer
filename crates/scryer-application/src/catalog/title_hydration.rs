@@ -333,11 +333,20 @@ pub async fn start_background_title_hydration_loop(
             .library_scan_tracker
             .active_facets()
             .await;
+        // A facet turned off for the instance is frozen: none of its titles
+        // are refreshed. It is left out of the read only, so a scan's yield
+        // below still follows the scan-owned facets alone.
+        let mut skipped_facets = blocked_facets.clone();
+        for facet in app.disabled_facets().await.unwrap_or_default() {
+            if !skipped_facets.contains(&facet) {
+                skipped_facets.push(facet);
+            }
+        }
         let due_titles = match app
             .services
             .catalog
             .titles
-            .list_titles_due_for_hydration(TITLE_HYDRATION_MAX_BATCH, &blocked_facets)
+            .list_titles_due_for_hydration(TITLE_HYDRATION_MAX_BATCH, &skipped_facets)
             .await
         {
             Ok(due_titles) => due_titles,
@@ -353,7 +362,7 @@ pub async fn start_background_title_hydration_loop(
         metrics::gauge!("scryer_title_metadata_hydration_pending").set(due_titles.len() as f64);
 
         if due_titles.is_empty() {
-            if !blocked_facets.contains(&MediaFacet::Movie)
+            if !skipped_facets.contains(&MediaFacet::Movie)
                 && !run_movie_smg_identity_backfill_phase(
                     &app,
                     &token,
@@ -469,7 +478,7 @@ pub async fn start_background_title_hydration_loop(
         }
 
         if targets.is_empty() {
-            if !blocked_facets.contains(&MediaFacet::Movie)
+            if !skipped_facets.contains(&MediaFacet::Movie)
                 && !run_movie_smg_identity_backfill_phase(
                     &app,
                     &token,
@@ -570,7 +579,7 @@ pub async fn start_background_title_hydration_loop(
                 }
             }
         }
-        if !blocked_facets.contains(&MediaFacet::Movie)
+        if !skipped_facets.contains(&MediaFacet::Movie)
             && !run_movie_smg_identity_backfill_phase(
                 &app,
                 &token,

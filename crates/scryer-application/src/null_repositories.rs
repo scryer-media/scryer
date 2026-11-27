@@ -4271,6 +4271,7 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
+        current.hidden_facets = settings.hidden_facets;
         current.language = settings.language.flatten();
         current.table_columns = settings.table_columns.unwrap_or_default();
         Ok(current)

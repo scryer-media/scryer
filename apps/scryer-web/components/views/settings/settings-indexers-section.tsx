@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useFacets } from "@/lib/facets/use-facets";
 import {
   ChevronRight,
   Edit,
@@ -1107,6 +1108,7 @@ function IndexerRoutingDisclosure({
   ) => Promise<void> | void;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
 
   return (
     <Table
@@ -1126,71 +1128,73 @@ function IndexerRoutingDisclosure({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {INDEXER_ROUTING_FACETS.map(({ scope, labelKey }) => {
-          const routing =
-            routingByScope[scope]?.[indexer.id] ??
-            getDefaultIndexerRouting(scope);
-          const isPending = isLoading || mutatingScopes.has(scope);
-          const facetLabel = t(labelKey);
-          const enabledId = selectorId(
-            "settings-indexer-routing-enabled",
-            indexer.id,
-            scope,
-          );
+        {visibleFacetItems(INDEXER_ROUTING_FACETS, (item) => item.scope).map(
+          ({ scope, labelKey }) => {
+            const routing =
+              routingByScope[scope]?.[indexer.id] ??
+              getDefaultIndexerRouting(scope);
+            const isPending = isLoading || mutatingScopes.has(scope);
+            const facetLabel = t(labelKey);
+            const enabledId = selectorId(
+              "settings-indexer-routing-enabled",
+              indexer.id,
+              scope,
+            );
 
-          return (
-            <TableRow
-              key={scope}
-              data-ui="settings-table-row"
-              data-subtable-row="indexer-routing"
-            >
-              <TableCell className="font-medium">{facetLabel}</TableCell>
-              <TableCell>
-                <div className="w-full max-w-md">
-                  <IndexerCategoryPicker
-                    triggerId={selectorId(
-                      "settings-indexer-routing-categories",
-                      indexer.id,
-                      scope,
-                    )}
-                    panelId={selectorId(
-                      "settings-indexer-routing-categories-panel",
-                      indexer.id,
-                      scope,
-                    )}
-                    categoryIdPrefix={selectorId(
-                      "settings-indexer-routing-category",
-                      indexer.id,
-                      scope,
-                    )}
-                    value={routing.categories}
-                    scope={scope}
-                    capsCategories={indexer.capsCategories}
+            return (
+              <TableRow
+                key={scope}
+                data-ui="settings-table-row"
+                data-subtable-row="indexer-routing"
+              >
+                <TableCell className="font-medium">{facetLabel}</TableCell>
+                <TableCell>
+                  <div className="w-full max-w-md">
+                    <IndexerCategoryPicker
+                      triggerId={selectorId(
+                        "settings-indexer-routing-categories",
+                        indexer.id,
+                        scope,
+                      )}
+                      panelId={selectorId(
+                        "settings-indexer-routing-categories-panel",
+                        indexer.id,
+                        scope,
+                      )}
+                      categoryIdPrefix={selectorId(
+                        "settings-indexer-routing-category",
+                        indexer.id,
+                        scope,
+                      )}
+                      value={routing.categories}
+                      scope={scope}
+                      capsCategories={indexer.capsCategories}
+                      disabled={isPending}
+                      categoriesLabel={`${t("settings.indexerRoutingCategories")} (${facetLabel})`}
+                      onChange={(categories) =>
+                        void onChange(scope, indexer.id, { categories })
+                      }
+                    />
+                  </div>
+                </TableCell>
+                <TableCell className="text-center">
+                  <Checkbox
+                    id={enabledId}
+                    size="large"
+                    checked={routing.enabled}
                     disabled={isPending}
-                    categoriesLabel={`${t("settings.indexerRoutingCategories")} (${facetLabel})`}
-                    onChange={(categories) =>
-                      void onChange(scope, indexer.id, { categories })
+                    aria-label={`${t("settings.indexerRoutingEnabled")}: ${facetLabel}`}
+                    onCheckedChange={(checked) =>
+                      void onChange(scope, indexer.id, {
+                        enabled: checked === true,
+                      })
                     }
                   />
-                </div>
-              </TableCell>
-              <TableCell className="text-center">
-                <Checkbox
-                  id={enabledId}
-                  size="large"
-                  checked={routing.enabled}
-                  disabled={isPending}
-                  aria-label={`${t("settings.indexerRoutingEnabled")}: ${facetLabel}`}
-                  onCheckedChange={(checked) =>
-                    void onChange(scope, indexer.id, {
-                      enabled: checked === true,
-                    })
-                  }
-                />
-              </TableCell>
-            </TableRow>
-          );
-        })}
+                </TableCell>
+              </TableRow>
+            );
+          },
+        )}
       </TableBody>
     </Table>
   );

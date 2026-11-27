@@ -744,39 +744,34 @@ mod tests {
 
     #[test]
     fn no_resize_variant_encodes_the_source_unchanged() {
-        artwork_pool(2)
-            .expect("artwork pool")
-            .install(|| {
-                let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
-                let direct =
-                    encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode");
+        artwork_pool(2).expect("artwork pool").install(|| {
+            let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
+            let direct = encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode");
 
-                // Target wider than the source: no upscaling, and the encoded
-                // bytes must be exactly what encoding the shared source gives.
-                let variant = build_width_variant(&source, "w128", 128).expect("variant encode");
-                assert_eq!((variant.width, variant.height), (64, 96));
-                assert_eq!(variant.bytes, direct);
-                assert_eq!(variant.digest, title_image_blob_digest(&direct));
+            // Target wider than the source: no upscaling, and the encoded
+            // bytes must be exactly what encoding the shared source gives.
+            let variant = build_width_variant(&source, "w128", 128).expect("variant encode");
+            assert_eq!((variant.width, variant.height), (64, 96));
+            assert_eq!(variant.bytes, direct);
+            assert_eq!(variant.digest, title_image_blob_digest(&direct));
 
-                // Equal width takes the same no-resize path.
-                let exact = build_width_variant(&source, "w64", 64).expect("variant encode");
-                assert_eq!(exact.bytes, direct);
-            });
+            // Equal width takes the same no-resize path.
+            let exact = build_width_variant(&source, "w64", 64).expect("variant encode");
+            assert_eq!(exact.bytes, direct);
+        });
     }
 
     #[test]
     fn resize_variant_still_downscales_to_the_target_width() {
-        artwork_pool(2)
-            .expect("artwork pool")
-            .install(|| {
-                let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
-                let variant = build_width_variant(&source, "w32", 32).expect("variant encode");
-                assert_eq!((variant.width, variant.height), (32, 48));
-                assert_ne!(
-                    variant.bytes,
-                    encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode")
-                );
-            });
+        artwork_pool(2).expect("artwork pool").install(|| {
+            let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
+            let variant = build_width_variant(&source, "w32", 32).expect("variant encode");
+            assert_eq!((variant.width, variant.height), (32, 48));
+            assert_ne!(
+                variant.bytes,
+                encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode")
+            );
+        });
     }
 
     #[test]

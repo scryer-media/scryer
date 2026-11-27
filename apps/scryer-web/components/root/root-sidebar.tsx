@@ -89,6 +89,8 @@ import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
 import { useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { useUiSettings } from "@/lib/context/ui-settings-context";
+// eslint-disable-next-line no-restricted-imports -- the shell passes topNav already filtered by useFacets()
+import { isMediaView, MEDIA_VIEW_IDS } from "@/lib/facets/registry";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   APP_PERMISSIONS,
@@ -204,6 +206,8 @@ type HeaderWithMobileNavigationProps = {
   mobileNavigation?: React.ReactNode;
 };
 
+const MEDIA_NAV_VIEW_IDS = MEDIA_VIEW_IDS as ViewId[];
+
 const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
   {
     id: "dashboard",
@@ -212,11 +216,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
   {
     id: "catalogs",
     labelKey: "nav.group.catalogs",
-    items: [
-      { kind: "view", id: "movies" },
-      { kind: "view", id: "series" },
-      { kind: "view", id: "anime" },
-    ],
+    items: MEDIA_NAV_VIEW_IDS.map((id) => ({ kind: "view", id })),
   },
   {
     id: "discover",
@@ -329,7 +329,6 @@ const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "scripts",
   "listProviderApps",
 ];
-const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
 
 function sidebarPublicAssetUrl(path: string): string {
   const basePath = getRuntimeBasePath();
@@ -1495,11 +1494,7 @@ function RootSidebarContent({
                         );
                       }
 
-                      const isMediaSection = [
-                        "movies",
-                        "series",
-                        "anime",
-                      ].includes(item.id);
+                      const isMediaSection = isMediaView(item.id);
                       const isSettingsTop = item.id === "settings";
                       const isWantedTop = item.id === "wanted";
                       const isSystemTop = item.id === "system";

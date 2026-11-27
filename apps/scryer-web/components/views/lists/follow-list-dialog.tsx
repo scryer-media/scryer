@@ -66,6 +66,7 @@ import { ListPreviewSummary } from "./list-preview-summary";
 import { ListRouteCard } from "./list-route-card";
 import { ProviderTile } from "./provider-tile";
 import type { ListRouteOptions } from "./lists-view";
+import { useFacets } from "@/lib/facets/use-facets";
 
 export type FollowListTarget =
   | {
@@ -195,11 +196,19 @@ function FollowListDialogBody({
 }: FollowListDialogProps & { target: FollowListTarget }) {
   const t = useTranslate();
   const user = useSessionUser();
+  const { values: visibleFacetValues } = useFacets();
   const { definitions: tagDefinitions, loading: tagsLoading } =
     useTitleTagDefinitions();
-  const [draft, setDraft] = React.useState(() =>
-    initialDraft(target, routeOptions, user),
-  );
+  const [draft, setDraft] = React.useState(() => {
+    const initial = initialDraft(target, routeOptions, user);
+    if (target.kind === "new") {
+      // A new follow starts on the visible kinds only; an edit keeps what the
+      // subscription already follows.
+      const visibleKinds = visibleFacetValues(initial.kinds);
+      if (visibleKinds.length > 0) initial.kinds = visibleKinds;
+    }
+    return initial;
+  });
   const [source, setSource] = React.useState<ListSourceDraft | null>(
     target.kind === "new"
       ? {
@@ -244,12 +253,15 @@ function FollowListDialogBody({
             target.subscription.source.sourceType,
           )?.item ?? null)
         : null;
-  const offeredKinds: readonly Facet[] = followListOfferedKinds({
-    requestedKinds: target.kind === "new" ? target.kinds : null,
-    sourceKinds: sourceItem?.kinds,
-    providerCoverage: manifest?.coverage,
-    savedKinds: target.kind === "edit" ? target.subscription.kinds : null,
-  });
+  const offeredKinds: readonly Facet[] = visibleFacetValues(
+    followListOfferedKinds({
+      requestedKinds: target.kind === "new" ? target.kinds : null,
+      sourceKinds: sourceItem?.kinds,
+      providerCoverage: manifest?.coverage,
+      savedKinds: target.kind === "edit" ? target.subscription.kinds : null,
+    }),
+    draft.kinds,
+  );
 
   const missingParams = source
     ? missingSourceParams(paramDefinitions, source.params)

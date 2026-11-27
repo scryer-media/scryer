@@ -3663,6 +3663,12 @@ pub mod settings {
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
     /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
     pub const UI_TOUR_ID_INVALID: &str = "SETTINGS_UI_TOUR_ID_INVALID";
+    /// Hidden facets would hide every facet; at least one must stay visible.
+    pub const UI_ALL_FACETS_HIDDEN: &str = "SETTINGS_UI_ALL_FACETS_HIDDEN";
+    /// Disabled facets would turn off every facet; at least one must stay on.
+    pub const ALL_FACETS_DISABLED: &str = "SETTINGS_ALL_FACETS_DISABLED";
+    /// The work belongs to a facet an administrator turned off for this instance.
+    pub const FACET_DISABLED: &str = "SETTINGS_FACET_DISABLED";
     /// A tour progress update names no tour, or more tours than one update may record.
     pub const UI_TOUR_COUNT_OUT_OF_RANGE: &str = "SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE";
     /// The color must be a #RRGGBB hex color.
@@ -3930,6 +3936,9 @@ pub mod settings {
         DASHBOARD_PANEL_SETTINGS_INVALID,
         LANGUAGE_OUT_OF_RANGE,
         UI_TOUR_ID_INVALID,
+        UI_ALL_FACETS_HIDDEN,
+        ALL_FACETS_DISABLED,
+        FACET_DISABLED,
         UI_TOUR_COUNT_OUT_OF_RANGE,
         MUST_RRGGBB_HEX_COLOR,
         UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED,

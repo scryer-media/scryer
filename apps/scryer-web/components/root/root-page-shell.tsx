@@ -119,11 +119,8 @@ import {
   shouldLeaveListsPage,
 } from "@/lib/utils/routes";
 import { cn } from "@/lib/utils";
-import {
-  FACET_REGISTRY,
-  isMediaView,
-  facetForView,
-} from "@/lib/facets/registry";
+import { facetById, isMediaView, facetForView } from "@/lib/facets/registry";
+import { useFacets } from "@/lib/facets/use-facets";
 import { BackendRestartOverlay } from "@/components/common/backend-restart-overlay";
 import {
   resolveTitleOverviewTargetById,
@@ -1259,9 +1256,8 @@ function AuthenticatedHomePage({
           return;
         }
 
-        const targetView = FACET_REGISTRY.find(
-          (definition) => definition.id === target.facet,
-        )?.viewId as ViewId | undefined;
+        const targetView = facetById(target.facet)?.viewId as
+          ViewId | undefined;
         if (!targetView) {
           replaceWithOverviewList();
           return;
@@ -1340,6 +1336,7 @@ function AuthenticatedHomePage({
     [navigateToOverview],
   );
 
+  const facetVisibility = useFacets();
   const topNav = useMemo(
     () => [
       {
@@ -1347,7 +1344,7 @@ function AuthenticatedHomePage({
         label: t("nav.dashboard"),
         icon: LayoutDashboard,
       },
-      ...FACET_REGISTRY.map((f) => ({
+      ...facetVisibility.facets.map((f) => ({
         id: f.viewId as ViewId,
         label: t(f.navLabelKey),
         icon: f.icon,
@@ -1372,7 +1369,7 @@ function AuthenticatedHomePage({
       { id: "system" as ViewId, label: t("system.title"), icon: Monitor },
       { id: "settings" as ViewId, label: t("nav.settings"), icon: Settings },
     ],
-    [t],
+    [t, facetVisibility.facets],
   );
   const {
     canViewCatalog,
@@ -1439,6 +1436,7 @@ function AuthenticatedHomePage({
       buildRouteCommands({
         t,
         user: authenticatedUser,
+        facets: facetVisibility.facets,
         personalListsRefused,
         activityImportCount: manualImportRequiredCount,
         onNavigate: navigateTo,
@@ -1446,6 +1444,7 @@ function AuthenticatedHomePage({
       }),
     [
       authenticatedUser,
+      facetVisibility.facets,
       manualImportRequiredCount,
       navigate,
       navigateTo,
@@ -1498,29 +1497,33 @@ function AuthenticatedHomePage({
     view,
   ]);
 
-  const accessibleDefaultRoute = useMemo(
-    () =>
-      defaultAccessibleRoute(
-        canViewCatalog,
-        canRequestMedia,
-        canResolveImports,
-        canManageUserAccounts,
-        canManageUsers,
-        canManageSystemSettings,
-        canManageCatalogSettings,
-        canManageLibrarySettings,
-      ),
-    [
-      canManageCatalogSettings,
-      canManageLibrarySettings,
-      canManageSystemSettings,
+  const accessibleDefaultRoute = useMemo(() => {
+    const route = defaultAccessibleRoute(
+      canViewCatalog,
+      canRequestMedia,
+      canResolveImports,
       canManageUserAccounts,
       canManageUsers,
-      canResolveImports,
-      canRequestMedia,
-      canViewCatalog,
-    ],
-  );
+      canManageSystemSettings,
+      canManageCatalogSettings,
+      canManageLibrarySettings,
+    );
+    // The catalog a user lands on must be one they have not hidden.
+    const facet = facetForView(route.view)?.id;
+    if (!facet) return route;
+    const landing = facetById(facetVisibility.visibleOr(facet))?.viewId;
+    return landing ? { ...route, view: landing as ViewId } : route;
+  }, [
+    facetVisibility,
+    canManageCatalogSettings,
+    canManageLibrarySettings,
+    canManageSystemSettings,
+    canManageUserAccounts,
+    canManageUsers,
+    canResolveImports,
+    canRequestMedia,
+    canViewCatalog,
+  ]);
 
   const navigateToAccessibleDefault = useCallback(() => {
     navigateTo(
@@ -1603,6 +1606,37 @@ function AuthenticatedHomePage({
     location.search,
     navigate,
     routeIsLanding,
+  ]);
+
+  // A hidden facet's catalog list is not a destination: send it to the first
+  // visible catalog. Title pages under that facet still open, since a hidden
+  // facet never hides what the user already has.
+  useEffect(() => {
+    if (
+      !routeIsCanonical ||
+      !isMediaView(view) ||
+      facetVisibility.isVisible(view) ||
+      contentSettingsSection !== "overview" ||
+      parsedOverviewSlug ||
+      legacyOverviewTitleId
+    ) {
+      return;
+    }
+    const facet = facetForView(view)?.id;
+    const target = facet
+      ? facetById(facetVisibility.visibleOr(facet))?.viewId
+      : undefined;
+    if (target && target !== view) {
+      navigate(buildViewPath(target as ViewId), { replace: true });
+    }
+  }, [
+    contentSettingsSection,
+    facetVisibility,
+    legacyOverviewTitleId,
+    navigate,
+    parsedOverviewSlug,
+    routeIsCanonical,
+    view,
   ]);
 
   useEffect(() => {

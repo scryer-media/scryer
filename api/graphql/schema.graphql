@@ -8480,6 +8480,10 @@ type GeneralSettingsPayload {
 	"""
 	experimentalFeaturesEnabled: Boolean!
 	"""
+	Facets turned off for the whole instance. They are hidden for every user and their background work does not run; their titles and files stay.
+	"""
+	disabledFacets: [MediaFacetValue!]!
+	"""
 	Whether this instance sends its library context to the metadata gateway for personalized discovery.
 	"""
 	personalizedDiscoveryEnabled: Boolean!
@@ -10411,6 +10415,10 @@ type InstanceFeaturesPayload {
 	Whether this instance sends its library context to the metadata gateway for personalized discovery.
 	"""
 	personalizedDiscoveryEnabled: Boolean!
+	"""
+	Facets an administrator turned off for the whole instance.
+	"""
+	disabledFacets: [MediaFacetValue!]!
 }
 
 """
@@ -20769,7 +20777,7 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, language or table_columns keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, hidden_facets, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
 	): UiSettingsPayload!
@@ -31702,6 +31710,10 @@ input SetMyUiSettingsInput {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
+	Facets to hide from navigation, discovery and pickers; omitted or null preserves the saved list and an empty list shows every facet. At least one facet must stay visible.
+	"""
+	hiddenFacets: [UiSettingsFacetValue!]
+	"""
 	Optional interface language code; null preserves the saved value and an empty string clears it.
 	"""
 	language: String
@@ -35565,6 +35577,10 @@ type UiSettingsPayload {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
+	Facets the caller hid from navigation, discovery and pickers; never every facet.
+	"""
+	hiddenFacets: [UiSettingsFacetValue!]!
+	"""
 	Interface language code saved on the caller's profile, or null to follow the browser.
 	"""
 	language: String
@@ -35905,6 +35921,10 @@ input UpdateGeneralSettingsInput {
 	Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
 	"""
 	experimentalFeaturesEnabled: Boolean
+	"""
+	Facets to turn off for the whole instance; at least one must stay on. Omission preserves the saved list.
+	"""
+	disabledFacets: [MediaFacetValue!]
 	"""
 	Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
 	"""

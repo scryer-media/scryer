@@ -53,6 +53,7 @@ interface SetupImportLibrariesViewProps {
   t: (key: string, values?: Record<string, unknown>) => string;
 }
 
+// eslint-disable-next-line no-restricted-syntax -- setup creates libraries for every facet before any user preference exists
 const FACET_PICKER: WizardFacet[] = ["MOVIE", "SERIES", "ANIME"];
 
 // Native drag-and-drop is reserved for wide, fine-pointer layouts. The
