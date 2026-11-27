@@ -1,0 +1,49 @@
+# The bridge's queue snapshot subscription for a Weaver with torrents. A
+# Weaver without torrents refuses it, and the bridge subscribes with the
+# NZB-only snapshot instead.
+subscription QueueSnapshotsWithTorrents {
+  queueSnapshots {
+    items {
+      id
+      name
+      originalTitle
+      state
+      error
+      progressPercent
+      totalBytes
+      downloadedBytes
+      failedBytes
+      health
+      category
+      outputDir
+      createdAt
+      clientRequestId
+      attributes {
+        key
+        value
+      }
+      attention {
+        code
+        message
+      }
+      protocol
+      torrent {
+        ...WeaverTorrentRow
+      }
+    }
+    latestCursor
+  }
+}
+
+fragment WeaverTorrentRow on Torrent {
+  id
+  infohashV1
+  private
+  ratio
+  uploadedBytes
+  seedingSeconds
+  completedAt
+  storageDir
+  seedingGoalMet
+  contentReady
+}

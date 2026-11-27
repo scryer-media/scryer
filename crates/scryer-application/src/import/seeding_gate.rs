@@ -1440,6 +1440,45 @@ mod tests {
         }
     }
 
+    // A seeding Weaver torrent reports `can_move_files: false` for as long as
+    // it is in the client, and its own goal verdict as `can_remove`: the gate
+    // holds it until the goal is met, and never imports it by move.
+    #[test]
+    fn a_seeding_weaver_torrent_is_never_imported_by_move() {
+        for goal_met in [false, true] {
+            let snapshot = DownloadSeedingSnapshot {
+                can_remove: Some(goal_met),
+                can_move_files: Some(false),
+                seed_ratio: Some(0.5),
+                seed_time_seconds: Some(600),
+                is_private: Some(false),
+                uploaded_bytes: Some(10),
+                completed_at: Some("2026-01-01T01:00:00+00:00".to_string()),
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                never_remove: false,
+            };
+            let decision = evaluate_seeding_gate(&SeedingGateInput {
+                client_type: "weaver".to_string(),
+                observation: Some(TorrentSeedingObservation::from(&snapshot)),
+                ..SeedingGateInput::default()
+            });
+            if goal_met {
+                assert!(
+                    matches!(decision.outcome, SeedingGateOutcome::Released { .. }),
+                    "{decision:?}"
+                );
+            } else {
+                assert_eq!(decision.outcome, SeedingGateOutcome::Hold);
+            }
+            assert_eq!(
+                decision.import_mode(ImportMode::Move),
+                ImportMode::HardlinkOrCopy,
+                "goal met: {goal_met}"
+            );
+        }
+    }
+
     #[test]
     fn unstable_data_blocks_a_move_even_when_seeding_is_done() {
         let decision = evaluate_seeding_gate(&input(TorrentSeedingObservation {

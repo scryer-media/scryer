@@ -1,0 +1,8 @@
+# Which protocol one live job is, before it is removed: a torrent is removed
+# with `removeTorrent`, an NZB job as before.
+query QueueItemProtocol($ids: [Int!]) {
+  queueItems(filter: { itemIds: $ids }) {
+    id
+    protocol
+  }
+}

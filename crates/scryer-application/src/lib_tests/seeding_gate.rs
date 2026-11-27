@@ -299,6 +299,49 @@ async fn an_already_held_torrent_re_enters_the_gate_and_is_still_not_removed() {
     assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
+// A Weaver torrent imported while it seeds is parked like any torrent: with
+// its goal unmet the cleanup holds it, nothing is removed, and the import
+// check never offers it again.
+#[tokio::test]
+async fn an_imported_seeding_weaver_torrent_is_held_and_never_imported_again() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Weaver Seeding Hold").await;
+
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "91",
+        &title,
+        TrackedDownloadState::ImportedSeeding,
+        true,
+    );
+    tracked.client_item.seeding = Some(DownloadSeedingSnapshot {
+        can_remove: Some(false),
+        can_move_files: Some(false),
+        is_private: Some(true),
+        ..Default::default()
+    });
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::ImportedSeeding,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::HeldForSeeding);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
+
+    // The queue keeps reporting the seeding torrent as completed; the row is
+    // settled, so the check leaves it as it is.
+    crate::import::completed_download::check(&app, &mut tracked).await;
+    assert_eq!(tracked.state, TrackedDownloadState::ImportedSeeding);
+    assert!(tracked.completed_source.is_none());
+}
+
 #[tokio::test]
 async fn a_torrent_that_left_the_client_settles_without_a_removal_call() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -2756,6 +2799,16 @@ async fn client_failure_fixture(
         true,
     );
     tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    // Weaver carries torrents too: only a job Scryer recorded as Usenet is
+    // released from the torrent protections, as a grab of an NZB records it.
+    if client_type == "weaver" {
+        record_mixed_job(
+            &app,
+            &tracked,
+            crate::tracked_downloads::DownloadJobProtocol::Usenet,
+        )
+        .await;
+    }
     client
         .history_items
         .lock()

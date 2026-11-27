@@ -1,0 +1,5 @@
+# Removes one torrent, and its files when `deleteFiles` is true. Weaver answers
+# with the removed torrent's id.
+mutation RemoveTorrent($id: Int!, $deleteFiles: Boolean!) {
+  removeTorrent(id: $id, deleteFiles: $deleteFiles)
+}

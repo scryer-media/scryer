@@ -1,0 +1,15 @@
+# Hands Weaver a torrent file (`source.metainfoUpload`) or a magnet
+# (`source.magnet`). `status` decides the outcome: ACCEPTED and
+# IDEMPOTENT_REPLAY carry the torrent Scryer tracks, DUPLICATE names one
+# another request already holds.
+mutation SubmitTorrent($input: SubmitTorrentInput!) {
+  submitTorrent(input: $input) {
+    accepted
+    status
+    clientRequestId
+    torrent {
+      id
+      infohashV1
+    }
+  }
+}
