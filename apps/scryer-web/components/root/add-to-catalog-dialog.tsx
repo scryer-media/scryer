@@ -65,6 +65,8 @@ type AddToCatalogDialogProps = {
     facet: Facet,
     options: MetadataCatalogAddOptions,
   ) => Promise<string | null>;
+  /** The anime "Monitor Specials & OVAs" setting, which seeds Advanced. */
+  animeMonitorSpecials?: boolean;
 };
 
 /** Sentinel used by callers when the dialog is closed so they don't need to pass null. */
@@ -95,12 +97,8 @@ function buildDefaultDraft(
     rootFolderId: defaultRootFolderId,
     seasonFolder: facet !== "MOVIE",
     monitorType: defaultMonitorTypeForFacet(facet, savedMonitorType),
-    ...(facet === "ANIME"
-      ? {
-          monitorSpecials: false,
-          interSeasonMovies: true,
-        }
-      : {}),
+    // Specials and inter-season movies are left unset so the add follows the
+    // anime settings of the chosen library.
   };
 }
 
@@ -132,6 +130,7 @@ export function AddToCatalogDialog({
   manageableLibraries,
   rootFolderOptions,
   onAdd,
+  animeMonitorSpecials = false,
 }: AddToCatalogDialogProps) {
   const t = useTranslate();
   const client = useClient();
@@ -661,6 +660,9 @@ export function AddToCatalogDialog({
               onLoadingChange={setMonitorSelectionLoading}
               disabled={isSubmitting}
               idPrefix="add-to-catalog"
+              includeSpecialsByDefault={
+                facet === "ANIME" && animeMonitorSpecials
+              }
             />
           ) : null}
 

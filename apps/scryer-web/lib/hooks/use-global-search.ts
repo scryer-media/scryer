@@ -81,6 +81,7 @@ import type {
   MonitorSelectionDraft,
   RootFolderOption,
 } from "@/lib/types/titles";
+import { animeAddTitleOptions } from "@/lib/utils/anime-add-options";
 import { monitorSelectionInput } from "@/lib/utils/monitor-selection";
 import type {
   TitleExternalRating,
@@ -1761,12 +1762,7 @@ export function useGlobalSearch({
                 ...(facet === "MOVIE"
                   ? {}
                   : { useSeasonFolders: options.seasonFolder }),
-                ...(facet === "ANIME"
-                  ? {
-                      monitorSpecials: options.monitorSpecials !== false,
-                      interSeasonMovies: options.interSeasonMovies !== false,
-                    }
-                  : {}),
+                ...animeAddTitleOptions(facet, options),
                 ...(options.monitorType === "ADVANCED"
                   ? {
                       monitorSelection: monitorSelectionInput(

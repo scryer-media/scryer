@@ -152,6 +152,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
     requestableLibrariesByFacet,
     resolveDefaultQualityProfileIdForFacet,
     rootFoldersByFacet,
+    animeCatalogDefaults,
   } = useSearchContext();
   const { ids: visibleFacetIds } = useFacets();
   const itemFacet = useDiscoveryItemFacet();
@@ -778,6 +779,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           )}
           manageableLibraries={librariesByFacet[selectedFacet] ?? []}
           rootFolderOptions={rootFoldersByFacet[selectedFacet] ?? []}
+          animeMonitorSpecials={animeCatalogDefaults.monitorSpecials}
           onAdd={(result, facet, options) =>
             // The rails reload on the catalog-titles event, same as an add made
             // from global search.

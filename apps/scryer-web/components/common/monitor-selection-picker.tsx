@@ -146,11 +146,13 @@ function toSeriesMovieChoices(
 
 function defaultSelection(
   choices: SeriesMonitorChoices,
+  includeSpecials = false,
 ): MonitorSelectionDraft {
   return normalizeMonitorSelection({
-    // Specials stay off by default, matching the non-advanced default.
+    // Specials (season 0) start selected only when the caller's specials
+    // setting monitors them, matching the non-advanced add.
     seasonNumbers: choices.seasons
-      .filter((season) => season.number !== 0)
+      .filter((season) => includeSpecials || season.number !== 0)
       .map((season) => season.number),
     seriesMovies: choices.seriesMovies
       .filter((movie) => movie.canon)
@@ -169,6 +171,8 @@ type MonitorSelectionPickerProps = {
   disabled?: boolean;
   idPrefix: string;
   className?: string;
+  /** Start with specials (season 0) selected when nothing is picked yet. */
+  includeSpecialsByDefault?: boolean;
 };
 
 export function MonitorSelectionPicker({
@@ -181,6 +185,7 @@ export function MonitorSelectionPicker({
   disabled = false,
   idPrefix,
   className,
+  includeSpecialsByDefault = false,
 }: MonitorSelectionPickerProps) {
   const t = useTranslate();
   const client = useClient();
@@ -202,6 +207,7 @@ export function MonitorSelectionPicker({
   // and the current draft in refs stops the load effect from re-running (and
   // re-seeding the defaults) on every keystroke elsewhere in the dialog.
   const onChangeRef = React.useRef(onChange);
+  const includeSpecialsRef = React.useRef(includeSpecialsByDefault);
   const onLoadingChangeRef = React.useRef(onLoadingChange);
   const seededSelectionRef = React.useRef<string | null>(null);
   const hasSelection =
@@ -211,6 +217,7 @@ export function MonitorSelectionPicker({
   // Declared before the load effect so the refs are current whenever it re-runs.
   React.useEffect(() => {
     onChangeRef.current = onChange;
+    includeSpecialsRef.current = includeSpecialsByDefault;
     onLoadingChangeRef.current = onLoadingChange;
     hasSelectionRef.current = hasSelection;
   });
@@ -269,7 +276,9 @@ export function MonitorSelectionPicker({
           seededSelectionRef.current !== cacheKey
         ) {
           seededSelectionRef.current = cacheKey;
-          onChangeRef.current(defaultSelection(loaded));
+          onChangeRef.current(
+            defaultSelection(loaded, includeSpecialsRef.current),
+          );
         }
       })
       .catch((error: unknown) => {

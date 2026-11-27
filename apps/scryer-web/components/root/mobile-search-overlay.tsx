@@ -402,6 +402,7 @@ export function MobileSearchOverlay({
     catalogQualityProfileOptions,
     librariesByFacet,
     rootFoldersByFacet,
+    animeCatalogDefaults,
     requestableLibrariesByFacet,
     setGlobalSearch,
     clearGlobalSearch,
@@ -1313,6 +1314,7 @@ export function MobileSearchOverlay({
           rootFoldersByFacet[addDialogTarget?.facet ?? "SERIES"]
         }
         onAdd={handleAddDialogSubmit}
+        animeMonitorSpecials={animeCatalogDefaults.monitorSpecials}
       />
       <RequestMediaDialog
         open={requestDialogTarget !== null}
