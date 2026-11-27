@@ -6135,6 +6135,10 @@ const en: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Folder template contains an illegal filesystem character: {{character}}",
   "settings.renameTemplateLabel": "Rename template",
+  "settings.renameTemplateNoExtensionTitle": "Save without {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "This rename template has no {ext} token. Scryer will add each file's extension to the end of the name.",
+  "settings.renameTemplateNoExtensionConfirm": "Save anyway",
   "settings.renameTemplatePlaceholder": "Placeholder",
   "settings.renameTemplateRequired": "Rename template is required.",
   "settings.renameCollisionPolicyLabel": "Collision policy",

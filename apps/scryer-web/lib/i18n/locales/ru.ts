@@ -1358,6 +1358,10 @@ const ru: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Шаблон папки содержит недопустимый символ файловой системы: {{character}}",
   "settings.renameTemplateLabel": "Шаблон переименования",
+  "settings.renameTemplateNoExtensionTitle": "Сохранить без {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "В этом шаблоне переименования нет токена {ext}. Scryer добавит расширение каждого файла в конец имени.",
+  "settings.renameTemplateNoExtensionConfirm": "Всё равно сохранить",
   "settings.renameTemplatePlaceholder": "Заполнитель",
   "settings.renameTemplateHelp":
     "Токены шаблона основаны на метаданных (например: {title}, {year}, {quality}, {ext}).",
