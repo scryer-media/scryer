@@ -3649,7 +3649,6 @@ impl crate::ports::RequestRuleSetRepository for NullRequestRuleSetRepository {
         _name: &str,
         _description: &str,
         _library_ids: &[String],
-        _applicability: scryer_domain::RequestRuleApplicability,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         Err(AppError::Repository(

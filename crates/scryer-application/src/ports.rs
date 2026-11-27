@@ -3737,6 +3737,8 @@ pub struct MediaRequestQuery {
     pub library_ids: Option<Vec<String>>,
     pub status: Option<scryer_domain::MediaRequestStatus>,
     pub requester_user_id: Option<String>,
+    /// Only requests that created this title.
+    pub created_title_id: Option<String>,
     pub order: MediaRequestOrder,
     /// The most rows to return, taken after `offset` in the list order. `None`
     /// reads every matching row, for the internal passes that need them all.
@@ -8455,6 +8457,23 @@ pub trait ImportArtifactRepository: Send + Sync {
         self.count_by_result_for_source_identity(identity, result)
             .await
     }
+
+    /// The import and the download-relative source path of the newest
+    /// artifact that imported `media_file_id`, when both were recorded.
+    async fn imported_source_for_media_file(
+        &self,
+        _media_file_id: &str,
+    ) -> AppResult<Option<ImportedMediaFileSource>> {
+        Ok(None)
+    }
+}
+
+/// Where an imported library file came from in its download folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportedMediaFileSource {
+    pub import_id: String,
+    /// The source path relative to the download folder.
+    pub relative_path: String,
 }
 
 /// Outcome of the Search-specific durable job boundary. An existing accepted
@@ -11556,212 +11575,118 @@ pub trait BlocklistRepository: Send + Sync {
     /// is deleted: its rows can never match again, but they would still render.
     async fn delete_for_indexer(&self, indexer_id: &str) -> AppResult<()>;
 
-    /// Record a confirmed library-scoped sampled-content block.
-    async fn block_content(&self, entry: &NewLibraryContentBlock) -> AppResult<bool> {
-        let _ = entry;
-        Ok(false)
-    }
+    // ── Bad files ───────────────────────────────────────────────────────────
 
-    /// Whether this sampled proof is blocked in the library.
-    async fn is_content_blocked(
+    /// The content identities of the title's bad-file entries, with each
+    /// entry's id. One read serves a whole import unit of work.
+    async fn list_content_identities_for_title(
         &self,
-        library_id: &str,
-        proof: &scryer_domain::ImportContentProof,
-        scheme: &str,
-    ) -> AppResult<bool> {
-        let _ = (library_id, proof, scheme);
-        Ok(false)
-    }
-
-    async fn has_content_block_size(&self, library_id: &str, size_bytes: i64) -> AppResult<bool> {
-        let _ = (library_id, size_bytes);
-        Ok(false)
-    }
-
-    /// Return one confirmed library content block.
-    async fn get_content_block(
-        &self,
-        id: &str,
-    ) -> AppResult<Option<scryer_domain::LibraryContentBlock>> {
-        let _ = id;
-        Ok(None)
-    }
-
-    /// Remove one confirmed library content block.
-    async fn remove_content_block(&self, id: &str) -> AppResult<()> {
-        let _ = id;
-        Ok(())
-    }
-
-    /// List bounded confirmed content blocks for a library.
-    async fn list_content_blocks(
-        &self,
-        library_id: &str,
-        limit: usize,
-    ) -> AppResult<Vec<scryer_domain::LibraryContentBlock>> {
-        let _ = (library_id, limit);
+        _title_id: &str,
+    ) -> AppResult<Vec<(String, scryer_domain::BlocklistContentIdentity)>> {
         Ok(Vec::new())
     }
 
-    /// Persist a media-issue report for later review.
+    /// The title's bad-file entry with this content identity, if any.
+    async fn find_content_block(
+        &self,
+        _title_id: &str,
+        _identity: &scryer_domain::BlocklistContentIdentity,
+    ) -> AppResult<Option<BlocklistEntry>> {
+        Ok(None)
+    }
+
+    /// Delete one entry, clear the bad-file stamp from the files it marked
+    /// and name the reports it confirmed, in one transaction.
+    async fn remove_and_unmark(&self, _id: &str) -> AppResult<Vec<crate::UnmarkedMediaIssue>> {
+        Err(AppError::Repository(
+            "bad-file entries are not supported by this repository".into(),
+        ))
+    }
+
     async fn submit_media_issue(
         &self,
-        issue: &NewMediaIssue,
+        _issue: &crate::NewMediaIssue,
     ) -> AppResult<scryer_domain::MediaIssue> {
-        let _ = issue;
         Err(AppError::Repository(
-            "media issue repository is not configured".into(),
+            "media issues are not supported by this repository".into(),
         ))
     }
 
-    async fn get_media_issue(&self, id: &str) -> AppResult<Option<scryer_domain::MediaIssue>> {
-        let _ = id;
+    async fn get_media_issue(&self, _id: &str) -> AppResult<Option<scryer_domain::MediaIssue>> {
         Ok(None)
     }
 
-    async fn record_media_issue_rule_trace(
-        &self,
-        record: &scryer_domain::RequestRuleDecisionRecord,
-        input_json: &str,
-    ) -> AppResult<bool> {
-        let _ = (record, input_json);
-        Ok(false)
+    /// Link a pending report to the rule decision trace evaluated for it.
+    async fn set_media_issue_rule_decision(&self, _id: &str, _decision_id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media issues are not supported by this repository".into(),
+        ))
     }
 
-    /// False proves that no other registered file in the library can match
-    /// this sampled proof. None denotes an unavailable impact index.
-    async fn media_issue_has_other_size_candidates(
-        &self,
-        library_id: &str,
-        file_id: &str,
-        size_bytes: i64,
-    ) -> AppResult<Option<bool>> {
-        let _ = (library_id, file_id, size_bytes);
-        Ok(None)
-    }
-
-    async fn list_media_issue_matching_candidates(
-        &self,
-        library_id: &str,
-        size_bytes: i64,
-        after_id: Option<&str>,
-        limit: usize,
-    ) -> AppResult<Vec<crate::MediaIssueMatchingCandidate>> {
-        let _ = (library_id, size_bytes, after_id, limit);
-        Ok(Vec::new())
-    }
-
-    async fn note_scanned_content_block(
-        &self,
-        library_id: &str,
-        file_id: &str,
-        proof: &scryer_domain::ImportContentProof,
-        scheme: &str,
-    ) -> AppResult<()> {
-        let _ = (library_id, file_id, proof, scheme);
-        Ok(())
-    }
-
-    async fn clear_scanned_content_block(&self, file_id: &str) -> AppResult<()> {
-        let _ = file_id;
-        Ok(())
-    }
-
+    /// One page of the library's reports, newest first. A report whose
+    /// replacement search ran reads as `ReplacementImported` once a file not
+    /// marked bad was imported for its media after the report last changed.
     async fn list_media_issues(
         &self,
-        library_id: &str,
-        status: Option<scryer_domain::MediaIssueStatus>,
-        limit: usize,
-        offset: usize,
+        _library_id: &str,
+        _status: Option<scryer_domain::MediaIssueStatus>,
+        _limit: usize,
+        _offset: usize,
     ) -> AppResult<Vec<scryer_domain::MediaIssue>> {
-        let _ = (library_id, status, limit, offset);
         Ok(Vec::new())
     }
 
-    async fn list_media_issues_for_title(
-        &self,
-        title_id: &str,
-        status: Option<scryer_domain::MediaIssueStatus>,
-        limit: usize,
-    ) -> AppResult<Vec<scryer_domain::MediaIssue>> {
-        let _ = (title_id, status, limit);
-        Ok(Vec::new())
-    }
-
-    /// Atomically confirm the content block and the pending report. True only
-    /// for the caller that performed the transition.
-    async fn confirm_media_issue(
-        &self,
-        _confirmation: crate::ConfirmMediaIssue<'_>,
-    ) -> AppResult<bool> {
+    /// Mark the reported file bad: write or extend the title's blocklist
+    /// entry, stamp the matching files and approve the report, in one
+    /// transaction. `Ok(false)` when the report was no longer pending.
+    async fn confirm_media_issue(&self, _confirm: crate::ConfirmMediaIssue<'_>) -> AppResult<bool> {
         Err(AppError::Repository(
-            "media issue repository is not configured".into(),
+            "media issues are not supported by this repository".into(),
         ))
     }
 
+    async fn reject_media_issue(
+        &self,
+        _id: &str,
+        _reviewer_user_id: Option<&str>,
+    ) -> AppResult<Option<scryer_domain::MediaIssue>> {
+        Err(AppError::Repository(
+            "media issues are not supported by this repository".into(),
+        ))
+    }
+
+    /// Set the execution status. `Ok(false)` when nothing changed.
+    async fn set_media_issue_execution_status(
+        &self,
+        _id: &str,
+        _status: scryer_domain::MediaIssueExecutionStatus,
+        _error_code: Option<&str>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "media issues are not supported by this repository".into(),
+        ))
+    }
+
+    /// Operator-confirmed recycles a restart interrupted, oldest first.
     async fn interrupted_media_issue_recycles(
         &self,
-        limit: u32,
+        _limit: usize,
     ) -> AppResult<Vec<crate::MediaIssueRecycleIntent>> {
-        let _ = limit;
         Ok(Vec::new())
     }
 
     async fn save_media_issue_recycle_receipt(
         &self,
-        issue_id: &str,
-        receipt: &crate::recycle_bin::PreparedRecycleFile,
-    ) -> AppResult<bool> {
-        let _ = (issue_id, receipt);
-        Ok(false)
+        _id: &str,
+        _receipt_json: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media issues are not supported by this repository".into(),
+        ))
     }
 
-    async fn get_media_issue_recycle_receipt(
-        &self,
-        issue_id: &str,
-    ) -> AppResult<Option<crate::recycle_bin::PreparedRecycleFile>> {
-        let _ = issue_id;
+    async fn get_media_issue_recycle_receipt(&self, _id: &str) -> AppResult<Option<String>> {
         Ok(None)
-    }
-
-    async fn reject_media_issue(
-        &self,
-        issue_id: &str,
-        reviewer_user_id: Option<&str>,
-        rule_decision_id: Option<&str>,
-    ) -> AppResult<Option<scryer_domain::MediaIssue>> {
-        let _ = (issue_id, reviewer_user_id, rule_decision_id);
-        Ok(None)
-    }
-
-    async fn set_media_issue_execution_status(
-        &self,
-        issue_id: &str,
-        execution_status: scryer_domain::MediaIssueExecutionStatus,
-        execution_error_code: Option<&str>,
-    ) -> AppResult<bool> {
-        let _ = (issue_id, execution_status, execution_error_code);
-        Ok(false)
-    }
-
-    async fn set_media_issue_execution_statuses(
-        &self,
-        issue_ids: &[String],
-        execution_status: scryer_domain::MediaIssueExecutionStatus,
-        execution_error_code: Option<&str>,
-    ) -> AppResult<usize> {
-        let mut count = 0;
-        for issue_id in issue_ids {
-            count += usize::from(
-                self.set_media_issue_execution_status(
-                    issue_id,
-                    execution_status,
-                    execution_error_code,
-                )
-                .await?,
-            );
-        }
-        Ok(count)
     }
 }
 
@@ -12698,7 +12623,6 @@ pub trait RequestRuleSetRepository: Send + Sync {
         name: &str,
         description: &str,
         library_ids: &[String],
-        applicability: scryer_domain::RequestRuleApplicability,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 

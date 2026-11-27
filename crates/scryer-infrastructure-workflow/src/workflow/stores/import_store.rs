@@ -1440,6 +1440,34 @@ impl ImportArtifactRepository for ImportStore {
         .await
     }
 
+    async fn imported_source_for_media_file(
+        &self,
+        media_file_id: &str,
+    ) -> AppResult<Option<scryer_application::ImportedMediaFileSource>> {
+        // Served by idx_download_import_artifacts_imported_media_file on both
+        // engines; a file has one artifact row per episode it holds.
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT import_id, relative_path
+             FROM download_import_artifacts
+             WHERE imported_media_file_id = {}
+               AND result = 'imported'
+               AND import_id IS NOT NULL
+               AND relative_path IS NOT NULL
+             ORDER BY created_at DESC
+             LIMIT 1",
+            &[SqlArg::Text(media_file_id.to_owned())],
+        )
+        .await?;
+        row.map(|row| {
+            Ok(scryer_application::ImportedMediaFileSource {
+                import_id: row.text("import_id")?,
+                relative_path: row.text("relative_path")?,
+            })
+        })
+        .transpose()
+    }
+
     async fn list_by_source_identity(
         &self,
         identity: &ClientJobLocator,

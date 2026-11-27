@@ -5691,6 +5691,7 @@ fn title_catalog_live_primary_file_exists(dialect: TitleCatalogSqlDialect, alias
         "EXISTS (SELECT 1 FROM media_files {alias} \
           WHERE {alias}.title_id = titles.id \
             AND {alias}.role = 'primary' \
+            AND {alias}.bad_file_blocklist_id IS NULL \
             AND {})",
         title_catalog_live_media_file_predicate(dialect, alias)
     )
@@ -5729,6 +5730,7 @@ fn title_catalog_outstanding_episode_exists(dialect: TitleCatalogSqlDialect) -> 
                      ON catalog_episode_media.id = catalog_episode_file.file_id \
                   WHERE catalog_episode_file.episode_id = catalog_episode.id \
                     AND catalog_episode_media.role = 'primary' \
+                    AND catalog_episode_media.bad_file_blocklist_id IS NULL \
                     AND {}))",
         title_catalog_aired_episode_predicate(dialect, "catalog_episode"),
         title_catalog_bool_column_is_true(dialect, "catalog_episode.monitored"),
@@ -6337,16 +6339,14 @@ fn title_catalog_live_media_file_predicate(dialect: TitleCatalogSqlDialect, alia
             format!(
                 "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
                   AND instr({alias}.file_path, '/{UPGRADE_REPLACEMENT_PREFIX}') = 0
-                  AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0
-                  AND {alias}.content_block_id IS NULL)"
+                  AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0)"
             )
         }
         TitleCatalogSqlDialect::Postgres => {
             format!(
                 "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
                   AND POSITION('/{UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
-                  AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
-                  AND {alias}.content_block_id IS NULL)"
+                  AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0)"
             )
         }
     }
@@ -6716,6 +6716,7 @@ fn title_catalog_episode_progress_subquery_scoped(
                             AND {}
                             AND fem.role = 'primary'
                             AND mf.scan_status <> 'review_required'
+                            AND mf.bad_file_blocklist_id IS NULL
                      ) THEN 1 END) AS owned_episodes
            FROM episodes e
            {scope_join}

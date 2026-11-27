@@ -1494,31 +1494,7 @@ pub struct NewBlocklistEntry {
     pub reason: Option<String>,
 }
 
-/// A confirmed library-scoped sampled-content block.
-#[derive(Clone, Debug)]
-pub struct NewLibraryContentBlock {
-    pub library_id: String,
-    pub proof: scryer_domain::ImportContentProof,
-    pub scheme: String,
-    pub reason: Option<String>,
-    pub approving_actor_id: Option<String>,
-    pub source_report_id: Option<String>,
-    pub source_media_file_id: Option<String>,
-    pub provenance_json: Option<String>,
-}
-
-pub struct ConfirmMediaIssue<'a> {
-    pub issue_id: &'a str,
-    pub reviewer_user_id: Option<&'a str>,
-    pub rule_decision_id: Option<&'a str>,
-    pub remediation: scryer_domain::MediaIssueRemediation,
-    pub block: &'a NewLibraryContentBlock,
-    pub release: Option<&'a NewBlocklistEntry>,
-    pub recycle_fingerprint: Option<&'a str>,
-    pub matching_media_file_ids: &'a [String],
-}
-
-/// A pending or reviewed media-issue report.
+/// A bad-file report to record.
 #[derive(Clone, Debug)]
 pub struct NewMediaIssue {
     pub library_id: String,
@@ -1526,24 +1502,42 @@ pub struct NewMediaIssue {
     pub media_file_id: String,
     pub file_path_snapshot: String,
     pub file_version: String,
-    pub proof: scryer_domain::ImportContentProof,
-    pub scheme: String,
+    pub content: scryer_domain::BlocklistContentIdentity,
     pub reporter_user_id: String,
-    pub reason_code: String,
+    pub reason: scryer_domain::MediaIssueReason,
     pub details: Option<String>,
     pub remediation: scryer_domain::MediaIssueRemediation,
     pub affected_episode_ids: Vec<String>,
     pub affected_series_movie_link_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-pub struct MediaIssueMatchingCandidate {
-    pub id: String,
-    pub title_id: String,
-    pub file_path: String,
-    pub size_bytes: i64,
+/// Mark a reported file bad.
+pub struct ConfirmMediaIssue<'a> {
+    pub issue_id: &'a str,
+    /// `None` when a rule confirmed the report.
+    pub reviewer_user_id: Option<&'a str>,
+    /// What the confirmation authorizes.
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub title_id: &'a str,
+    pub content: &'a scryer_domain::BlocklistContentIdentity,
+    /// The grab the file came from, when known. Its entry gains the content
+    /// identity instead of a second entry being written.
+    pub release: Option<&'a NewBlocklistEntry>,
+    pub reason: &'a str,
+    pub recycle_fingerprint: Option<&'a str>,
+    /// The title's files whose content matches. Each is stamped.
+    pub matching_media_file_ids: &'a [String],
 }
 
+/// A report whose bad-file mark was taken off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnmarkedMediaIssue {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+}
+
+/// An operator-confirmed recycle to resume after a restart.
 #[derive(Clone, Debug)]
 pub struct MediaIssueRecycleIntent {
     pub issue_id: String,

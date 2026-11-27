@@ -1,3 +1,4 @@
+mod bad_file_store;
 pub mod probe_store;
 mod release_decision_explanation;
 mod store;

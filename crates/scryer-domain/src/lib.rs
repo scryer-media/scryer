@@ -4278,28 +4278,68 @@ pub struct BlocklistEntry {
     pub info_hash: Option<String>,
     pub reason: Option<String>,
     pub created_at: String,
+    /// Set when the entry marks a file bad: the sampled content identity of
+    /// that file. A content-only entry has an empty release name.
+    pub content: Option<BlocklistContentIdentity>,
 }
 
-/// A library-scoped block of sampled media-file content.
+/// The sampled content identity a bad-file blocklist entry carries.
 ///
-/// This identity is intentionally not a full-file hash and is not a path:
-/// `(scheme, size_bytes, sample_bytes, sample_blake3)` describes the same
-/// 1 MiB head/tail proof used by import integrity checks. A match is a
-/// sampled match, not proof of full-byte equality.
+/// `(scheme, size_bytes, sample_bytes, sample_blake3)` is the import content
+/// proof: the size plus a BLAKE3 digest of the first and last MiB. A match is
+/// a sampled match, not proof of full-byte equality.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LibraryContentBlock {
-    pub id: String,
-    pub library_id: String,
+pub struct BlocklistContentIdentity {
     pub scheme: String,
     pub size_bytes: u64,
     pub sample_bytes: u64,
     pub sample_blake3: String,
-    pub reason: Option<String>,
-    pub approving_actor_id: Option<String>,
-    pub source_report_id: Option<String>,
-    pub source_media_file_id: Option<String>,
-    pub provenance_json: Option<String>,
-    pub created_at: String,
+}
+
+/// Why a reporter says a file is bad.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueReason {
+    /// The file does not play, or plays with visible or audible damage.
+    Corrupted,
+    /// The file holds a different movie or episode.
+    WrongContent,
+    /// The audio is not in the expected language.
+    WrongLanguage,
+    /// Audio and picture drift apart.
+    AudioOutOfSync,
+    /// The picture or sound is far worse than the quality suggests.
+    PoorQuality,
+    /// Anything else; the reporter explains in the details.
+    Other,
+}
+
+impl MediaIssueReason {
+    pub const ALL: [Self; 6] = [
+        Self::Corrupted,
+        Self::WrongContent,
+        Self::WrongLanguage,
+        Self::AudioOutOfSync,
+        Self::PoorQuality,
+        Self::Other,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Corrupted => "corrupted",
+            Self::WrongContent => "wrong_content",
+            Self::WrongLanguage => "wrong_language",
+            Self::AudioOutOfSync => "audio_out_of_sync",
+            Self::PoorQuality => "poor_quality",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str() == value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4310,7 +4350,7 @@ pub enum MediaIssueRemediation {
 }
 
 impl MediaIssueRemediation {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::MarkBad => "mark_bad",
             Self::RecycleAndSearch => "recycle_and_search",
@@ -4318,7 +4358,7 @@ impl MediaIssueRemediation {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        match value {
             "mark_bad" => Some(Self::MarkBad),
             "recycle_and_search" => Some(Self::RecycleAndSearch),
             _ => None,
@@ -4336,7 +4376,7 @@ pub enum MediaIssueStatus {
 }
 
 impl MediaIssueStatus {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Approved => "approved",
@@ -4346,7 +4386,7 @@ impl MediaIssueStatus {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        match value {
             "pending" => Some(Self::Pending),
             "approved" => Some(Self::Approved),
             "rejected" => Some(Self::Rejected),
@@ -4356,23 +4396,25 @@ impl MediaIssueStatus {
     }
 }
 
+/// What has happened to an approved report's file.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaIssueExecutionStatus {
     None,
+    /// The file is marked bad.
     Blocked,
     Recycling,
     RecycleFailed,
     NoEligibleRelease,
     DownloadQueued,
+    /// A file not marked bad was imported for the report's media after the
+    /// report last changed. Derived when reports are read; never stored.
     ReplacementImported,
     Searching,
-    Complete,
-    Failed,
 }
 
 impl MediaIssueExecutionStatus {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Blocked => "blocked",
@@ -4382,12 +4424,26 @@ impl MediaIssueExecutionStatus {
             Self::DownloadQueued => "download_queued",
             Self::ReplacementImported => "replacement_imported",
             Self::Searching => "searching",
-            Self::Complete => "complete",
-            Self::Failed => "failed",
         }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [
+            Self::None,
+            Self::Blocked,
+            Self::Recycling,
+            Self::RecycleFailed,
+            Self::NoEligibleRelease,
+            Self::DownloadQueued,
+            Self::ReplacementImported,
+            Self::Searching,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == value)
     }
 }
 
+/// A report that a library file is bad. Reports are kept as audit records.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaIssue {
     pub id: String,
@@ -4396,29 +4452,22 @@ pub struct MediaIssue {
     pub media_file_id: String,
     pub file_path_snapshot: String,
     pub file_version: String,
-    pub size_bytes: u64,
-    pub scheme: String,
-    pub sample_bytes: u64,
-    pub sample_blake3: String,
+    /// The reported file's sampled content identity.
+    pub content: BlocklistContentIdentity,
     pub reporter_user_id: String,
-    pub reason_code: String,
+    pub reason: MediaIssueReason,
     pub details: Option<String>,
     pub remediation: MediaIssueRemediation,
-    /// The remediation actually authorized by review/rule policy. It is
-    /// separate from the request, so mark-bad approval can never implicitly
-    /// authorize recycle-and-search.
+    /// The remediation review or a rule authorized. Marking a file bad never
+    /// authorizes recycling it.
     pub authorized_remediation: Option<MediaIssueRemediation>,
-    pub rule_input_schema_version: Option<i32>,
-    pub rule_input_hash: Option<String>,
-    pub rule_snapshot_json: Option<String>,
-    pub rule_votes_json: Vec<String>,
-    pub rule_effective_outcome: Option<String>,
-    pub rule_policy_outcome: Option<String>,
-    pub rule_hold_reasons: Vec<String>,
     pub status: MediaIssueStatus,
     pub affected_episode_ids: Vec<String>,
     pub affected_series_movie_link_ids: Vec<String>,
+    /// The rule decision trace, in `request_rule_decisions`.
     pub rule_decision_id: Option<String>,
+    /// The blocklist entry that marks the file bad, while it exists.
+    pub blocklist_id: Option<String>,
     pub reviewed_by_user_id: Option<String>,
     pub reviewed_at: Option<String>,
     pub execution_status: MediaIssueExecutionStatus,
@@ -4518,6 +4567,7 @@ pub enum DomainEventType {
     MediaIssueApproved,
     MediaIssueRejected,
     MediaIssueRecycleExecution,
+    MediaIssueUnmarked,
     TitleAdded,
     TitleUpdated,
     TitleRematched,
@@ -4588,6 +4638,7 @@ impl DomainEventType {
             Self::MediaIssueApproved => "media_issue_approved",
             Self::MediaIssueRejected => "media_issue_rejected",
             Self::MediaIssueRecycleExecution => "media_issue_recycle_execution",
+            Self::MediaIssueUnmarked => "media_issue_unmarked",
             Self::TitleAdded => "title_added",
             Self::TitleUpdated => "title_updated",
             Self::TitleRematched => "title_rematched",
@@ -4658,6 +4709,7 @@ impl DomainEventType {
             "media_issue_approved" => Some(Self::MediaIssueApproved),
             "media_issue_rejected" => Some(Self::MediaIssueRejected),
             "media_issue_recycle_execution" => Some(Self::MediaIssueRecycleExecution),
+            "media_issue_unmarked" => Some(Self::MediaIssueUnmarked),
             "title_added" => Some(Self::TitleAdded),
             "title_updated" => Some(Self::TitleUpdated),
             "title_rematched" => Some(Self::TitleRematched),
@@ -4826,6 +4878,27 @@ pub struct MediaIssueEventData {
     pub remediation: String,
     pub status: String,
     pub execution_status: String,
+}
+
+/// How a bad-file mark was taken off.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueUnmarkRoute {
+    /// The title's blocklist entry was cleared.
+    BlocklistClear,
+    /// A recycled copy of the file was restored with confirmation.
+    RecycleRestore,
+}
+
+/// A bad-file mark was taken off. The report stays approved; the event's
+/// actor is who unmarked it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssueUnmarkedEventData {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+    pub blocklist_id: String,
+    pub route: MediaIssueUnmarkRoute,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5640,6 +5713,7 @@ pub enum DomainEventPayload {
     MediaIssueApproved(MediaIssueEventData),
     MediaIssueRejected(MediaIssueEventData),
     MediaIssueRecycleExecution(MediaIssueEventData),
+    MediaIssueUnmarked(MediaIssueUnmarkedEventData),
     TitleAdded(TitleAddedEventData),
     TitleUpdated(TitleUpdatedEventData),
     TitleRematched(TitleRematchedEventData),
@@ -5712,6 +5786,7 @@ impl DomainEventPayload {
             Self::MediaIssueApproved(_) => DomainEventType::MediaIssueApproved,
             Self::MediaIssueRejected(_) => DomainEventType::MediaIssueRejected,
             Self::MediaIssueRecycleExecution(_) => DomainEventType::MediaIssueRecycleExecution,
+            Self::MediaIssueUnmarked(_) => DomainEventType::MediaIssueUnmarked,
             Self::TitleAdded(_) => DomainEventType::TitleAdded,
             Self::TitleUpdated(_) => DomainEventType::TitleUpdated,
             Self::TitleRematched(_) => DomainEventType::TitleRematched,
@@ -6968,33 +7043,6 @@ pub struct LifecycleSequenceTerminalMembership {
     pub released_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RequestRuleApplicability {
-    #[default]
-    Acquisition,
-    MediaIssue,
-    AcquisitionAndMediaIssue,
-}
-
-impl RequestRuleApplicability {
-    pub const fn as_storage_str(self) -> &'static str {
-        match self {
-            Self::Acquisition => "acquisition",
-            Self::MediaIssue => "media_issue",
-            Self::AcquisitionAndMediaIssue => "acquisition_and_media_issue",
-        }
-    }
-
-    pub fn parse_storage(value: &str) -> Option<Self> {
-        match value {
-            "acquisition" => Some(Self::Acquisition),
-            "media_issue" => Some(Self::MediaIssue),
-            "acquisition_and_media_issue" => Some(Self::AcquisitionAndMediaIssue),
-            _ => None,
-        }
-    }
-}
 /// A user-authored request rule set: identity, scope, and evaluation state.
 ///
 /// The matcher lives on [`RequestRuleRevision`], never here, so changing what a
@@ -7007,7 +7055,6 @@ pub struct RequestRuleSet {
     /// Whether the rule set takes part in deciding requests. A disabled rule
     /// set is not loaded and casts no vote.
     pub enabled: bool,
-    pub applicability: RequestRuleApplicability,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Revision number of the matcher currently in force.

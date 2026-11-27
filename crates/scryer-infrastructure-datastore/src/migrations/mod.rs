@@ -1,6 +1,8 @@
 pub mod assets;
 #[cfg(test)]
 mod audience_favorites_upgrade_tests;
+#[cfg(test)]
+mod bad_file_reports_upgrade_tests;
 pub mod blake3_identities;
 #[cfg(test)]
 #[path = "blake3_identities_upgrade_tests.rs"]
@@ -41,8 +43,6 @@ mod lifecycle_rule_state_upgrade_tests;
 mod lifecycle_rule_targets_upgrade_tests;
 #[cfg(test)]
 mod list_search_mode_upgrade_tests;
-#[cfg(test)]
-mod media_content_blocks_upgrade_tests;
 #[cfg(test)]
 #[path = "migration_progress_tests.rs"]
 mod migration_progress_tests;

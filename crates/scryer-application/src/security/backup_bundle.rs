@@ -1083,10 +1083,6 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "library_content_blocks",
-        classification: BackupTableClassification::Export,
-    },
-    BackupTableCatalogEntry {
         table: "media_issues",
         classification: BackupTableClassification::Export,
     },

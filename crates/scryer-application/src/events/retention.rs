@@ -31,6 +31,7 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::MediaIssueApproved
         | DomainEventType::MediaIssueRejected
         | DomainEventType::MediaIssueRecycleExecution
+        | DomainEventType::MediaIssueUnmarked
         | DomainEventType::ConfigurationChanged
         | DomainEventType::MetadataHydrationUpdated
         | DomainEventType::ReleaseGrabbed
