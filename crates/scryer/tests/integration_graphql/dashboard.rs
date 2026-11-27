@@ -228,6 +228,7 @@ fn imported_payload(title_name: &str) -> DomainEventPayload {
         episode_ids: vec![],
         size_bytes: Some(IMPORTED_SIZE_BYTES),
         upgrade: false,
+        file_placements: Vec::new(),
     })
 }
 

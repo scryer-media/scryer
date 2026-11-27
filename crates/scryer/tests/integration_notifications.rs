@@ -668,6 +668,7 @@ fn import_completed_event_data(
         episode_ids,
         size_bytes: None,
         upgrade: false,
+        file_placements: Vec::new(),
     }
 }
 

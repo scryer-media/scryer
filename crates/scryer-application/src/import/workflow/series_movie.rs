@@ -2197,6 +2197,9 @@ async fn import_additional_movie_download(
                 // Single-file import, so the file's size is also the total.
                 size_bytes: Some(file_result.size_bytes as i64),
                 upgrade: false,
+                file_placements: vec![
+                    file_result.file_placement(path_to_stored_string(&dest_path)),
+                ],
             }),
         ))
         .await;
@@ -2870,6 +2873,7 @@ async fn import_movie_download(
                             // Single-file import, so the file's size is also the total.
                             size_bytes: Some(outcome.new_size_bytes),
                             upgrade: true,
+                            file_placements: vec![outcome.placement.clone()],
                         }),
                     ))
                     .await;
@@ -3134,6 +3138,9 @@ async fn import_movie_download(
                 // Single-file import, so the file's size is also the total.
                 size_bytes: Some(file_result.size_bytes as i64),
                 upgrade: false,
+                file_placements: vec![
+                    file_result.file_placement(path_to_stored_string(&dest_path)),
+                ],
             }),
         ))
         .await;
@@ -3812,6 +3819,7 @@ async fn import_series_movie_download(
                                 // Single-file import, so the file's size is also the total.
                                 size_bytes: Some(outcome.new_size_bytes),
                                 upgrade: true,
+                                file_placements: vec![outcome.placement.clone()],
                             }),
                         ))
                         .await;
@@ -4107,6 +4115,7 @@ async fn import_series_movie_download(
             // Single-file import, so the file's size is also the total.
             size_bytes: Some(file_result.size_bytes as i64),
             upgrade: false,
+            file_placements: vec![file_result.file_placement(path_to_stored_string(&dest_path))],
         }),
     ))
     .await?;

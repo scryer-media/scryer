@@ -1000,6 +1000,17 @@ pub(crate) fn title_history_record_from_domain_event(
     let data_json = serialize_title_history_data(&event.payload);
     let episode_ids = event_episode_ids(event);
     let collection_id = event_collection_id(event);
+    let file_placements = match &event.payload {
+        DomainEventPayload::ImportCompleted(data) => data
+            .file_placements
+            .iter()
+            .map(|placement| scryer_domain::ImportFilePlacement {
+                path: redact_history_api_keys(&redact_history_urls(&placement.path)),
+                ..placement.clone()
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
 
     Some(TitleHistoryRecord {
         id: event.event_id.clone(),
@@ -1045,6 +1056,7 @@ pub(crate) fn title_history_record_from_domain_event(
         source_path,
         dest_path,
         size_bytes: title_history_size_bytes(&event.payload),
+        file_placements,
         data_json,
         occurred_at: event.occurred_at.to_rfc3339(),
         created_at: event.occurred_at.to_rfc3339(),
@@ -1693,6 +1705,7 @@ mod tests {
                     episode_ids: vec!["episode-1".to_string()],
                     size_bytes: Some(1024),
                     upgrade: false,
+                    file_placements: Vec::new(),
                 }),
                 r#"{"type":"import_completed","data":{"title":{"title_name":"Fixture","facet":"series","external_ids":{"imdb_id":null,"tmdb_id":null,"tvdb_id":null,"anidb_id":null},"poster_url":null,"year":2024},"media_updates":[{"path":"/library/Fixture.mkv","update_type":"created"}],"imported_count":1,"import_id":"import-1","source_system":"nzbget","source_ref":"queue-1","source_title":"Imported.Release","source_path":"/downloads/Fixture.mkv","dest_path":"/library/Fixture.mkv","quality":"1080p","episode_ids":["episode-1"],"size_bytes":1024,"upgrade":false}}"#,
                 ActivityKind::SeriesEpisodeImported,
@@ -2066,6 +2079,7 @@ mod tests {
                     episode_ids: vec!["ep-1".to_string()],
                     size_bytes: Some(1_024),
                     upgrade: false,
+                    file_placements: Vec::new(),
                 }),
             ),
             event(
@@ -2088,6 +2102,7 @@ mod tests {
                     episode_ids: vec!["ep-1".to_string()],
                     size_bytes: Some(4_096),
                     upgrade: false,
+                    file_placements: Vec::new(),
                 }),
             ),
         ];

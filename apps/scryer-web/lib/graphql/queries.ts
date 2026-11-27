@@ -795,8 +795,14 @@ const HISTORY_SCORING_FIELDS = `scoring {
   comparisons { fileId episodeIds previousScore delta }
 }`;
 
+const HISTORY_FILE_PLACEMENT_FIELDS = `filePlacements {
+  path placement
+  linkFallback { cause reason osErrorCode }
+}`;
+
 const TITLE_EVENT_FIELDS = `
     ${HISTORY_SCORING_FIELDS}
+    ${HISTORY_FILE_PLACEMENT_FIELDS}
     id
     titleId
     episodeId
@@ -5158,6 +5164,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
   titleHistory(filter: $filter) {
     items {
       ${HISTORY_SCORING_FIELDS}
+      ${HISTORY_FILE_PLACEMENT_FIELDS}
       id
       titleId
       titleName
