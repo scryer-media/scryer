@@ -1054,3 +1054,56 @@ fn a_query_budget_skip_becomes_partial_only_for_an_indexer_another_query_reached
     );
     assert!(reasons["idx-unasked"].is_not_searched_for_query_budget());
 }
+
+#[test]
+fn an_indexer_reason_does_not_depend_on_which_query_finishes_first() {
+    let answer = |outcome: IndexerSearchOutcome| {
+        vec![IndexerQueryOutcome {
+            indexer_id: "idx-a".to_string(),
+            outcome,
+            page: None,
+        }]
+    };
+    let kept_back = answer(IndexerSearchOutcome::Partial {
+        empty: true,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+        retry_after: Some(std::time::Duration::from_secs(40)),
+    });
+    for partial_reason in [
+        IndexerSearchIncompleteReason::RateLimited,
+        IndexerSearchIncompleteReason::UpstreamFailure,
+        IndexerSearchIncompleteReason::FanoutBranchFailed,
+        IndexerSearchIncompleteReason::MalformedContent,
+    ] {
+        // This query reached the indexer and returned rows, then ended short.
+        let answered = answer(IndexerSearchOutcome::Partial {
+            empty: false,
+            reason: Some(partial_reason),
+            retry_after: None,
+        });
+        let settle = |first: &[IndexerQueryOutcome], second: &[IndexerQueryOutcome]| {
+            let mut reasons = HashMap::new();
+            let mut searched = HashSet::new();
+            record_query_indexer_outcomes(&mut reasons, &mut searched, first);
+            record_query_indexer_outcomes(&mut reasons, &mut searched, second);
+            settle_query_budget_reasons(&mut reasons, &searched);
+            let reason = reasons.remove("idx-a").expect("idx-a fell short");
+            (
+                searched.contains("idx-a"),
+                reason.kind,
+                reason.code,
+                reason.message,
+            )
+        };
+
+        let budget_first = settle(&kept_back, &answered);
+        let budget_last = settle(&answered, &kept_back);
+        assert_eq!(budget_first, budget_last, "{partial_reason:?}");
+        assert!(budget_first.0, "{partial_reason:?}: rows mean it was asked");
+        assert_ne!(
+            budget_first.2,
+            Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED),
+            "{partial_reason:?}"
+        );
+    }
+}

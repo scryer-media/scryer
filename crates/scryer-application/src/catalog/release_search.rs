@@ -663,20 +663,54 @@ pub(crate) struct ScoredSearchOutcome {
     pub search_session_id: String,
 }
 
-/// Whether an outcome shows the indexer was sent the query.
+/// Whether an outcome shows the indexer was sent the query. Every partial
+/// answer reached the indexer except one its query budget kept from being
+/// sent, and an answer that carried rows reached it whatever its reason.
 fn outcome_sent_request(outcome: IndexerSearchOutcome) -> bool {
     match outcome {
         IndexerSearchOutcome::Complete { .. } => true,
-        IndexerSearchOutcome::Partial { reason, .. } => matches!(
-            reason,
-            None | Some(
-                IndexerSearchIncompleteReason::QueryBudgetPartial
-                    | IndexerSearchIncompleteReason::PageCeilingReached
-                    | IndexerSearchIncompleteReason::SaturatedPartition
-                    | IndexerSearchIncompleteReason::Unattested
-            )
-        ),
+        IndexerSearchOutcome::Partial { empty, reason, .. } => {
+            !empty || reason != Some(IndexerSearchIncompleteReason::QueryBudgetExhausted)
+        }
         _ => false,
+    }
+}
+
+/// Folds one query's per-indexer outcomes into the search's record of which
+/// indexers were sent a request and why any of them fell short.
+fn record_query_indexer_outcomes(
+    reasons: &mut HashMap<String, IncompleteIndexerReason>,
+    searched: &mut HashSet<String>,
+    outcomes: &[IndexerQueryOutcome],
+) {
+    for outcome in outcomes {
+        if outcome_sent_request(outcome.outcome) && !searched.contains(&outcome.indexer_id) {
+            searched.insert(outcome.indexer_id.clone());
+        }
+        if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
+            record_incomplete_indexer_reason(reasons, outcome.indexer_id.clone(), reason);
+        }
+    }
+}
+
+/// Records why an indexer did not cover the search when several of its
+/// queries say so. The reason kept does not depend on the order the queries
+/// finish in: the more serious outcome wins, and between two of the same
+/// outcome the longer wait.
+fn record_incomplete_indexer_reason(
+    reasons: &mut HashMap<String, IncompleteIndexerReason>,
+    indexer_id: String,
+    reason: IncompleteIndexerReason,
+) {
+    match reasons.entry(indexer_id) {
+        std::collections::hash_map::Entry::Occupied(mut kept) => {
+            if reason.outranks(kept.get()) {
+                kept.insert(reason);
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(reason);
+        }
     }
 }
 
@@ -1229,6 +1263,9 @@ pub(crate) struct IncompleteIndexerReason {
     /// How long to wait before asking the indexer again, when the outcome
     /// says. The message repeats it for people; code reads this field.
     pub retry_after: Option<std::time::Duration>,
+    /// Which reason is kept when several queries of one search give one
+    /// indexer different reasons; higher is more serious.
+    precedence: u8,
 }
 impl IncompleteIndexerReason {
     pub fn failed(message: String) -> Self {
@@ -1237,7 +1274,13 @@ impl IncompleteIndexerReason {
             message,
             code: None,
             retry_after: None,
+            precedence: u8::MAX,
         }
+    }
+
+    /// Whether this reason replaces `kept` for the same indexer.
+    fn outranks(&self, kept: &Self) -> bool {
+        (self.precedence, self.retry_after) > (kept.precedence, kept.retry_after)
     }
 
     /// Whether the indexer answered part of the search before its query
@@ -1375,7 +1418,37 @@ pub(crate) fn incomplete_indexer_reason(
         },
         code,
         retry_after,
+        precedence: incomplete_outcome_precedence(outcome),
     })
+}
+
+/// How serious an outcome is when one indexer's queries end differently: a
+/// query its budget kept back ranks lowest, then a query its budget cut
+/// short, then a contained or rate-limited answer, then failures.
+fn incomplete_outcome_precedence(outcome: IndexerSearchOutcome) -> u8 {
+    use IndexerSearchIncompleteReason as Reason;
+    match outcome {
+        IndexerSearchOutcome::Partial { reason, .. } => match reason {
+            Some(Reason::QueryBudgetExhausted) => 0,
+            Some(Reason::QueryBudgetPartial) => 1,
+            Some(Reason::Unattested) => 2,
+            Some(Reason::PageCeilingReached) => 3,
+            Some(Reason::SaturatedPartition) => 4,
+            Some(Reason::RateLimited) => 5,
+            None => 8,
+            Some(Reason::MalformedContent) => 9,
+            Some(Reason::FanoutBranchFailed) => 10,
+            Some(Reason::UpstreamFailure) => 11,
+        },
+        IndexerSearchOutcome::Deferred { .. } => 6,
+        IndexerSearchOutcome::Skipped { .. } => 7,
+        IndexerSearchOutcome::ClientUnavailable { .. } => 12,
+        IndexerSearchOutcome::Errored => 13,
+        IndexerSearchOutcome::Complete { .. }
+        | IndexerSearchOutcome::Unsupported
+        | IndexerSearchOutcome::BackedOff { .. }
+        | IndexerSearchOutcome::LocalLimit { .. } => 0,
+    }
 }
 
 fn completely_covered_indexers(
@@ -2479,18 +2552,11 @@ impl AppUseCase {
             match result {
                 Ok(Ok(response)) => {
                     successful_searches += 1;
-                    for outcome in &response.indexer_outcomes {
-                        if outcome_sent_request(outcome.outcome)
-                            && !searched_indexer_ids.contains(&outcome.indexer_id)
-                        {
-                            searched_indexer_ids.insert(outcome.indexer_id.clone());
-                        }
-                        if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
-                            incomplete_indexer_reasons
-                                .entry(outcome.indexer_id.clone())
-                                .or_insert(reason);
-                        }
-                    }
+                    record_query_indexer_outcomes(
+                        &mut incomplete_indexer_reasons,
+                        &mut searched_indexer_ids,
+                        &response.indexer_outcomes,
+                    );
                     record_query_coverage_outcomes(
                         &mut coverage_by_indexer,
                         &response.indexer_outcomes,
@@ -2929,9 +2995,13 @@ impl AppUseCase {
                 &next.complete_indexer_ids,
                 &next.unsupported_indexer_ids,
             );
-            outcome
-                .incomplete_indexer_reasons
-                .extend(next.incomplete_indexer_reasons);
+            for (indexer_id, reason) in next.incomplete_indexer_reasons {
+                record_incomplete_indexer_reason(
+                    &mut outcome.incomplete_indexer_reasons,
+                    indexer_id,
+                    reason,
+                );
+            }
             outcome
                 .searched_indexer_ids
                 .extend(next.searched_indexer_ids);
