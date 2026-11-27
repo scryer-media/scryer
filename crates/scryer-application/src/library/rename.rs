@@ -5194,14 +5194,9 @@ fn resolve_rename_common_metadata_from_evidence(
     let group = release_group
         .or_else(|| parsed_current.release_group.clone())
         .unwrap_or_default();
+    // Parse hints are parser diagnostics, never an edition label.
     let edition = edition
-        .or_else(|| {
-            parsed_current
-                .parse_hints
-                .iter()
-                .find(|hint| hint.to_ascii_lowercase().contains("edition"))
-                .cloned()
-        })
+        .or_else(|| non_empty_owned(parsed_current.edition.clone()))
         .unwrap_or_default();
 
     ResolvedRenameCommonMetadata {
