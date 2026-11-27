@@ -475,13 +475,12 @@ impl AppUseCase {
         ) {
             return Ok(false);
         }
-        Ok(self
+        Ok(!self
             .services
             .library
             .media_files
-            .list_media_files_for_title(&title.id)
-            .await?
-            .is_empty())
+            .title_has_media_files(&title.id)
+            .await?)
     }
 
     /// Describe what changing this title's folder match would do (FR-002).

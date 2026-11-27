@@ -10334,6 +10334,14 @@ pub trait MediaFileRepository: Send + Sync {
 
     async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>>;
 
+    /// Whether the title owns any live media file, the files
+    /// [`Self::list_media_files_for_title`] would list. SQL stores answer
+    /// with one indexed existence read; the default supports in-memory
+    /// repositories.
+    async fn title_has_media_files(&self, title_id: &str) -> AppResult<bool> {
+        Ok(!self.list_media_files_for_title(title_id).await?.is_empty())
+    }
+
     /// Compact ownership/cutoff facts for live primary links. SQL stores select
     /// only these columns; the default supports in-memory repositories.
     async fn list_primary_file_cutoffs_for_title(
