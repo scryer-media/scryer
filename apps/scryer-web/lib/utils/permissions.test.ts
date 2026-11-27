@@ -274,8 +274,8 @@ test("storage normalization strips every shadowed permission", () => {
       LIBRARY_PERMISSIONS.request,
       LIBRARY_PERMISSIONS.autoApproveRequests,
       LIBRARY_PERMISSIONS.manageSubtitles,
-    ]).sort(),
-    [LIBRARY_PERMISSIONS.manageTitles, LIBRARY_PERMISSIONS.view].sort(),
+    ]),
+    [LIBRARY_PERMISSIONS.manageTitles],
   );
 
   // Without Manage Titles the subtitle grant is stored as itself.
@@ -335,7 +335,7 @@ test("the shadow tooltip names Manage Titles for Manage Subtitles", () => {
   );
 });
 
-test("Manage Titles implies View, and storage keeps an explicit View", () => {
+test("Manage Titles implies View, and a shadowed grant saves unchanged", () => {
   const titleManager = normalizeJwtPermissionClaims(
     [],
     [{ libraryId: "library-primary", permissions: ["manageTitles"] }],
@@ -367,12 +367,18 @@ test("Manage Titles implies View, and storage keeps an explicit View", () => {
     ),
     "Manage Titles",
   );
+  // What the API sends for a stored [Manage Titles] saves back unchanged.
   assert.deepEqual(
-    normalizeLibraryPermissionsForStorage([
-      LIBRARY_PERMISSIONS.view,
-      LIBRARY_PERMISSIONS.manageTitles,
-    ]).sort(),
-    [LIBRARY_PERMISSIONS.manageTitles, LIBRARY_PERMISSIONS.view].sort(),
+    normalizeLibraryPermissionsForStorage(
+      libraryPermissionsWithRequestShadowing([
+        LIBRARY_PERMISSIONS.manageTitles,
+      ]),
+    ),
+    [LIBRARY_PERMISSIONS.manageTitles],
+  );
+  assert.deepEqual(
+    normalizeLibraryPermissionsForStorage([LIBRARY_PERMISSIONS.view]),
+    [LIBRARY_PERMISSIONS.view],
   );
 
   // Resolve Imports alone still does not grant View.

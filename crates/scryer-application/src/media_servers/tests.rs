@@ -1543,6 +1543,31 @@ async fn media_server_update_allows_harmless_save_with_unchanged_grants_without_
 }
 
 #[tokio::test]
+async fn system_settings_user_renames_a_connection_whose_grant_reads_back_shadowed() {
+    let stored = LibraryPermissionMask::from_permissions([LibraryPermission::ManageTitles]);
+    let mut connection = grant_bearing_jellyfin_connection();
+    connection.default_library_grants[0].permissions = stored;
+    let app = app_with_connection(connection.clone());
+    // The API sends the grant with its implied bits, and the client saves it
+    // back as it was read.
+    let mut patch = empty_update_patch("jellyfin-main");
+    patch.display_name = Some("Home Jellyfin".to_string());
+    patch.default_app_permissions = Some(connection.default_app_permissions);
+    patch.default_library_grants = Some(vec![MediaServerDefaultLibraryGrant {
+        library_id: "movies".to_string(),
+        permissions: stored.with_request_shadowing(),
+    }]);
+
+    let updated = app
+        .update_media_server_connection(&system_settings_user(), patch)
+        .await
+        .expect("implied bits alone are not a grant change");
+
+    assert_eq!(updated.display_name, "Home Jellyfin");
+    assert_eq!(updated.default_library_grants[0].permissions, stored);
+}
+
+#[tokio::test]
 async fn media_server_create_preserves_plex_token_and_path_mappings() {
     let app = app_with_connections(Vec::new());
     let created = app

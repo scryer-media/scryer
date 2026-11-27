@@ -747,13 +747,14 @@ impl LibraryPermissionMask {
         mask
     }
 
-    /// Strip the bits [`Self::with_request_shadowing`] adds back. View is the
-    /// exception: an explicit View stands on its own, so taking Manage Titles
-    /// away later leaves it in place.
+    /// Strip the bits [`Self::with_request_shadowing`] adds back, View
+    /// included. The API sends shadowed masks, so a grant that is loaded and
+    /// saved unchanged must store the mask it was read from.
     pub fn normalized_for_storage(self) -> Self {
         if self.contains(Self::MANAGE_TITLES) {
             Self(
                 self.0
+                    & !Self::VIEW.0
                     & !Self::AUTO_APPROVE_REQUESTS.0
                     & !Self::REQUEST.0
                     & !Self::MANAGE_SUBTITLES.0,
