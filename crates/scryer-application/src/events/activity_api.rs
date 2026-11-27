@@ -14,7 +14,7 @@ use scryer_domain::{
     DownloadQueueItemCommandIssuedEventData, ImportRequestKind, ImportRequestedEventData,
     LibraryPermission, MediaFacet, MetadataHydrationState, MetadataHydrationUpdatedEventData,
     PostProcessingCompletedEventData, PostProcessingResult, SubtitleDownloadedEventData,
-    SubtitleSearchFailedEventData, TitleUpdatedEventData,
+    SubtitleRemovedEventData, SubtitleSearchFailedEventData, TitleUpdatedEventData,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -457,6 +457,10 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
     TitleHistoryEventType::Rematched,
     TitleHistoryEventType::SeedingStarted,
     TitleHistoryEventType::SeedingCompleted,
+    TitleHistoryEventType::SubtitleDownloaded,
+    TitleHistoryEventType::SubtitleFailed,
+    TitleHistoryEventType::SubtitleDeleted,
+    TitleHistoryEventType::SubtitleBlocklisted,
 ];
 
 const TITLE_HISTORY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
@@ -478,6 +482,10 @@ const TITLE_HISTORY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
     DomainEventType::DownloadMissing,
     DomainEventType::SeedingStarted,
     DomainEventType::SeedingCompleted,
+    DomainEventType::SubtitleDownloaded,
+    DomainEventType::SubtitleSearchFailed,
+    DomainEventType::SubtitleDeleted,
+    DomainEventType::SubtitleBlocklisted,
 ];
 
 pub fn supported_title_history_event_types() -> &'static [TitleHistoryEventType] {
@@ -1476,23 +1484,23 @@ impl AppUseCase {
         }
     }
 
+    /// Records a subtitle download. `actor` is the user for a manual
+    /// download and `None` for the automatic search.
     pub(crate) async fn emit_subtitle_downloaded_event(
         &self,
+        actor: Option<&User>,
         title: &Title,
-        subtitle_path: Option<String>,
-        language: Option<String>,
-        provider: Option<String>,
+        data: SubtitleDownloadedEventData,
     ) {
+        let actor: DomainEventActor = match actor {
+            Some(user) => user.into(),
+            None => None::<String>.into(),
+        };
         if let Err(error) = self
             .append_domain_event(new_title_domain_event(
-                None,
+                actor,
                 title,
-                DomainEventPayload::SubtitleDownloaded(SubtitleDownloadedEventData {
-                    title: title_context_snapshot(title),
-                    subtitle_path,
-                    language,
-                    provider,
-                }),
+                DomainEventPayload::SubtitleDownloaded(data),
             ))
             .await
         {
@@ -1503,22 +1511,38 @@ impl AppUseCase {
     pub(crate) async fn emit_subtitle_search_failed_event(
         &self,
         title: &Title,
-        language: Option<String>,
-        reason: Option<String>,
+        data: SubtitleSearchFailedEventData,
     ) {
         if let Err(error) = self
             .append_domain_event(new_title_domain_event(
-                None,
+                None::<String>,
                 title,
-                DomainEventPayload::SubtitleSearchFailed(SubtitleSearchFailedEventData {
-                    title: title_context_snapshot(title),
-                    language,
-                    reason,
-                }),
+                DomainEventPayload::SubtitleSearchFailed(data),
             ))
             .await
         {
             tracing::warn!(title_id = %title.id, error = %error, "failed to append subtitle search failed domain event");
+        }
+    }
+
+    /// Records a user deleting a subtitle, or deleting and blocklisting it.
+    pub(crate) async fn emit_subtitle_removed_event(
+        &self,
+        actor: &User,
+        title: &Title,
+        blocklisted: bool,
+        data: SubtitleRemovedEventData,
+    ) {
+        let payload = if blocklisted {
+            DomainEventPayload::SubtitleBlocklisted(data)
+        } else {
+            DomainEventPayload::SubtitleDeleted(data)
+        };
+        if let Err(error) = self
+            .append_domain_event(new_title_domain_event(actor, title, payload))
+            .await
+        {
+            tracing::warn!(title_id = %title.id, error = %error, "failed to append subtitle removed domain event");
         }
     }
 
