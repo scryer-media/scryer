@@ -1529,6 +1529,8 @@ async fn discover_title_folder_boundaries(
 struct TitleBoundaryContent {
     has_media: bool,
     has_child_titles: bool,
+    /// The folder's own listing held no entries at all.
+    listed_nothing: bool,
 }
 
 enum EpisodeFolderBoundaryPolicy<'a> {
@@ -1628,11 +1630,13 @@ async fn inspect_title_boundary_children(
     episode_folders: &EpisodeFolderBoundaryPolicy<'_>,
     part_nesting: usize,
 ) -> AppResult<TitleBoundaryContent> {
-    let mut content = TitleBoundaryContent {
-        has_media: directory_has_direct_media(path).await?,
-        has_child_titles: false,
-    };
+    let has_media = directory_has_direct_media(path).await?;
     let (entries, end) = listed_kinds(path).await?;
+    let mut content = TitleBoundaryContent {
+        has_media,
+        has_child_titles: false,
+        listed_nothing: entries.is_empty() && end.is_ok(),
+    };
     for (child, kind) in entries {
         if kind != EntryKind::Directory
             || should_skip_library_top_level_entry(&child, true)
@@ -1685,8 +1689,9 @@ pub(crate) async fn ensure_existing_title_boundary(
 
 /// Refuse a selected folder that is not one title's folder holding its media.
 ///
-/// With `empty_allowed`, a folder holding no media and no other titles'
-/// folders is accepted too. The answer is whether the folder holds media.
+/// With `empty_allowed`, a folder whose listing holds no entries at all is
+/// accepted too; one holding anything other than its title's media is not.
+/// The answer is whether the folder holds media.
 pub(crate) async fn ensure_title_boundary_holding_media_unless(
     path: &Path,
     episode_folders: &[regex::Regex],
@@ -1697,7 +1702,8 @@ pub(crate) async fn ensure_title_boundary_holding_media_unless(
         &EpisodeFolderBoundaryPolicy::Configured(episode_folders),
     )
     .await?;
-    if content.has_child_titles || !(content.has_media || empty_allowed) {
+    if content.has_child_titles || !(content.has_media || (empty_allowed && content.listed_nothing))
+    {
         return Err(existing_title_boundary_refusal());
     }
     Ok(content.has_media)

@@ -1122,6 +1122,12 @@ const zh_TW: LocaleDictionary = {
   "settings.mediaServerEnabled": "已啟用媒體伺服器",
   "settings.mediaServerAuthCapabilities": "驗證功能",
   "settings.mediaServerAutoAddEnabled": "自動新增已啟用",
+  "settings.mediaServerRefreshOffer":
+    "當 Scryer 匯入、重新命名、刪除或移動媒體時，重新整理此伺服器的媒體庫",
+  "settings.mediaServerRefreshOfferHelp":
+    "在「通知」中為此連線訂閱：{{events}}。你可以在那裡變更或移除。",
+  "settings.mediaServerRefreshPluginMissing":
+    "匯入後重新整理媒體庫需要此伺服器的通知外掛程式，但尚未安裝。如要安裝，請開啟",
   "settings.mediaServerPathMappings": "路徑對應",
   "settings.mediaServerPathMappingsHelp":
     "若媒體伺服器對媒體資料夾的檢視路徑與 Scryer 不同，請在此設定路徑對應。",
@@ -2081,6 +2087,20 @@ const zh_TW: LocaleDictionary = {
   "queue.manualImportMultipleEpisodes": "此檔案包含多集",
   "queue.manualImportMultipleEpisodesLabel": "為此檔案分配多集",
   "queue.manualImportApplySuggestions": "全部應用建議",
+  "queue.manualImportApplySuggestionsSelected": "對所選項目套用建議",
+  "queue.manualImportSelectAll": "全選",
+  "queue.manualImportSelectNone": "全不選",
+  "queue.manualImportSelectInvert": "反向選取",
+  "queue.manualImportSelectMatching": "選取相符項目",
+  "queue.manualImportSelectMatchingLabel": "檔名包含…",
+  "queue.manualImportSelectedCount": "已選取 {{count}} 項",
+  "queue.manualImportSkipSelected": "略過所選項目",
+  "queue.manualImportAssignSelected": "為所選項目指定目標…",
+  "queue.manualImportVerdict.UPGRADE": "升級",
+  "queue.manualImportVerdict.EQUAL": "品質相同",
+  "queue.manualImportVerdict.DOWNGRADE": "降級",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "新檔案",
+  "queue.manualImportVerdictEstimated": "估計",
   "queue.removeFailed": "移除失敗",
   "queue.manualImportTooltip": "手動匯入可用於需要關注的佇列項。",
   "queue.releaseTitle": "釋出資源",
@@ -3318,6 +3338,8 @@ const zh_TW: LocaleDictionary = {
   "status.editingRule": "正在編輯規則 {{name}}",
   "status.deletingRule": "刪除規則 {{name}}？",
   "status.mediaServerCreated": "媒體伺服器連線已儲存。",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "媒體伺服器連線已儲存，但以下媒體庫重新整理訂閱未能建立：{{events}}。{{reason}}",
   "status.mediaServerUpdated": "媒體伺服器連線已更新。",
   "status.mediaServerDeleted": "已刪除媒體伺服器 {{name}}。",
   "status.plexServersDiscovered": "已載入 Plex 伺服器。",
@@ -3422,7 +3444,7 @@ const zh_TW: LocaleDictionary = {
   "profile.linkedAccountConnection": "連線",
   "profile.linkedAccountUnknownConnection": "未知連線",
   "profile.linkedAccountStatus": "狀態",
-  "profile.linkJellyfinAccount": "連結 Jellyfin",
+  "profile.linkJellyfinAccount": "連結 Jellyfin / Silo",
   "profile.linkPlexAccount": "連結 Plex",
   "profile.linkAccountConnection": "連線",
   "profile.linkAccountUsername": "使用者名稱",
@@ -3449,7 +3471,7 @@ const zh_TW: LocaleDictionary = {
   "auth.signInRateLimited": "登入嘗試次數過多。請稍候再試。",
   "auth.signInWithScryerPassword": "使用 Scryer 密碼登入",
   "auth.signInWithPasskey": "使用通行密鑰登入",
-  "auth.signInWithJellyfin": "使用 Jellyfin 登入",
+  "auth.signInWithJellyfin": "使用 Jellyfin / Silo 登入",
   "auth.jellyfinFailed": "Jellyfin 登入失敗。",
   "auth.signInWithPlex": "使用 Plex 登入",
   "auth.plexFailed": "Plex 登入失敗。",
@@ -3649,7 +3671,7 @@ const zh_TW: LocaleDictionary = {
   "settings.notificationNoProviders":
     "未安裝通知外掛。請先在外掛頁面安裝通知外掛。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "已抓取釋出",
   "settings.notificationEvent.download": "下載失敗",
   "settings.notificationEvent.upgrade": "升級進口",
@@ -6697,10 +6719,10 @@ const zh_TW: LocaleDictionary = {
     "規則為發行版本評分，讓 Scryer 優先選擇你想要的，略過你不想要的。",
   "tours.onboarding.mediaServers.title": "媒體伺服器",
   "tours.onboarding.mediaServers.body":
-    "連接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看過什麼。若要在 Scryer 匯入後重新整理伺服器，還需在「外掛」中安裝該伺服器的外掛。",
+    "連接 Jellyfin / Silo、Plex 或 Emby，Scryer 就能知道你看過什麼。若要在 Scryer 匯入後重新整理伺服器，還需在「外掛」中安裝該伺服器的外掛。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「外掛」面板加入。Jellyfin、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連線，也要從這個面板安裝該伺服器的外掛，匯入後伺服器才會重新整理。",
+    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「外掛」面板加入。Jellyfin / Silo、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連線，也要從這個面板安裝該伺服器的外掛，匯入後伺服器才會重新整理。",
   "tours.onboarding.plugins.title": "外掛",
   "tours.onboarding.plugins.body":
     "外掛可加入索引器、下載使用者端和通知服務。在這裡安裝和更新它們。",

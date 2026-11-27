@@ -60,7 +60,8 @@ const PLUGIN_LOGO_AVIF_SLUGS = [
 ] as const;
 
 const LEGACY_PLUGIN_LOGO_SRC_BY_SLUG: Record<string, string> = {
-  jellyfin: "/auth-providers/jellyfin.svg",
+  // The Jellyfin plugin also serves Silo's Jellyfin-compatible API.
+  jellyfin: "/plugin-logos/svg/jellyfin-silo.svg",
   nzbget: "/download-clients/nzbget.svg",
   plex: "/auth-providers/plex.svg",
   prowlarr: "/media-sites/prowlarr.svg",
@@ -74,6 +75,7 @@ const PLUGIN_LOGO_ALIASES: Record<string, string> = {
   "broadcasthenet-tv": "broadcasthe-net",
   "broadcasthenet-tv-tracker": "broadcasthe-net",
   btntv: "broadcasthe-net",
+  "jellyfin-silo": "jellyfin",
   "download-station": "downloadstation",
   "synology-download-station": "downloadstation",
   downloadstation: "downloadstation",

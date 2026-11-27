@@ -1581,6 +1581,20 @@ const es: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Asignar varios episodios a este archivo",
   "queue.manualImportApplySuggestions": "Aplicar sugerencias a todos",
+  "queue.manualImportApplySuggestionsSelected": "Aplicar sugerencias a la selección",
+  "queue.manualImportSelectAll": "Seleccionar todo",
+  "queue.manualImportSelectNone": "No seleccionar nada",
+  "queue.manualImportSelectInvert": "Invertir selección",
+  "queue.manualImportSelectMatching": "Seleccionar coincidencias",
+  "queue.manualImportSelectMatchingLabel": "El nombre de archivo contiene…",
+  "queue.manualImportSelectedCount": "{{count}} seleccionados",
+  "queue.manualImportSkipSelected": "Omitir selección",
+  "queue.manualImportAssignSelected": "Asignar destino a la selección…",
+  "queue.manualImportVerdict.UPGRADE": "Mejora",
+  "queue.manualImportVerdict.EQUAL": "Misma calidad",
+  "queue.manualImportVerdict.DOWNGRADE": "Empeora",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Archivo nuevo",
+  "queue.manualImportVerdictEstimated": "estimado",
   "queue.removeFailed": "Error al eliminar",
   "queue.manualImportTooltip":
     "La importación manual está disponible para elementos de la cola que requieren atención.",
@@ -2368,7 +2382,7 @@ const es: LocaleDictionary = {
   "settings.notificationNoProviders":
     "No hay plugins de notificación instalados. Instala un plugin de notificación desde la página de Plugins.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Lanzamiento capturado",
   "settings.notificationEvent.download": "La descarga falló",
   "settings.notificationEvent.upgrade": "Actualización importada",
@@ -4076,10 +4090,10 @@ const es: LocaleDictionary = {
     "Las reglas puntúan los lanzamientos para que Scryer prefiera los que quieres y descarte los que no.",
   "tours.onboarding.mediaServers.title": "Servidores multimedia",
   "tours.onboarding.mediaServers.body":
-    "Conecta Jellyfin, Plex o Emby para que Scryer sepa lo que has visto. Para que tu servidor se actualice cuando Scryer importe algo, instala también el plugin de ese servidor en Plugins.",
+    "Conecta Jellyfin / Silo, Plex o Emby para que Scryer sepa lo que has visto. Para que tu servidor se actualice cuando Scryer importe algo, instala también el plugin de ese servidor en Plugins.",
   "tours.onboarding.notifications.title": "Notificaciones",
   "tours.onboarding.notifications.body":
-    "Entérate de capturas, importaciones y todo lo que requiera atención, donde prefieras. Añade servicios desde este panel de Plugins. Jellyfin, Plex y Emby también están aquí: tu servidor solo se actualiza tras una importación cuando instalas su plugin desde este panel, aunque ya esté conectado en Servidores multimedia.",
+    "Entérate de capturas, importaciones y todo lo que requiera atención, donde prefieras. Añade servicios desde este panel de Plugins. Jellyfin / Silo, Plex y Emby también están aquí: tu servidor solo se actualiza tras una importación cuando instalas su plugin desde este panel, aunque ya esté conectado en Servidores multimedia.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Los plugins añaden indexadores, clientes de descarga y servicios de notificación. Instálalos y actualízalos aquí.",

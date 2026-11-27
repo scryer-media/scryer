@@ -229,7 +229,9 @@ impl AppUseCase {
     /// The media servers each user has an active, verified link to, in one
     /// read for every user named. Every listed user has an entry; one with no
     /// such link has an empty list. Pending invites and disabled links do not
-    /// count. Callers decide which users they may describe.
+    /// count. Each list runs in link-creation order, earliest first, so the
+    /// first entry is the server the account was linked to first. Callers
+    /// decide which users they may describe.
     pub async fn users_linked_media_servers(
         &self,
         user_ids: &[String],
@@ -245,6 +247,7 @@ impl AppUseCase {
         if user_ids.is_empty() {
             return Ok(linked);
         }
+        let mut links: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
         for account in self
             .services
             .identity
@@ -257,14 +260,26 @@ impl AppUseCase {
             {
                 continue;
             }
-            if let Some(providers) = linked.get_mut(&account.user_id)
-                && !providers.contains(&account.provider)
-            {
-                providers.push(account.provider);
+            if linked.contains_key(&account.user_id) {
+                links
+                    .entry(account.user_id)
+                    .or_default()
+                    .push((account.created_at, account.provider));
             }
         }
-        for providers in linked.values_mut() {
-            providers.sort_by_key(|provider| provider.as_str());
+        for (user_id, mut user_links) in links {
+            user_links.sort_by(|left, right| {
+                left.0
+                    .cmp(&right.0)
+                    .then_with(|| left.1.as_str().cmp(right.1.as_str()))
+            });
+            if let Some(providers) = linked.get_mut(&user_id) {
+                for (_, provider) in user_links {
+                    if !providers.contains(&provider) {
+                        providers.push(provider);
+                    }
+                }
+            }
         }
         Ok(linked)
     }

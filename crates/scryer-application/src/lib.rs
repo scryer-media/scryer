@@ -81,6 +81,7 @@ pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
+pub mod host_memory;
 mod image_proxy;
 mod import;
 mod indexer_category;
@@ -487,11 +488,14 @@ pub use events::activity_api::{
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
     HeldDownloadClientPolicy, HeldSourcesReason, HeldSourcesRelease, HeldSourcesReleaseOffer,
-    HeldSourcesSettlement, HeldWorkspacePreserved, ManualImportCandidateMapping,
+    HeldSourcesSettlement, HeldWorkspacePreserved, MANUAL_IMPORT_VERDICT_MAX_EPISODES_PER_ROW,
+    MANUAL_IMPORT_VERDICT_MAX_ROWS, ManualImportCandidateMapping, ManualImportCurrentFile,
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
-    ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
+    ManualImportRequestPayload, ManualImportVerdict, ManualImportVerdictRequest,
+    ManualImportVerdictRow, begin_manual_import_selection, execute_manual_import,
     execute_queued_manual_import, import_completed_download, import_staging_path,
-    release_held_import_sources, retry_failed_import, start_background_manual_import_poller,
+    manual_import_verdicts, release_held_import_sources, retry_failed_import,
+    start_background_manual_import_poller,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;
 pub(crate) use integration::integration::ManualImportSourceResolution;
@@ -830,8 +834,8 @@ pub use settings::keys::{
     DEFAULT_RECAP_POLICY, DEFAULT_RENAME_COLLISION_POLICY, DEFAULT_RENAME_MISSING_METADATA_POLICY,
     DEFAULT_RENAME_TEMPLATE_ANIME, DEFAULT_RENAME_TEMPLATE_MOVIE, DEFAULT_RENAME_TEMPLATE_SERIES,
     DEFAULT_SEASON_FOLDER_TEMPLATE, DEFAULT_SEEDING_PROFILE_SETTING_KEY,
-    DEFAULT_SERIES_LIBRARY_PATH, DEFAULT_SPECIALS_FOLDER_TEMPLATE, DISABLED_FACETS_KEY,
-    DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY,
+    DEFAULT_SERIES_LIBRARY_PATH, DEFAULT_SPECIALS_FOLDER_TEMPLATE, DEFAULT_TITLE_TAGS_KEY,
+    DISABLED_FACETS_KEY, DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY,
     DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
     EXPERIMENTAL_FEATURES_ENABLED_KEY, FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY,
     FORM_LOGIN_ENABLED_KEY, FULL_HASH_BACKFILL_CURSOR_KEY, HISTORY_KEEP_FOREVER_KEY,

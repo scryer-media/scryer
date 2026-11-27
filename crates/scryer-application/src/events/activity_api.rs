@@ -249,14 +249,6 @@ async fn prefetch_event_title_libraries(
     Ok(())
 }
 
-async fn actor_can_view_titleless_operational_event(
-    app: &AppUseCase,
-    actor: &User,
-) -> AppResult<bool> {
-    app.has_app_permission(actor, AppPermission::ManageSystemSettings)
-        .await
-}
-
 async fn require_actor_view_library(app: &AppUseCase, actor: &User) -> AppResult<()> {
     if app
         .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
@@ -344,26 +336,53 @@ fn catalog_refresh_signal(activity: ActivityEvent) -> ActivityEvent {
     }
 }
 
-/// Library ids an actor may read events for: `view` for catalog-level events,
-/// `privileged` for everything that describes acquisition or files.
+/// The import lifecycle a `Resolve Imports` holder acts on: an import was
+/// asked for, finished, or was refused. A title event of one of these kinds is
+/// readable in a library where the actor resolves imports, on top of every
+/// library they hold privileged access to.
+fn title_event_is_import_lifecycle(payload: &DomainEventPayload) -> bool {
+    matches!(
+        payload,
+        DomainEventPayload::ImportRequested(_)
+            | DomainEventPayload::ImportCompleted(_)
+            | DomainEventPayload::ImportRejected(_)
+    )
+}
+
+/// What an actor may read in the event log, read once per request: library
+/// ids for catalog-level events (`view`), for acquisition and file events
+/// (`privileged`), and for import lifecycle events (`imports`, the privileged
+/// libraries plus those where the actor resolves imports), and the app
+/// permissions that open titleless events.
 struct EventVisibility {
     view: HashSet<String>,
     privileged: HashSet<String>,
+    imports: HashSet<String>,
+    titleless_operational: bool,
+    manage_lists: bool,
 }
 
 impl EventVisibility {
     async fn load(app: &AppUseCase, actor: &User) -> AppResult<Self> {
+        let context = app.library_permission_context(actor, None).await?;
+        let privileged: HashSet<String> = app
+            .privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect();
+        let mut imports = privileged.clone();
+        imports.extend(context.library_ids(LibraryPermission::ResolveImports));
+        let authorization = app.authorization_for_actor(actor).await?;
         Ok(Self {
-            view: app
-                .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-                .await?
+            view: context
+                .library_ids(LibraryPermission::View)
                 .into_iter()
                 .collect(),
-            privileged: app
-                .privileged_library_ids(actor, None)
-                .await?
-                .into_iter()
-                .collect(),
+            privileged,
+            imports,
+            titleless_operational: authorization
+                .has_app_permission(AppPermission::ManageSystemSettings),
+            manage_lists: authorization.has_app_permission(AppPermission::ManageLists),
         })
     }
 }
@@ -382,6 +401,8 @@ async fn event_allowed(
     if event.title_id.is_some() {
         let library_ids = if title_event_is_catalog_level(&event.payload) {
             &visibility.view
+        } else if title_event_is_import_lifecycle(&event.payload) {
+            &visibility.imports
         } else {
             &visibility.privileged
         };
@@ -413,10 +434,7 @@ async fn event_allowed(
                 .resource_type
                 .starts_with(crate::lists::public::LIST_CONFIGURATION_RESOURCE_PREFIX) =>
         {
-            Ok(app
-                .has_app_permission(actor, AppPermission::ManageLists)
-                .await?
-                || actor_can_view_titleless_operational_event(app, actor).await?)
+            Ok(visibility.manage_lists || visibility.titleless_operational)
         }
         DomainEventPayload::MediaRequestSubmitted(data) => {
             Ok(allowed_library_ids.contains(&data.library_id))
@@ -450,7 +468,7 @@ async fn event_allowed(
             )
             .await
         }
-        _ => actor_can_view_titleless_operational_event(app, actor).await,
+        _ => Ok(visibility.titleless_operational),
     }
 }
 
@@ -1639,7 +1657,7 @@ impl AppUseCase {
             )
             .await?;
         } else {
-            require_actor_view_library(self, actor).await?;
+            require_actor_activity_feed(self, actor).await?;
         }
         let offset = offset.max(0) as usize;
         let limit = limit.max(1) as usize;
@@ -1733,7 +1751,7 @@ impl AppUseCase {
         filter: &DomainEventFilter,
         source_page_budget: Option<usize>,
     ) -> AppResult<DomainEventFeedPage> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let target_len = if filter.limit == 0 {
             100
         } else {

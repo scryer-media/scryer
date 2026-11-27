@@ -77,6 +77,11 @@ impl AppUseCase {
                 Some(&rename.next_label),
             )
             .await?;
+            self.rewrite_library_default_title_tag(
+                &rename.previous_label,
+                Some(&rename.next_label),
+            )
+            .await?;
         }
         self.upsert_system_setting_json(
             TITLE_TAG_PENDING_RENAMES_KEY,
@@ -125,6 +130,8 @@ impl AppUseCase {
             // Pending requests expose their tags to an approver, so they must
             // not retain a label the registry no longer defines.
             self.rewrite_pending_request_policy_tag(&deletion.label, None)
+                .await?;
+            self.rewrite_library_default_title_tag(&deletion.label, None)
                 .await?;
             rewritten_delay_profiles.insert(id.clone(), delay_profiles);
         }
@@ -312,6 +319,8 @@ impl AppUseCase {
         // with. The decision traces are audit records and are never rewritten.
         if renamed {
             self.rewrite_pending_request_policy_tag(&previous_label, Some(&definition.label))
+                .await?;
+            self.rewrite_library_default_title_tag(&previous_label, Some(&definition.label))
                 .await?;
             self.upsert_system_setting_json(
                 TITLE_TAG_PENDING_RENAMES_KEY,

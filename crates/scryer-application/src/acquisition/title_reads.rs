@@ -254,6 +254,83 @@ impl TitleCatalogReads {
             .or_insert_with(|| Arc::clone(&files));
         Ok(files)
     }
+
+    /// Answer [`Self::live_media_files_for_episode_ids`] for several episode
+    /// sets of this title with one read of their union.
+    ///
+    /// Each set's answer is derived the way the store derives it: the files
+    /// linked to any episode of the set, newest first, with the role primary
+    /// when one of the file's primary links is in the set. Sets already
+    /// memoized are left as they are.
+    pub(crate) async fn prime_live_media_files_for_episode_sets(
+        &self,
+        app: &AppUseCase,
+        sets: &[Vec<String>],
+    ) -> AppResult<()> {
+        let mut pending: Vec<Vec<String>> = Vec::new();
+        {
+            let memo = lock(&self.scoped_media_files);
+            for set in sets {
+                let mut key = set.clone();
+                key.sort();
+                key.dedup();
+                if !key.is_empty() && !memo.contains_key(&key) && !pending.contains(&key) {
+                    pending.push(key);
+                }
+            }
+        }
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let union = pending
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let union_files = app
+            .services
+            .library
+            .media_files
+            .list_live_media_files_for_titles_episode_ids(&[(self.title_id.clone(), union)])
+            .await?
+            .into_iter()
+            .find(|(title_id, _)| *title_id == self.title_id)
+            .map(|(_, files)| files)
+            .unwrap_or_default();
+
+        let mut memo = lock(&self.scoped_media_files);
+        for key in pending {
+            let wanted = key
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>();
+            let files = union_files
+                .iter()
+                .filter(|file| {
+                    file.episode_ids
+                        .iter()
+                        .any(|id| wanted.contains(id.as_str()))
+                })
+                .map(|file| {
+                    let mut file = file.clone();
+                    file.media_file.role = if file
+                        .primary_episode_ids
+                        .iter()
+                        .any(|id| wanted.contains(id.as_str()))
+                    {
+                        crate::MediaFileRole::Primary
+                    } else {
+                        crate::MediaFileRole::Additional
+                    };
+                    file
+                })
+                .collect::<Vec<_>>();
+            memo.entry(key).or_insert_with(|| Arc::new(files));
+        }
+        Ok(())
+    }
 }
 
 /// The memo holds plain data, so a poisoned lock is still a consistent map.

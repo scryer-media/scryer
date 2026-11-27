@@ -3606,6 +3606,90 @@ async fn re_adding_a_title_keeps_its_monitoring_and_episode_selections() {
     assert_eq!(monitored_by_id.get(&episodes[1].id), Some(&true));
 }
 
+#[tokio::test]
+async fn library_default_tags_are_given_to_new_titles_and_follow_the_registry() {
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let (_, all) = series_libraries_with_defaults(&app, &user).await;
+    let save = |tags: Vec<&str>| LibrarySettingsOverrideDraft {
+        default_title_tags: Some(tags.into_iter().map(String::from).collect()),
+        ..empty_library_settings_override()
+    };
+
+    for undefined in [vec!["ember-remux"], vec!["scryer:monitor-type:none"]] {
+        let error = app
+            .update_library_settings(&user, &all, save(undefined))
+            .await
+            .expect_err("an undefined tag is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::catalog::NOT_DEFINED_TAG)
+        );
+    }
+
+    let remux = app
+        .create_title_tag_definition(&user, "ember-remux", None)
+        .await
+        .expect("define tag");
+    app.create_title_tag_definition(&user, "night-shelf", None)
+        .await
+        .expect("define tag");
+    let saved = app
+        .update_library_settings(&user, &all, save(vec![" Ember-Remux ", "ember-remux"]))
+        .await
+        .expect("save default tags");
+    assert_eq!(saved.default_title_tags, ["ember-remux"]);
+
+    let added = app
+        .add_title_with_outcome_in_library(
+            &user,
+            NewTitle {
+                name: "Cinder Vale".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                tags: vec!["night-shelf".into()],
+                external_ids: vec![ExternalId::new("tvdb_id", "770001")],
+                ..Default::default()
+            },
+            all.clone(),
+        )
+        .await
+        .expect("add series");
+    let labels: Vec<_> = added
+        .title
+        .tags
+        .iter()
+        .filter(|tag| !tag.starts_with("scryer:"))
+        .cloned()
+        .collect();
+    assert_eq!(labels, ["night-shelf", "ember-remux"]);
+
+    app.update_title_tag_definition(&user, &remux.id, Some("uhd-remux".into()), None)
+        .await
+        .expect("rename tag");
+    assert_eq!(
+        app.get_library_settings(&user, &all)
+            .await
+            .expect("read settings")
+            .default_title_tags,
+        ["uhd-remux"]
+    );
+
+    app.delete_title_tag_definition(&user, &remux.id)
+        .await
+        .expect("delete tag");
+    assert!(
+        app.get_library_settings(&user, &all)
+            .await
+            .expect("read settings")
+            .default_title_tags
+            .is_empty()
+    );
+}
+
 /// Every directory and file under `root`, sorted, with file bytes, so a test
 /// can prove a catalog edit left the disk exactly as it was.
 fn root_removal_disk_snapshot(root: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
@@ -4404,5 +4488,64 @@ async fn library_root_writes_install_the_roots_on_the_disk_owner() {
     assert_eq!(
         disk.class_of(std::path::Path::new("/synthetic/elsewhere/a.mkv")),
         VolumeClass::AppData
+    );
+}
+
+#[tokio::test]
+async fn viewable_facets_follow_the_member_s_library_grants() {
+    let (app, admin) = bootstrap();
+    let mut library_ids = Vec::new();
+    for (facet, name) in [
+        (MediaFacet::Movie, "Hollowmere movies"),
+        (MediaFacet::Series, "Hollowmere series"),
+    ] {
+        let library = app
+            .create_library(
+                &admin,
+                facet,
+                name.into(),
+                vec![LibraryRootDraft {
+                    id: None,
+                    path: format!("/synthetic/{}", name.replace(' ', "-")),
+                    is_default: true,
+                }],
+                None,
+            )
+            .await
+            .expect("create library");
+        library_ids.push(library.id);
+    }
+    let member = |grants: &[(usize, scryer_domain::LibraryPermission)]| {
+        let mut user = test_user_with_app_permissions("hollowmere-member", AppPermissionMask::NONE);
+        for (index, permission) in grants {
+            user.authorization.libraries.insert(
+                library_ids[*index].clone(),
+                scryer_domain::LibraryPermissionMask::from_permissions([*permission]),
+            );
+        }
+        user
+    };
+
+    use scryer_domain::LibraryPermission::*;
+    for (actor, expected) in [
+        (member(&[(0, View)]), vec![MediaFacet::Movie]),
+        (member(&[(1, Request)]), vec![MediaFacet::Series]),
+        (
+            member(&[(0, ManageTitles), (1, ManageLibrary)]),
+            vec![MediaFacet::Movie, MediaFacet::Series],
+        ),
+        // Resolving imports alone is not a reason to open the catalog.
+        (member(&[(0, ResolveImports)]), vec![]),
+        (member(&[]), vec![]),
+    ] {
+        assert_eq!(
+            app.viewable_facets(&actor).await.expect("viewable facets"),
+            expected
+        );
+    }
+    let viewable = app.viewable_facets(&admin).await.expect("admin facets");
+    assert!(
+        viewable.contains(&MediaFacet::Movie) && viewable.contains(&MediaFacet::Series),
+        "an administrator keeps every catalog: {viewable:?}"
     );
 }

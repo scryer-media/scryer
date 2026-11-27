@@ -269,6 +269,33 @@ pub(crate) fn score_parked_release_title(
     }
 }
 
+/// Admission facts for a file Scryer knows only by its parsed name and size,
+/// scored the way [`score_parked_release_title`] scores an announced release.
+///
+/// Pure and synchronous: no clock, no store and no file system. The caller
+/// supplies the parse, the size basis of the episodes the file would take, and
+/// the resolved context.
+pub(crate) fn score_announced_candidate<'a>(
+    parsed: &'a crate::ParsedReleaseMetadata,
+    size_bytes: i64,
+    size_basis: CoverageSizeBasis,
+    context: &'a ResolvedScoringContext,
+) -> crate::admission::CandidateFacts<'a> {
+    let tier_index = crate::quality_profile::quality_tier_index(
+        &context.profile().criteria,
+        parsed.quality.as_deref(),
+    );
+    let evidence =
+        crate::canonical_scoring::ReleaseEvidence::announced(parsed.clone(), Some(size_bytes));
+    let view = context.view(size_basis, false).without_rules();
+    let scored = context.with_rule_batch(|rules| {
+        crate::canonical_scoring::score_release_in_batch(&evidence, &view, rules)
+    });
+    crate::admission::CandidateFacts::new(tier_index, scored.revision, scored.total)
+        .with_language(scored.language)
+        .with_profile_policy(parsed.release_group.as_deref(), &context.profile().criteria)
+}
+
 /// Who is asking for a subject, and therefore what a multi-episode scope means.
 ///
 /// Exactly one scope shape reads differently on the two sides, and it is the

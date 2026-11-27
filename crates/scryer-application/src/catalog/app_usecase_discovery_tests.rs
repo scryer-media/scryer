@@ -427,6 +427,42 @@ fn cross_indexer_release_dedup_judges_one_indexers_releases_together() {
 }
 
 #[test]
+fn cross_indexer_release_dedup_matches_names_differing_only_in_non_ascii_case() {
+    let upper = "Synthetic.Ärende.S01E02.1080p.WEB-DL.AAC2.0.H.264-GRP";
+    let lower = "Synthetic ärende S01E02 1080p WEBDL AAC2 0 H264-GRP";
+    assert_same_dedup_key(upper, lower);
+    let priorities = HashMap::from([
+        ("Shared Source".to_string(), 50),
+        ("Preferred Source".to_string(), 10),
+    ]);
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            make_search_result(
+                "Shared Source",
+                upper,
+                "https://example.test/shared",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Preferred Source",
+                lower,
+                "https://example.test/preferred",
+                DownloadSourceKind::NzbUrl,
+            ),
+        ],
+        &priorities,
+        "nzb",
+    );
+    assert_eq!(
+        deduped
+            .into_iter()
+            .map(|result| result.download_url.unwrap_or_default())
+            .collect::<Vec<_>>(),
+        vec!["https://example.test/preferred".to_string()]
+    );
+}
+
+#[test]
 fn cross_indexer_release_dedup_keeps_a_release_only_one_indexer_carries() {
     assert_same_dedup_key(SAME_KEY_FIRST, SAME_KEY_SECOND);
     let priorities = HashMap::from([

@@ -872,9 +872,11 @@ async fn permission_claims_survive_token_round_trip() {
             .app_permissions
             .contains(&"managePermissions".to_string())
     );
+    // Manage Titles implies View, so storage, and the claim built from it,
+    // carries only the broader bit; readers expand it the same way.
     assert!(decoded.claims.library_permissions.iter().any(|grant| {
-        grant.permissions.contains(&"view".to_string())
-            && grant.permissions.contains(&"manageTitles".to_string())
+        grant.permissions.contains(&"manageTitles".to_string())
+            && !grant.permissions.contains(&"view".to_string())
     }));
 }
 

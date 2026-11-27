@@ -4,6 +4,9 @@ const en: LocaleDictionary = {
   "settings.defaultMonitorType": "Default monitoring for new titles",
   "settings.defaultMonitorTypeHelp":
     "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
+  "settings.libraryDefaultTitleTags": "Tags for new titles",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Added to every title added to this library, by hand, from a list or by approving a request. Titles found by a library scan and titles already here are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":
@@ -4350,6 +4353,8 @@ const en: LocaleDictionary = {
     "Choose both a season and episode.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "A series movie search cannot include a season or episode.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "This search takes a title, not free text. Run a free-text search as an interactive search instead.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Choose a title to search for releases.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":
@@ -5950,6 +5955,12 @@ const en: LocaleDictionary = {
   "settings.mediaServerEnabled": "Enable media server connection",
   "settings.mediaServerAuthCapabilities": "Permissions",
   "settings.mediaServerAutoAddEnabled": "Auto-add new verified users",
+  "settings.mediaServerRefreshOffer":
+    "Refresh this server's library when Scryer imports, renames, deletes or moves media",
+  "settings.mediaServerRefreshOfferHelp":
+    "Subscribes this connection under Notifications to: {{events}}. You can change or remove it there.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Library refresh after imports needs this server's notification plugin, which is not installed. To install it, open",
   "settings.mediaServerPathMappings": "Path Mappings",
   "settings.mediaServerPathMappingsHelp":
     "Each rule is saved as server path => Scryer path.",
@@ -7106,6 +7117,20 @@ const en: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Assign several episodes to this file",
   "queue.manualImportApplySuggestions": "Apply suggestions to all",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Same quality",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "New file",
+  "queue.manualImportVerdictEstimated": "estimated",
+  "queue.manualImportApplySuggestionsSelected": "Apply suggestions to selected",
+  "queue.manualImportSelectAll": "Select all",
+  "queue.manualImportSelectNone": "Select none",
+  "queue.manualImportSelectInvert": "Invert selection",
+  "queue.manualImportSelectMatching": "Select matching",
+  "queue.manualImportSelectMatchingLabel": "File name contains…",
+  "queue.manualImportSelectedCount": "{{count}} selected",
+  "queue.manualImportSkipSelected": "Skip selected",
+  "queue.manualImportAssignSelected": "Assign target to selected…",
   "queue.removeFailed": "Remove Failed",
   "queue.manualImportTooltip":
     "Manual import is available for attention-required queue items.",
@@ -7405,7 +7430,8 @@ const en: LocaleDictionary = {
   "settings.loginDisabled": "Login disabled",
   "settings.accountOrigin.scryer": "Scryer account",
   "settings.accountOrigin.mediaServerLogin": "Created by {{provider}} login",
-  "settings.accountOrigin.mediaServerLoginUnknown": "Created by media server login",
+  "settings.accountOrigin.mediaServerLoginUnknown":
+    "Created by media server login",
   "settings.linkedMediaServer": "Linked to {{provider}}",
   "settings.enableLogin": "Enable login",
   "settings.disableLogin": "Disable login",
@@ -8735,6 +8761,8 @@ const en: LocaleDictionary = {
   "status.editingRule": "Editing rule {{name}}",
   "status.deletingRule": "Delete rule {{name}}?",
   "status.mediaServerCreated": "Media server connection saved.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Media server connection saved, but these library refresh subscriptions were not created: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Media server connection updated.",
   "status.mediaServerDeleted": "Deleted media server {{name}}.",
   "status.plexServersDiscovered": "Plex servers loaded.",
@@ -8862,7 +8890,7 @@ const en: LocaleDictionary = {
   "profile.linkedAccountConnection": "Connection",
   "profile.linkedAccountUnknownConnection": "Unknown connection",
   "profile.linkedAccountStatus": "Status",
-  "profile.linkJellyfinAccount": "Link Jellyfin",
+  "profile.linkJellyfinAccount": "Link Jellyfin / Silo",
   "profile.linkPlexAccount": "Link Plex",
   "profile.linkAccountConnection": "Connection",
   "profile.linkAccountUsername": "Username",
@@ -8892,7 +8920,7 @@ const en: LocaleDictionary = {
     "Too many sign-in attempts. Please wait a moment and try again.",
   "auth.signInWithScryerPassword": "Sign in with Scryer password",
   "auth.signInWithPasskey": "Sign in with passkey",
-  "auth.signInWithJellyfin": "Sign in with Jellyfin",
+  "auth.signInWithJellyfin": "Sign in with Jellyfin / Silo",
   "auth.jellyfinFailed": "Jellyfin sign-in failed.",
   "auth.signInWithPlex": "Sign in with Plex",
   "auth.plexFailed": "Plex sign-in failed.",
@@ -9117,7 +9145,7 @@ const en: LocaleDictionary = {
   "settings.notificationNoProviders":
     "No notification plugins installed. Install a notification plugin from the Plugins page first.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Grabbed Release",
   "settings.notificationEvent.download": "Download Failed",
   "settings.notificationEvent.upgrade": "Upgrade Imported",
@@ -9624,8 +9652,10 @@ const en: LocaleDictionary = {
   "history.placementRenamed": "Moved into place",
   "history.placementAlreadyPresent": "Already in the library",
   "history.linkFallbackFailed": "Copied because the hard link failed",
-  "history.linkFallbackNotPossible": "Copied because a hard link is not possible here",
-  "history.linkFallbackUnverifiable": "Copied because the hard link could not be verified",
+  "history.linkFallbackNotPossible":
+    "Copied because a hard link is not possible here",
+  "history.linkFallbackUnverifiable":
+    "Copied because the hard link could not be verified",
   "history.linkFallbackError": "error {{code}}",
 
   // Indexer error diagnostics
@@ -13716,10 +13746,10 @@ const en: LocaleDictionary = {
     "Rules score releases, so Scryer prefers the ones you want and passes over the ones you don't.",
   "tours.onboarding.mediaServers.title": "Media servers",
   "tours.onboarding.mediaServers.body":
-    "Connect Jellyfin, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
+    "Connect Jellyfin / Silo, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
   "tours.onboarding.notifications.title": "Notifications",
   "tours.onboarding.notifications.body":
-    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
+    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin / Silo, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins add indexers, download clients and notification services. Install and update them here.",

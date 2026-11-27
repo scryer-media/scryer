@@ -4,6 +4,9 @@ const ru: LocaleDictionary = {
   "settings.defaultMonitorType": "Отслеживание новых тайтлов по умолчанию",
   "settings.defaultMonitorTypeHelp":
     "Начальный выбор при добавлении или запросе тайтла. Существующие тайтлы и подписки на списки не меняются.",
+  "settings.libraryDefaultTitleTags": "Теги для новых тайтлов",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Добавляются к каждому тайтлу, добавленному в эту библиотеку вручную, из списка или при одобрении запроса. Тайтлы, найденные сканированием библиотеки, и уже добавленные тайтлы не меняются.",
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Эта версия Prowlarr не поддерживается. Обновите Prowlarr до версии 2.0 или новее.",
   "error.reason.STANDBY_NOT_FOUND":
@@ -1180,6 +1183,12 @@ const ru: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Разрешения",
   "settings.mediaServerAutoAddEnabled":
     "Автоматически добавлять новых подтверждённых пользователей",
+  "settings.mediaServerRefreshOffer":
+    "Обновлять библиотеку этого сервера, когда Scryer импортирует, переименовывает, удаляет или перемещает медиа",
+  "settings.mediaServerRefreshOfferHelp":
+    "Подписывает это подключение в разделе «Уведомления» на: {{events}}. Изменить или удалить подписку можно там.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Для обновления библиотеки после импорта нужен плагин уведомлений этого сервера, но он не установлен. Чтобы установить его, откройте",
   "settings.defaultAppPermissions": "Разрешения приложения по умолчанию",
   "settings.defaultLibraryPermissions": "Разрешения библиотеки по умолчанию",
   "settings.mediaServerPathMappings": "Сопоставление путей",
@@ -2304,6 +2313,20 @@ const ru: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Назначить этому файлу несколько эпизодов",
   "queue.manualImportApplySuggestions": "Применить предложения ко всем",
+  "queue.manualImportApplySuggestionsSelected": "Применить предложения к выбранным",
+  "queue.manualImportSelectAll": "Выбрать все",
+  "queue.manualImportSelectNone": "Снять выбор",
+  "queue.manualImportSelectInvert": "Инвертировать выбор",
+  "queue.manualImportSelectMatching": "Выбрать совпадающие",
+  "queue.manualImportSelectMatchingLabel": "Имя файла содержит…",
+  "queue.manualImportSelectedCount": "Выбрано: {{count}}",
+  "queue.manualImportSkipSelected": "Пропустить выбранные",
+  "queue.manualImportAssignSelected": "Назначить цель выбранным…",
+  "queue.manualImportVerdict.UPGRADE": "Улучшение",
+  "queue.manualImportVerdict.EQUAL": "То же качество",
+  "queue.manualImportVerdict.DOWNGRADE": "Ухудшение",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Новый файл",
+  "queue.manualImportVerdictEstimated": "оценка",
   "queue.removeFailed": "Удалить ошибочные",
   "queue.manualImportTooltip":
     "Ручной импорт доступен для элементов очереди, требующих внимания.",
@@ -3687,6 +3710,8 @@ const ru: LocaleDictionary = {
   "status.editingRule": "Редактирование правила {{name}}",
   "status.deletingRule": "Удалить правило {{name}}?",
   "status.mediaServerCreated": "Подключение к медиасерверу сохранено.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Подключение к медиасерверу сохранено, но эти подписки на обновление библиотеки не созданы: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Подключение к медиасерверу обновлено.",
   "status.mediaServerDeleted": "Медиасервер {{name}} удалён.",
   "status.plexServersDiscovered": "Серверы Plex загружены.",
@@ -3830,7 +3855,7 @@ const ru: LocaleDictionary = {
   "profile.linkedAccountConnection": "Подключение",
   "profile.linkedAccountUnknownConnection": "Неизвестное подключение",
   "profile.linkedAccountStatus": "Статус",
-  "profile.linkJellyfinAccount": "Подключить Jellyfin",
+  "profile.linkJellyfinAccount": "Подключить Jellyfin / Silo",
   "profile.linkPlexAccount": "Подключить Plex",
   "profile.linkAccountConnection": "Подключение",
   "profile.linkAccountUsername": "Имя пользователя",
@@ -3866,7 +3891,7 @@ const ru: LocaleDictionary = {
     "Слишком много попыток входа. Подождите немного и повторите попытку.",
   "auth.signInWithScryerPassword": "Войти с помощью пароля Scryer",
   "auth.signInWithPasskey": "Войти с помощью ключа доступа",
-  "auth.signInWithJellyfin": "Войти через Jellyfin",
+  "auth.signInWithJellyfin": "Войти через Jellyfin / Silo",
   "auth.jellyfinFailed": "Не удалось выполнить вход через Jellyfin.",
   "auth.signInWithPlex": "Войти через Plex",
   "auth.plexFailed": "Не удалось выполнить вход через Plex.",
@@ -4064,7 +4089,7 @@ const ru: LocaleDictionary = {
   "settings.notificationJellyfinChannelHint":
     "Сопоставления путей должны связывать папки Scryer с путями к папкам, доступным Jellyfin. Оставьте их пустыми, если оба сервиса используют одинаковые пути.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Завершение импорта — стандартный триггер для запуска сканирования Jellyfin после импорта. Здесь доступны только события Jellyfin, способные обновить библиотеку.",
+    "Завершение импорта — стандартный триггер для запуска сканирования Jellyfin / Silo после импорта. Здесь доступны только события Jellyfin / Silo, способные обновить библиотеку.",
   "settings.notificationEvent.grab": "Релиз получен",
   "settings.notificationEvent.download": "Ошибка загрузки",
   "settings.notificationEvent.upgrade": "Обновление импортировано",
@@ -11446,6 +11471,8 @@ const ru: LocaleDictionary = {
     "Выберите и сезон, и эпизод.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "Поиск фильма сериала не может включать сезон или эпизод.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "Этот поиск принимает тайтл, а не произвольный текст. Для поиска по тексту запустите интерактивный поиск.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Выберите тайтл для поиска релизов.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":
@@ -14635,10 +14662,10 @@ const ru: LocaleDictionary = {
     "Правила оценивают релизы, чтобы Scryer выбирал нужные вам и пропускал ненужные.",
   "tours.onboarding.mediaServers.title": "Медиасерверы",
   "tours.onboarding.mediaServers.body":
-    "Подключите Jellyfin, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
+    "Подключите Jellyfin / Silo, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
   "tours.onboarding.notifications.title": "Уведомления",
   "tours.onboarding.notifications.body":
-    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
+    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin / Silo, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
   "tours.onboarding.plugins.title": "Плагины",
   "tours.onboarding.plugins.body":
     "Плагины добавляют индексаторы, клиенты загрузки и службы уведомлений. Устанавливайте и обновляйте их здесь.",

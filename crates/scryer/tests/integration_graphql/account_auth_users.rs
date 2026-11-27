@@ -1923,9 +1923,10 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
         .await
         .expect("seed media server connection");
     }
-    // One user is linked to Jellyfin and to two Plex servers; another has
+    // One user is linked to Plex first, then Jellyfin, then a second Plex
+    // server, so creation order differs from alphabetical order; another has
     // only a pending and a disabled link.
-    for (id, user, provider, connection, status, verified) in [
+    for (id, user, provider, connection, status, verified, minutes_ago) in [
         (
             "link-1",
             &created[0],
@@ -1933,6 +1934,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
             "plex-emberfall",
             "active",
             true,
+            30,
         ),
         (
             "link-2",
@@ -1941,6 +1943,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
             "jellyfin-emberfall",
             "active",
             true,
+            20,
         ),
         (
             "link-3",
@@ -1949,6 +1952,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
             "plex-cinderwake",
             "active",
             true,
+            10,
         ),
         (
             "link-4",
@@ -1957,6 +1961,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
             "jellyfin-emberfall",
             "pending_claim",
             false,
+            5,
         ),
         (
             "link-5",
@@ -1965,6 +1970,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
             "plex-emberfall",
             "disabled",
             true,
+            1,
         ),
     ] {
         sqlx::query(
@@ -1981,7 +1987,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
         .bind(format!("{id}-name"))
         .bind(status)
         .bind(verified.then(|| now.to_rfc3339()))
-        .bind(now.to_rfc3339())
+        .bind((now - chrono::Duration::minutes(minutes_ago)).to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(ctx.db.pool())
         .await
@@ -2002,7 +2008,7 @@ async fn graphql_users_list_only_active_verified_media_server_links() {
             .map(|row| row["linkedMediaServers"].clone())
             .expect("created user listed")
     };
-    assert_eq!(linked(&created[0]), json!(["JELLYFIN", "PLEX"]));
+    assert_eq!(linked(&created[0]), json!(["PLEX", "JELLYFIN"]));
     assert_eq!(linked(&created[1]), json!([]));
     assert_eq!(linked(&created[2]), json!([]));
 }

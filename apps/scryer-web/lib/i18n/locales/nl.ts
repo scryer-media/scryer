@@ -1116,6 +1116,12 @@ const nl: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Rechten",
   "settings.mediaServerAutoAddEnabled":
     "Nieuwe geverifieerde gebruikers automatisch toevoegen",
+  "settings.mediaServerRefreshOffer":
+    "De bibliotheek van deze server vernieuwen wanneer Scryer media importeert, hernoemt, verwijdert of verplaatst",
+  "settings.mediaServerRefreshOfferHelp":
+    "Abonneert deze verbinding onder Meldingen op: {{events}}. Je kunt dit daar wijzigen of verwijderen.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Bibliotheekvernieuwing na imports heeft de meldingsplugin van deze server nodig, die niet is geïnstalleerd. Open om hem te installeren",
   "settings.mediaServerPathMappings": "Padmappings",
   "settings.mediaServerPathMappingsHelp":
     "Elke regel wordt opgeslagen als serverpad => Scryer-pad.",
@@ -1964,6 +1970,20 @@ const nl: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Meerdere afleveringen aan dit bestand toewijzen",
   "queue.manualImportApplySuggestions": "Suggesties op alles toepassen",
+  "queue.manualImportApplySuggestionsSelected": "Suggesties op selectie toepassen",
+  "queue.manualImportSelectAll": "Alles selecteren",
+  "queue.manualImportSelectNone": "Niets selecteren",
+  "queue.manualImportSelectInvert": "Selectie omkeren",
+  "queue.manualImportSelectMatching": "Overeenkomende selecteren",
+  "queue.manualImportSelectMatchingLabel": "Bestandsnaam bevat…",
+  "queue.manualImportSelectedCount": "{{count}} geselecteerd",
+  "queue.manualImportSkipSelected": "Selectie overslaan",
+  "queue.manualImportAssignSelected": "Doel toewijzen aan selectie…",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Zelfde kwaliteit",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Nieuw bestand",
+  "queue.manualImportVerdictEstimated": "geschat",
   "queue.removeFailed": "Mislukte verwijderen",
   "queue.manualImportTooltip":
     "Handmatige import is beschikbaar voor wachtrijitems die aandacht vereisen.",
@@ -3206,6 +3226,8 @@ const nl: LocaleDictionary = {
   "status.editingRule": "Regel {{name}} bewerken",
   "status.deletingRule": "Regel {{name}} verwijderen?",
   "status.mediaServerCreated": "Mediaserververbinding opgeslagen.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Mediaserververbinding opgeslagen, maar deze abonnementen voor bibliotheekvernieuwing zijn niet aangemaakt: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Mediaserververbinding bijgewerkt.",
   "status.mediaServerDeleted": "Mediaserver {{name}} verwijderd.",
   "status.plexServersDiscovered": "Plex-servers geladen.",
@@ -3321,7 +3343,7 @@ const nl: LocaleDictionary = {
   "profile.linkedAccountConnection": "Verbinding",
   "profile.linkedAccountUnknownConnection": "Onbekende verbinding",
   "profile.linkedAccountStatus": "Status",
-  "profile.linkJellyfinAccount": "Jellyfin koppelen",
+  "profile.linkJellyfinAccount": "Jellyfin / Silo koppelen",
   "profile.linkPlexAccount": "Plex koppelen",
   "profile.linkAccountConnection": "Verbinding",
   "profile.linkAccountUsername": "Gebruikersnaam",
@@ -3351,7 +3373,7 @@ const nl: LocaleDictionary = {
     "Te veel inlogpogingen. Wacht even en probeer het opnieuw.",
   "auth.signInWithScryerPassword": "Inloggen met Scryer-wachtwoord",
   "auth.signInWithPasskey": "Inloggen met passkey",
-  "auth.signInWithJellyfin": "Inloggen met Jellyfin",
+  "auth.signInWithJellyfin": "Inloggen met Jellyfin / Silo",
   "auth.jellyfinFailed": "Jellyfin-inloggen mislukt.",
   "auth.signInWithPlex": "Inloggen met Plex",
   "auth.plexFailed": "Plex-inloggen mislukt.",
@@ -3550,7 +3572,7 @@ const nl: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Geen meldingsplugins geïnstalleerd. Installeer eerst een meldingsplugin via de pagina Plugins.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import voltooid is de gebruikelijke Jellyfin-scantrigger na import. Alleen Jellyfin-gebeurtenissen die de bibliotheek kunnen verversen zijn hier beschikbaar.",
+    "Import voltooid is de gebruikelijke Jellyfin / Silo-scantrigger na import. Alleen Jellyfin / Silo-gebeurtenissen die de bibliotheek kunnen verversen zijn hier beschikbaar.",
   "settings.notificationEvent.grab": "Release opgehaald",
   "settings.notificationEvent.download": "Download mislukt",
   "settings.notificationEvent.upgrade": "Upgrade geïmporteerd",
@@ -4832,10 +4854,10 @@ const nl: LocaleDictionary = {
     "Regels geven releases een score, zodat Scryer kiest wat je wilt en overslaat wat je niet wilt.",
   "tours.onboarding.mediaServers.title": "Mediaservers",
   "tours.onboarding.mediaServers.body":
-    "Koppel Jellyfin, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
+    "Koppel Jellyfin / Silo, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
   "tours.onboarding.notifications.title": "Meldingen",
   "tours.onboarding.notifications.body":
-    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt. Diensten voeg je toe vanuit dit Plugins-paneel. Ook Jellyfin, Plex en Emby staan hier: je server vernieuwt na een import pas als je de plugin ervan uit dit paneel installeert, ook als hij al gekoppeld is onder Mediaservers.",
+    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt. Diensten voeg je toe vanuit dit Plugins-paneel. Ook Jellyfin / Silo, Plex en Emby staan hier: je server vernieuwt na een import pas als je de plugin ervan uit dit paneel installeert, ook als hij al gekoppeld is onder Mediaservers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins voegen indexers, downloadclients en meldingsdiensten toe. Installeer en werk ze hier bij.",

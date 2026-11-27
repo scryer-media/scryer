@@ -2285,6 +2285,7 @@ pub async fn begin_manual_import_selection(
         candidates.push(crate::ManualImportSelectionCandidate {
             id: candidate_id.clone(),
             canonical_path: canonical_path.clone(),
+            size_bytes: Some(file.size_bytes),
         });
         files.push(ManualImportSelectionFilePreview {
             candidate_id,

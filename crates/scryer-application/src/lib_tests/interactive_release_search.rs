@@ -1128,6 +1128,75 @@ async fn a_raw_query_keeps_the_pages_an_indexer_answered_before_its_query_budget
     assert!(unasked.rate_limited);
 }
 
+/// Two indexers stopped by a rate limit: one after delivering a row, one
+/// before. What each delivered decides its status, in a raw query and in a
+/// title search alike.
+async fn rate_limited_pair(app_request: fn(&Title) -> InteractiveReleaseSearchRequest) {
+    let limited = |empty| crate::IndexerSearchOutcome::Partial {
+        empty,
+        reason: Some(crate::IndexerSearchIncompleteReason::RateLimited),
+        retry_after: Some(Duration::from_secs(30)),
+    };
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-delivered",
+            vec![budget_release(
+                "Quarry.Lantern.2019.2160p.WEB-DL-QUILLFOX",
+                "rl1",
+            )],
+        )
+        .await
+        .with_outcome("idx-delivered", limited(false))
+        .await
+        .with_outcome("idx-empty", limited(true))
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![
+            synthetic_direct_nab_indexer_config("idx-delivered", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-empty", "newznab"),
+        ],
+    );
+    let title = budget_movie(&app, &user).await;
+
+    let start = app
+        .start_interactive_release_search(&user, app_request(&title))
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    let delivered = indexer_view(&done, "idx-delivered");
+    assert_eq!(
+        delivered.status,
+        InteractiveReleaseSearchIndexerStatus::Completed,
+        "rows delivered before the limit answer the search: {delivered:?}"
+    );
+    assert_eq!(delivered.result_count, 1);
+    assert!(delivered.rate_limited, "{delivered:?}");
+    assert_eq!(delivered.retry_after, Some(Duration::from_secs(30)));
+
+    let empty = indexer_view(&done, "idx-empty");
+    assert_eq!(
+        empty.status,
+        InteractiveReleaseSearchIndexerStatus::Failed,
+        "a limit before any row is not an answer: {empty:?}"
+    );
+    assert_eq!(empty.result_count, 0);
+    assert!(empty.rate_limited, "{empty:?}");
+    assert_eq!(empty.retry_after, Some(Duration::from_secs(30)));
+}
+
+#[tokio::test]
+async fn a_raw_query_reads_a_rate_limited_indexer_by_what_it_delivered() {
+    rate_limited_pair(|_| query_request("quarry lantern")).await;
+}
+
+#[tokio::test]
+async fn a_title_search_reads_a_rate_limited_indexer_by_what_it_delivered() {
+    rate_limited_pair(|title| title_request(&title.id)).await;
+}
+
 // ── Title subject: a whole season ──────────────────────────────────────────
 
 /// A series with a season-2 collection holding two episodes. Returns the

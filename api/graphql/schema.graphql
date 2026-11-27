@@ -10436,6 +10436,11 @@ type InstanceFeaturesPayload {
 	Facets an administrator turned off for the whole instance.
 	"""
 	disabledFacets: [MediaFacetValue!]!
+	"""
+	Facets the current user can view, request into, add titles to or
+	manage a library of.
+	"""
+	viewableFacets: [MediaFacetValue!]!
 }
 
 """
@@ -11641,6 +11646,13 @@ input LibrarySettingsInput {
 	"""
 	defaultMonitorType: String
 	"""
+	Defined tag labels every title added to this library is given, by hand,
+	from a list or by approving a request; null or empty clears them. A
+	label the registry does not define is refused with
+	`CATALOG_NOT_DEFINED_TAG`.
+	"""
+	defaultTitleTags: [String!]
+	"""
 	Default quality profile identity.
 	"""
 	qualityProfileId: ID
@@ -11789,6 +11801,10 @@ type LibrarySettingsPayload {
 	Saved library choice; null uses the built-in facet default.
 	"""
 	defaultMonitorTypeOverride: String
+	"""
+	Tag labels every title added to this library is given; empty when none.
+	"""
+	defaultTitleTags: [String!]!
 	"""
 	Library override quality-profile ID; null means inherit.
 	"""
@@ -17232,6 +17248,24 @@ input ManualImportCandidateMappingInput {
 }
 
 """
+The best file already holding the episodes a manual-import candidate is mapped to.
+"""
+type ManualImportCurrentFilePayload {
+	"""
+	Quality label of the file, or null when unavailable.
+	"""
+	quality: String
+	"""
+	Release group of the file, or null when unavailable.
+	"""
+	releaseGroup: String
+	"""
+	Score the file holds the episodes at.
+	"""
+	score: Int!
+}
+
+"""
 Candidate file details used to preview a manual import selection.
 """
 type ManualImportFilePreviewPayload {
@@ -17327,6 +17361,68 @@ type ManualImportSeriesMovieTargetPayload {
 	Runtime in minutes, or null when unavailable.
 	"""
 	runtimeMinutes: Int
+}
+
+"""
+Estimated upgrade verdict for one manual-import candidate. Display only: the import decides again on the landed file.
+"""
+type ManualImportVerdictPayload {
+	"""
+	Candidate ID the estimate is for.
+	"""
+	candidateId: ID!
+	"""
+	Episodes of the title the estimate covers; a multi-episode file is judged across all of them.
+	"""
+	episodeIds: [ID!]!
+	"""
+	Estimated verdict, or null when the candidate cannot be estimated.
+	"""
+	verdict: ManualImportVerdictValue
+	"""
+	Estimated score of the candidate, or null when it cannot be estimated.
+	"""
+	estimatedScore: Int
+	"""
+	Best file already holding the episodes, or null when none does or it cannot be estimated.
+	"""
+	currentFile: ManualImportCurrentFilePayload
+}
+
+"""
+One manual-import candidate and the episodes to estimate it against.
+"""
+input ManualImportVerdictRequestInput {
+	"""
+	Candidate ID from the persisted manual-import selection.
+	"""
+	candidateId: ID!
+	"""
+	Episode IDs the candidate is mapped to; IDs outside the selection's title are ignored.
+	"""
+	episodeIds: [ID!]!
+}
+
+"""
+Estimated comparison of a manual-import file with the files already holding the episodes it is mapped to.
+"""
+enum ManualImportVerdictValue {
+	"""
+	The file would be an upgrade over what the episodes hold.
+	"""
+	UPGRADE
+	"""
+	The file ties what the episodes hold.
+	"""
+	EQUAL
+	"""
+	What the episodes hold is better than the file.
+	"""
+	DOWNGRADE
+	"""
+	None of the episodes holds a file.
+	"""
+	NO_CURRENT_FILE
 }
 
 """
@@ -26453,6 +26549,8 @@ type QueryRoot {
 	): WantedItemPayload
 	"""
 	Search indexers for a title, series movie link, or episode and return at most 200 results.
+	A free-text `query` is refused with `INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`;
+	run it with `startInteractiveReleaseSearch` instead.
 	"""
 	searchReleases(
 		"""
@@ -26789,6 +26887,19 @@ type QueryRoot {
 		"""
 		input: LibraryGraphInput!
 	): LibraryGraph
+	"""
+	Estimate whether each manual-import candidate would upgrade the episodes it is mapped to; requires the selection's owner with import resolution on its library. Read-only: nothing is queued or imported.
+	"""
+	manualImportVerdicts(
+		"""
+		Selection ID from beginManualImportSelection.
+		"""
+		selectionId: ID!,
+		"""
+		Candidates and the episodes each is mapped to; at most 2000 candidates and 500 episodes per candidate.
+		"""
+		files: [ManualImportVerdictRequestInput!]!
+	): [ManualImportVerdictPayload!]!
 	"""
 	Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
 	"""
@@ -31133,12 +31244,14 @@ enum ScriptTriggerValue {
 }
 
 """
-Filters for an interactive release search. Exactly one of `titleId` and
-`query` names the subject.
+Filters for a release search. `startInteractiveReleaseSearch` takes
+exactly one of `titleId` and `query` as the subject; `searchReleases`
+takes `titleId` and refuses `query`.
 """
 input SearchReleasesInput {
 	"""
-	Title identity whose releases are searched; required unless `query` is given.
+	Title identity whose releases are searched. Required by
+	`searchReleases`; an interactive search needs it unless `query` is given.
 	"""
 	titleId: ID
 	"""
@@ -31157,9 +31270,9 @@ input SearchReleasesInput {
 	episode: String
 	"""
 	Optional limit. A title search lists at most this many results
-	(default 50, max 200); a `query` search asks each indexer for this many
-	(default 100, 1 to 500); `aggregatePageSize` sets how many merged results
-	each page lists.
+	(default 50, max 200). An interactive `query` search asks each indexer
+	for this many (default 100, 1 to 500); `aggregatePageSize` sets how many
+	merged results each page lists.
 	"""
 	limit: Int
 	"""
@@ -31169,7 +31282,9 @@ input SearchReleasesInput {
 	"""
 	aggregatePageSize: Int
 	"""
-	Raw operator query sent as typed to each indexer, without a catalog title.
+	Raw operator query sent as typed to each indexer, without a catalog
+	title. Interactive searches only: `searchReleases` refuses it with
+	`INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`.
 	"""
 	query: String
 	"""
@@ -37395,8 +37510,9 @@ type UserPayload {
 	libraryPermissions: [UserLibraryPermissionGrantPayload!]!
 	"""
 	Media servers this user has an active, verified account link to, such
-	as the server whose login created the account. Pending invites and
-	disabled links are not listed.
+	as the server whose login created the account. Listed in link-creation
+	order, earliest first. Pending invites and disabled links are not
+	listed.
 	"""
 	linkedMediaServers: [ExternalAccountProviderValue!]!
 }
