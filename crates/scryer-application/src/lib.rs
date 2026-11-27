@@ -80,6 +80,7 @@ pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
+pub mod host_memory;
 mod image_proxy;
 mod import;
 mod indexer_category;
