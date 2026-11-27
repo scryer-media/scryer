@@ -1416,6 +1416,7 @@ mod expected_episode_release_title_tests {
             client_id: "client-1".to_string(),
             client_type: "qbittorrent".to_string(),
             client_item: DownloadQueueItem {
+                client_job_protocol: None,
                 id: Id::new().0,
                 title_id: Some("title-1".to_string()),
                 episode_id: None,

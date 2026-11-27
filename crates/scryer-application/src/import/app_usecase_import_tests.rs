@@ -86,7 +86,7 @@ fn test_movie_title_with_aliases_and_ids(
 }
 
 fn test_completed_download(name: &str, dest_dir: &std::path::Path) -> CompletedDownload {
-    CompletedDownload {
+    CompletedDownload { client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "weaver".to_string(),
         client_id: "client-1".to_string(),

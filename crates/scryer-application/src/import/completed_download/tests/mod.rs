@@ -1998,6 +1998,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         client_id: "client-1".to_string(),
         client_type: "nzbget".to_string(),
         client_item: DownloadQueueItem {
+            client_job_protocol: None,
             id: Id::new().0,
             title_id: Some(title_id.to_string()),
             episode_id: None,
@@ -2074,6 +2075,7 @@ fn build_completed_download(
     category: Option<&str>,
 ) -> CompletedDownload {
     CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "client-1".to_string(),

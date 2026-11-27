@@ -1,0 +1,51 @@
+# The bridge's queue event subscription for a Weaver with torrents. A Weaver
+# without torrents refuses it, and the bridge subscribes with the NZB-only
+# events instead.
+subscription QueueEventsWithTorrents($after: String) {
+  queueEvents(after: $after) {
+    cursor
+    kind
+    itemId
+    item {
+      id
+      name
+      originalTitle
+      state
+      error
+      progressPercent
+      totalBytes
+      downloadedBytes
+      failedBytes
+      health
+      category
+      outputDir
+      createdAt
+      clientRequestId
+      attributes {
+        key
+        value
+      }
+      attention {
+        code
+        message
+      }
+      protocol
+      torrent {
+        ...WeaverTorrentRow
+      }
+    }
+  }
+}
+
+fragment WeaverTorrentRow on Torrent {
+  id
+  infohashV1
+  private
+  ratio
+  uploadedBytes
+  seedingSeconds
+  completedAt
+  storageDir
+  seedingGoalMet
+  contentReady
+}

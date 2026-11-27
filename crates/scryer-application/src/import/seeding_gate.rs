@@ -125,6 +125,9 @@ pub(crate) struct SeedGoalLookupKey {
     /// that carries both usenet and torrent jobs; `Unknown` keeps the
     /// protections there.
     pub job_protocol: DownloadJobProtocol,
+    /// The protocol the client reports for the job, for a key whose
+    /// `job_protocol` is still `Unknown`; `resolve_job_protocol` weighs it.
+    pub client_reported_protocol: Option<scryer_domain::ClientJobProtocol>,
 }
 
 /// Seed goals prefetched for one reconcile tick in a single query.
@@ -644,6 +647,32 @@ impl DownloadJobProtocol {
         }
         Self::from_source_kind(submission.source_kind)
     }
+
+    fn from_client_report(protocol: scryer_domain::ClientJobProtocol) -> Self {
+        match protocol {
+            scryer_domain::ClientJobProtocol::Usenet => Self::Usenet,
+            scryer_domain::ClientJobProtocol::Torrent => Self::Torrent,
+        }
+    }
+}
+
+/// The protocol of one client job. This is the one place it is decided.
+///
+/// The job's grab record answers first, whenever it names a protocol. A job
+/// with no record, an unreadable one, or one that names none takes the
+/// protocol the client itself reports for it. With neither, `established`
+/// stands: what an earlier resolution of the same row found, or `Unknown`,
+/// which keeps the torrent protections.
+pub(crate) fn resolve_job_protocol(
+    recorded: Option<&crate::DownloadSubmission>,
+    client_reported: Option<scryer_domain::ClientJobProtocol>,
+    established: DownloadJobProtocol,
+) -> DownloadJobProtocol {
+    recorded
+        .map(DownloadJobProtocol::from_submission)
+        .filter(|protocol| *protocol != DownloadJobProtocol::Unknown)
+        .or_else(|| client_reported.map(DownloadJobProtocol::from_client_report))
+        .unwrap_or(established)
 }
 
 fn source_kind_is_torrent(kind: &DownloadSourceKind) -> bool {
@@ -718,35 +747,41 @@ pub(crate) fn client_type_is_torrent(app: &AppUseCase, client_type: &str) -> boo
 /// caller that holds no tracked row.
 ///
 /// Reads nothing unless the client carries both protocols, since only there
-/// can the answer change a decision. A failed or empty read is `Unknown`,
-/// which keeps the protections.
+/// can the answer change a decision. The answer is `resolve_job_protocol`'s:
+/// a failed or empty read leaves the client's own report, and without one
+/// `Unknown`, which keeps the protections.
 pub(crate) async fn job_protocol_for_client_item(
     app: &AppUseCase,
     canonical_download_id: Option<&DownloadId>,
     locator: &ClientJobLocator,
+    client_reported: Option<scryer_domain::ClientJobProtocol>,
 ) -> DownloadJobProtocol {
     if !client_carries_usenet_and_torrent_jobs(app, &locator.client_type) {
         return DownloadJobProtocol::Unknown;
     }
-    match app
+    let recorded = match app
         .services
         .workflow
         .download_submissions
         .find_by_client_item_id_for_download(canonical_download_id, locator)
         .await
     {
-        Ok(Some(submission)) => DownloadJobProtocol::from_submission(&submission),
-        Ok(None) => DownloadJobProtocol::Unknown,
+        Ok(recorded) => recorded,
         Err(error) => {
             tracing::warn!(
                 error = %error,
                 client_type = locator.client_type.as_str(),
                 download_client_item_id = locator.item_id.as_str(),
-                "failed to read the job's grab record; keeping seeding protections"
+                "failed to read the job's grab record; using the client's report or keeping seeding protections"
             );
-            DownloadJobProtocol::Unknown
+            None
         }
-    }
+    };
+    resolve_job_protocol(
+        recorded.as_ref(),
+        client_reported,
+        DownloadJobProtocol::Unknown,
+    )
 }
 
 /// The observed torrent state for one client item, from the published
@@ -854,8 +889,13 @@ async fn resolve_import_job_protocol(
     }
     let locator =
         ClientJobLocator::new(Some(&key.client_id), &key.client_type, &key.client_item_id);
-    let protocol =
-        job_protocol_for_client_item(app, key.canonical_download_id.as_ref(), &locator).await;
+    let protocol = job_protocol_for_client_item(
+        app,
+        key.canonical_download_id.as_ref(),
+        &locator,
+        key.client_reported_protocol,
+    )
+    .await;
     let _ = IMPORT_JOB_PROTOCOLS.try_with(|recorded| {
         recorded.borrow_mut().push((key.clone(), protocol));
     });
@@ -1039,6 +1079,7 @@ pub(crate) fn seed_goal_lookup_key_for_completed(
         // A completed download carries no grab record; the gate reads it from
         // the submission when the client carries both protocols.
         job_protocol: DownloadJobProtocol::Unknown,
+        client_reported_protocol: completed.client_job_protocol,
     }
 }
 
@@ -1437,6 +1478,45 @@ mod tests {
                 ..SeedingGateInput::default()
             });
             assert_eq!(decision.outcome, SeedingGateOutcome::Released { action });
+        }
+    }
+
+    // A seeding Weaver torrent reports `can_move_files: false` for as long as
+    // it is in the client, and its own goal verdict as `can_remove`: the gate
+    // holds it until the goal is met, and never imports it by move.
+    #[test]
+    fn a_seeding_weaver_torrent_is_never_imported_by_move() {
+        for goal_met in [false, true] {
+            let snapshot = DownloadSeedingSnapshot {
+                can_remove: Some(goal_met),
+                can_move_files: Some(false),
+                seed_ratio: Some(0.5),
+                seed_time_seconds: Some(600),
+                is_private: Some(false),
+                uploaded_bytes: Some(10),
+                completed_at: Some("2026-01-01T01:00:00+00:00".to_string()),
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                never_remove: false,
+            };
+            let decision = evaluate_seeding_gate(&SeedingGateInput {
+                client_type: "weaver".to_string(),
+                observation: Some(TorrentSeedingObservation::from(&snapshot)),
+                ..SeedingGateInput::default()
+            });
+            if goal_met {
+                assert!(
+                    matches!(decision.outcome, SeedingGateOutcome::Released { .. }),
+                    "{decision:?}"
+                );
+            } else {
+                assert_eq!(decision.outcome, SeedingGateOutcome::Hold);
+            }
+            assert_eq!(
+                decision.import_mode(ImportMode::Move),
+                ImportMode::HardlinkOrCopy,
+                "goal met: {goal_met}"
+            );
         }
     }
 

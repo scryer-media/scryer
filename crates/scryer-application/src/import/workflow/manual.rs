@@ -546,7 +546,13 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
             }
         }
     }
-    let job_protocol = crate::seeding_gate::job_protocol_for_client_item(app, None, &locator).await;
+    let job_protocol = crate::seeding_gate::job_protocol_for_client_item(
+        app,
+        None,
+        &locator,
+        completed.client_job_protocol,
+    )
+    .await;
     let _ = reconcile_terminal_download_cleanup(
         app,
         None,

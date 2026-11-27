@@ -1,0 +1,44 @@
+# The queue read for a Weaver with torrents: `queue_items.graphql` plus each
+# job's protocol and the torrent fields the seeding snapshot and the import
+# read. A Weaver without torrents refuses `protocol` or `torrent`, and the
+# read falls back to `queue_items.graphql`.
+query QueueItemsWithTorrents($filter: QueueFilterInput) {
+  queueItems(filter: $filter) {
+    id
+    name
+    originalTitle
+    state
+    error
+    progressPercent
+    totalBytes
+    category
+    outputDir
+    createdAt
+    clientRequestId
+    attributes {
+      key
+      value
+    }
+    attention {
+      code
+      message
+    }
+    protocol
+    torrent {
+      ...WeaverTorrentRow
+    }
+  }
+}
+
+fragment WeaverTorrentRow on Torrent {
+  id
+  infohashV1
+  private
+  ratio
+  uploadedBytes
+  seedingSeconds
+  completedAt
+  storageDir
+  seedingGoalMet
+  contentReady
+}

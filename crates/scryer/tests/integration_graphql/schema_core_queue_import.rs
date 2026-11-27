@@ -2654,6 +2654,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
     let source_dir = tempfile::tempdir().expect("source tempdir");
     std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let item = DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: item_id.to_string(),
         title_id: None,
@@ -2698,6 +2699,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
         seeding: None,
     };
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "weaver".to_string(),
         client_id: "graphql-weaver-client".to_string(),
@@ -3836,6 +3838,7 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
     let source_dir = tempfile::tempdir().expect("source tempdir");
     std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let item = DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: item_id.to_string(),
         title_id: None,
@@ -3877,6 +3880,7 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
         seeding: None,
     };
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "weaver".to_string(),
         client_id: client_id.to_string(),

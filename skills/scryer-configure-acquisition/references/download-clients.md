@@ -55,7 +55,8 @@ keys:
 | `max_connections_per_host` | intValue | both | default 2 |
 | `bandwidth_limit_kbps` | intValue | both | empty or 0 means no limit |
 
-`torbox` accepts both torrents and NZBs.
+`torbox` accepts both torrents and NZBs. So does `weaver`; a Weaver without
+torrents refuses a torrent grab, which then goes to the next client.
 
 ### Remote path mappings
 
