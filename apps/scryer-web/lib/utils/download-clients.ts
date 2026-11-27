@@ -164,13 +164,9 @@ function descriptorOwnsAnyField(
   );
 }
 
-function configValueInput(
-  key: string,
-  value: unknown,
-  field: ConfigFieldDef | undefined,
-): ProviderConfigValueInput {
+function looksLikeSecretConfigKey(key: string): boolean {
   const normalizedKey = key.trim().toLowerCase();
-  const isSecretKey =
+  return (
     normalizedKey === "api_key" ||
     normalizedKey === "apikey" ||
     normalizedKey === "username" ||
@@ -178,7 +174,52 @@ function configValueInput(
     normalizedKey.includes("api_key") ||
     normalizedKey.includes("password") ||
     normalizedKey.includes("secret") ||
-    normalizedKey.includes("token");
+    normalizedKey.includes("token")
+  );
+}
+
+/** Field types whose empty value is a choice the plugin can read as "none". */
+const CLEARABLE_TEXT_FIELD_TYPES = new Set([
+  "STRING",
+  "MULTILINE",
+  "SELECT",
+  "FILTERED_SELECT",
+  "PATH",
+  "TAG",
+]);
+
+/**
+ * Descriptor text fields the operator cleared. They are sent as an empty
+ * string so the host stores the choice; omitting them would let the plugin
+ * fall back to its default. Secret fields keep their own clear path.
+ */
+function clearedTextConfigValues(
+  draft: DownloadClientDraft,
+  fields: ConfigFieldDef[],
+  sentKeys: ReadonlySet<string>,
+): ProviderConfigValueInput[] {
+  return fields
+    .filter(
+      (field) =>
+        CLEARABLE_TEXT_FIELD_TYPES.has(field.fieldType) &&
+        !FIXED_DOWNLOAD_CLIENT_CONFIG_FIELD_KEYS.has(field.key) &&
+        !looksLikeSecretConfigKey(field.key) &&
+        !sentKeys.has(field.key) &&
+        Object.hasOwn(draft.configValues, field.key) &&
+        String(draft.configValues[field.key] ?? "").trim() === "",
+    )
+    .map((field): ProviderConfigValueInput => ({
+      key: field.key,
+      stringValue: "",
+    }));
+}
+
+function configValueInput(
+  key: string,
+  value: unknown,
+  field: ConfigFieldDef | undefined,
+): ProviderConfigValueInput {
+  const isSecretKey = looksLikeSecretConfigKey(key);
 
   if (field?.fieldType === "BOOL") {
     return { key, boolValue: String(value).trim().toLowerCase() === "true" };
@@ -514,7 +555,12 @@ export function buildDownloadClientConfigValues(
       key: field.key,
       clearSecret: true,
     }));
-  return [...values, ...explicitSecretClears];
+  const clearedText = clearedTextConfigValues(
+    draft,
+    fields,
+    new Set(Object.keys(cleaned)),
+  );
+  return [...values, ...clearedText, ...explicitSecretClears];
 }
 
 export function buildDownloadClientDraftFromRecord(

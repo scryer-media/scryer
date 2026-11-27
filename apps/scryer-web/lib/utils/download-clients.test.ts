@@ -5,11 +5,13 @@ import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
   buildDownloadClientTypeOptions,
+  downloadClientConfigFieldValue,
   downloadClientConnectionTestBlocker,
   isFileBackedDownloadClientConfigField,
   isHostlessDownloadClientType,
   normalizeDownloadClientDraft,
 } from "./download-clients.ts";
+import { providerConfigValuesToRecord } from "./provider-config.ts";
 import type { ConfigFieldDef, DownloadClientDraft } from "../types/index.ts";
 
 function configField(
@@ -125,6 +127,59 @@ test("blank optional descriptor secrets are omitted", () => {
   );
 
   assert.equal(values.has("password"), false);
+});
+
+test("a cleared descriptor text field is sent as an empty string and shows empty again", () => {
+  const fields = [
+    configField({ key: "category", defaultValue: "synthetic-default" }),
+    configField({ key: "directory", fieldType: "PATH" }),
+    configField({ key: "tag", defaultValue: "synthetic-tag" }),
+    configField({ key: "limit", fieldType: "NUMBER", defaultValue: "5" }),
+    configField({ key: "token", fieldType: "PASSWORD" }),
+  ];
+  const values = valuesByKey(
+    buildDownloadClientConfigValues(
+      draft({
+        clientType: "transmission",
+        configValues: {
+          category: "",
+          directory: "  ",
+          limit: "",
+          token: "",
+        },
+      }),
+      fields,
+    ),
+  );
+
+  assert.deepEqual(values.get("category"), {
+    key: "category",
+    stringValue: "",
+  });
+  assert.deepEqual(values.get("directory"), {
+    key: "directory",
+    stringValue: "",
+  });
+  // Never saved: not sent, so the plugin keeps its default.
+  assert.equal(values.has("tag"), false);
+  // Numbers and secrets keep their own handling.
+  assert.equal(values.has("limit"), false);
+  assert.equal(values.has("token"), false);
+
+  // Read back, the stored empty value shows empty, not the default; a key
+  // that was never saved still shows the default.
+  const stored = providerConfigValuesToRecord([
+    {
+      key: "category",
+      value: { __typename: "StringConfigValuePayload", stringValue: "" },
+    },
+  ]);
+  const reloaded = draft({ clientType: "transmission", configValues: stored });
+  assert.equal(downloadClientConfigFieldValue(reloaded, fields[0]), "");
+  assert.equal(
+    downloadClientConfigFieldValue(reloaded, fields[2]),
+    "synthetic-tag",
+  );
 });
 
 test("stored descriptor secrets can be explicitly cleared", () => {
