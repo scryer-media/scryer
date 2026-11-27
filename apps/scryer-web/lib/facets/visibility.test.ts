@@ -7,6 +7,7 @@ import {
   filterVisibleFacets,
   hiddenFacetsFromUiSettings,
   hiddenFacetsToUiSettings,
+  hideUnusableCatalogFacets,
   isFacetVisible,
   NO_HIDDEN_FACETS,
   visibleFacetOr,
@@ -126,5 +127,36 @@ test("instance-disabled facets add to the user's hidden ones without hiding all"
   assert.equal(
     combineHiddenFacets(ANIME_HIDDEN, ["MOVIE", "SERIES", "ANIME"]),
     ANIME_HIDDEN,
+  );
+});
+
+test("catalog entries leave the facets the user has no use for", () => {
+  // Not read yet: every entry stays, so nothing flashes away.
+  assert.equal(hideUnusableCatalogFacets(ANIME_HIDDEN, null), ANIME_HIDDEN);
+  assert.deepEqual(
+    [...hideUnusableCatalogFacets(NO_HIDDEN_FACETS, ["MOVIE"])].sort(),
+    ["ANIME", "SERIES"],
+  );
+  // The user's own choice still applies on top.
+  assert.deepEqual(
+    [
+      ...hideUnusableCatalogFacets(hiddenFacetsFromUiSettings(["MOVIES"]), [
+        "MOVIE",
+        "SERIES",
+      ]),
+    ].sort(),
+    ["ANIME", "MOVIE"],
+  );
+  assert.equal(
+    hideUnusableCatalogFacets(ANIME_HIDDEN, ["MOVIE", "SERIES", "ANIME"]),
+    ANIME_HIDDEN,
+  );
+  // Nothing usable leaves the entries to the other permission checks.
+  assert.equal(hideUnusableCatalogFacets(ANIME_HIDDEN, []), ANIME_HIDDEN);
+  assert.equal(
+    hideUnusableCatalogFacets(hiddenFacetsFromUiSettings(["SERIES"]), [
+      "SERIES",
+    ]).size,
+    1,
   );
 });

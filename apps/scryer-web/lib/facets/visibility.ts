@@ -60,6 +60,26 @@ export function combineHiddenFacets(
   return combined.size >= FACET_REGISTRY.length ? disabled : combined;
 }
 
+/**
+ * The facets whose catalog entries to hide: `hidden`, plus every facet the
+ * user has no use for (see `InstanceFeatures.viewableFacets`). Until that list
+ * is read (`null`) nothing more is hidden, and a list that would leave no
+ * catalog leaves `hidden` as it is.
+ */
+export function hideUnusableCatalogFacets(
+  hidden: HiddenFacets,
+  viewable: readonly string[] | null | undefined,
+): HiddenFacets {
+  if (!viewable) return hidden;
+  const usable = new Set(viewable.map(resolveFacetId));
+  const combined = new Set<Facet>(hidden);
+  for (const facet of FACET_REGISTRY) {
+    if (!usable.has(facet.id)) combined.add(facet.id);
+  }
+  if (combined.size === hidden.size) return hidden;
+  return combined.size >= FACET_REGISTRY.length ? hidden : combined;
+}
+
 /** The save form of a hidden set, in registry order. */
 export function hiddenFacetsToUiSettings(
   hidden: HiddenFacets,
