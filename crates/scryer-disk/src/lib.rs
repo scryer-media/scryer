@@ -1994,7 +1994,8 @@ impl Disk {
 
 /// A link the destination cannot hold, as opposed to one that failed: the
 /// two paths are on different filesystems, or the filesystem has no such
-/// links or no more room for them.
+/// links or no more room for them. A filesystem without links may also
+/// answer a link call with an invalid-argument error.
 fn link_not_possible(error: &io::Error) -> bool {
     if is_cross_device_error(error) || error.kind() == io::ErrorKind::Unsupported {
         return true;
@@ -2007,6 +2008,7 @@ fn link_not_possible(error: &io::Error) -> bool {
                 || code == libc::ENOTSUP
                 || code == libc::EOPNOTSUPP
                 || code == libc::EMLINK
+                || code == libc::EINVAL
         )
     }
     #[cfg(windows)]
