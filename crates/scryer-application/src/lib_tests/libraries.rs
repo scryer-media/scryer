@@ -3359,6 +3359,253 @@ async fn library_default_monitor_type_invalid_choice_writes_nothing() {
     assert!(repo.write_log().is_empty());
 }
 
+/// A finished series: both episodes aired long ago.
+fn finished_series_metadata() -> (Vec<SeasonMetadata>, Vec<EpisodeMetadata>) {
+    let seasons = vec![SeasonMetadata {
+        tvdb_id: 770_001,
+        tmdb_id: None,
+        number: 1,
+        label: "Season 1".into(),
+        episode_type: "official".into(),
+    }];
+    let episodes = (1..=2i32)
+        .map(|number| EpisodeMetadata {
+            tvdb_id: 770_100 + i64::from(number),
+            tmdb_id: None,
+            episode_number: number,
+            name: format!("Lantern Hollow {number}"),
+            aired: format!("2020-01-0{number}"),
+            runtime_minutes: 24,
+            is_filler: false,
+            is_recap: false,
+            overview: String::new(),
+            absolute_number: number.to_string(),
+            contiguous_absolute_number: None,
+            season_number: 1,
+            image_url: String::new(),
+        })
+        .collect();
+    (seasons, episodes)
+}
+
+async fn add_finished_series(
+    app: &AppUseCase,
+    user: &User,
+    library_id: &str,
+    tags: Vec<String>,
+    monitored: bool,
+) -> (Title, Vec<Episode>) {
+    let outcome = app
+        .add_title_with_outcome_in_library(
+            user,
+            NewTitle {
+                name: "Lantern Hollow".into(),
+                facet: MediaFacet::Series,
+                monitored,
+                tags,
+                external_ids: vec![ExternalId::new("tvdb_id", "770000")],
+                ..Default::default()
+            },
+            library_id.to_string(),
+        )
+        .await
+        .expect("add series");
+    assert!(!outcome.reused_existing_title);
+    let (seasons, episodes) = finished_series_metadata();
+    app.create_series_seasons_and_episodes(&outcome.title, &seasons, &episodes, &[], &[])
+        .await;
+    let episodes = stored_title_episodes(app, user, &outcome.title.id).await;
+    (outcome.title, episodes)
+}
+
+async fn stored_title_episodes(app: &AppUseCase, user: &User, title_id: &str) -> Vec<Episode> {
+    let mut stored = Vec::new();
+    for collection in app
+        .list_collections(user, title_id)
+        .await
+        .expect("list collections")
+    {
+        stored.extend(
+            app.list_episodes(user, &collection.id)
+                .await
+                .expect("list episodes"),
+        );
+    }
+    assert_eq!(stored.len(), 2, "both episodes stored");
+    stored
+}
+
+async fn series_libraries_with_defaults(app: &AppUseCase, user: &User) -> (String, String) {
+    let future = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let all = app
+        .create_library(
+            user,
+            MediaFacet::Series,
+            "All episode series".into(),
+            vec![LibraryRootDraft {
+                id: None,
+                path: "/synthetic/all-episode-series".into(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create library")
+        .id;
+    for (library, value) in [(&future, "FUTURE_EPISODES"), (&all, "ALL_EPISODES")] {
+        app.update_library_settings(
+            user,
+            library,
+            LibrarySettingsOverrideDraft {
+                default_monitor_type: Some(value.into()),
+                ..empty_library_settings_override()
+            },
+        )
+        .await
+        .expect("save library default monitoring");
+    }
+    (future, all)
+}
+
+#[tokio::test]
+async fn add_title_without_monitor_type_applies_the_library_default() {
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let (future, all) = series_libraries_with_defaults(&app, &user).await;
+
+    let (title, episodes) = add_finished_series(&app, &user, &future, vec![], true).await;
+    assert!(
+        title
+            .tags
+            .contains(&"scryer:monitor-type:futureepisodes".to_string())
+    );
+    assert!(episodes.iter().all(|episode| !episode.monitored));
+
+    let (title, episodes) = add_finished_series(&app, &user, &all, vec![], true).await;
+    assert!(
+        title
+            .tags
+            .contains(&"scryer:monitor-type:allepisodes".to_string())
+    );
+    assert!(episodes.iter().all(|episode| episode.monitored));
+}
+
+#[tokio::test]
+async fn add_title_keeps_an_explicit_monitor_type_and_unmonitored_flag() {
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let (future, all) = series_libraries_with_defaults(&app, &user).await;
+
+    let (title, episodes) = add_finished_series(
+        &app,
+        &user,
+        &future,
+        vec!["scryer:monitor-type:allepisodes".into()],
+        true,
+    )
+    .await;
+    let monitor_tags: Vec<_> = title
+        .tags
+        .iter()
+        .filter(|tag| tag.starts_with("scryer:monitor-type:"))
+        .collect();
+    assert_eq!(monitor_tags, ["scryer:monitor-type:allepisodes"]);
+    assert!(episodes.iter().all(|episode| episode.monitored));
+
+    let (title, episodes) = add_finished_series(
+        &app,
+        &user,
+        &all,
+        vec!["scryer:monitor-type:futureepisodes".into()],
+        true,
+    )
+    .await;
+    let monitor_tags: Vec<_> = title
+        .tags
+        .iter()
+        .filter(|tag| tag.starts_with("scryer:monitor-type:"))
+        .collect();
+    assert_eq!(monitor_tags, ["scryer:monitor-type:futureepisodes"]);
+    assert!(episodes.iter().all(|episode| !episode.monitored));
+}
+
+#[tokio::test]
+async fn add_title_unmonitored_in_an_all_episodes_library_monitors_nothing() {
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let (_, all) = series_libraries_with_defaults(&app, &user).await;
+
+    let (title, episodes) = add_finished_series(&app, &user, &all, vec![], false).await;
+    assert!(!title.monitored);
+    assert!(episodes.iter().all(|episode| !episode.monitored));
+}
+
+#[tokio::test]
+async fn re_adding_a_title_keeps_its_monitoring_and_episode_selections() {
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let (_, all) = series_libraries_with_defaults(&app, &user).await;
+    let (title, episodes) = add_finished_series(&app, &user, &all, vec![], true).await;
+    app.set_episode_monitored(&user, &episodes[0].id, false)
+        .await
+        .expect("unmonitor one episode");
+
+    // The library's default changes before the same title is added again.
+    app.update_library_settings(
+        &user,
+        &all,
+        LibrarySettingsOverrideDraft {
+            default_monitor_type: Some("FUTURE_EPISODES".into()),
+            ..empty_library_settings_override()
+        },
+    )
+    .await
+    .expect("change library default monitoring");
+    let again = app
+        .add_title_with_outcome_in_library(
+            &user,
+            NewTitle {
+                name: "Lantern Hollow".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                external_ids: vec![ExternalId::new("tvdb_id", "770000")],
+                ..Default::default()
+            },
+            all.clone(),
+        )
+        .await
+        .expect("re-add series");
+    assert!(again.reused_existing_title);
+    assert_eq!(again.title.id, title.id);
+    let monitor_tags: Vec<_> = again
+        .title
+        .tags
+        .iter()
+        .filter(|tag| tag.starts_with("scryer:monitor-type:"))
+        .collect();
+    assert_eq!(monitor_tags, ["scryer:monitor-type:allepisodes"]);
+
+    let stored = stored_title_episodes(&app, &user, &title.id).await;
+    let monitored_by_id: HashMap<_, _> = stored
+        .iter()
+        .map(|episode| (episode.id.clone(), episode.monitored))
+        .collect();
+    assert_eq!(monitored_by_id.get(&episodes[0].id), Some(&false));
+    assert_eq!(monitored_by_id.get(&episodes[1].id), Some(&true));
+}
+
 /// Every directory and file under `root`, sorted, with file bytes, so a test
 /// can prove a catalog edit left the disk exactly as it was.
 fn root_removal_disk_snapshot(root: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {

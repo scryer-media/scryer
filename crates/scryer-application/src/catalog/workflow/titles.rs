@@ -997,10 +997,24 @@ impl AppUseCase {
     pub async fn add_title_with_options_patch_outcome_in_library(
         &self,
         actor: &User,
-        request: NewTitle,
+        mut request: NewTitle,
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<AddTitleOutcome> {
+        // An add that names no monitor type takes the library's default
+        // monitoring. A title the add reuses keeps its own tags, since the
+        // store returns the existing row rather than this one.
+        let prefix = crate::media_requests::TITLE_MONITOR_TYPE_TAG_PREFIX;
+        if !request
+            .tags
+            .iter()
+            .any(|tag| tag.trim().to_ascii_lowercase().starts_with(prefix))
+            && let Some(monitor_type) = self
+                .new_title_default_monitor_type_tag_value(&library_id, &request.facet)
+                .await?
+        {
+            request.tags.push(format!("{prefix}{monitor_type}"));
+        }
         // Creation is the third door into `titles.tags`, alongside the tag patch
         // and the whole-bag `updateTitle(tags:)` write, and it is gated exactly
         // like them: a title may not be born carrying a label the registry does
