@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   applyRenameTemplatePreview,
+  renameTemplateWritesToken,
   splitRenameTemplateSegments,
   validateFolderTemplateSyntax,
   validateRenameTemplateSyntax,
@@ -413,4 +414,17 @@ test("splitRenameTemplateSegments leaves escaped literal braces unhighlighted", 
       { text: " ({{year}})", isToken: false },
     ],
   );
+});
+
+test("a template writes a token only where it would be rendered", () => {
+  assert.equal(renameTemplateWritesToken("{title}.{ext}", "ext"), true);
+  assert.equal(renameTemplateWritesToken("{title}.{EXT|space:_}", "ext"), true);
+  assert.equal(
+    renameTemplateWritesToken("{title}{?edition: {edition}.{ext}}", "ext"),
+    true,
+  );
+  assert.equal(renameTemplateWritesToken("{title} - {quality}", "ext"), false);
+  assert.equal(renameTemplateWritesToken("{title}.{{ext}}", "ext"), false);
+  assert.equal(renameTemplateWritesToken("{title}{?ext: file}", "ext"), false);
+  assert.equal(renameTemplateWritesToken("{title}.{extra}", "ext"), false);
 });

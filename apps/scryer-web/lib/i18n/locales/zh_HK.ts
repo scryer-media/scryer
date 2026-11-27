@@ -1299,6 +1299,10 @@ const zh_HK: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "資料夾範本包含非法的文件系統字元：{{character}}",
   "settings.renameTemplateLabel": "重命名模板",
+  "settings.renameTemplateNoExtensionTitle": "不含 {ext} 仍要儲存？",
+  "settings.renameTemplateNoExtensionDescription":
+    "此重新命名範本沒有 {ext} 標記。Scryer 會將每個檔案的副檔名加到名稱結尾。",
+  "settings.renameTemplateNoExtensionConfirm": "仍要儲存",
   "settings.renameTemplatePlaceholder": "佔位符",
   "settings.renameTemplateRequired": "重命名模板為必填項。",
   "settings.renameCollisionPolicyLabel": "衝突策略",
