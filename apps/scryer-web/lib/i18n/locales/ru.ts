@@ -1978,6 +1978,10 @@ const ru: LocaleDictionary = {
     "Ошибка в {{count}} индексаторах: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "Пропущено индексаторов: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "Индексаторов, опрошенных частично из-за лимита запросов: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: следующий запрос возможен через {{seconds}} с",
   "title.noReleasesFound": "Для {{name}} релизы не найдены.",
   "title.searchNeedsDownloadClientTitle":
     "Для поиска требуется клиент загрузки",
@@ -6441,6 +6445,11 @@ const ru: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "Пауза после недавних ошибок",
   "indexerSearch.skipReason.backedOffUntil": "Пауза до {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Не поддерживает текстовый поиск",
+  "indexerSearch.skipReason.queryBudget": "Превышен лимит запросов",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Превышен лимит запросов до {{time}}",
+  "indexerSearch.queryBudget.partlySearched":
+    "Опрошен частично: лимит запросов остановил оставшиеся запросы. Результаты отправленных запросов сохранены.",
   "indexerSearch.health.retryFailed": "Повторить неудачные",
   "indexerSearch.refine.title": "Уточнить",
   "indexerSearch.refine.reset": "Сбросить",

@@ -3011,6 +3011,10 @@ pub enum IndexerSearchIncompleteReason {
     /// An interactive search skipped the indexer instead of waiting out its
     /// query budget. Nothing was sent and none of the budget was spent.
     QueryBudgetExhausted,
+    /// An interactive search sent some of the indexer's requests, then
+    /// stopped instead of waiting out its query budget for the rest. The
+    /// results of the requests that were sent are kept.
+    QueryBudgetPartial,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

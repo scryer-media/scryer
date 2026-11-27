@@ -8329,6 +8329,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         debug!(
                             indexer = indexer_name.as_str(),
                             strategy = outcome.label.as_str(),
+                            next_slot_secs = outcome.over_query_budget.map(|wait| wait.as_secs()),
                             "skipping strategy: request was not dispatched"
                         );
                         continue;
@@ -8774,6 +8775,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                             debug!(
                                 indexer = indexer_name.as_str(),
                                 strategy = outcome.label.as_str(),
+                                next_slot_secs =
+                                    outcome.over_query_budget.map(|wait| wait.as_secs()),
                                 "skipping fallback strategy: request was not dispatched"
                             );
                             continue;
@@ -9104,14 +9107,27 @@ impl IndexerClient for MultiIndexerSearchClient {
                     );
                 }
 
-                if !any_strategy_fired && query_budget_wait.is_some() {
-                    log_indexer_skip(
-                        mode,
-                        is_rss_request,
-                        indexer_name.as_str(),
-                        IndexerSkipReason::QueryBudgetExceeded,
-                        None,
-                    );
+                if let Some(wait) = query_budget_wait {
+                    let next_slot_at = chrono::Duration::from_std(wait)
+                        .ok()
+                        .and_then(|wait| Utc::now().checked_add_signed(wait));
+                    if any_strategy_fired {
+                        info!(
+                            indexer = indexer_name.as_str(),
+                            reason = scryer_application::error_reasons::indexer_query_budget::PARTLY_SEARCHED,
+                            next_slot_secs = wait.as_secs(),
+                            result_count = collected_results.len(),
+                            "indexer searched in part: over its query budget"
+                        );
+                    } else {
+                        log_indexer_skip(
+                            mode,
+                            is_rss_request,
+                            indexer_name.as_str(),
+                            IndexerSkipReason::QueryBudgetExceeded,
+                            next_slot_at,
+                        );
+                    }
                 }
 
                 // An indexer that answered nothing because a local monthly
@@ -9160,7 +9176,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                             }
                         } else {
                             IndexerSearchCompletion::Partial {
-                                reason: if query_budget_wait.is_some() {
+                                // A request that was sent before the budget
+                                // ran out keeps its results: the indexer was
+                                // searched in part, not skipped.
+                                reason: if query_budget_wait.is_some() && any_strategy_fired {
+                                    Some(IndexerSearchIncompleteReason::QueryBudgetPartial)
+                                } else if query_budget_wait.is_some() {
                                     Some(IndexerSearchIncompleteReason::QueryBudgetExhausted)
                                 } else {
                                     only_unattested_incompleteness
@@ -13727,6 +13748,7 @@ mod tests {
             IndexerSearchIncompleteReason::FanoutBranchFailed,
             IndexerSearchIncompleteReason::Unattested,
             IndexerSearchIncompleteReason::QueryBudgetExhausted,
+            IndexerSearchIncompleteReason::QueryBudgetPartial,
         ] {
             assert!(!completion_is_contained(&partial(Some(recoverable), None)));
         }
@@ -15576,6 +15598,97 @@ mod tests {
             .find(|outcome| outcome.indexer_id == "idx-1")
             .expect("the skipped indexer reports an outcome");
         match outcome.outcome {
+            IndexerSearchOutcome::Partial {
+                empty: true,
+                reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+                retry_after: Some(retry_after),
+            } => assert!(
+                retry_after > INTERACTIVE_PACING_MAX_WAIT,
+                "retry after {retry_after:?}"
+            ),
+            other => panic!("expected an over-budget outcome, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn interactive_search_keeps_the_results_of_an_indexer_its_query_budget_stops_part_way() {
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.max_queries_per_minute = Some(1);
+
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(|_| response_with_titles(&["Blade.Summit.S02E03.720p.WEB-DL"])),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![config],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: anime_caps(),
+            }),
+        );
+        // Two id lookups make up the primary tier, so the search needs two
+        // query slots; the budget holds one a minute.
+        let search = || {
+            multi.search(
+                "Blade Summit S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+        };
+        let budget_outcome = |response: &IndexerSearchResponse| {
+            response
+                .indexer_outcomes
+                .iter()
+                .find(|outcome| outcome.indexer_id == "idx-1")
+                .map(|outcome| outcome.outcome)
+                .expect("the indexer reports an outcome")
+        };
+
+        // The first lookup is sent and answers; the second slot is about a
+        // minute out, past what an interactive search waits, so the search
+        // stops there and keeps what it has.
+        let partial = search().await.expect("partial search should succeed");
+        assert_eq!(calls.lock().expect("calls").len(), 1);
+        assert_eq!(
+            partial.results.len(),
+            1,
+            "the answered request's results stay"
+        );
+        assert_eq!(partial.results[0].title, "Blade.Summit.S02E03.720p.WEB-DL");
+        match budget_outcome(&partial) {
+            // `empty` describes the task's own response, and a paged
+            // search hands its rows on as they arrive; the rows above are
+            // what shows they were kept.
+            IndexerSearchOutcome::Partial {
+                empty: _,
+                reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+                retry_after: Some(retry_after),
+            } => assert!(
+                retry_after > INTERACTIVE_PACING_MAX_WAIT,
+                "retry after {retry_after:?}"
+            ),
+            other => panic!("expected a partly searched outcome, got {other:?}"),
+        }
+
+        // With its first slot already over budget the indexer is not asked.
+        let skipped = search().await.expect("skipped search should succeed");
+        assert_eq!(calls.lock().expect("calls").len(), 1, "no request is sent");
+        assert!(skipped.results.is_empty());
+        match budget_outcome(&skipped) {
             IndexerSearchOutcome::Partial {
                 empty: true,
                 reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
