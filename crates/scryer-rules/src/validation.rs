@@ -165,7 +165,7 @@ impl InputPathContext {
             catalog: REQUEST_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
-            nested_fact_sections: &[],
+            nested_fact_sections: request::REQUEST_NESTED_FACT_SECTIONS,
             limits: RuntimeLimits::request_defaults(),
         }
     }
@@ -402,36 +402,6 @@ impl InputReferencePath {
         // The two segments of `PERSON_TARGETED_REQUEST_ROOT`, which the test
         // below pins so this match and that constant cannot drift.
         match self.components.as_slice() {
-            [
-                InputPathComponent::Field(input),
-                InputPathComponent::Field(namespace),
-            ] if input == "input" && namespace == "observations" => {
-                // Reading the entire object also reaches the sensitive
-                // relationship envelope.
-                Some("input.observations".into())
-            }
-            [
-                InputPathComponent::Field(input),
-                InputPathComponent::Field(namespace),
-                selector,
-                ..,
-            ] if input == "input"
-                && namespace == "observations"
-                && !matches!(selector, InputPathComponent::Field(_)) =>
-            {
-                Some("input.observations".into())
-            }
-            [
-                InputPathComponent::Field(input),
-                InputPathComponent::Field(namespace),
-                InputPathComponent::Field(fact),
-                ..,
-            ] if input == "input"
-                && matches!(namespace.as_str(), "facts" | "observations")
-                && fact == "media_issue" =>
-            {
-                Some(format!("input.{namespace}.media_issue"))
-            }
             [
                 InputPathComponent::Field(input),
                 InputPathComponent::Field(requester),
@@ -1323,15 +1293,33 @@ pub fn request_rule_may_read_fact_families(
             || path.selects_fact_dynamically(nested)
             || path.reads_facts_object_wholesale(nested);
         let fact_name = path.fact_name(nested);
+        // `input.observations.<name>` names a top-level fact, and
+        // `input.<section>.observations.<name>` names `<section>.<name>`.
         let observation = match path.components.as_slice() {
             [
                 InputPathComponent::Field(input),
                 InputPathComponent::Field(observations),
                 rest @ ..,
             ] if input == "input" && observations == "observations" => match rest.first() {
-                Some(InputPathComponent::Field(name)) => Some(Some(name.as_str())),
+                Some(InputPathComponent::Field(name)) => Some(Some(name.clone())),
                 _ => Some(None),
             },
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(section),
+                InputPathComponent::Field(observations),
+                rest @ ..,
+            ] if input == "input"
+                && observations == "observations"
+                && nested.contains(&section.as_str()) =>
+            {
+                match rest.first() {
+                    Some(InputPathComponent::Field(name)) => {
+                        Some(Some(format!("{section}.{name}")))
+                    }
+                    _ => Some(None),
+                }
+            }
             _ => None,
         };
         for (family, read) in families.iter().zip(reads.iter_mut()) {
@@ -1340,8 +1328,8 @@ pub fn request_rule_may_read_fact_families(
                 || fact_name
                     .as_ref()
                     .is_some_and(|name| family.contains(&name.as_str()))
-                || match observation {
-                    Some(Some(name)) => family.contains(&name),
+                || match &observation {
+                    Some(Some(name)) => family.contains(&name.as_str()),
                     Some(None) => true,
                     None => false,
                 };
@@ -2065,7 +2053,16 @@ pub fn validate_request_rule(
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_VOTE_REQUIRED,
             "request rule decides nothing: define a vote ('approve', 'deny' or 'manual'), \
-             a 'set_' head or 'add_tags', for example: approve if { ... }",
+             a 'set_' head, 'add_tags', or a report vote ('mark_bad' or 'reject_report'), \
+             for example: approve if { ... }",
+        )
+        .with_warnings(warnings));
+    }
+    if scan.decides_request() && scan.decides_report() {
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_MIXES_REPORT_AND_REQUEST_HEADS,
+            "a rule decides media requests or bad-file reports, not both: move 'mark_bad' and \
+             'reject_report' into a rule of their own",
         )
         .with_warnings(warnings));
     }

@@ -20,7 +20,7 @@ use chrono::Utc;
 use scryer_domain::{
     Id, Library, LibraryPermission, RequestDecisionOutcome, RequestRuleDecisionRecord, User,
 };
-use scryer_rules::request::{REQUEST_INPUT_SCHEMA_VERSION, RequestVote};
+use scryer_rules::request::{REQUEST_INPUT_SCHEMA_VERSION, RequestReportVote, RequestVote};
 use serde::Serialize;
 
 use crate::helpers::{HashDomain, blake3_identity_hex};
@@ -170,8 +170,21 @@ pub struct RecordedVote {
     pub shaping: RequestShaping,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notify: Option<String>,
+    /// What a report rule said about a bad-file report: `mark_bad`,
+    /// `reject_report` or `conflict`. Absent when it said nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_vote: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+const fn report_vote_name(vote: RequestReportVote) -> Option<&'static str> {
+    match vote {
+        RequestReportVote::Abstain => None,
+        RequestReportVote::MarkBad => Some("mark_bad"),
+        RequestReportVote::Reject => Some("reject_report"),
+        RequestReportVote::Conflict => Some("conflict"),
+    }
 }
 
 const fn vote_name(vote: RequestVote) -> &'static str {
@@ -183,7 +196,7 @@ const fn vote_name(vote: RequestVote) -> &'static str {
     }
 }
 
-fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedVote> {
+pub(crate) fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedVote> {
     let mut recorded: Vec<RecordedVote> = votes
         .iter()
         .map(|vote| RecordedVote {
@@ -197,6 +210,7 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
             tags: vote.decision.tags.clone(),
             shaping: vote.decision.shaping.clone(),
             notify: vote.decision.notify.clone(),
+            report_vote: report_vote_name(vote.decision.report_vote),
             error: None,
         })
         .collect();
@@ -211,6 +225,7 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
         tags: Vec::new(),
         shaping: RequestShaping::default(),
         notify: None,
+        report_vote: None,
         error: Some(error.message.clone()),
     }));
     recorded
@@ -233,13 +248,10 @@ impl AppUseCase {
         purpose: RequestEvaluationPurpose,
     ) -> AppResult<RequestEvaluation> {
         let metadata_partial = snapshot.partial;
-        let permission = if draft.kind == "media_issue" {
-            false
-        } else {
-            self.has_library_permission(actor, &library.id, LibraryPermission::AutoApproveRequests)
-                .await
-                .unwrap_or(false)
-        };
+        let permission = self
+            .has_library_permission(actor, &library.id, LibraryPermission::AutoApproveRequests)
+            .await
+            .unwrap_or(false);
         let cache = self.request_rules_engine_snapshot();
         if cache.unavailable {
             tracing::warn!(
@@ -248,12 +260,8 @@ impl AppUseCase {
             );
             return Ok(self.record_error_fallback(&purpose, metadata_partial).await);
         }
-        let consulted: Vec<(String, crate::request_rules::engine::RequestRuleScope)> =
-            if draft.kind == "media_issue" {
-                cache.scopes_for_media_issue(&library.id)
-            } else {
-                cache.scopes_for_acquisition_request(&library.id)
-            }
+        let consulted: Vec<(String, crate::request_rules::engine::RequestRuleScope)> = cache
+            .scopes_for_library(&library.id)
             .into_iter()
             .map(|(id, scope)| (id.clone(), scope.clone()))
             .collect();
@@ -262,7 +270,7 @@ impl AppUseCase {
         // decides. Building the fact document would cost a dozen repository
         // reads to reach the same verdict, so short-circuit without a trace:
         // no rule took part.
-        if consulted.is_empty() && draft.media_issue.is_none() {
+        if consulted.is_empty() {
             let arbitration = arbitrate(&[], &[], permission);
             return Ok(RequestEvaluation {
                 decision_id: None,
@@ -340,11 +348,16 @@ impl AppUseCase {
             }
         };
 
+        // Library scoping is applied here, on the votes, not on the engine:
+        // see `request_rules::engine`.
         let mut votes: Vec<ScopedVote> = Vec::new();
         for record in &outcome.records {
             let Some(scope) = cache.scopes.get(&record.rule_set_id) else {
                 continue;
             };
+            if !scope.covers(&library.id) {
+                continue;
+            }
             votes.push(ScopedVote {
                 rule_set_id: record.rule_set_id.clone(),
                 rule_set_name: record.rule_set_name.clone(),
@@ -369,6 +382,9 @@ impl AppUseCase {
             let Some(scope) = cache.scopes.get(&failure.rule_set_id) else {
                 continue;
             };
+            if !scope.covers(&library.id) {
+                continue;
+            }
             errors.push(ScopedError {
                 rule_set_id: failure.rule_set_id.clone(),
                 rule_set_name: failure.rule_set_name.clone(),
@@ -380,8 +396,8 @@ impl AppUseCase {
 
         let mut arbitration = arbitrate(&votes, &errors, permission);
         let resolved_shaping = self.resolve_request_shaping(draft, &mut arbitration).await;
-        let (mut effective_outcome, mut fallback_reason) =
-            effective_rule_outcome(&arbitration, draft.media_issue.as_ref());
+        let mut effective_outcome = arbitration.policy_outcome;
+        let mut fallback_reason = arbitration.fallback_reason.map(str::to_string);
         // Tags land only through an approval, automatic or by a person later,
         // so a denial needs no registry read: its tags stay in the trace.
         let applicable_tags = if arbitration.policy_outcome == RequestDecisionOutcome::Deny {
@@ -424,53 +440,11 @@ impl AppUseCase {
             resolved_shaping,
         };
         evaluation.decision_id = self
-            .record_request_decision(
-                &purpose,
-                &evaluation,
-                &votes,
-                &errors,
-                &input_hash,
-                draft.media_issue.as_ref().map(|_| &input),
-            )
+            .record_request_decision(&purpose, &evaluation, &votes, &errors, &input_hash)
             .await;
         Ok(evaluation)
     }
-}
 
-pub(super) fn effective_rule_outcome(
-    arbitration: &Arbitration,
-    media_issue: Option<&scryer_rules::request::RequestMediaIssueDoc>,
-) -> (RequestDecisionOutcome, Option<String>) {
-    if let Some(issue) = media_issue
-        && arbitration.policy_outcome == RequestDecisionOutcome::AutoApprove
-    {
-        if issue.remediation == "recycle_and_search" {
-            // Recycle/search remains a separate explicit approval surface.
-            return (
-                RequestDecisionOutcome::ManualReview,
-                Some("recycle_search_requires_explicit_authorization".into()),
-            );
-        }
-        if issue.remediation != "mark_bad" {
-            return (
-                RequestDecisionOutcome::ManualReview,
-                Some("media_issue_remediation_not_armed".into()),
-            );
-        }
-        if issue.wider_hash_impact == scryer_rules::request::WiderHashImpact::Unknown {
-            return (
-                RequestDecisionOutcome::ManualReview,
-                Some("wider_hash_impact_unproven".into()),
-            );
-        }
-    }
-    (
-        arbitration.policy_outcome,
-        arbitration.fallback_reason.map(str::to_string),
-    )
-}
-
-impl AppUseCase {
     /// Check every agreed shaping value against this request, through the
     /// same validators an approver's override goes through, and resolve it to
     /// what an approval writes. A value that cannot apply is refused on the
@@ -636,7 +610,6 @@ impl AppUseCase {
         votes: &[ScopedVote],
         errors: &[ScopedError],
         input_hash: &str,
-        media_issue_input: Option<&scryer_rules::request::RequestInput>,
     ) -> Option<String> {
         let request_id = purpose.trace_request_id()?;
         let now = Utc::now();
@@ -661,31 +634,6 @@ impl AppUseCase {
             input_schema_version: i64::from(REQUEST_INPUT_SCHEMA_VERSION),
             created_at: now,
         };
-        if let Some(input) = media_issue_input
-            && matches!(purpose, RequestEvaluationPurpose::Submit { .. })
-        {
-            let input_json = match serde_json::to_string(input) {
-                Ok(json) => json,
-                Err(error) => {
-                    tracing::warn!(%error, "failed to serialize media issue rule input");
-                    return None;
-                }
-            };
-            return match self
-                .services
-                .workflow
-                .blocklist_repo
-                .record_media_issue_rule_trace(&record, &input_json)
-                .await
-            {
-                Ok(true) => Some(record.id),
-                Ok(false) => None,
-                Err(error) => {
-                    tracing::warn!(%error, report_id = record.request_id, "failed to persist media issue rule trace");
-                    None
-                }
-            };
-        }
         match self
             .services
             .customization
@@ -718,7 +666,7 @@ impl AppUseCase {
     ) -> RequestEvaluation {
         let mut evaluation = RequestEvaluation::held_on_error(metadata_partial);
         evaluation.decision_id = self
-            .record_request_decision(purpose, &evaluation, &[], &[], "", None)
+            .record_request_decision(purpose, &evaluation, &[], &[], "")
             .await;
         evaluation
     }

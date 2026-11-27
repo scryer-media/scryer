@@ -10,6 +10,8 @@ use super::*;
 
 #[path = "request_rules_failure_tests.rs"]
 mod failure_tests;
+#[path = "request_rules_report_tests.rs"]
+mod report_tests;
 use scryer_domain::{
     LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState, MediaRequestStatus,
     RequestDecisionOutcome,
@@ -102,6 +104,7 @@ fn vote(id: &str, vote: RequestVote, held: bool, tags: &[&str]) -> ScopedVote {
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
             shaping: Default::default(),
             notify: None,
+            report_vote: scryer_rules::request::RequestReportVote::Abstain,
             held,
         },
     }
@@ -495,7 +498,6 @@ async fn a_new_rule_set_is_stored_disabled_and_loads_nothing() {
                 description: "test".to_string(),
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -686,7 +688,6 @@ async fn a_person_targeting_source_needs_permission_authority() {
                 description: String::new(),
                 rego_source: PERSON_TARGETED.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -708,7 +709,6 @@ async fn a_person_targeting_source_needs_permission_authority() {
                 description: String::new(),
                 rego_source: PERSON_TARGETED.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -725,7 +725,6 @@ async fn a_person_targeting_source_needs_permission_authority() {
                 description: String::new(),
                 rego_source: DENY_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -747,7 +746,6 @@ async fn an_invalid_source_is_refused_with_the_reference_wording() {
                     "package rules\nimport rego.v1\n\napprove if {\n\tinput.facts.not_a_fact\n}\n"
                         .to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -1276,7 +1274,6 @@ async fn a_library_scoped_rule_does_not_vote_on_another_librarys_request() {
                 description: String::new(),
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: vec![series_library],
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -2433,7 +2430,6 @@ async fn create_rule(
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -2491,14 +2487,13 @@ fn sample(harness: &MediaRequestTestHarness, library_id: &str, tvdb_id: i64) -> 
     RequestRuleSample {
         user_id: harness.user.id.clone(),
         library_id: library_id.to_string(),
-        kind: None,
-        media_issue: None,
         external_ids: vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
         quality_profile_id: Some("1080p".to_string()),
         monitor_type: None,
         lease_days: Some(Some(14)),
         required_audio_languages: None,
         preferred_audio_languages: None,
+        report: None,
     }
 }
 
@@ -2878,7 +2873,6 @@ async fn a_shaping_value_this_instance_cannot_apply_is_refused_at_save_with_its_
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -2939,7 +2933,6 @@ async fn a_monitor_no_scoped_library_accepts_is_refused_at_save() {
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids: vec![movie_library],
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -2969,7 +2962,6 @@ async fn the_builder_model_round_trips_and_is_bounded() {
                 description: String::new(),
                 rego_source: APPROVE_EVERYTHING.to_string(),
                 library_ids: Vec::new(),
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: Some(model.clone()),
             },
         )
@@ -3072,7 +3064,6 @@ async fn create_scoped_rule(
                 description: String::new(),
                 rego_source: source.to_string(),
                 library_ids,
-                applicability: scryer_domain::RequestRuleApplicability::Acquisition,
                 builder_model: None,
             },
         )
@@ -3185,7 +3176,6 @@ async fn re_scoping_to_a_library_that_cannot_take_the_shaped_monitor_is_refused(
             "Future episodes".to_string(),
             String::new(),
             vec![movie_library],
-            None,
         )
         .await
         .expect_err("a movie library has no episode monitoring");
@@ -3211,7 +3201,6 @@ async fn re_scoping_to_a_library_that_cannot_take_the_shaped_monitor_is_refused(
             "Renamed".to_string(),
             String::new(),
             vec![series_library],
-            None,
         )
         .await
         .expect("rename");

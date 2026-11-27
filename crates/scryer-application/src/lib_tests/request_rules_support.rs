@@ -140,7 +140,6 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         name: &str,
         description: &str,
         library_ids: &[String],
-        applicability: scryer_domain::RequestRuleApplicability,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
@@ -151,7 +150,6 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         rule_set.name = name.to_string();
         rule_set.description = description.to_string();
         rule_set.library_ids = library_ids.to_vec();
-        rule_set.applicability = applicability;
         rule_set.updated_at = updated_at;
         Ok(())
     }

@@ -619,6 +619,7 @@ impl AppUseCase {
                     .requester_user_id
                     .map(|user_id| user_id.trim().to_string())
                     .filter(|user_id| !user_id.is_empty()),
+                created_title_id: None,
                 order: input.order,
                 limit: Some(media_request_page_limit(input.limit)),
                 offset: input.offset,
@@ -660,6 +661,7 @@ impl AppUseCase {
                 library_ids: Some(library_ids),
                 status: input.status,
                 requester_user_id: Some(actor.id.clone()),
+                created_title_id: None,
                 order: MediaRequestOrder::RecentlyUpdated,
                 limit: Some(media_request_page_limit(input.limit)),
                 offset: input.offset,
@@ -2136,9 +2138,6 @@ pub(crate) fn request_draft_from_media_request(
     request: &MediaRequest,
 ) -> crate::request_rules::RequestDraft {
     crate::request_rules::RequestDraft {
-        kind: "acquisition_request".to_string(),
-        media_issue: None,
-        media_issue_reporter_requested_affected_media: None,
         facet: request.facet.clone(),
         title: request.title.clone(),
         year: request.year,
@@ -2165,9 +2164,6 @@ fn request_draft_from_new_media_request(
     list_rank: Option<i64>,
 ) -> crate::request_rules::RequestDraft {
     crate::request_rules::RequestDraft {
-        kind: "acquisition_request".to_string(),
-        media_issue: None,
-        media_issue_reporter_requested_affected_media: None,
         facet: request.facet.clone(),
         title: request.title.clone(),
         year: request.year,

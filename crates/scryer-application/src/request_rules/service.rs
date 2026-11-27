@@ -56,7 +56,6 @@ pub struct RequestRuleDraft {
     pub rego_source: String,
     /// Empty means every library.
     pub library_ids: Vec<String>,
-    pub applicability: scryer_domain::RequestRuleApplicability,
     /// The simple editor's document for this source, kept opaque. `None`
     /// stores none.
     pub builder_model: Option<serde_json::Value>,
@@ -81,8 +80,6 @@ pub enum RequestRulePreviewSource {
 pub struct RequestRuleSample {
     pub user_id: String,
     pub library_id: String,
-    pub kind: Option<String>,
-    pub media_issue: Option<crate::media_issues::SubmitMediaIssueInput>,
     pub external_ids: Vec<ExternalId>,
     pub quality_profile_id: Option<String>,
     pub monitor_type: Option<String>,
@@ -93,6 +90,35 @@ pub struct RequestRuleSample {
     pub required_audio_languages: Option<Vec<String>>,
     /// `None` leaves it to the library.
     pub preferred_audio_languages: Option<Vec<String>>,
+    /// The sample bad-file report a report rule is previewed against. A
+    /// request rule ignores it; a report rule without one sees
+    /// [`RequestRuleReportSample::default`].
+    pub report: Option<RequestRuleReportSample>,
+}
+
+/// A hypothetical bad-file report for previewing a report rule. Nothing is
+/// read from a real file.
+#[derive(Clone, Debug)]
+pub struct RequestRuleReportSample {
+    pub reason: scryer_domain::MediaIssueReason,
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    /// True for a file from a known grab.
+    pub grabbed: bool,
+    pub has_details: bool,
+    /// `None` previews the fact as unknown.
+    pub reporter_requested_media: Option<bool>,
+}
+
+impl Default for RequestRuleReportSample {
+    fn default() -> Self {
+        Self {
+            reason: scryer_domain::MediaIssueReason::Corrupted,
+            remediation: scryer_domain::MediaIssueRemediation::MarkBad,
+            grabbed: true,
+            has_details: true,
+            reporter_requested_media: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -158,14 +184,17 @@ pub struct RequestRulePreviewResult {
     /// The text `notify` produced. A preview never sends it.
     pub notify: Option<String>,
     pub error: Option<String>,
-    pub policy_outcome: scryer_domain::RequestDecisionOutcome,
-    pub effective_outcome: scryer_domain::RequestDecisionOutcome,
-    pub fallback_reason: Option<String>,
     /// The exact document the rule saw, pretty-printed. An author debugging
     /// "why did this not match" needs the facts, not just the verdict.
     pub input_json: String,
     /// True when the sample's metadata could not be fully established.
     pub metadata_partial: bool,
+    /// What a report rule said about the sample report; `None` for a request
+    /// rule.
+    pub report_vote: Option<scryer_rules::request::RequestReportVote>,
+    /// What submitting the sample report would do with this rule alone;
+    /// `None` for a request rule.
+    pub report_outcome: Option<crate::request_rules::ReportVerdict>,
 }
 
 /// A rule set with its current revision; a missing revision is a repository
@@ -316,7 +345,6 @@ impl AppUseCase {
             description: draft.description,
             // Created disabled: enabling is a second, deliberate call.
             enabled: false,
-            applicability: draft.applicability,
             library_ids: draft.library_ids,
             current_revision_number: 1,
             created_at: now,
@@ -415,13 +443,11 @@ impl AppUseCase {
         name: String,
         description: String,
         library_ids: Vec<String>,
-        applicability: Option<scryer_domain::RequestRuleApplicability>,
     ) -> AppResult<RequestRuleSet> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
         let mut rule_set = self.require_request_rule_set(rule_set_id).await?;
-        let applicability = applicability.unwrap_or(rule_set.applicability);
         let name = require_non_empty(&name, "name")?;
         // A new scope can drop the only library that accepted a shaped value,
         // so the revision in force is checked against it as a save would be.
@@ -446,20 +472,12 @@ impl AppUseCase {
         self.services
             .customization
             .request_rule_sets
-            .update_rule_set_metadata(
-                &rule_set.id,
-                &name,
-                &description,
-                &library_ids,
-                applicability,
-                now,
-            )
+            .update_rule_set_metadata(&rule_set.id, &name, &description, &library_ids, now)
             .await?;
 
         rule_set.name = name;
         rule_set.description = description;
         rule_set.library_ids = library_ids;
-        rule_set.applicability = applicability;
         rule_set.updated_at = now;
         self.rebuild_request_rules_engine().await?;
         Ok(rule_set)
@@ -571,16 +589,6 @@ impl AppUseCase {
             .await?;
 
         let sample = request.sample;
-        if sample.media_issue.is_some()
-            && !self
-                .has_app_permission(actor, AppPermission::ManagePermissions)
-                .await?
-        {
-            return Err(AppError::unauthorized_reason(
-                crate::error_reasons::request_rules::PERSON_TARGETING_PERMISSION_REQUIRED,
-                "Testing a media issue exposes the sample user's request relationship",
-            ));
-        }
         let requester = self
             .services
             .identity
@@ -594,43 +602,6 @@ impl AppUseCase {
                 )
             })?;
         let requester = self.attach_user_authorization(requester).await?;
-        let (library, draft, snapshot) = match (sample.kind.as_deref(), sample.media_issue.as_ref())
-        {
-            (Some("media_issue") | None, Some(issue)) => {
-                let (library, draft) = self
-                    .preview_media_issue_draft(&requester, sample.library_id.trim(), issue)
-                    .await?;
-                (
-                    library,
-                    draft,
-                    MediaRequestMetadataSnapshot::unavailable(
-                        "media_issue_not_acquisition_metadata",
-                    ),
-                )
-            }
-            (Some("acquisition_request") | None, None) => {
-                self.acquisition_rule_preview_draft(sample).await?
-            }
-            _ => {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::request_rules::RULE_VALIDATION_FAILED,
-                    "The sample kind must match the supplied request fields",
-                ));
-            }
-        };
-
-        self.test_request_preview_policy(policy, &requester, &library, &draft, snapshot)
-            .await
-    }
-
-    async fn acquisition_rule_preview_draft(
-        &self,
-        sample: RequestRuleSample,
-    ) -> AppResult<(
-        scryer_domain::Library,
-        RequestDraft,
-        MediaRequestMetadataSnapshot,
-    )> {
         let library = self
             .services
             .catalog
@@ -643,6 +614,19 @@ impl AppUseCase {
                     "sample library not found",
                 )
             })?;
+
+        if crate::request_rules::RequestRuleKind::of_source(&policy.rego_source, &policy.id)
+            == crate::request_rules::RequestRuleKind::Report
+        {
+            return self
+                .preview_report_rule(
+                    &policy,
+                    &requester,
+                    &library,
+                    sample.report.unwrap_or_default(),
+                )
+                .await;
+        }
 
         let external_ids =
             crate::media_requests::normalize_media_request_external_ids(sample.external_ids)?;
@@ -683,9 +667,6 @@ impl AppUseCase {
         };
 
         let draft = RequestDraft {
-            kind: "acquisition_request".to_string(),
-            media_issue: None,
-            media_issue_reporter_requested_affected_media: None,
             facet: library.facet.clone(),
             title: preview_sample_title(&library.facet),
             year: None,
@@ -709,24 +690,13 @@ impl AppUseCase {
             list_rank: None,
         };
 
-        Ok((library, draft, snapshot))
-    }
-
-    async fn test_request_preview_policy(
-        &self,
-        policy: RequestPolicy,
-        requester: &User,
-        library: &scryer_domain::Library,
-        draft: &RequestDraft,
-        snapshot: MediaRequestMetadataSnapshot,
-    ) -> AppResult<RequestRulePreviewResult> {
         let evaluated_at = Utc::now();
         let metadata_partial = snapshot.partial;
         let context = self
             .assemble_request_input_context(
-                requester,
-                library,
-                draft,
+                &requester,
+                &library,
+                &draft,
                 snapshot,
                 evaluated_at,
                 None,
@@ -746,38 +716,12 @@ impl AppUseCase {
             )
         })?;
         let mut evaluator = engine.evaluator();
-        let mut outcome = evaluator.evaluate(&input).map_err(|error| {
+        let outcome = evaluator.evaluate(&input).map_err(|error| {
             AppError::validation_refused(
                 crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
                 format!("rule evaluation failed: {error}"),
             )
         })?;
-        // Test a rule must also show the result of the live arbitration. Other
-        // applicable rules are evaluated with the same server-built input, and
-        // the unsaved rule remains selected separately above.
-        let cache = self.request_rules_engine_snapshot();
-        let selected: std::collections::HashSet<String> = if draft.kind == "media_issue" {
-            cache.scopes_for_media_issue(&library.id)
-        } else {
-            cache.scopes_for_acquisition_request(&library.id)
-        }
-        .into_iter()
-        .filter(|(id, _)| id.as_str() != policy.id)
-        .map(|(id, _)| id.clone())
-        .collect();
-        if !selected.is_empty() {
-            let mut cache_evaluator = cache.engine.evaluator();
-            let cached = cache_evaluator
-                .evaluate_in_scope(&input, |id| selected.contains(id))
-                .map_err(|error| {
-                    AppError::validation_refused(
-                        crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
-                        format!("rule evaluation failed: {error}"),
-                    )
-                })?;
-            outcome.records.extend(cached.records);
-            outcome.errors.extend(cached.errors);
-        }
 
         let (vote, held, reasons, tags, shaping, notify, error) =
             match (outcome.records.first(), outcome.errors.first()) {
@@ -822,31 +766,6 @@ impl AppUseCase {
         // only says which of them cannot land yet.
         let undefined_tags = self.undefined_title_tag_labels(&tags).await?;
 
-        use super::arbitration::{ScopedError, ScopedVote, arbitrate};
-        let votes: Vec<_> = outcome
-            .records
-            .into_iter()
-            .map(|record| ScopedVote {
-                rule_set_id: record.rule_set_id,
-                rule_set_name: record.rule_set_name,
-                revision_number: 0,
-                content_hash: source_content_hash.clone(),
-                decision: record.decision,
-            })
-            .collect();
-        let errors: Vec<_> = error
-            .iter()
-            .map(|message| ScopedError {
-                rule_set_id: rule_set_id.clone(),
-                rule_set_name: policy.name.clone(),
-                revision_number: 0,
-                content_hash: source_content_hash.clone(),
-                message: message.clone(),
-            })
-            .collect();
-        let arbitration = arbitrate(&votes, &errors, false);
-        let (effective_outcome, fallback_reason) =
-            super::evaluation::effective_rule_outcome(&arbitration, draft.media_issue.as_ref());
         Ok(RequestRulePreviewResult {
             rule_set_id,
             source_content_hash,
@@ -859,11 +778,133 @@ impl AppUseCase {
             shaping,
             notify,
             error,
-            policy_outcome: arbitration.policy_outcome,
-            effective_outcome,
-            fallback_reason,
             input_json,
             metadata_partial,
+            report_vote: None,
+            report_outcome: None,
+        })
+    }
+
+    /// Preview a report rule against a sample report: the vote, and what
+    /// submitting that report would do if this were the only report rule.
+    async fn preview_report_rule(
+        &self,
+        policy: &RequestPolicy,
+        requester: &User,
+        library: &scryer_domain::Library,
+        sample: RequestRuleReportSample,
+    ) -> AppResult<RequestRulePreviewResult> {
+        use crate::request_rules::arbitration::{ScopedError, ScopedVote, arbitrate_report};
+
+        let evaluated_at = Utc::now();
+        let requester_doc = self
+            .request_requester_doc(requester, &library.id, evaluated_at)
+            .await?;
+        let report = scryer_rules::request::RequestReportDoc {
+            reason: sample.reason.as_str().to_string(),
+            remediation: sample.remediation.as_str().to_string(),
+            provenance: if sample.grabbed { "grabbed" } else { "unknown" }.to_string(),
+            has_details: sample.has_details,
+            title_id: "sample-title".to_string(),
+            media_file_id: "sample-media-file".to_string(),
+            affected_episode_ids: Vec::new(),
+            affected_series_movie_link_ids: Vec::new(),
+            facts: scryer_rules::request::RequestReportFactsDoc {
+                reporter_requested_media: match sample.reporter_requested_media {
+                    Some(value) => scryer_rules::request::Observation::known(value),
+                    None => scryer_rules::request::Observation::unknown(
+                        crate::request_rules::facts::fact_reason::NOT_YET_COLLECTED,
+                    ),
+                },
+            },
+        };
+        let input = crate::request_rules::report::build_report_input(
+            evaluated_at,
+            requester_doc,
+            library,
+            report,
+        );
+        let input_json = serde_json::to_string_pretty(&input).unwrap_or_else(|_| "{}".to_string());
+
+        let source_content_hash = content_hash(&policy.rego_source);
+        let engine = RequestRulesEngine::build(std::slice::from_ref(policy)).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::COMPILE_FAILED,
+                format!("rule failed to compile: {error}"),
+            )
+        })?;
+        let mut evaluator = engine.evaluator();
+        let outcome = evaluator.evaluate(&input).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
+                format!("rule evaluation failed: {error}"),
+            )
+        })?;
+
+        let votes: Vec<ScopedVote> = outcome
+            .records
+            .iter()
+            .map(|record| ScopedVote {
+                rule_set_id: record.rule_set_id.clone(),
+                rule_set_name: record.rule_set_name.clone(),
+                revision_number: 0,
+                content_hash: source_content_hash.clone(),
+                decision: record.decision.clone(),
+            })
+            .collect();
+        let mut errors: Vec<ScopedError> = outcome
+            .errors
+            .iter()
+            .map(|failure| ScopedError {
+                rule_set_id: failure.rule_set_id.clone(),
+                rule_set_name: failure.rule_set_name.clone(),
+                revision_number: 0,
+                content_hash: source_content_hash.clone(),
+                message: failure.message.clone(),
+            })
+            .collect();
+        if votes.is_empty() && errors.is_empty() {
+            errors.push(ScopedError {
+                rule_set_id: policy.id.clone(),
+                rule_set_name: policy.name.clone(),
+                revision_number: 0,
+                content_hash: source_content_hash.clone(),
+                message: "rule produced no decision".to_string(),
+            });
+        }
+        let verdict = arbitrate_report(&votes, &errors).verdict;
+        let record = outcome.records.first();
+        Ok(RequestRulePreviewResult {
+            rule_set_id: policy.id.clone(),
+            source_content_hash,
+            evaluated_at,
+            vote: record.map(|record| record.decision.vote),
+            held: record.is_some_and(|record| record.decision.held),
+            reasons: record
+                .map(|record| {
+                    record
+                        .decision
+                        .reason_codes
+                        .iter()
+                        .map(|code| RequestDecisionReason {
+                            code: code.clone(),
+                            rule_name: record.rule_set_name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            tags: Vec::new(),
+            undefined_tags: Vec::new(),
+            shaping: RequestShaping::default(),
+            notify: record.and_then(|record| record.decision.notify.clone()),
+            error: record
+                .is_none()
+                .then(|| errors.first().map(|error| error.message.clone()))
+                .flatten(),
+            input_json,
+            metadata_partial: false,
+            report_vote: record.map(|record| record.decision.report_vote),
+            report_outcome: Some(verdict),
         })
     }
 

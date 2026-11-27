@@ -101,7 +101,6 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
                 "Must roll back",
                 "bad scope",
                 &["library-9".into(), "missing-library".into()],
-                scryer_domain::RequestRuleApplicability::Acquisition,
                 Utc::now()
             )
             .await
@@ -116,14 +115,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     assert_eq!(unchanged.updated_at, before.updated_at);
 
     store
-        .update_rule_set_metadata(
-            "scoped",
-            "Scoped",
-            "",
-            &["library-1".into()],
-            scryer_domain::RequestRuleApplicability::Acquisition,
-            Utc::now(),
-        )
+        .update_rule_set_metadata("scoped", "Scoped", "", &["library-1".into()], Utc::now())
         .await
         .unwrap();
     assert!(
@@ -144,14 +136,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     );
 
     store
-        .update_rule_set_metadata(
-            "scoped",
-            "Global",
-            "",
-            &[],
-            scryer_domain::RequestRuleApplicability::Acquisition,
-            Utc::now(),
-        )
+        .update_rule_set_metadata("scoped", "Global", "", &[], Utc::now())
         .await
         .unwrap();
     assert!(
@@ -173,7 +158,6 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
             "Scoped again",
             "",
             &["library-2".into()],
-            scryer_domain::RequestRuleApplicability::Acquisition,
             Utc::now(),
         )
         .await
@@ -197,7 +181,6 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> RequestRuleSet {
         name: "Family friendly".to_string(),
         description: "Auto-approve low-certification titles".to_string(),
         enabled: false,
-        applicability: scryer_domain::RequestRuleApplicability::Acquisition,
         library_ids,
         current_revision_number: 1,
         created_at: now,
@@ -325,7 +308,6 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
             "Renamed",
             "New description",
             &["library-9".to_string()],
-            scryer_domain::RequestRuleApplicability::Acquisition,
             Utc::now(),
         )
         .await?;

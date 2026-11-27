@@ -26,6 +26,9 @@ pub const RULE_MATCH_REQUIRED: &str = "RULE_MATCH_REQUIRED";
 pub const RULE_ACTION_REQUIRED: &str = "RULE_ACTION_REQUIRED";
 /// A request matcher must define a vote, a shaping head, or `add_tags`.
 pub const RULE_VOTE_REQUIRED: &str = "RULE_VOTE_REQUIRED";
+/// A request rule defines both a head that decides a media request and a
+/// head that decides a bad-file report.
+pub const RULE_MIXES_REPORT_AND_REQUEST_HEADS: &str = "RULE_MIXES_REPORT_AND_REQUEST_HEADS";
 /// A lifecycle action head that carries a value (`set_quality_profile`,
 /// `add_tags`, `remove_tags`) is given something other than a plain literal.
 pub const RULE_ACTION_VALUE_NOT_LITERAL: &str = "RULE_ACTION_VALUE_NOT_LITERAL";
@@ -87,6 +90,7 @@ pub const ALL: &[&str] = &[
     RULE_MATCH_REQUIRED,
     RULE_ACTION_REQUIRED,
     RULE_VOTE_REQUIRED,
+    RULE_MIXES_REPORT_AND_REQUEST_HEADS,
     RULE_VALIDATION_FAILED,
     RULE_COMPILATION_ERROR,
     RULE_OUTPUT_INVALID,

@@ -30,8 +30,7 @@ use scryer_domain::{
 use scryer_rules::request::{
     Observation, REQUEST_INPUT_SCHEMA_VERSION, RequestAwardDoc, RequestCertificationDoc,
     RequestClockDoc, RequestDoc, RequestFactsDoc, RequestInput, RequestLibraryDoc, RequestListDoc,
-    RequestMediaIssueFactsDoc, RequestRequesterDoc, certification_rank_for_label,
-    max_resolution_for_quality_tiers,
+    RequestRequesterDoc, certification_rank_for_label, max_resolution_for_quality_tiers,
 };
 
 use crate::media_requests::snapshot::{MediaRequestMetadataSnapshot, SNAPSHOT_GROUP_ALL};
@@ -165,6 +164,28 @@ pub(crate) const LIST_EXCLUSION_FACT_NAMES: &[&str] = &["list_excluded"];
 /// How many titles the requester already has in the target library.
 pub(crate) const REQUESTER_TITLES_FACT_NAMES: &[&str] = &["requester_titles_in_library_count"];
 
+/// The one fact a bad-file report carries: whether the reporter asked for the
+/// reported media.
+pub(crate) const REPORT_REQUESTER_RELATIONSHIP_FACT_NAMES: &[&str] =
+    &["report.reporter_requested_media"];
+
+/// Whether any of the report rules `policies` may read
+/// [`REPORT_REQUESTER_RELATIONSHIP_FACT_NAMES`], each rule parsed once.
+pub(crate) fn report_rules_read_requester_relationship<'a>(
+    policies: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> bool {
+    policies.into_iter().any(|(rego_source, rule_set_id)| {
+        scryer_rules::validation::request_rule_may_read_fact_families(
+            rego_source,
+            rule_set_id,
+            &[REPORT_REQUESTER_RELATIONSHIP_FACT_NAMES],
+        )
+        .first()
+        .copied()
+        .unwrap_or(true)
+    })
+}
+
 /// Which fact families an evaluation reads. A family left unread costs no
 /// read, and its facts read unknown as not yet collected; it is left unread
 /// only when no loaded rule can read any of its facts.
@@ -284,10 +305,6 @@ const US_COUNTRY_CODES: [&str; 4] = ["us", "usa", "united states", "united state
 /// a pre-flight preview, a submit, or an edit of a pending request.
 #[derive(Clone, Debug)]
 pub struct RequestDraft {
-    pub kind: String,
-    pub media_issue: Option<scryer_rules::request::RequestMediaIssueDoc>,
-    pub media_issue_reporter_requested_affected_media:
-        Option<scryer_rules::request::Observation<bool>>,
     pub facet: MediaFacet,
     pub title: String,
     pub year: Option<i32>,
@@ -404,9 +421,6 @@ pub struct RequestInputContext {
     pub history: RequestRequesterHistoryContext,
     /// `None` when no count is available; the fact reads unknown.
     pub library_title_count: Option<i64>,
-    /// Host-derived relationship evidence for a media-issue input. `None`
-    /// means this is an acquisition request, not a media issue.
-    pub media_issue_reporter_requested_affected_media: Option<Observation<bool>>,
     pub watchlist: RequestWatchlistContext,
     /// `None` when the exclusion store could not be read.
     pub list_excluded: Option<bool>,
@@ -430,7 +444,8 @@ pub fn build_request_input(context: RequestInputContext) -> RequestInput {
         now: RequestClockDoc::at(context.evaluation_time),
         requester: context.requester,
         library: context.library,
-        request: context.request,
+        request: Some(context.request),
+        report: None,
         facts,
     }
 }
@@ -440,12 +455,6 @@ fn build_facts(context: &RequestInputContext) -> RequestFactsDoc {
     let ratings_known = !snapshot.is_missing(GROUP_RATINGS);
 
     RequestFactsDoc {
-        media_issue: RequestMediaIssueFactsDoc {
-            reporter_requested_affected_media: context
-                .media_issue_reporter_requested_affected_media
-                .clone()
-                .unwrap_or_else(|| Observation::absent_because("not_media_issue")),
-        },
         // ── content rating ──
         age_rating: snapshot_fact(snapshot, GROUP_CONTENT_RATINGS, || {
             snapshot_age_rating(snapshot).ok_or("no_age_rating")
@@ -850,12 +859,7 @@ fn empty_facts() -> RequestFactsDoc {
     let unset = || fact_reason::NOT_YET_COLLECTED;
     macro_rules! unset_facts {
         ($($field:ident),* $(,)?) => {
-            RequestFactsDoc {
-                $($field: Observation::unknown(unset()),)*
-                media_issue: RequestMediaIssueFactsDoc {
-                    reporter_requested_affected_media: Observation::unknown(unset()),
-                },
-            }
+            RequestFactsDoc { $($field: Observation::unknown(unset()),)* }
         };
     }
     unset_facts!(
@@ -1231,9 +1235,6 @@ impl AppUseCase {
             catalog,
             history,
             library_title_count,
-            media_issue_reporter_requested_affected_media: draft
-                .media_issue_reporter_requested_affected_media
-                .clone(),
             watchlist,
             list_excluded,
             requester_titles_in_library_count,
@@ -1456,7 +1457,7 @@ impl AppUseCase {
     /// uses, so a rule saying `"manage_titles" in input.requester.library_permissions`
     /// reads the vocabulary an operator already knows from the permissions
     /// screen.
-    async fn request_requester_doc(
+    pub(crate) async fn request_requester_doc(
         &self,
         actor: &User,
         library_id: &str,
@@ -1765,8 +1766,6 @@ fn storage_figures(
 /// is looking at.
 fn request_doc(draft: &RequestDraft, list: Option<RequestListDoc>) -> RequestDoc {
     RequestDoc {
-        kind: draft.kind.clone(),
-        media_issue: draft.media_issue.clone(),
         origin: draft.origin.as_str().to_string(),
         title: draft.title.clone(),
         year: draft.year,
