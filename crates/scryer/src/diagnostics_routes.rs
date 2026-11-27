@@ -603,7 +603,7 @@ impl HostFacts {
             }
             None => self.omit("os.kernel", "not_portable_on_this_platform"),
         }
-        match total_memory_bytes() {
+        match scryer_application::host_memory::total_memory_bytes() {
             Some(bytes) => {
                 os.insert("total_memory_bytes".to_string(), json!(bytes));
             }
@@ -965,44 +965,6 @@ fn host_name() -> Option<String> {
 #[cfg(not(unix))]
 fn host_name() -> Option<String> {
     std::env::var("COMPUTERNAME").ok()
-}
-
-#[cfg(target_os = "linux")]
-fn total_memory_bytes() -> Option<u64> {
-    let text = Disk::process()
-        .read_to_string_blocking(Path::new("/proc/meminfo"))
-        .ok()?;
-    let kib = text
-        .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))?
-        .trim()
-        .trim_end_matches("kB")
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    Some(kib * 1024)
-}
-
-#[cfg(target_os = "macos")]
-fn total_memory_bytes() -> Option<u64> {
-    let mut value: u64 = 0;
-    let mut size = std::mem::size_of::<u64>();
-    // SAFETY: `hw.memsize` is a u64 and `value` is a writable u64.
-    let result = unsafe {
-        libc::sysctlbyname(
-            c"hw.memsize".as_ptr(),
-            (&mut value as *mut u64).cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    (result == 0).then_some(value)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn total_memory_bytes() -> Option<u64> {
-    None
 }
 
 #[cfg(target_os = "macos")]
