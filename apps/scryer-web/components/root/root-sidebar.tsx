@@ -95,6 +95,8 @@ import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  canManageCatalogSettingsPages,
+  canManageLibrarySettingsPage,
   hasAnyAppPermission,
   hasAnyLibraryPermission,
   hasAnyPrivilegedLibraryAccess,
@@ -793,13 +795,9 @@ function RootSidebarContent({
   const canManageSystemSettings = hasAnyAppPermission(user, [
     APP_PERMISSIONS.manageSystemSettings,
   ]);
-  const canManageCatalogSettings = hasAnyAppPermission(user, [
-    APP_PERMISSIONS.manageCatalogSettings,
-  ]);
-  const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
-  const canManageLibrarySettings =
-    canManageConfig ||
-    hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageLibrary);
+  // A facet's settings pages follow what their saves need on the server.
+  const canManageConfig = canManageCatalogSettingsPages(user);
+  const canManageLibrarySettings = canManageLibrarySettingsPage(user);
   const canViewCatalog = hasAnyLibraryPermission(
     user,
     LIBRARY_PERMISSIONS.view,

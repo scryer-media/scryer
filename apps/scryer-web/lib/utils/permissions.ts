@@ -278,6 +278,31 @@ export function hasAnyLibraryPermission(
 }
 
 /**
+ * A facet's catalog settings pages (general, quality, renaming, routing): the
+ * server saves them only for Manage Catalog Settings, so System Settings
+ * alone does not open them.
+ */
+export function canManageCatalogSettingsPages(
+  user: PermissionUser | null | undefined,
+): boolean {
+  return hasAppPermission(user, APP_PERMISSIONS.manageCatalogSettings);
+}
+
+/**
+ * A facet's library settings page: everything that opens the catalog
+ * settings pages, or Manage Library on some library, which is what the
+ * server's library edit checks.
+ */
+export function canManageLibrarySettingsPage(
+  user: PermissionUser | null | undefined,
+): boolean {
+  return (
+    canManageCatalogSettingsPages(user) ||
+    hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageLibrary)
+  );
+}
+
+/**
  * Expand a grant the way the server's `with_request_shadowing` does: Manage
  * Titles implies View, Auto-Approve Requests, Request, and Manage Subtitles,
  * and Auto-Approve Requests implies Request.

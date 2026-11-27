@@ -66,6 +66,8 @@ import { LoadingMark } from "@/components/common/loading-mark";
 type SettingsMediaServersSectionProps = {
   connections: MediaServerConnection[];
   libraries: LibraryRecord[];
+  /** Only permission managers see or edit the default permissions. */
+  canManagePermissions: boolean;
   draft: MediaServerConnectionDraft;
   setDraft: React.Dispatch<React.SetStateAction<MediaServerConnectionDraft>>;
   localPathStyle: LocalPathStyle | undefined;
@@ -266,6 +268,7 @@ function MediaServerActionButton({
 export function SettingsMediaServersSection({
   connections,
   libraries,
+  canManagePermissions,
   draft,
   setDraft,
   localPathStyle,
@@ -1284,7 +1287,7 @@ export function SettingsMediaServersSection({
                       </p>
                     ) : null}
 
-                    {draft.autoAddEnabled ? (
+                    {draft.autoAddEnabled && canManagePermissions ? (
                       <div className="rounded border border-border bg-card/50 p-3">
                         <Label className="mb-2 block">
                           {t("uiText.defaultPermissions")}

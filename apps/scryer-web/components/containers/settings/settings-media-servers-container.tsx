@@ -40,7 +40,12 @@ import type {
   PlexServerDiscovery,
 } from "@/lib/types";
 import { authenticateWithPlexPin } from "@/lib/utils/plex-oauth";
-import { normalizeLibraryPermissionsForStorage } from "@/lib/utils/permissions";
+import { useAuth } from "@/lib/hooks/use-auth";
+import {
+  APP_PERMISSIONS,
+  hasAppPermission,
+  normalizeLibraryPermissionsForStorage,
+} from "@/lib/utils/permissions";
 import {
   isLocalPathFormatValidForStyle,
   localPathStyleFromRuntimeValue,
@@ -314,6 +319,7 @@ export function SettingsMediaServersContainer() {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const { user } = useAuth();
   const [connections, setConnections] = useState<
     SettingsMediaServersSectionProps["connections"]
   >([]);
@@ -377,7 +383,19 @@ export function SettingsMediaServersContainer() {
     );
   }, [client]);
 
+  // Default permissions for added users are granted by permission managers
+  // only; the editor and the library list behind it are theirs. A permission
+  // manager holds View on every library through the administrator default.
+  const canManagePermissions = hasAppPermission(
+    user,
+    APP_PERMISSIONS.managePermissions,
+  );
+
   const refreshLibraries = useCallback(async () => {
+    if (!canManagePermissions) {
+      setLibraries([]);
+      return;
+    }
     const { data, error } = await client
       .query(
         librariesQuery,
@@ -387,7 +405,7 @@ export function SettingsMediaServersContainer() {
       .toPromise();
     if (error) throw error;
     setLibraries((data?.libraries ?? []) as LibraryRecord[]);
-  }, [client]);
+  }, [canManagePermissions, client]);
 
   const refreshAuthRuntimeState = useCallback(async () => {
     const { data, error } = await client
@@ -868,6 +886,7 @@ export function SettingsMediaServersContainer() {
       <SettingsMediaServersSection
         connections={connections}
         libraries={libraries}
+        canManagePermissions={canManagePermissions}
         draft={draft}
         setDraft={setDraft}
         localPathStyle={localPathStyle}

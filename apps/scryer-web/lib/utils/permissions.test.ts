@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  canManageCatalogSettingsPages,
+  canManageLibrarySettingsPage,
   canManageLibrarySubtitles,
   hasAnyLibraryPermission,
   hasAnyPrivilegedLibraryAccess,
@@ -559,4 +561,23 @@ test("privileged library access mirrors the server predicate", () => {
     assert.equal(hasAnyPrivilegedLibraryAccess(user), true);
   }
   assert.equal(hasPrivilegedLibraryAccess(null, "library-movies"), false);
+});
+
+test("a facet's settings pages follow Manage Catalog Settings, not System Settings", () => {
+  const systemOnly = normalizeJwtPermissionClaims(["manageSystemSettings"], []);
+  assert.equal(canManageCatalogSettingsPages(systemOnly), false);
+  assert.equal(canManageLibrarySettingsPage(systemOnly), false);
+
+  const catalog = normalizeJwtPermissionClaims(["manageCatalogSettings"], []);
+  assert.equal(canManageCatalogSettingsPages(catalog), true);
+  assert.equal(canManageLibrarySettingsPage(catalog), true);
+
+  // A library manager opens only the library page, and so does a System
+  // Settings holder who also manages a library.
+  const libraryManager = normalizeJwtPermissionClaims(
+    ["manageSystemSettings"],
+    [{ libraryId: "library-primary", permissions: ["manageLibrary"] }],
+  );
+  assert.equal(canManageCatalogSettingsPages(libraryManager), false);
+  assert.equal(canManageLibrarySettingsPage(libraryManager), true);
 });
