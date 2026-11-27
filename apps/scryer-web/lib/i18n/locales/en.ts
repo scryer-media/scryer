@@ -7102,6 +7102,15 @@ const en: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Assign several episodes to this file",
   "queue.manualImportApplySuggestions": "Apply suggestions to all",
+  "queue.manualImportApplySuggestionsSelected": "Apply suggestions to selected",
+  "queue.manualImportSelectAll": "Select all",
+  "queue.manualImportSelectNone": "Select none",
+  "queue.manualImportSelectInvert": "Invert selection",
+  "queue.manualImportSelectMatching": "Select matching",
+  "queue.manualImportSelectMatchingLabel": "File name contains…",
+  "queue.manualImportSelectedCount": "{{count}} selected",
+  "queue.manualImportSkipSelected": "Skip selected",
+  "queue.manualImportAssignSelected": "Assign target to selected…",
   "queue.removeFailed": "Remove Failed",
   "queue.manualImportTooltip":
     "Manual import is available for attention-required queue items.",
@@ -7401,7 +7410,8 @@ const en: LocaleDictionary = {
   "settings.loginDisabled": "Login disabled",
   "settings.accountOrigin.scryer": "Scryer account",
   "settings.accountOrigin.mediaServerLogin": "Created by {{provider}} login",
-  "settings.accountOrigin.mediaServerLoginUnknown": "Created by media server login",
+  "settings.accountOrigin.mediaServerLoginUnknown":
+    "Created by media server login",
   "settings.linkedMediaServer": "Linked to {{provider}}",
   "settings.enableLogin": "Enable login",
   "settings.disableLogin": "Disable login",
@@ -9616,8 +9626,10 @@ const en: LocaleDictionary = {
   "history.placementRenamed": "Moved into place",
   "history.placementAlreadyPresent": "Already in the library",
   "history.linkFallbackFailed": "Copied because the hard link failed",
-  "history.linkFallbackNotPossible": "Copied because a hard link is not possible here",
-  "history.linkFallbackUnverifiable": "Copied because the hard link could not be verified",
+  "history.linkFallbackNotPossible":
+    "Copied because a hard link is not possible here",
+  "history.linkFallbackUnverifiable":
+    "Copied because the hard link could not be verified",
   "history.linkFallbackError": "error {{code}}",
 
   // Indexer error diagnostics
