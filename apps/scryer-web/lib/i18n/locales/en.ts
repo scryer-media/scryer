@@ -7111,6 +7111,11 @@ const en: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Assign several episodes to this file",
   "queue.manualImportApplySuggestions": "Apply suggestions to all",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Same quality",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "New file",
+  "queue.manualImportVerdictEstimated": "estimated",
   "queue.manualImportApplySuggestionsSelected": "Apply suggestions to selected",
   "queue.manualImportSelectAll": "Select all",
   "queue.manualImportSelectNone": "Select none",

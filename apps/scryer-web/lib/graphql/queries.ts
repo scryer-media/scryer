@@ -6429,3 +6429,11 @@ export const libraryFullHashBackfillQuery = `query LibraryFullHashBackfill {
     fullHashBackfillEnabled
   }
 }`;
+
+export const manualImportVerdictsQuery = `query ManualImportVerdicts($selectionId: ID!, $files: [ManualImportVerdictRequestInput!]!) {
+  manualImportVerdicts(selectionId: $selectionId, files: $files) {
+    candidateId
+    episodeIds
+    verdict
+  }
+}`;
