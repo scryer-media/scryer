@@ -81,6 +81,7 @@ import {
   formatStorageSize,
   formatTerabytes,
   groupStorageRootsByLibrary,
+  storageTileUsedBytes,
   isProviderCoolingDown,
   isProviderErroring,
   summarizeIndexerHealth,
@@ -1664,14 +1665,16 @@ export function StoragePanel({
               key={group.libraryId}
               className="flex min-w-0 flex-col gap-1.5"
             >
-              <h3 className="truncate text-[10px] font-semibold uppercase tracking-wide text-[var(--scry-muted2)]">
-                {group.libraryName}
+              <h3 className="flex min-w-0 items-baseline gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--scry-muted2)]">
+                <span className="min-w-0 truncate">{group.libraryName}</span>
+                <StorageLibrarySize root={group.roots[0]} />
               </h3>
               <div className="flex flex-wrap gap-2">
                 {group.roots.map((root) => (
                   <StorageRootTile
                     key={`${group.libraryId}:${root.path}`}
                     libraryName={group.libraryName}
+                    libraryRootCount={group.roots.length}
                     root={root}
                     compact={false}
                   />
@@ -1687,6 +1690,7 @@ export function StoragePanel({
               <StorageRootTile
                 key={`${group.libraryId}:${root.path}`}
                 libraryName={group.libraryName}
+                libraryRootCount={group.roots.length}
                 root={root}
                 compact={tier === "compact"}
               />
@@ -1698,12 +1702,31 @@ export function StoragePanel({
   );
 }
 
+/** A library's own size beside its heading, when the server reported it. */
+function StorageLibrarySize({ root }: { root: DashboardStorageRoot | undefined }) {
+  const t = useTranslate();
+  const size = formatStorageSize(root?.libraryBytes);
+  if (!size) {
+    return null;
+  }
+  return (
+    <span className="shrink-0 font-normal normal-case tabular-nums">
+      {t("dashboard.storageLibrarySize", {
+        size: `${size.value} ${size.unit}`,
+      })}
+    </span>
+  );
+}
+
 function StorageRootTile({
   libraryName,
+  libraryRootCount,
   root,
   compact,
 }: {
   libraryName: string;
+  /** Roots the owning library has; a single-root library shows its own size. */
+  libraryRootCount: number;
   root: DashboardStorageRoot;
   /** Path and percentage only, for a panel squeezed to its minimum. */
   compact: boolean;
@@ -1714,8 +1737,15 @@ function StorageRootTile({
   const toneStyle = usageToneStyle(tone);
   const tagTone = percent === null ? null : usageTagBadgeTone(tag);
   const tagKey = percent === null ? null : usageTagLabelKey(tag);
-  const usedTb = formatTerabytes(root.usedBytes);
+  const shownUsed = storageTileUsedBytes(root, libraryRootCount);
+  const usedTb = formatTerabytes(shownUsed.usedBytes);
   const totalTb = formatTerabytes(root.totalBytes);
+  const usageHint = shownUsed.isLibrarySize
+    ? t("dashboard.storageLibraryUsageHint", {
+        library: usedTb ?? "—",
+        used: formatTerabytes(root.usedBytes) ?? "—",
+      })
+    : undefined;
   const freeStorage =
     root.usedBytes !== null && root.totalBytes !== null
       ? formatStorageSize(Math.max(0, root.totalBytes - root.usedBytes))
@@ -1763,7 +1793,10 @@ function StorageRootTile({
               <span>{t("dashboard.storageUnavailable")}</span>
             ) : (
               <>
-                <span className="min-w-0 truncate tabular-nums">
+                <span
+                  className="min-w-0 truncate tabular-nums"
+                  title={usageHint}
+                >
                   {t("dashboard.storageUsage", {
                     used: usedTb ?? "—",
                     total: totalTb ?? "—",

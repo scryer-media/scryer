@@ -287,6 +287,10 @@ impl AppUseCase {
         if sort.key == crate::TitleCatalogSortKey::Profile && sort.profile_names.is_none() {
             sort.profile_names = Some(self.title_catalog_profile_names(&library_ids).await?);
         }
+        if sort.key == crate::TitleCatalogSortKey::Episodes && sort.episodes_aired_through.is_none()
+        {
+            sort.episodes_aired_through = Some(self.runtime.environment.now().date_naive());
+        }
         self.services
             .catalog
             .titles

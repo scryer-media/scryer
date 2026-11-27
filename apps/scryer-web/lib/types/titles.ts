@@ -103,6 +103,8 @@ export type TitleCollectionRecord = {
   episodesOwned?: number | null;
   episodesMonitored?: number | null;
   episodesTotal?: number | null;
+  episodesOnDisk?: number | null;
+  episodesExpected?: number | null;
   episodes?: TitleCollectionEpisodeRecord[] | null;
   createdAt?: string | null;
 };
@@ -227,6 +229,9 @@ export type TitleRecord = {
   episodesOwned?: number | null;
   episodesMonitored?: number | null;
   episodesTotal?: number | null;
+  episodesOnDisk?: number | null;
+  episodesExpected?: number | null;
+  episodeRecordsTotal?: number | null;
   contentStatus?: string | null;
   posterUrl?: string | null;
   posterSourceUrl?: string | null;

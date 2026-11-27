@@ -4916,6 +4916,9 @@ const en: LocaleDictionary = {
   "dashboard.storageFree": "{{size}} free",
   "dashboard.storageUnavailable": "Usage unavailable",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} in this library",
+  "dashboard.storageLibraryUsageHint":
+    "This library holds {{library}} TB; {{used}} TB of the volume is in use",
   "dashboard.storageLegend": "OK · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "LOW",
   "dashboard.tagCrit": "CRIT",
@@ -6694,8 +6697,8 @@ const en: LocaleDictionary = {
   "title.table.runtime": "Runtime",
   "title.table.avgRuntime": "Avg runtime",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} episodes",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} episodes ({{monitored}} monitored)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} episodes (total: {{total}})",
   "title.table.status": "Status",
   "title.table.root": "Root",
   "title.table.popularity": "Popularity",

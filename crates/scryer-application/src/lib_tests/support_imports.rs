@@ -972,6 +972,7 @@ impl MediaFileRepository for MockMediaFileRepo {
     async fn list_title_episode_progress_summaries(
         &self,
         _title_ids: &[String],
+        _aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         Ok(Vec::new())
     }
@@ -979,6 +980,7 @@ impl MediaFileRepository for MockMediaFileRepo {
     async fn list_collection_episode_progress_summaries(
         &self,
         _title_ids: &[String],
+        _aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         Ok(Vec::new())
     }

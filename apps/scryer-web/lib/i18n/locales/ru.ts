@@ -1868,8 +1868,8 @@ const ru: LocaleDictionary = {
   "title.table.runtime": "Продолжительность",
   "title.table.avgRuntime": "Средняя продолжительность",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} эпизодов",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} эпизодов (отслеживается: {{monitored}})",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} эпизодов (всего: {{total}})",
   "title.table.status": "Статус",
   "title.table.root": "Корневая папка",
   "title.table.popularity": "Популярность",
@@ -11700,6 +11700,9 @@ const ru: LocaleDictionary = {
   "dashboard.storageFree": "Свободно: {{size}}",
   "dashboard.storageUnavailable": "Данные об использовании недоступны",
   "dashboard.storageUsage": "{{used}}/{{total}} ТБ",
+  "dashboard.storageLibrarySize": "{{size}} в этой библиотеке",
+  "dashboard.storageLibraryUsageHint":
+    "Библиотека занимает {{library}} ТБ; на томе занято {{used}} ТБ",
   "dashboard.storageLegend": "В норме · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "МАЛО",
   "dashboard.tagCrit": "КРИТ",

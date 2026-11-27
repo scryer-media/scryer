@@ -153,18 +153,6 @@ export function episodeDisplayTitle(
   return episodeTitleOrTba(episode.title?.trim() || episode.episodeLabel, t);
 }
 
-export function isEpisodeCountableForProgress(episode: CollectionEpisode) {
-  const title = episode.title?.trim();
-  const airDate = episode.airDate?.trim();
-
-  if (!title || !airDate) {
-    return false;
-  }
-
-  const normalizedTitle = title.toUpperCase();
-  return normalizedTitle !== "TBA" && normalizedTitle !== "TBD";
-}
-
 export function parseNumberToken(
   raw: string | null | undefined,
 ): number | null {
