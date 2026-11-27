@@ -2416,6 +2416,7 @@ async fn queued_manual_import_rejects_observed_targets_before_consuming_or_queue
         candidates: vec![crate::ManualImportSelectionCandidate {
             id: "candidate-1".to_string(),
             canonical_path: "/private/tmp/observed-target-selection.mkv".to_string(),
+            size_bytes: None,
         }],
     };
     *import_repo.manual_import_selection.lock().await = Some(selection.clone());

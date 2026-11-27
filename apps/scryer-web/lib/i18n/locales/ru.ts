@@ -2304,6 +2304,11 @@ const ru: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Назначить этому файлу несколько эпизодов",
   "queue.manualImportApplySuggestions": "Применить предложения ко всем",
+  "queue.manualImportVerdict.UPGRADE": "Улучшение",
+  "queue.manualImportVerdict.EQUAL": "То же качество",
+  "queue.manualImportVerdict.DOWNGRADE": "Ухудшение",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Новый файл",
+  "queue.manualImportVerdictEstimated": "оценка",
   "queue.removeFailed": "Удалить ошибочные",
   "queue.manualImportTooltip":
     "Ручной импорт доступен для элементов очереди, требующих внимания.",

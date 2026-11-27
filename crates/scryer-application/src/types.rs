@@ -5298,6 +5298,9 @@ impl UiSettings {
 pub struct ManualImportSelectionCandidate {
     pub id: String,
     pub canonical_path: String,
+    /// The file's size when the preview listed it. `None` on selections
+    /// written before the size was kept.
+    pub size_bytes: Option<i64>,
 }
 
 /// A durable selection of files rooted in a tracked completed download.

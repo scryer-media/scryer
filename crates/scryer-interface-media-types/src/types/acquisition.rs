@@ -1578,6 +1578,54 @@ pub struct ManualImportFilePreviewPayload {
     pub suggested_series_movie_link_id: Option<String>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+/// Estimated comparison of a manual-import file with the files already holding the episodes it is mapped to.
+pub enum ManualImportVerdictValue {
+    /// The file would be an upgrade over what the episodes hold.
+    Upgrade,
+    /// The file ties what the episodes hold.
+    Equal,
+    /// What the episodes hold is better than the file.
+    Downgrade,
+    /// None of the episodes holds a file.
+    NoCurrentFile,
+}
+
+#[derive(InputObject)]
+/// One manual-import candidate and the episodes to estimate it against.
+pub struct ManualImportVerdictRequestInput {
+    /// Candidate ID from the persisted manual-import selection.
+    pub candidate_id: ID,
+    /// Episode IDs the candidate is mapped to; IDs outside the selection's title are ignored.
+    pub episode_ids: Vec<ID>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// The best file already holding the episodes a manual-import candidate is mapped to.
+pub struct ManualImportCurrentFilePayload {
+    /// Quality label of the file, or null when unavailable.
+    pub quality: Option<String>,
+    /// Release group of the file, or null when unavailable.
+    pub release_group: Option<String>,
+    /// Score the file holds the episodes at.
+    pub score: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Estimated upgrade verdict for one manual-import candidate. Display only: the import decides again on the landed file.
+pub struct ManualImportVerdictPayload {
+    /// Candidate ID the estimate is for.
+    pub candidate_id: ID,
+    /// Episodes of the title the estimate covers; a multi-episode file is judged across all of them.
+    pub episode_ids: Vec<ID>,
+    /// Estimated verdict, or null when the candidate cannot be estimated.
+    pub verdict: Option<ManualImportVerdictValue>,
+    /// Estimated score of the candidate, or null when it cannot be estimated.
+    pub estimated_score: Option<i32>,
+    /// Best file already holding the episodes, or null when none does or it cannot be estimated.
+    pub current_file: Option<ManualImportCurrentFilePayload>,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Series-movie target candidate for a manual import.
 pub struct ManualImportSeriesMovieTargetPayload {

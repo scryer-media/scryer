@@ -1499,6 +1499,11 @@ const ko: LocaleDictionary = {
   "queue.manualImportMultipleEpisodes": "이 파일에 여러 에피소드",
   "queue.manualImportMultipleEpisodesLabel": "이 파일에 여러 에피소드 지정",
   "queue.manualImportApplySuggestions": "모두에 제안 적용",
+  "queue.manualImportVerdict.UPGRADE": "업그레이드",
+  "queue.manualImportVerdict.EQUAL": "동일한 품질",
+  "queue.manualImportVerdict.DOWNGRADE": "다운그레이드",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "새 파일",
+  "queue.manualImportVerdictEstimated": "추정",
   "queue.removeFailed": "제거 실패",
   "queue.manualImportTooltip":
     "수동 가져오기는 주의가 필요한 대기열 항목에서 사용할 수 있습니다.",
