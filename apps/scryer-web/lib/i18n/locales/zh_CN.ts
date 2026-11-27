@@ -816,6 +816,8 @@ const zh_CN: LocaleDictionary = {
   "settings.downloadClientPriority": "优先级",
   "settings.downloadClientRemoveCompleted": "移除已完成",
   "settings.downloadClientRemoveFailed": "移除失败项",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "“移除失败项”适用于在客户端中失败的下载。Scryer 拒绝导入的种子始终按已导入的方式处理：做种到目标后由客户端移除。",
   "settings.downloadClientUseSslInfo": "连接此下载客户端时使用 SSL/TLS。",
   "settings.downloadClientEnabledInfo":
     "禁用后，此客户端在下载路由中将被跳过。",

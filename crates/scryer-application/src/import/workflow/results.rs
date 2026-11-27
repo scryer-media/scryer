@@ -549,6 +549,32 @@ pub(crate) enum TerminalFailureOrigin {
     ManualBlocklist,
 }
 
+/// Whether a terminal download is a torrent whose import Scryer refused.
+///
+/// Such a torrent ends the way an imported one does, whatever the client's
+/// "Remove failed" setting says: it seeds until its goal is met, then the
+/// client is asked to remove it (or stop it, or hand it off, as the profile
+/// says). With no goal it is removed at once. A download that failed in the
+/// client, a warning that outlasted its timeout, and every Usenet download
+/// keep following "Remove failed".
+pub(crate) fn rejected_torrent_goes_to_seeding_gate(
+    app: &AppUseCase,
+    tracked: &crate::tracked_downloads::TrackedDownload,
+    state: TrackedDownloadState,
+) -> bool {
+    state == TrackedDownloadState::Failed
+        && tracked.burned_by_import_gate
+        && !tracked.manual_failure_cleanup
+        && !tracked.status_messages.iter().any(|message| {
+            message.kind == crate::tracked_downloads::TrackedStatusMessageKind::WarningTimeout
+        })
+        && crate::seeding_gate::download_job_is_torrent(
+            app,
+            &tracked.client_type,
+            tracked.job_protocol,
+        )
+}
+
 pub(crate) async fn should_remove_terminal_download(
     app: &AppUseCase,
     client_id: &str,

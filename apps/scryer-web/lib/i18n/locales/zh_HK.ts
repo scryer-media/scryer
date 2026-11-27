@@ -1203,6 +1203,8 @@ const zh_HK: LocaleDictionary = {
   "settings.downloadClientPriority": "優先級",
   "settings.downloadClientRemoveCompleted": "移除已完成",
   "settings.downloadClientRemoveFailed": "移除失敗項",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "「移除失敗項」適用於在用戶端中失敗的下載。Scryer 拒絕匯入的種子一律比照已匯入的處理：做種至目標後由用戶端移除。",
   "settings.downloadClientUseSslInfo": "連接此下載客戶端時使用 SSL/TLS。",
   "settings.downloadClientEnabledInfo":
     "禁用後，此客戶端在下載路由中將被跳過。",

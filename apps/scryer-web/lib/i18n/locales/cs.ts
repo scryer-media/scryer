@@ -1427,6 +1427,8 @@ const cs: LocaleDictionary = {
   "settings.downloadClientPriority": "Priorita",
   "settings.downloadClientRemoveCompleted": "Odebrat dokončené",
   "settings.downloadClientRemoveFailed": "Odebrat neúspěšné",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "„Odebrat neúspěšné“ platí pro stahování, která selhala v klientovi. Torrent, jehož import Scryer odmítl, se vždy uklidí jako importovaný: seeduje do svého cíle a pak ho klient odebere.",
   "settings.downloadClientUseSslInfo":
     "Při připojování k tomuto klientovi pro stahování použít SSL/TLS.",
   "settings.downloadClientEnabledInfo":

@@ -1160,6 +1160,8 @@ const nl: LocaleDictionary = {
   "settings.downloadClientPriority": "Prioriteit",
   "settings.downloadClientRemoveCompleted": "Voltooide verwijderen",
   "settings.downloadClientRemoveFailed": "Mislukte verwijderen",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "'Mislukte verwijderen' geldt voor downloads die in de client zijn mislukt. Een torrent waarvan Scryer de import weigerde, wordt altijd opgeruimd als een geïmporteerde: hij seedt tot zijn doel en daarna verwijdert de client hem.",
   "settings.downloadClientUseSslInfo":
     "Gebruik SSL/TLS bij verbinden met deze downloadclient.",
   "settings.downloadClientEnabledInfo":

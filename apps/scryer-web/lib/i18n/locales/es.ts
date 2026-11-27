@@ -906,6 +906,8 @@ const es: LocaleDictionary = {
   "settings.downloadClientPriority": "Prioridad",
   "settings.downloadClientRemoveCompleted": "Eliminar completados",
   "settings.downloadClientRemoveFailed": "Eliminar fallidos",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "«Eliminar fallidos» se aplica a las descargas que fallaron en el cliente. Un torrent cuya importación rechazó Scryer siempre se limpia como uno importado: comparte hasta su objetivo y luego el cliente lo elimina.",
   "settings.downloadClientUseSslInfo":
     "Usar SSL/TLS al conectar con este cliente de descarga.",
   "settings.downloadClientEnabledInfo":

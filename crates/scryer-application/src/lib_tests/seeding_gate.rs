@@ -7998,3 +7998,266 @@ async fn a_tracked_download_takes_its_job_protocol_from_its_grab_record() {
         assert_eq!(rebuilt.job_protocol, job, "{job:?}");
     }
 }
+
+/// A torrent whose import was refused, on a client with "Remove failed" off.
+async fn rejected_torrent_fixture(
+    download_client: Arc<StubDownloadClient>,
+    name: &str,
+    item_id: &str,
+    goals: Option<PersistedSeedGoals>,
+) -> (AppUseCase, TrackedDownload) {
+    let (mut app, user, _) = bootstrap_with_torrent_clients(download_client);
+    let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, false).await;
+    let title = movie_title(&app, &user, name).await;
+    if let Some(goals) = goals {
+        app.services.workflow.download_submissions = goals_repo(item_id, goals);
+    }
+    let mut tracked = tracked_for(
+        &config.id,
+        "qbittorrent",
+        item_id,
+        &title,
+        TrackedDownloadState::Failed,
+        true,
+    );
+    tracked.burned_by_import_gate = true;
+    (app, tracked)
+}
+
+fn deleted_items(
+    requests: &[(Option<String>, Option<String>, String, bool, bool)],
+) -> Vec<(String, bool)> {
+    requests
+        .iter()
+        .map(|(_, _, item_id, _, remove_data)| (item_id.clone(), *remove_data))
+        .collect()
+}
+
+/// "Remove failed" does not decide a refused torrent: it is held while its
+/// seeding goal is unmet.
+#[tokio::test]
+async fn a_rejected_torrent_seeds_to_its_goal_with_remove_failed_off() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, mut tracked) = rejected_torrent_fixture(
+        download_client.clone(),
+        "Rejected Torrent Held",
+        "torrent-rejected-held",
+        Some(persisted_goals(false)),
+    )
+    .await;
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(true),
+            can_move_files: Some(true),
+            seed_ratio: Some(0.4),
+            ..DownloadSeedingSnapshot::default()
+        },
+        &mut tracked,
+    );
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Failed,
+        None,
+    )
+    .await;
+
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::HeldForSeeding);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
+}
+
+/// Once the goal is met the refused torrent is removed with its data, though
+/// "Remove failed" is off.
+#[tokio::test]
+async fn a_rejected_torrent_is_removed_once_its_goal_is_met_with_remove_failed_off() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, mut tracked) = rejected_torrent_fixture(
+        download_client.clone(),
+        "Rejected Torrent Released",
+        "torrent-rejected-released",
+        Some(persisted_goals(false)),
+    )
+    .await;
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(false),
+            can_move_files: Some(true),
+            seed_ratio: Some(2.4),
+            ..DownloadSeedingSnapshot::default()
+        },
+        &mut tracked,
+    );
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Failed,
+        None,
+    )
+    .await;
+
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        deleted_items(&download_client.deleted_requests.lock().await),
+        vec![("torrent-rejected-released".to_string(), true)]
+    );
+}
+
+/// With no seeding goal the refused torrent is removed at once.
+#[tokio::test]
+async fn a_rejected_torrent_without_goals_is_removed_at_once_with_remove_failed_off() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, mut tracked) = rejected_torrent_fixture(
+        download_client.clone(),
+        "Rejected Torrent No Goals",
+        "torrent-rejected-no-goals",
+        None,
+    )
+    .await;
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(true),
+            can_move_files: Some(true),
+            ..DownloadSeedingSnapshot::default()
+        },
+        &mut tracked,
+    );
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Failed,
+        None,
+    )
+    .await;
+
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        deleted_items(&download_client.deleted_requests.lock().await),
+        vec![("torrent-rejected-no-goals".to_string(), true)]
+    );
+}
+
+/// A torrent that failed in its client, and one whose warning outlasted the
+/// timeout, still follow "Remove failed": with it off both stay in the client.
+#[tokio::test]
+async fn torrent_failures_that_are_not_import_rejections_keep_following_remove_failed() {
+    for warning_timeout in [false, true] {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let (app, mut tracked) = rejected_torrent_fixture(
+            download_client.clone(),
+            "Client Failed Torrent",
+            "torrent-client-failed",
+            None,
+        )
+        .await;
+        if warning_timeout {
+            tracked.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::WarningTimeout,
+                "synthetic warning",
+            )];
+        } else {
+            tracked.burned_by_import_gate = false;
+        }
+        observed(
+            DownloadSeedingSnapshot {
+                can_remove: Some(true),
+                can_move_files: Some(true),
+                ..DownloadSeedingSnapshot::default()
+            },
+            &mut tracked,
+        );
+
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Failed,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            TerminalDownloadCleanupOutcome::NotConfigured,
+            "warning_timeout={warning_timeout}"
+        );
+        assert!(download_client.deleted_requests.lock().await.is_empty());
+    }
+}
+
+/// The durable cleanup a restart resumes reads the refusal back from the
+/// stored failure reason and treats the torrent the same way; a stored client
+/// failure stays retained by "Remove failed".
+#[tokio::test]
+async fn durable_cleanup_of_a_rejected_torrent_ignores_remove_failed() {
+    for (reason, expect_removed) in [(Some("import_gate_rejected"), true), (None, false)] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, false).await;
+        let title = movie_title(&app, &user, "Durable Rejected Torrent").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            "qbittorrent",
+            "durable-rejected-torrent",
+            &title,
+            TrackedDownloadState::Failed,
+            true,
+        );
+        observed(
+            DownloadSeedingSnapshot {
+                can_remove: Some(true),
+                can_move_files: Some(true),
+                ..DownloadSeedingSnapshot::default()
+            },
+            &mut tracked,
+        );
+        tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+        client
+            .history_items
+            .lock()
+            .await
+            .push(tracked.client_item.clone());
+        let locator = crate::ClientJobLocator::new(
+            Some(config.id.as_str()),
+            "qbittorrent",
+            "durable-rejected-torrent",
+        );
+        let identity = crate::DownloadSubmissionIdentity {
+            download_id: Some(tracked.download_id.to_wire()),
+            ..Default::default()
+        };
+        repository
+            .record_identity_tracked_state(
+                &identity,
+                Some(&locator),
+                TrackedDownloadState::Failed.as_str(),
+                reason,
+                None,
+            )
+            .await
+            .expect("record durable failure");
+
+        let (_, _, cleanup) = crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .expect("cleanup ran");
+
+        if expect_removed {
+            assert_eq!(cleanup, TerminalDownloadCleanupOutcome::Removed);
+            assert_eq!(
+                deleted_items(&client.deleted_requests.lock().await),
+                vec![("durable-rejected-torrent".to_string(), true)]
+            );
+        } else {
+            assert_eq!(cleanup, TerminalDownloadCleanupOutcome::NotConfigured);
+            assert!(client.deleted_requests.lock().await.is_empty());
+        }
+    }
+}

@@ -899,6 +899,8 @@ const de: LocaleDictionary = {
   "settings.downloadClientPriority": "Priorität",
   "settings.downloadClientRemoveCompleted": "Abgeschlossene entfernen",
   "settings.downloadClientRemoveFailed": "Fehlgeschlagene entfernen",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "„Fehlgeschlagene entfernen“ gilt für Downloads, die im Client fehlgeschlagen sind. Ein Torrent, dessen Import Scryer abgelehnt hat, wird immer wie ein importierter behandelt: Er seedet bis zu seinem Ziel, dann entfernt ihn der Client.",
   "settings.downloadClientUseSslInfo":
     "SSL/TLS beim Verbinden mit diesem Download-Client verwenden.",
   "settings.downloadClientEnabledInfo":

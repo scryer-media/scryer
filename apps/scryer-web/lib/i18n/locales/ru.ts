@@ -1255,6 +1255,8 @@ const ru: LocaleDictionary = {
   "settings.downloadClientPriority": "Приоритет",
   "settings.downloadClientRemoveCompleted": "Удалять завершённые",
   "settings.downloadClientRemoveFailed": "Удалять неудачные",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "«Удалять неудачные» относится к загрузкам, завершившимся ошибкой в клиенте. Торрент, импорт которого Scryer отклонил, всегда обрабатывается как импортированный: он раздаётся до цели, после чего клиент его удаляет.",
   "settings.downloadClientUseSslInfo":
     "Использовать SSL/TLS при подключении к этому клиенту загрузки.",
   "settings.downloadClientRemoveCompletedInfo":

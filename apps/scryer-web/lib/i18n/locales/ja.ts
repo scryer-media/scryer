@@ -892,6 +892,8 @@ const ja: LocaleDictionary = {
   "settings.downloadClientPriority": "優先度",
   "settings.downloadClientRemoveCompleted": "完了時に削除",
   "settings.downloadClientRemoveFailed": "失敗時に削除",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "「失敗時に削除」はクライアント内で失敗したダウンロードに適用されます。Scryer がインポートを拒否したトレントは常にインポート済みと同様に扱われ、目標までシードした後にクライアントから削除されます。",
   "settings.downloadClientUseSslInfo":
     "このダウンロードクライアントへの接続時にSSL/TLSを使用します。",
   "settings.downloadClientEnabledInfo":
