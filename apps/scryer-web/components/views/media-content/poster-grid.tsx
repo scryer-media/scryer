@@ -136,6 +136,7 @@ export const PosterGrid = React.memo(function PosterGrid({
   return (
     <div
       ref={gridRef}
+      data-catalog-poster-grid="true"
       data-catalog-scroll-root={scrollContainer ? "true" : undefined}
       className={
         scrollContainer

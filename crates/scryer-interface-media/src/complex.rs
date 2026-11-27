@@ -16,6 +16,53 @@ use crate::types::*;
 
 const RELATION_PAGE_MAX_LIMIT: i32 = 300;
 
+/// Name both sides of each pairing from one batched title read.
+pub async fn same_film_pairing_payloads(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    pairings: Vec<scryer_application::SameFilmPairing>,
+) -> GqlResult<Vec<SameFilmPairingPayload>> {
+    if pairings.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut ids = pairings
+        .iter()
+        .flat_map(|pairing| {
+            std::iter::once(pairing.series_title_id.clone()).chain(pairing.movie_title_id.clone())
+        })
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    let titles = app
+        .get_titles_by_ids(actor, &ids)
+        .await
+        .map_err(to_gql_error)?
+        .into_iter()
+        .map(|title| (title.id.clone(), title))
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(pairings
+        .into_iter()
+        .filter_map(|pairing| {
+            let series = titles.get(&pairing.series_title_id)?;
+            let movie = match pairing.movie_title_id.as_ref() {
+                Some(id) => Some(titles.get(id)?),
+                None => None,
+            };
+            Some(SameFilmPairingPayload {
+                tmdb_id: pairing.tmdb_id,
+                series_movie_link_id: ID::from(pairing.series_movie_link_id),
+                series_title_id: ID::from(series.id.clone()),
+                series_title_name: series.name.clone(),
+                series_title_facet: MediaFacetValue::from_domain(series.facet.clone()),
+                movie_title_id: movie.map(|movie| ID::from(movie.id.clone())),
+                movie_title_name: movie.map(|movie| movie.name.clone()),
+                movie_title_facet: movie
+                    .map(|movie| MediaFacetValue::from_domain(movie.facet.clone())),
+            })
+        })
+        .collect())
+}
+
 /// What a release-decisions page query reads: the total is counted only for
 /// `totalCount` or `hasMore`, and explanations are parsed only for the item
 /// fields that read them.
@@ -1158,6 +1205,23 @@ impl TitlePayload {
                 .collect())
         })
         .await
+    }
+
+    /// Where this title's film is tracked twice, matched by TMDB movie id: for
+    /// a movie, the series movies of shows that hold the same film; for a
+    /// series, the movie titles that hold one of its series movies. Titles the
+    /// caller cannot view are left out.
+    async fn same_film_elsewhere(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<SameFilmPairingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let pairings = app
+            .same_film_pairings_for_title(&actor, self.id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        same_film_pairing_payloads(&app, &actor, pairings).await
     }
 
     /// Media files for this title that are visible to the caller, or an empty list when none are available.

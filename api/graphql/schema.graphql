@@ -26143,6 +26143,16 @@ type QueryRoot {
 		id: ID!
 	): TitlePayload
 	"""
+	Series movies of visible shows that already track the film with this
+	TMDB movie id, for a movie that is about to be added.
+	"""
+	seriesMoviesTrackingFilm(
+		"""
+		TMDB movie id of the film.
+		"""
+		tmdbId: String!
+	): [SameFilmPairingPayload!]!
+	"""
 	Fetch locally cached movie metadata through a visible title relationship.
 	"""
 	movieEntity(
@@ -30657,6 +30667,45 @@ enum RuntimePathStyleValue {
 }
 
 """
+One film tracked twice: as a series movie of a show and as a movie title,
+matched by TMDB movie id.
+"""
+type SameFilmPairingPayload {
+	"""
+	TMDB movie id both sides carry.
+	"""
+	tmdbId: String!
+	"""
+	Series-movie link that tracks the film inside the show.
+	"""
+	seriesMovieLinkId: ID!
+	"""
+	Show that holds the series movie.
+	"""
+	seriesTitleId: ID!
+	"""
+	Name of the show.
+	"""
+	seriesTitleName: String!
+	"""
+	Facet of the show.
+	"""
+	seriesTitleFacet: MediaFacetValue!
+	"""
+	Movie title that tracks the same film, or null before the movie is added.
+	"""
+	movieTitleId: ID
+	"""
+	Name of the movie title, or null before the movie is added.
+	"""
+	movieTitleName: String
+	"""
+	Facet of the movie title, or null before the movie is added.
+	"""
+	movieTitleFacet: MediaFacetValue
+}
+
+"""
 Secret values collected for an external import setup.
 """
 input SaveExternalImportSetupSecretDraftInput {
@@ -34697,6 +34746,13 @@ type TitlePayload {
 	Series-movie links for this title, or an empty list when none exist.
 	"""
 	seriesMovieLinks: [SeriesMovieLinkPayload!]!
+	"""
+	Where this title's film is tracked twice, matched by TMDB movie id: for
+	a movie, the series movies of shows that hold the same film; for a
+	series, the movie titles that hold one of its series movies. Titles the
+	caller cannot view are left out.
+	"""
+	sameFilmElsewhere: [SameFilmPairingPayload!]!
 	"""
 	Media files for this title that are visible to the caller, or an empty list when none are available.
 	"""

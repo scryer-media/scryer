@@ -6,7 +6,7 @@ import {
   episodeProgressCounts,
   episodeProgressPercent,
   episodeProgressText,
-  localCalendarDay,
+  utcCalendarDay,
 } from "./episode-progress.ts";
 
 test("progress is episodes on disk over episodes expected", () => {
@@ -49,12 +49,23 @@ test("loaded episodes count the way the server does", () => {
       { monitored: true, airDate: null, hasFile: true },
       // Unmonitored, aired, no file: not expected.
       { monitored: false, airDate: "2026-01-02", hasFile: false },
+      // Monitored with only a year or a month: not aired yet.
+      { monitored: true, airDate: "2026", hasFile: false },
+      { monitored: true, airDate: "2026-04", hasFile: false },
     ],
     "2026-05-01",
   );
-  assert.deepEqual(counts, { onDisk: 2, expected: 4, total: 6 });
+  assert.deepEqual(counts, { onDisk: 2, expected: 4, total: 8 });
 });
 
-test("a calendar day is the local date", () => {
-  assert.equal(localCalendarDay(new Date(2026, 0, 5, 23, 30)), "2026-01-05");
+test("the calendar day is the UTC date", () => {
+  // 23:30 at UTC-7 on Jan 5 is already Jan 6 in UTC.
+  assert.equal(
+    utcCalendarDay(new Date("2026-01-05T23:30:00-07:00")),
+    "2026-01-06",
+  );
+  assert.equal(
+    utcCalendarDay(new Date("2026-01-05T23:30:00Z")),
+    "2026-01-05",
+  );
 });

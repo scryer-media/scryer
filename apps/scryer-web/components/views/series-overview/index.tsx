@@ -85,6 +85,7 @@ import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "../title-ratings-strip";
 import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import { TitleSettingsPanel } from "../title-settings-panel";
+import { movieTitlePlacesByLink } from "@/lib/utils/same-film";
 import { SeasonSection, SeriesMovieTimelineSection } from "./season-section";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type { LibraryRecord } from "@/lib/types/titles";
@@ -342,6 +343,10 @@ function SeriesOverviewViewImpl({
   const timelineItems = React.useMemo(
     () => buildSeriesTimelineItems(sortedCollections, seriesMovieLinks),
     [seriesMovieLinks, sortedCollections],
+  );
+  const sameFilmPlacesByLink = React.useMemo(
+    () => movieTitlePlacesByLink(title?.sameFilmElsewhere, title?.id ?? ""),
+    [title?.id, title?.sameFilmElsewhere],
   );
 
   const [expandedKeys, setExpandedKeys] = React.useState<Set<string>>(
@@ -1661,6 +1666,9 @@ function SeriesOverviewViewImpl({
                         <SeriesMovieTimelineSection
                           key={item.key}
                           link={item.link}
+                          sameFilmPlaces={sameFilmPlacesByLink.get(
+                            item.link.id,
+                          )}
                           expanded={expandedKeys.has(item.key)}
                           onToggle={toggleActionByKey.get(item.key)!}
                           mediaFilesByEpisode={mediaFilesByEpisode}

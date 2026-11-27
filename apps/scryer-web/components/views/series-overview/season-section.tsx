@@ -70,7 +70,7 @@ import { seasonHasSelectableEpisodes } from "@/lib/utils/season-selection";
 import {
   countEpisodeProgress,
   episodeProgressCounts,
-  localCalendarDay,
+  utcCalendarDay,
 } from "@/lib/utils/episode-progress";
 import {
   formatFileSize,
@@ -462,7 +462,7 @@ function SeasonSectionImpl({
           hasFile:
             (mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES).length > 0,
         })),
-        localCalendarDay(new Date()),
+        utcCalendarDay(new Date()),
       );
     if (counts.total === 0) {
       return null;

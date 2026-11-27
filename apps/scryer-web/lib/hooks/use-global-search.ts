@@ -130,7 +130,8 @@ export type MetadataCatalogRequestOptions = {
 };
 
 export type AnimeCatalogDefaults = {
-  monitorSpecials: boolean;
+  /** Null until the instance's anime settings have been read. */
+  monitorSpecials: boolean | null;
   interSeasonMovies: boolean;
 };
 
@@ -611,7 +612,7 @@ export function useGlobalSearch({
   );
   const [animeCatalogDefaults, setAnimeCatalogDefaults] =
     useState<AnimeCatalogDefaults>({
-      monitorSpecials: true,
+      monitorSpecials: null,
       interSeasonMovies: true,
     });
   const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] =

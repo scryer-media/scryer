@@ -6787,7 +6787,7 @@ fn title_catalog_episode_progress_subquery_scoped(
            FROM (
                 SELECT e.title_id,
                        CASE WHEN {} THEN 1 ELSE 0 END AS monitored,
-                       CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                       CASE WHEN length(trim(COALESCE(e.air_date, ''))) >= 10
                              AND substr(trim(e.air_date), 1, 10) <= {{}}
                             THEN 1 ELSE 0 END AS aired,
                        CASE WHEN EXISTS (

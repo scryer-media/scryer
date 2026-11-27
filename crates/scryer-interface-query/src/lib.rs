@@ -1875,6 +1875,22 @@ impl CatalogQueries {
         Ok(title.map(|title| from_title(&app, title)))
     }
 
+    /// Series movies of visible shows that already track the film with this
+    /// TMDB movie id, for a movie that is about to be added.
+    async fn series_movies_tracking_film(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "TMDB movie id of the film.")] tmdb_id: String,
+    ) -> GqlResult<Vec<SameFilmPairingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let pairings = app
+            .series_movies_tracking_tmdb_movie(&actor, &tmdb_id)
+            .await
+            .map_err(to_gql_error)?;
+        scryer_interface_media::same_film_pairing_payloads(&app, &actor, pairings).await
+    }
+
     /// Fetch locally cached movie metadata through a visible title relationship.
     async fn movie_entity(
         &self,

@@ -594,6 +594,21 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
       }
     }`;
 
+const SAME_FILM_PAIRING_FIELDS = `
+      tmdbId
+      seriesMovieLinkId
+      seriesTitleId
+      seriesTitleName
+      seriesTitleFacet
+      movieTitleId
+      movieTitleName
+      movieTitleFacet`;
+
+export const seriesMoviesTrackingFilmQuery = `query SeriesMoviesTrackingFilm($tmdbId: String!) {
+  seriesMoviesTrackingFilm(tmdbId: $tmdbId) {${SAME_FILM_PAIRING_FIELDS}
+  }
+}`;
+
 const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     id
     name
@@ -667,6 +682,8 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     createdAt
     collections {${MOVIE_SIDE_PANEL_COLLECTION_FIELDS}
     }
+    sameFilmElsewhere {${SAME_FILM_PAIRING_FIELDS}
+    }
     wantedItems {
       items {${WANTED_ITEM_FIELDS}
       }
@@ -732,6 +749,8 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     collections {${SERIES_SIDE_PANEL_COLLECTION_FIELDS}
     }
     seriesMovieLinks {${SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS}
+    }
+    sameFilmElsewhere {${SAME_FILM_PAIRING_FIELDS}
     }
     certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
@@ -3276,6 +3295,12 @@ export const movieAvailabilitySettingsQuery = `query MovieAvailabilitySettings {
 export const libraryDefaultMovieAvailabilityQuery = `query LibraryDefaultMovieAvailability($libraryId: ID!) {
   librarySettings(libraryId: $libraryId) {
     defaultMovieAvailability
+  }
+}`;
+
+export const libraryAnimeMonitorSpecialsQuery = `query LibraryAnimeMonitorSpecials($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    monitorSpecials
   }
 }`;
 
