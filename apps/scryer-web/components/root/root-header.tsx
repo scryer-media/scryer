@@ -166,6 +166,7 @@ export const RootHeader = React.memo(function RootHeader({
     isCatalogConfigReady,
     librariesByFacet,
     rootFoldersByFacet,
+    animeCatalogDefaults,
     requestableLibrariesByFacet,
     catalogSearchResults,
     catalogSearchLoading,
@@ -1934,6 +1935,7 @@ export const RootHeader = React.memo(function RootHeader({
           rootFoldersByFacet[addDialogTarget?.facet ?? "SERIES"]
         }
         onAdd={handleAddDialogSubmit}
+        animeMonitorSpecials={animeCatalogDefaults.monitorSpecials}
       />
       <RequestMediaDialog
         open={requestDialogTarget !== null}

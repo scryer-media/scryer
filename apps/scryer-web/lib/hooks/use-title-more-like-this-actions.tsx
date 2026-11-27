@@ -216,6 +216,7 @@ export function useTitleMoreLikeThisActions({
           )}
           manageableLibraries={search.librariesByFacet[addFacet] ?? []}
           rootFolderOptions={search.rootFoldersByFacet[addFacet] ?? []}
+          animeMonitorSpecials={search.animeCatalogDefaults.monitorSpecials}
           onAdd={async (result, facet, options) => {
             const titleId = await search.addMetadataSearchResultToCatalog(
               result,

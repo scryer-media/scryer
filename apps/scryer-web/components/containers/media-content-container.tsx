@@ -627,6 +627,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     requestMetadataSearchResult,
     resolveDefaultQualityProfileIdForFacet,
     rootFoldersByFacet,
+    animeCatalogDefaults,
     runTvdbSearch,
     setQueueFacet,
     tvdbCandidates,
@@ -996,16 +997,18 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
-    if (effectiveViewMode === "poster" || effectiveViewMode === "graph") {
+    if (effectiveViewMode === "graph") {
       return defaultTitleCatalogSortState;
     }
     if (titleCatalogSort.key === "name") {
       return titleCatalogSort;
     }
     const columnKey = titleCatalogSort.key as TitleTableColumnKey;
+    // The poster view has no columns: it sorts by any supported key.
     if (
       !isTitleTableColumnSupportedForView(columnKey, view) ||
-      visibleTitleTableColumns[columnKey] !== true
+      (effectiveViewMode !== "poster" &&
+        visibleTitleTableColumns[columnKey] !== true)
     ) {
       return defaultTitleCatalogSortState;
     }
@@ -3613,12 +3616,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                 ...(queueFacet === "MOVIE"
                   ? {}
                   : { useSeasonFolders: seasonFoldersForQueue }),
-                ...(queueFacet === "ANIME"
-                  ? {
-                      monitorSpecials: false,
-                      interSeasonMovies: true,
-                    }
-                  : {}),
               },
               externalIds,
               smgId: candidate.smgId ?? undefined,
@@ -5688,6 +5685,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           )}
           manageableLibraries={librariesByFacet[addDiscoveryFacet] ?? []}
           rootFolderOptions={rootFoldersByFacet[addDiscoveryFacet] ?? []}
+          animeMonitorSpecials={animeCatalogDefaults.monitorSpecials}
           onAdd={(result, facet, options) =>
             // The catalog reload rides the catalog-titles event, same as an add
             // made from global search.
