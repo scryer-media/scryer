@@ -299,6 +299,7 @@ async fn execute_history_retry(
                 // never taken for an import however much this attempt placed.
                 needs_reconciliation: error.requires_manual_reconciliation(),
                 release_burned: false,
+                release_refused: false,
                 title_id: release_evidence
                     .title_id()
                     .map(str::to_string)

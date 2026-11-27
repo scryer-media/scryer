@@ -20,6 +20,7 @@ fn base_completed_import_result(
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -105,6 +106,9 @@ async fn import_series_download(
     let mut ignored_count: usize = 0;
     let mut rejected_count: usize = 0;
     let mut release_burned = false;
+    // Skipped and rejected members that lost a fair comparison with the
+    // library, as opposed to ones an operator has to resolve.
+    let mut refused_count: usize = 0;
     let mut failed_count: usize = 0;
     let mut last_error: Option<String> = None;
     let mut rejection_reasons: BTreeMap<String, usize> = BTreeMap::new();
@@ -222,8 +226,10 @@ async fn import_series_download(
                 skip_reason,
                 episode_ids,
                 already_present_destination,
+                refused,
                 ..
             }) => {
+                refused_count += usize::from(refused);
                 if let Some((dest_path, _)) = already_present_destination {
                     subtitle_deliveries.push((
                         source_video.path().to_path_buf(),
@@ -252,6 +258,10 @@ async fn import_series_download(
                 ..
             }) => {
                 rejected_count += 1;
+                refused_count += usize::from(matches!(
+                    disposition,
+                    crate::import_decide::RejectionDisposition::Skip
+                ));
                 release_burned |= matches!(
                     disposition,
                     crate::import_decide::RejectionDisposition::Blocklist
@@ -294,6 +304,12 @@ async fn import_series_download(
         last_skipped_skip_reason,
     );
     let release_burned = matches!(&decision, ImportDecision::Rejected) && release_burned;
+    // Nothing imported, nothing failed, and every member that was not an
+    // ignored extra lost to the library.
+    let release_refused = imported_count == 0
+        && failed_count == 0
+        && refused_count > 0
+        && refused_count == skipped_count + rejected_count;
 
     let error_message = episode_import_summary_message(
         EpisodeImportSummaryCounts {
@@ -324,6 +340,7 @@ async fn import_series_download(
         link_type: imported_link_type,
         error_message,
         release_burned,
+        release_refused,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -395,6 +412,10 @@ enum EpisodeImportOutcome {
         skip_reason: Option<ImportSkipReason>,
         episode_ids: Vec<String>,
         already_present_destination: Option<(String, String)>,
+        /// The file lost a fair comparison with the library (a `Skip`
+        /// disposition), rather than being skipped for a reason an operator
+        /// has to resolve.
+        refused: bool,
         /// A block on the release name this file earned by losing to the
         /// library. Reported, like `blocklist_after_import`, so a pack writes
         /// one row.
@@ -1813,6 +1834,7 @@ async fn import_single_episode_file(
             });
         }
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message: unresolved_episode_import_message(
                 &parsed,

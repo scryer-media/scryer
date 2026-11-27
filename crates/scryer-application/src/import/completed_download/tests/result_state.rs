@@ -110,6 +110,7 @@ async fn apply_result_marks_verified_already_present_skip_imported() {
         link_type: None,
         error_message: Some("episode already imported".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -178,6 +179,7 @@ async fn unavailable_artifact_evidence_keeps_already_present_import_retryable() 
         link_type: None,
         error_message: Some("episode already imported".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -226,6 +228,7 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -328,6 +331,7 @@ fn pass_result(
         needs_reconciliation: false,
         source_cleanup_failed: false,
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -709,6 +713,7 @@ async fn verified_import_mark_retries_without_rolling_back_import() {
         link_type: None,
         error_message: Some("episode already imported".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -758,6 +763,7 @@ async fn verified_import_mark_stops_after_bounded_permanent_failures() {
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -831,6 +837,7 @@ async fn verified_import_mark_uses_completed_client_identity() {
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -975,6 +982,7 @@ async fn apply_result_keeps_rejected_already_imported_result_blocked() {
         link_type: None,
         error_message: Some("existing episode file is equal or better".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1328,6 +1336,7 @@ async fn apply_result_does_not_verify_unresolved_identity_rejection_as_imported(
         link_type: None,
         error_message: Some("download identity is unresolved".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1362,6 +1371,7 @@ async fn apply_result_blocks_cancelled_import_for_manual_review() {
         link_type: None,
         error_message: Some("Import was cancelled. Use Manual Import to resume it.".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1414,6 +1424,7 @@ async fn apply_result_blocks_post_download_rule_error_hold_for_operator_review()
             link_type: None,
             error_message: Some(reason.to_string()),
             release_burned: false,
+            release_refused: false,
             started_at: Utc::now(),
             completed_at: Utc::now(),
             upgrade: false,
@@ -1461,6 +1472,7 @@ async fn apply_result_keeps_ambiguous_obfuscated_episode_blocked_with_actionable
         link_type: None,
         error_message: Some(reason.to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1500,6 +1512,7 @@ async fn apply_result_keeps_retrying_no_video_import_after_unchanged_checks() {
         link_type: None,
         error_message: Some("no eligible video files found".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1562,6 +1575,7 @@ async fn apply_result_blocks_no_video_import_once_slow_retries_reach_the_ceiling
         link_type: None,
         error_message: Some("no eligible video files found".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1616,6 +1630,7 @@ async fn apply_result_resets_no_video_retry_when_source_signature_changes() {
         link_type: None,
         error_message: Some("no eligible video files found".to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -1651,6 +1666,7 @@ fn failed_execution_result(error_message: &str) -> ImportResult {
         link_type: None,
         error_message: Some(error_message.to_string()),
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,
@@ -2327,5 +2343,117 @@ mod released_hold {
             HeldImportReleaseSettlement::Imported
         );
         assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
+}
+
+/// A torrent-only app and a Scryer-origin torrent download whose completed job
+/// holds `episode.mkv` beside an unrelated file, for the refused-import tests.
+fn refused_torrent_fixture() -> (
+    AppUseCase,
+    TrackedDownload,
+    tempfile::TempDir,
+    std::path::PathBuf,
+) {
+    let mut app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let plugin_provider: std::sync::Arc<dyn crate::DownloadClientPluginProvider> =
+        std::sync::Arc::new(TorrentOnlyPluginProvider);
+    app.services.integrations.download_client_plugin_provider =
+        crate::RuntimeFeature::enabled(plugin_provider);
+    let mut td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
+    td.client_type = "qbittorrent".to_string();
+    td.client_item.client_type = "qbittorrent".to_string();
+    td.client_item.is_scryer_origin = true;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let source = temp_dir.path().join("completed/job/episode.mkv");
+    std::fs::create_dir_all(source.parent().expect("source parent")).expect("create job");
+    std::fs::write(&source, b"video").expect("write source");
+    (app, td, temp_dir, source)
+}
+
+fn lost_to_library_result(source: &std::path::Path) -> ImportResult {
+    let mut result = failed_execution_result("not an upgrade for the library file");
+    result.decision = ImportDecision::Skipped;
+    result.skip_reason = Some(ImportSkipReason::DuplicateFile);
+    result.release_refused = true;
+    result.source_path = source.to_string_lossy().into_owned();
+    result
+}
+
+fn extraction_blocked_result(source: &std::path::Path) -> ImportResult {
+    let mut result = failed_execution_result("every allowed extraction attempt failed");
+    result.skip_reason = Some(ImportSkipReason::ArchiveExtractionBlocked);
+    result.source_path = source.to_string_lossy().into_owned();
+    result
+}
+
+#[tokio::test]
+async fn a_refused_torrent_of_a_scryer_grab_is_routed_to_failure_handling() {
+    for (label, build) in [
+        (
+            "lost to the library",
+            lost_to_library_result as fn(&std::path::Path) -> ImportResult,
+        ),
+        ("extraction blocked", extraction_blocked_result),
+    ] {
+        let (app, mut td, _dir, source) = refused_torrent_fixture();
+        let result = build(&source);
+
+        assert!(
+            !apply_import_result(&app, &mut td, result, 0).await,
+            "{label}"
+        );
+        assert_eq!(td.state, TrackedDownloadState::FailedPending, "{label}");
+        assert_eq!(td.status, TrackedDownloadStatus::Error, "{label}");
+        assert_eq!(
+            td.status_messages[0].kind,
+            crate::tracked_downloads::TrackedStatusMessageKind::ImportRefused,
+            "{label}: failure handling reads the kind to name the failure"
+        );
+        assert!(
+            td.burned_by_import_gate,
+            "{label}: terminal cleanup takes the rejected-torrent path"
+        );
+        // Routing deletes nothing; the seeding gate decides removal later.
+        assert_eq!(std::fs::read(&source).unwrap(), b"video", "{label}");
+    }
+}
+
+#[tokio::test]
+async fn a_held_torrent_refusal_stays_import_blocked() {
+    let (app, mut td, _dir, source) = refused_torrent_fixture();
+    let mut result = lost_to_library_result(&source);
+    // A hold leaves the result unrefused: an operator decides it.
+    result.release_refused = false;
+    result.skip_reason = Some(ImportSkipReason::PolicyMismatch);
+
+    assert!(!apply_import_result(&app, &mut td, result, 0).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert!(!td.burned_by_import_gate);
+    assert_eq!(std::fs::read(&source).unwrap(), b"video");
+}
+
+#[tokio::test]
+async fn refused_imports_outside_scryer_torrents_stay_import_blocked() {
+    for label in ["usenet download", "download Scryer did not grab"] {
+        let (app, mut td, _dir, source) = refused_torrent_fixture();
+        if label == "usenet download" {
+            td.client_type = "nzbget".to_string();
+            td.client_item.client_type = "nzbget".to_string();
+        } else {
+            td.client_item.is_scryer_origin = false;
+        }
+        for result in [
+            lost_to_library_result(&source),
+            extraction_blocked_result(&source),
+        ] {
+            let mut td = td.clone();
+            assert!(
+                !apply_import_result(&app, &mut td, result, 0).await,
+                "{label}"
+            );
+            assert_eq!(td.state, TrackedDownloadState::ImportBlocked, "{label}");
+            assert!(!td.burned_by_import_gate, "{label}");
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), b"video", "{label}");
     }
 }

@@ -3671,6 +3671,12 @@ pub struct ImportResult {
     pub source_cleanup_failed: bool,
     #[serde(default)]
     pub release_burned: bool,
+    /// Nothing was imported because every file lost a fair comparison with
+    /// the library: a refusal that settles the download rather than one an
+    /// operator has to resolve. Set apart from `release_burned`, which also
+    /// holds the release to blame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub release_refused: bool,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
     /// The import replaced an existing media file. Only the canonical movie

@@ -248,6 +248,7 @@ async fn execute_resolved_episode_import(
                 &prior.file.file_path,
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
@@ -293,6 +294,7 @@ async fn execute_resolved_episode_import(
                 .await
         {
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: reason,
                 reason_code: Some(code.as_str().to_string()),
@@ -470,6 +472,7 @@ async fn execute_resolved_episode_import(
     {
         tracing::debug!(file = %precheck_dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message: reason,
             reason_code: Some(code.as_str().to_string()),
@@ -546,6 +549,7 @@ async fn execute_resolved_episode_import(
             // must stay grabbable after review.
             if rejection.requires_review() {
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -630,6 +634,7 @@ async fn execute_resolved_episode_import(
             "holding episode replacement for manual resolution"
         );
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message,
             reason_code: Some(
@@ -741,6 +746,7 @@ async fn execute_resolved_episode_import(
                     .iter()
                     .all(|episode_id| own.episode_ids.contains(episode_id));
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -767,6 +773,7 @@ async fn execute_resolved_episode_import(
                 // least as well, so the episodes are in place and the file has
                 // nothing to add. The existing file is left exactly as it is.
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: true,
                     blocklist,
                     message: rejection.message,
                     reason_code,
@@ -826,6 +833,7 @@ async fn execute_resolved_episode_import(
                 "import source would replace a library file this download placed; leaving the library file in place"
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
@@ -866,6 +874,7 @@ async fn execute_resolved_episode_import(
                     "import source is identical to the library file it would replace; leaving the library file in place"
                 );
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),

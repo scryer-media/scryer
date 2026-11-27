@@ -50,6 +50,10 @@ pub enum TrackedStatusMessageKind {
     /// which survives the merge back from background work, to block the
     /// release on every indexer.
     UnwantedExecutables,
+    /// Import took nothing from a completed torrent of Scryer's own grab and
+    /// the refusal settles it. Failure handling reads this kind, like
+    /// `UnwantedExecutables`, to name the failure.
+    ImportRefused,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

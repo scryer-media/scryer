@@ -1735,6 +1735,8 @@ enum FailedGrabKind {
     OtherImportVerdict,
     /// The download client reported the failure.
     ClientReported,
+    /// Import took nothing from the download and the refusal settles it.
+    ImportRefused,
 }
 
 /// Runs failure handling for a grab served by `indexer-a` and returns the
@@ -1800,6 +1802,13 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
             true,
         ),
         FailedGrabKind::OtherImportVerdict => (vec!["warning timed out".into()], true),
+        FailedGrabKind::ImportRefused => (
+            vec![crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::ImportRefused,
+                "not an upgrade for the library file",
+            )],
+            true,
+        ),
         FailedGrabKind::ClientReported => {
             client_item.attention_reason = Some("connection reset by server".to_string());
             (Vec::new(), false)
@@ -1874,6 +1883,20 @@ async fn an_executables_failure_on_one_indexer_blocks_the_release_on_every_index
     assert_eq!(entries[0].indexer_id, "", "the block names no indexer");
     assert!(blocked_on(&app, &title_id, "indexer-a").await);
     assert!(blocked_on(&app, &title_id, "indexer-b").await);
+}
+
+#[tokio::test]
+async fn a_refused_import_fails_the_grab_and_blocks_it_on_its_own_indexer() {
+    let (app, title_id) = fail_grab_from_indexer_a(FailedGrabKind::ImportRefused).await;
+    let entries = title_blocklist_entries(&app, &title_id).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].indexer_id, "indexer-a");
+    assert_eq!(
+        entries[0].reason.as_deref(),
+        Some("import rejected: not an upgrade for the library file"),
+        "the entry names import's verdict, not the client's report"
+    );
+    assert!(!blocked_on(&app, &title_id, "indexer-b").await);
 }
 
 #[tokio::test]

@@ -5563,7 +5563,12 @@ pub mod download_failure {
     /// so it is blocked on every indexer rather than only the one that
     /// served it.
     pub const UNWANTED_EXECUTABLES: &str = "DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES";
-    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES];
+    /// A torrent of Scryer's own grab completed, and import took nothing from
+    /// it: every file lost to the library, or its archives could not be
+    /// extracted. It is failed so it seeds to its goal and is removed, and its
+    /// scope is searched again.
+    pub const IMPORT_REFUSED: &str = "DOWNLOAD_FAILURE_IMPORT_REFUSED";
+    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES, IMPORT_REFUSED];
 }
 
 /// Why Scryer itself wrote a blocklist entry. Stored as the entry's reason.

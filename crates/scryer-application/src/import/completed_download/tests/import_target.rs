@@ -684,6 +684,7 @@ async fn verified_retry_clears_failed_state_durably() {
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
         upgrade: false,

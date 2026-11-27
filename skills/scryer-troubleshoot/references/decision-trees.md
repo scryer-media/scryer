@@ -67,7 +67,9 @@ not run them.
    - `ARCHIVE_EXTRACTION_WAITING`: an extraction failed; the next of its
      three attempts is not due yet. `ARCHIVE_EXTRACTION_BLOCKED`: all three
      failed. Operator retries the import from the queue item once the archive
-     is fixed.
+     is fixed. A torrent Scryer grabbed does not wait here: it is marked
+     FAILED, its release is blocklisted and searched again, and it seeds to
+     its goal before the client removes it.
    - `attentionReasonCode` `IMPORT_RETRY_LIMIT_REACHED`: six passes in a row
      made no progress. Read the import's last `skipReason` and error (step 3)
      for the cause; operator retries from the queue item once it is fixed.

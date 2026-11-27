@@ -4899,6 +4899,7 @@ impl QueuedManualImportOutcome {
             link_type: None,
             error_message: None,
             release_burned: false,
+            release_refused: false,
             started_at: now,
             completed_at: now,
             upgrade: false,

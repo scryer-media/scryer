@@ -128,12 +128,23 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
 
     // Import's verdict lives in the status messages: the client item is the
     // client's own report and is refreshed on every poll.
-    let unwanted_executables = td.status_messages.iter().find(|message| {
-        message.kind == crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables
-    });
-    let failure_code =
-        unwanted_executables.map(|_| crate::error_reasons::download_failure::UNWANTED_EXECUTABLES);
-    let failure_reason = unwanted_executables
+    let import_verdict = td
+        .status_messages
+        .iter()
+        .find_map(|message| match message.kind {
+            crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables => Some((
+                message,
+                crate::error_reasons::download_failure::UNWANTED_EXECUTABLES,
+            )),
+            crate::tracked_downloads::TrackedStatusMessageKind::ImportRefused => Some((
+                message,
+                crate::error_reasons::download_failure::IMPORT_REFUSED,
+            )),
+            _ => None,
+        });
+    let failure_code = import_verdict.map(|(_, code)| code);
+    let failure_reason = import_verdict
+        .map(|(message, _)| message)
         .map(|message| message.text.as_str())
         .or(td.client_item.attention_reason.as_deref())
         .unwrap_or("Failed download detected")
