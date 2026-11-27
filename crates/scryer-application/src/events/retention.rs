@@ -49,6 +49,8 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::PostProcessingCompleted
         | DomainEventType::SubtitleDownloaded
         | DomainEventType::SubtitleSearchFailed
+        | DomainEventType::SubtitleDeleted
+        | DomainEventType::SubtitleBlocklisted
         | DomainEventType::SeedingStarted
         | DomainEventType::SeedingCompleted
         | DomainEventType::ListTitleAdded

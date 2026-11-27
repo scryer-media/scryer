@@ -1664,6 +1664,30 @@ fn title_history_event_type_parts(
                     DomainEventType::SeedingCompleted.as_str().into(),
                 ));
             }
+            TitleHistoryEventType::SubtitleDownloaded => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::SubtitleDownloaded.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::SubtitleFailed => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::SubtitleSearchFailed.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::SubtitleDeleted => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::SubtitleDeleted.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::SubtitleBlocklisted => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::SubtitleBlocklisted.as_str().into(),
+                ));
+            }
             TitleHistoryEventType::DownloadMissing => {
                 parts.push("event_type = {}".to_string());
                 args.push(SqlArg::Text(

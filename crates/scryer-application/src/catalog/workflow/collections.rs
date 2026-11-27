@@ -1351,6 +1351,164 @@ impl AppUseCase {
             .await
     }
 
+    /// Every place the film behind `title_id` is tracked twice: as a series
+    /// movie of a show and as a movie title, matched by TMDB movie id. A movie
+    /// title lists the series movies that name it; a series lists, per series
+    /// movie, the movie titles that name the same film. Titles the actor
+    /// cannot view are left out.
+    pub async fn same_film_pairings_for_title(
+        &self,
+        actor: &User,
+        title_id: &str,
+    ) -> AppResult<Vec<SameFilmPairing>> {
+        let Some(title) = self.get_title(actor, title_id).await? else {
+            return Ok(Vec::new());
+        };
+        let mut pairings = Vec::new();
+
+        if let Some(tmdb_id) = movie_tmdb_id(&title) {
+            let matches = self
+                .services
+                .catalog
+                .shows
+                .list_series_movie_links_by_movie_tmdb_ids(std::slice::from_ref(&tmdb_id))
+                .await?;
+            let series_ids = matches
+                .iter()
+                .filter(|found| found.series_title_id != title.id)
+                .map(|found| found.series_title_id.clone())
+                .collect::<Vec<_>>();
+            let visible = self
+                .filter_title_ids_for_permission(
+                    actor,
+                    &series_ids,
+                    scryer_domain::LibraryPermission::View,
+                )
+                .await?
+                .into_iter()
+                .collect::<HashSet<_>>();
+            pairings.extend(
+                matches
+                    .into_iter()
+                    .filter(|found| visible.contains(&found.series_title_id))
+                    .map(|found| SameFilmPairing {
+                        tmdb_id: found.tmdb_id,
+                        series_movie_link_id: found.series_movie_link_id,
+                        series_title_id: found.series_title_id,
+                        movie_title_id: Some(title.id.clone()),
+                    }),
+            );
+        }
+
+        let links = self
+            .services
+            .catalog
+            .shows
+            .list_series_movie_links_for_title(&title.id)
+            .await?;
+        let link_tmdb_ids = links
+            .iter()
+            .filter_map(|link| {
+                let tmdb_id = link.movie.tmdb_id.as_deref()?.trim();
+                (!tmdb_id.is_empty()).then(|| (link.id.clone(), tmdb_id.to_string()))
+            })
+            .collect::<Vec<_>>();
+        if !link_tmdb_ids.is_empty() {
+            let mut lookups = link_tmdb_ids
+                .iter()
+                .map(|(_, tmdb_id)| ("tmdb".to_string(), tmdb_id.clone()))
+                .collect::<Vec<_>>();
+            lookups.sort();
+            lookups.dedup();
+            let found = self
+                .services
+                .catalog
+                .titles
+                .find_titles_by_external_ids_batch(&lookups)
+                .await?;
+            let mut movies_by_tmdb_id = HashMap::<String, Vec<String>>::new();
+            let mut candidate_ids = Vec::new();
+            for ((_, tmdb_id), titles) in lookups.iter().zip(found) {
+                for movie in titles {
+                    if movie.id == title.id
+                        || movie_tmdb_id(&movie).as_deref() != Some(tmdb_id.as_str())
+                    {
+                        continue;
+                    }
+                    candidate_ids.push(movie.id.clone());
+                    movies_by_tmdb_id
+                        .entry(tmdb_id.clone())
+                        .or_default()
+                        .push(movie.id);
+                }
+            }
+            let visible = self
+                .filter_title_ids_for_permission(
+                    actor,
+                    &candidate_ids,
+                    scryer_domain::LibraryPermission::View,
+                )
+                .await?
+                .into_iter()
+                .collect::<HashSet<_>>();
+            for (link_id, tmdb_id) in link_tmdb_ids {
+                for movie_id in movies_by_tmdb_id.get(&tmdb_id).into_iter().flatten() {
+                    if visible.contains(movie_id) {
+                        pairings.push(SameFilmPairing {
+                            tmdb_id: tmdb_id.clone(),
+                            series_movie_link_id: link_id.clone(),
+                            series_title_id: title.id.clone(),
+                            movie_title_id: Some(movie_id.clone()),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(pairings)
+    }
+
+    /// The series movies, in libraries the actor can view, that already track
+    /// the film with TMDB movie id `tmdb_id`. Used before a movie is added.
+    pub async fn series_movies_tracking_tmdb_movie(
+        &self,
+        actor: &User,
+        tmdb_id: &str,
+    ) -> AppResult<Vec<SameFilmPairing>> {
+        let tmdb_id = tmdb_id.trim();
+        if tmdb_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let matches = self
+            .services
+            .catalog
+            .shows
+            .list_series_movie_links_by_movie_tmdb_ids(&[tmdb_id.to_string()])
+            .await?;
+        let series_ids = matches
+            .iter()
+            .map(|found| found.series_title_id.clone())
+            .collect::<Vec<_>>();
+        let visible = self
+            .filter_title_ids_for_permission(
+                actor,
+                &series_ids,
+                scryer_domain::LibraryPermission::View,
+            )
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        Ok(matches
+            .into_iter()
+            .filter(|found| visible.contains(&found.series_title_id))
+            .map(|found| SameFilmPairing {
+                tmdb_id: found.tmdb_id,
+                series_movie_link_id: found.series_movie_link_id,
+                series_title_id: found.series_title_id,
+                movie_title_id: None,
+            })
+            .collect())
+    }
+
     pub async fn get_movie_entity(
         &self,
         actor: &User,
@@ -2356,4 +2514,32 @@ fn derive_episode_type(
         Some("alternate") => EpisodeType::Alternate,
         _ => EpisodeType::Standard,
     }
+}
+
+/// One film tracked twice: as the series movie `series_movie_link_id` of the
+/// show `series_title_id`, and as the movie title `movie_title_id` (absent
+/// while that movie is only being considered for adding).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SameFilmPairing {
+    pub tmdb_id: String,
+    pub series_movie_link_id: String,
+    pub series_title_id: String,
+    pub movie_title_id: Option<String>,
+}
+
+/// The TMDB movie id of a title that is a film: a TMDB id of kind `movie`,
+/// or one without a kind on a Movies title. TMDB numbers movies and shows
+/// separately, so a series' TMDB id is never read as a film's.
+pub(crate) fn movie_tmdb_id(title: &Title) -> Option<String> {
+    title.external_ids.iter().find_map(|id| {
+        if !id.source.trim().eq_ignore_ascii_case("tmdb") {
+            return None;
+        }
+        let is_movie = match id.normalized_kind().as_deref() {
+            Some(kind) => kind == "movie",
+            None => title.facet == scryer_domain::MediaFacet::Movie,
+        };
+        let value = id.value.trim();
+        (is_movie && !value.is_empty()).then(|| value.to_string())
+    })
 }

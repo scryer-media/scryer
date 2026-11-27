@@ -354,6 +354,14 @@ pub enum TitleHistoryEventTypeValue {
     SeedingStarted,
     /// Torrent's seeding obligation was discharged.
     SeedingCompleted,
+    /// A subtitle was downloaded, automatically or by hand.
+    SubtitleDownloaded,
+    /// An automatic subtitle download failed.
+    SubtitleFailed,
+    /// A subtitle file was deleted.
+    SubtitleDeleted,
+    /// A subtitle was deleted and its provider file blocklisted.
+    SubtitleBlocklisted,
 }
 
 impl TitleHistoryEventTypeValue {
@@ -379,6 +387,10 @@ impl TitleHistoryEventTypeValue {
             Self::Rematched => TitleHistoryEventType::Rematched,
             Self::SeedingStarted => TitleHistoryEventType::SeedingStarted,
             Self::SeedingCompleted => TitleHistoryEventType::SeedingCompleted,
+            Self::SubtitleDownloaded => TitleHistoryEventType::SubtitleDownloaded,
+            Self::SubtitleFailed => TitleHistoryEventType::SubtitleFailed,
+            Self::SubtitleDeleted => TitleHistoryEventType::SubtitleDeleted,
+            Self::SubtitleBlocklisted => TitleHistoryEventType::SubtitleBlocklisted,
         }
     }
 }

@@ -2412,6 +2412,10 @@ async fn notification_dispatcher_delivers_subtitle_downloaded() {
             subtitle_path: Some("/library/Subtitle Show/S01E01.en.srt".to_string()),
             language: Some("English".to_string()),
             provider: Some("opensubtitles".to_string()),
+            media_file_id: None,
+            episode_ids: Vec::new(),
+            sync_applied: None,
+            sync_offset_ms: None,
         }),
     ))
     .await
@@ -2466,6 +2470,8 @@ async fn notification_dispatcher_delivers_subtitle_search_failed() {
             title: title_context("Subtitle Failure", "series", DomainExternalIds::default()),
             language: Some("English".to_string()),
             reason: Some("provider timeout".to_string()),
+            media_file_id: None,
+            episode_ids: Vec::new(),
         }),
     ))
     .await

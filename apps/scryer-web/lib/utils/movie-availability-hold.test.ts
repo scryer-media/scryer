@@ -15,6 +15,7 @@ const translations: Record<string, string> = {
     "Release dates are not known yet.",
 };
 const translate = (key: string) => translations[key] ?? key;
+const searched = { monitored: true, hasFile: false };
 
 const waiting: MovieAvailabilityRecord = {
   status: "waiting",
@@ -26,7 +27,7 @@ const waiting: MovieAvailabilityRecord = {
 };
 
 test("a waiting movie shows its state, effective date and reason", () => {
-  assert.deepEqual(movieAvailabilityHold(waiting, translate), {
+  assert.deepEqual(movieAvailabilityHold(waiting, translate, searched), {
     status: "waiting",
     statusLabel: "Waiting",
     dateLabel: "Dec 1, 2026",
@@ -36,7 +37,11 @@ test("a waiting movie shows its state, effective date and reason", () => {
 
 test("an estimated date carries the Calendar's estimate label", () => {
   assert.equal(
-    movieAvailabilityHold({ ...waiting, estimated: true }, translate)
+    movieAvailabilityHold(
+      { ...waiting, estimated: true },
+      translate,
+      searched,
+    )
       ?.dateLabel,
     "Dec 1, 2026 (Estimated date)",
   );
@@ -52,6 +57,7 @@ test("unknown availability has no date but still says why", () => {
         reason: "release_dates_unknown",
       },
       translate,
+      searched,
     ),
     {
       status: "unknown",
@@ -67,9 +73,37 @@ test("an available movie, or one not loaded yet, shows nothing", () => {
     movieAvailabilityHold(
       { ...waiting, status: "available", reason: "available" },
       translate,
+      searched,
     ),
     null,
   );
-  assert.equal(movieAvailabilityHold(null, translate), null);
-  assert.equal(movieAvailabilityHold(undefined, translate), null);
+  assert.equal(movieAvailabilityHold(null, translate, searched), null);
+  assert.equal(movieAvailabilityHold(undefined, translate, searched), null);
+});
+
+test("no hold shows for a movie automatic search is not waiting on", () => {
+  assert.equal(
+    movieAvailabilityHold(waiting, translate, {
+      monitored: false,
+      hasFile: false,
+    }),
+    null,
+  );
+  assert.equal(
+    movieAvailabilityHold(waiting, translate, {
+      monitored: true,
+      hasFile: true,
+    }),
+    null,
+  );
+});
+
+test("a reason code the client does not know shows no reason", () => {
+  const hold = movieAvailabilityHold(
+    { ...waiting, reason: "some_future_reason" },
+    translate,
+    searched,
+  );
+  assert.equal(hold?.reasonLabel, null);
+  assert.equal(hold?.statusLabel, "Waiting");
 });

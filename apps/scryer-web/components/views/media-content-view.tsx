@@ -76,6 +76,11 @@ import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { TitleCastStrip } from "@/components/views/title-cast-strip";
+import {
+  SAME_FILM_TITLES_SLOT,
+  SameFilmNotice,
+} from "@/components/common/same-film-notice";
+import { seriesMoviePlaces } from "@/lib/utils/same-film";
 import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
@@ -1351,7 +1356,10 @@ function TitleContextPanel({
     formatTitleDate(title.createdAt, dateTimeFormat) ?? t("label.unknown");
   const availabilityHold =
     title.facet === "MOVIE"
-      ? movieAvailabilityHold(title.movieAvailability, t)
+      ? movieAvailabilityHold(title.movieAvailability, t, {
+          monitored: title.monitored,
+          hasFile: titleMediaFiles.length > 0,
+        })
       : null;
   const unknownLabel = t("label.unknown");
   const qualityLabel = resolveDisplayedQualityLabel(title, unknownLabel);
@@ -1527,6 +1535,17 @@ function TitleContextPanel({
                 titleId={title.id}
                 variant="hero"
                 className="mt-2"
+              />
+              <SameFilmNotice
+                places={seriesMoviePlaces(
+                  title.sameFilmElsewhere?.filter(
+                    (pairing) => pairing.movieTitleId === title.id,
+                  ),
+                )}
+                sentence={t("title.sameFilmAsSeriesMovie", {
+                  titles: SAME_FILM_TITLES_SLOT,
+                })}
+                className="mt-2 text-[#b7c0dd]"
               />
               <p className="mt-3 min-h-[6.25rem] line-clamp-5 text-[12.5px] leading-5 text-[#b7c0dd]">
                 {overviewText}

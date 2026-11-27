@@ -273,10 +273,10 @@ pub use ports::{
     EpisodeWrite, LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
     LibraryGraphRunRecord, LibraryGraphSnapshotRecord, MediaRequestQualityProfileReferenceCounts,
     MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
-    MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SubtitleSyncClient,
-    SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, TitleExternalIdPresence, TitleExternalIdPresenceLookup,
-    UserUiSettingsRepository,
+    MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SeriesMovieTmdbMatch,
+    SubtitleSyncClient, SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo,
+    TitleExternalIdLookup, TitleExternalIdLookupMatch, TitleExternalIdPresence,
+    TitleExternalIdPresenceLookup, UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
 pub use acquisition::submission::describe_acquisition_metrics;
@@ -436,7 +436,7 @@ pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;
 pub use catalog::workflow::{
     DeleteEpisodeFilesJobAccepted, DeleteTitlesJobAccepted, DeleteTitlesJobItem,
-    DeleteTitlesJobRequest,
+    DeleteTitlesJobRequest, SameFilmPairing,
 };
 pub use contracts::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeStatesQuery,

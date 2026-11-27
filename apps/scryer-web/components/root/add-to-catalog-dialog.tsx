@@ -38,7 +38,18 @@ import {
   INHERIT_CATALOG_QUALITY_PROFILE_VALUE,
 } from "@/lib/utils/catalog-add-quality-profile";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { libraryDefaultMovieAvailabilityQuery } from "@/lib/graphql/queries";
+import {
+  libraryAnimeMonitorSpecialsQuery,
+  libraryDefaultMovieAvailabilityQuery,
+  seriesMoviesTrackingFilmQuery,
+} from "@/lib/graphql/queries";
+import {
+  SAME_FILM_TITLES_SLOT,
+  SameFilmNotice,
+} from "@/components/common/same-film-notice";
+import type { SameFilmPairing } from "@/lib/types/titles";
+import { filmTmdbIdForAdd, seriesMoviePlaces } from "@/lib/utils/same-film";
+import { advancedSpecialsDefault } from "@/lib/utils/anime-add-options";
 import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
 import {
   catalogAudioLanguagesForSubmit,
@@ -65,8 +76,12 @@ type AddToCatalogDialogProps = {
     facet: Facet,
     options: MetadataCatalogAddOptions,
   ) => Promise<string | null>;
-  /** The anime "Monitor Specials & OVAs" setting, which seeds Advanced. */
-  animeMonitorSpecials?: boolean;
+  /**
+   * The instance's anime "Monitor Specials & OVAs" setting, or null while it
+   * is unread. Advanced seeds from the chosen library's resolved value and
+   * uses this only when that cannot be read.
+   */
+  animeMonitorSpecials?: boolean | null;
 };
 
 /** Sentinel used by callers when the dialog is closed so they don't need to pass null. */
@@ -130,7 +145,7 @@ export function AddToCatalogDialog({
   manageableLibraries,
   rootFolderOptions,
   onAdd,
-  animeMonitorSpecials = false,
+  animeMonitorSpecials = null,
 }: AddToCatalogDialogProps) {
   const t = useTranslate();
   const client = useClient();
@@ -230,6 +245,76 @@ export function AddToCatalogDialog({
       current = false;
     };
   }, [client, facet, open, selectedLibraryId]);
+  // The chosen library's resolved specials setting seeds Advanced, as the
+  // server resolves it for the add. Reading it needs permission to manage the
+  // library; without it, or on an error, the instance's setting stands in.
+  const [loadedLibrarySpecials, setLoadedLibrarySpecials] = React.useState<{
+    libraryId: string;
+    value: boolean | null;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!open || facet !== "ANIME" || !selectedLibraryId) return;
+    let current = true;
+    void client
+      .query<{
+        librarySettings?: { monitorSpecials?: boolean | null } | null;
+      }>(libraryAnimeMonitorSpecialsQuery, { libraryId: selectedLibraryId })
+      .toPromise()
+      .then(({ data }) => {
+        const value = data?.librarySettings?.monitorSpecials;
+        if (current) {
+          setLoadedLibrarySpecials({
+            libraryId: selectedLibraryId,
+            value: typeof value === "boolean" ? value : null,
+          });
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, facet, open, selectedLibraryId]);
+  const includeSpecialsByDefault = advancedSpecialsDefault({
+    facet,
+    libraryId: selectedLibraryId,
+    librarySpecials:
+      loadedLibrarySpecials?.libraryId === selectedLibraryId
+        ? loadedLibrarySpecials.value
+        : undefined,
+    instanceSpecials: animeMonitorSpecials,
+  });
+  // A film another show already holds as a series movie is named before the
+  // add, so the user knows it would be tracked twice.
+  const filmTmdbId = filmTmdbIdForAdd(result, facet);
+  const [trackingSeriesMovies, setTrackingSeriesMovies] = React.useState<{
+    tmdbId: string;
+    pairings: SameFilmPairing[];
+  } | null>(null);
+  React.useEffect(() => {
+    if (!open || !filmTmdbId) return;
+    let current = true;
+    void client
+      .query<{ seriesMoviesTrackingFilm?: SameFilmPairing[] | null }>(
+        seriesMoviesTrackingFilmQuery,
+        { tmdbId: filmTmdbId },
+      )
+      .toPromise()
+      .then(({ data }) => {
+        if (current) {
+          setTrackingSeriesMovies({
+            tmdbId: filmTmdbId,
+            pairings: data?.seriesMoviesTrackingFilm ?? [],
+          });
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, filmTmdbId, open]);
+  const trackingSeriesMoviePlaces = seriesMoviePlaces(
+    trackingSeriesMovies?.tmdbId === filmTmdbId
+      ? trackingSeriesMovies?.pairings
+      : [],
+  );
   const libraryDefaultAvailability =
     loadedDefaultAvailability?.libraryId === selectedLibraryId
       ? loadedDefaultAvailability.value
@@ -365,6 +450,13 @@ export function AddToCatalogDialog({
         <CatalogActionDialogSummary result={result} facet={facet} mode="add" />
 
         <div className="space-y-6 p-5 sm:p-7">
+          <SameFilmNotice
+            places={trackingSeriesMoviePlaces}
+            sentence={t("title.sameFilmBeforeAdd", {
+              titles: SAME_FILM_TITLES_SLOT,
+            })}
+            className="rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-2.5 text-[12.5px] leading-5"
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             {libraries.length >= 1 ? (
               <label className="space-y-1 sm:col-span-2">
@@ -660,9 +752,7 @@ export function AddToCatalogDialog({
               onLoadingChange={setMonitorSelectionLoading}
               disabled={isSubmitting}
               idPrefix="add-to-catalog"
-              includeSpecialsByDefault={
-                facet === "ANIME" && animeMonitorSpecials
-              }
+              includeSpecialsByDefault={includeSpecialsByDefault}
             />
           ) : null}
 
