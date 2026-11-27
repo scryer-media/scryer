@@ -271,6 +271,24 @@ async fn require_actor_view_library(app: &AppUseCase, actor: &User) -> AppResult
     }
 }
 
+/// Entry to the activity feed and its live signals: `View` or `Resolve
+/// Imports` on some library. Rows stay scoped by [`EventVisibility`], so the
+/// wider entry shows a member nothing from a library they hold no grant on.
+async fn require_actor_activity_feed(app: &AppUseCase, actor: &User) -> AppResult<()> {
+    if app
+        .library_permission_context(actor, None)
+        .await?
+        .has_any_library_with_any(&[LibraryPermission::View, LibraryPermission::ResolveImports])
+    {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized_reason(
+            crate::error_reasons::events::LIBRARY_ACCESS_DENIED,
+            "You do not have access to this library".to_string(),
+        ))
+    }
+}
+
 /// Whether a title-bearing event is catalog-level, visible with `View`. Every
 /// other title event carries acquisition, download, import, file or path
 /// detail and needs privileged library access. Deny by default: a new event
@@ -1668,7 +1686,7 @@ impl AppUseCase {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<ActivityEvent>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let offset = offset.max(0) as usize;
         let limit = limit.max(1) as usize;
         let user_facing_event_types = user_facing_domain_event_types();
@@ -1828,7 +1846,7 @@ impl AppUseCase {
     /// The current tail of the event log; subscriptions start from here so a
     /// fresh client only sees events that happen after it connected.
     pub async fn latest_domain_event_sequence(&self, actor: &User) -> AppResult<i64> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         self.services.events.domain_events.latest_sequence().await
     }
 
@@ -1838,7 +1856,7 @@ impl AppUseCase {
         after_sequence: i64,
         limit: usize,
     ) -> AppResult<Vec<(i64, ActivityEvent)>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let target_len = limit.clamp(1, 500);
         let visibility = EventVisibility::load(self, actor).await?;
         let mut title_library_cache = HashMap::new();
@@ -1902,7 +1920,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<ActivityEvent>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let (tx, rx) = broadcast::channel(128);
         let app = self.clone();
         let actor = actor.clone();
@@ -1951,7 +1969,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<i64>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         Ok(self.runtime.events.domain_event_broadcast.subscribe())
     }
 
@@ -1959,7 +1977,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<()>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         Ok(self.runtime.events.import_history_broadcast.subscribe())
     }
 

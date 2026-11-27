@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  canManageCatalogSettingsPages,
+  canManageLibrarySettingsPage,
   canManageLibrarySubtitles,
   hasAnyLibraryPermission,
   hasAnyPrivilegedLibraryAccess,
@@ -333,6 +335,57 @@ test("the shadow tooltip names Manage Titles for Manage Subtitles", () => {
   );
 });
 
+test("Manage Titles implies View, and storage keeps an explicit View", () => {
+  const titleManager = normalizeJwtPermissionClaims(
+    [],
+    [{ libraryId: "library-primary", permissions: ["manageTitles"] }],
+  );
+  assert.equal(
+    hasLibraryPermission(
+      titleManager,
+      "library-primary",
+      LIBRARY_PERMISSIONS.view,
+    ),
+    true,
+  );
+  assert.equal(
+    hasAnyLibraryPermission(titleManager, LIBRARY_PERMISSIONS.view),
+    true,
+  );
+  assert.equal(
+    hasLibraryPermission(
+      titleManager,
+      "library-other",
+      LIBRARY_PERMISSIONS.view,
+    ),
+    false,
+  );
+  assert.equal(
+    libraryPermissionShadowSource(
+      [LIBRARY_PERMISSIONS.manageTitles],
+      LIBRARY_PERMISSIONS.view,
+    ),
+    "Manage Titles",
+  );
+  assert.deepEqual(
+    normalizeLibraryPermissionsForStorage([
+      LIBRARY_PERMISSIONS.view,
+      LIBRARY_PERMISSIONS.manageTitles,
+    ]).sort(),
+    [LIBRARY_PERMISSIONS.manageTitles, LIBRARY_PERMISSIONS.view].sort(),
+  );
+
+  // Resolve Imports alone still does not grant View.
+  const resolver = normalizeJwtPermissionClaims(
+    [],
+    [{ libraryId: "library-primary", permissions: ["resolveImports"] }],
+  );
+  assert.equal(
+    hasAnyLibraryPermission(resolver, LIBRARY_PERMISSIONS.view),
+    false,
+  );
+});
+
 test("a Manage Titles holder passes the Manage Subtitles gate", () => {
   const titleManager = normalizeJwtPermissionClaims(
     [],
@@ -508,4 +561,23 @@ test("privileged library access mirrors the server predicate", () => {
     assert.equal(hasAnyPrivilegedLibraryAccess(user), true);
   }
   assert.equal(hasPrivilegedLibraryAccess(null, "library-movies"), false);
+});
+
+test("a facet's settings pages follow Manage Catalog Settings, not System Settings", () => {
+  const systemOnly = normalizeJwtPermissionClaims(["manageSystemSettings"], []);
+  assert.equal(canManageCatalogSettingsPages(systemOnly), false);
+  assert.equal(canManageLibrarySettingsPage(systemOnly), false);
+
+  const catalog = normalizeJwtPermissionClaims(["manageCatalogSettings"], []);
+  assert.equal(canManageCatalogSettingsPages(catalog), true);
+  assert.equal(canManageLibrarySettingsPage(catalog), true);
+
+  // A library manager opens only the library page, and so does a System
+  // Settings holder who also manages a library.
+  const libraryManager = normalizeJwtPermissionClaims(
+    ["manageSystemSettings"],
+    [{ libraryId: "library-primary", permissions: ["manageLibrary"] }],
+  );
+  assert.equal(canManageCatalogSettingsPages(libraryManager), false);
+  assert.equal(canManageLibrarySettingsPage(libraryManager), true);
 });

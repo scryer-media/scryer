@@ -49,6 +49,63 @@ async fn create_user_and_list_users() {
 }
 
 #[tokio::test]
+async fn a_permission_manager_lists_users_but_gains_no_other_user_call() {
+    let (app, admin) = bootstrap();
+    let created = create_user_with_permissions(
+        &app,
+        &admin,
+        "emberfall",
+        "password123",
+        vec![TestPermissionPreset::CatalogView],
+    )
+    .await
+    .expect("create user");
+
+    let granter = test_user_with_app_permissions(
+        "permission-granter",
+        AppPermissionMask::from_permissions([AppPermission::ManagePermissions]),
+    );
+    let listed = app
+        .list_users(&granter)
+        .await
+        .expect("a permission manager lists users");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|user| user.id.clone())
+            .collect::<Vec<_>>(),
+        app.list_users(&admin)
+            .await
+            .expect("an administrator lists users")
+            .iter()
+            .map(|user| user.id.clone())
+            .collect::<Vec<_>>()
+    );
+
+    let refused = app
+        .set_user_password(&granter, &created.id, "other-pass".to_string())
+        .await
+        .expect_err("setting a password still needs Manage Users");
+    assert_eq!(
+        refused.reason(),
+        Some(crate::error_reasons::authorization::ACTION_PERMISSION_DENIED)
+    );
+
+    let curator = test_user_with_app_permissions(
+        "list-curator",
+        AppPermissionMask::from_permissions([AppPermission::ManageLists]),
+    );
+    let refused = app
+        .list_users(&curator)
+        .await
+        .expect_err("neither permission refuses the listing");
+    assert_eq!(
+        refused.reason(),
+        Some(crate::error_reasons::authorization::ACTION_PERMISSION_DENIED)
+    );
+}
+
+#[tokio::test]
 async fn attaching_authorization_to_many_users_matches_attaching_it_to_each() {
     let (app, admin) = bootstrap();
     for (username, presets) in [

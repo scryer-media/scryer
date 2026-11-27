@@ -278,15 +278,41 @@ export function hasAnyLibraryPermission(
 }
 
 /**
+ * A facet's catalog settings pages (general, quality, renaming, routing): the
+ * server saves them only for Manage Catalog Settings, so System Settings
+ * alone does not open them.
+ */
+export function canManageCatalogSettingsPages(
+  user: PermissionUser | null | undefined,
+): boolean {
+  return hasAppPermission(user, APP_PERMISSIONS.manageCatalogSettings);
+}
+
+/**
+ * A facet's library settings page: everything that opens the catalog
+ * settings pages, or Manage Library on some library, which is what the
+ * server's library edit checks.
+ */
+export function canManageLibrarySettingsPage(
+  user: PermissionUser | null | undefined,
+): boolean {
+  return (
+    canManageCatalogSettingsPages(user) ||
+    hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageLibrary)
+  );
+}
+
+/**
  * Expand a grant the way the server's `with_request_shadowing` does: Manage
- * Titles implies Auto-Approve Requests, Request, and Manage Subtitles, and
- * Auto-Approve Requests implies Request.
+ * Titles implies View, Auto-Approve Requests, Request, and Manage Subtitles,
+ * and Auto-Approve Requests implies Request.
  */
 export function libraryPermissionsWithRequestShadowing(
   values: string[],
 ): string[] {
   const next = new Set(values);
   if (next.has(LIBRARY_PERMISSIONS.manageTitles)) {
+    next.add(LIBRARY_PERMISSIONS.view);
     next.add(LIBRARY_PERMISSIONS.autoApproveRequests);
     next.add(LIBRARY_PERMISSIONS.request);
     next.add(LIBRARY_PERMISSIONS.manageSubtitles);
@@ -296,7 +322,11 @@ export function libraryPermissionsWithRequestShadowing(
   return Array.from(next);
 }
 
-/** Strip shadowed bits before writing, mirroring `normalized_for_storage`. */
+/**
+ * Strip shadowed bits before writing, mirroring `normalized_for_storage`. View
+ * is kept as ticked: it is the one implied bit that stands on its own, so
+ * taking Manage Titles away later must not take an explicit View with it.
+ */
 export function normalizeLibraryPermissionsForStorage(
   values: string[],
 ): string[] {
@@ -317,7 +347,8 @@ export function libraryPermissionShadowSource(
 ): string | null {
   const explicit = new Set(explicitValues);
   if (
-    (permission === LIBRARY_PERMISSIONS.request ||
+    (permission === LIBRARY_PERMISSIONS.view ||
+      permission === LIBRARY_PERMISSIONS.request ||
       permission === LIBRARY_PERMISSIONS.autoApproveRequests ||
       permission === LIBRARY_PERMISSIONS.manageSubtitles) &&
     explicit.has(LIBRARY_PERMISSIONS.manageTitles)
@@ -349,10 +380,11 @@ function libraryPermissionMatches(
         !explicit.has(LIBRARY_PERMISSIONS.manageTitles) &&
         libraryPermissionsWithRequestShadowing(values).includes(permission)
       );
-    // Unlike the request pair, Manage Subtitles is genuinely held by a Manage
-    // Titles holder: the server answers `has_library_permission` for it through
-    // the same shadow, so the UI must agree or a title manager sees no button
-    // for something the server would let them do.
+    // Unlike the request pair, View and Manage Subtitles are genuinely held by
+    // a Manage Titles holder: the server answers `has_library_permission` for
+    // them through the same shadow, so the UI must agree or a title manager
+    // sees no entry for something the server would let them do.
+    case LIBRARY_PERMISSIONS.view:
     case LIBRARY_PERMISSIONS.manageSubtitles:
       return libraryPermissionsWithRequestShadowing(values).includes(
         permission,

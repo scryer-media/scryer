@@ -499,6 +499,93 @@ async fn activity_visibility_with_prefetched_libraries_follows_each_title() {
     }
 }
 
+#[tokio::test]
+async fn an_import_resolver_enters_the_feed_but_sees_no_other_library() {
+    let fixture = seed_history().await;
+    let app = &fixture.app;
+    let series = seed_title(
+        app,
+        "title-ashgrove-series",
+        "Ashgrove",
+        MediaFacet::Series,
+        9101,
+    )
+    .await;
+    for title in [&series, &fixture.emberfall] {
+        app.append_domain_event(new_title_domain_event(
+            &fixture.admin,
+            title,
+            analyzed(title, 7_777, vec![]),
+        ))
+        .await
+        .expect("append activity event");
+    }
+
+    let mut resolver = test_user_with_app_permissions("import-resolver", AppPermissionMask::NONE);
+    resolver.authorization.libraries = [(
+        series.library_id.clone(),
+        LibraryPermissionMask::RESOLVE_IMPORTS,
+    )]
+    .into_iter()
+    .collect();
+
+    app.latest_domain_event_sequence(&resolver)
+        .await
+        .expect("resolver reads the feed tail");
+    app.subscribe_activity_events(&resolver)
+        .await
+        .expect("resolver subscribes to activity");
+    app.subscribe_domain_event_sequences(&resolver)
+        .await
+        .expect("resolver subscribes to feed sequences");
+    app.subscribe_import_history(&resolver)
+        .await
+        .expect("resolver subscribes to import history");
+
+    let movie_titles = [
+        fixture.emberfall.id.as_str(),
+        fixture.cinderwake.id.as_str(),
+    ];
+    let recent = app
+        .recent_activity(&resolver, 200, 0)
+        .await
+        .expect("resolver reads recent activity");
+    assert!(recent.iter().all(|event| {
+        event
+            .title_id
+            .as_deref()
+            .is_none_or(|title_id| !movie_titles.contains(&title_id))
+    }));
+    let after = app
+        .list_activity_events_after_sequence(&resolver, 0, 500)
+        .await
+        .expect("resolver reads activity after a sequence");
+    let all_events = fixture.domain_events.events.lock().await.clone();
+    for (sequence, _) in &after {
+        let event = all_events
+            .iter()
+            .find(|event| event.sequence == *sequence)
+            .expect("listed event exists");
+        assert!(
+            event
+                .title_id
+                .as_deref()
+                .is_none_or(|title_id| !movie_titles.contains(&title_id))
+        );
+    }
+
+    // A member with no library grant at all is still refused.
+    let outsider = test_user_with_app_permissions("no-grant-member", AppPermissionMask::NONE);
+    let refused = app
+        .recent_activity(&outsider, 10, 0)
+        .await
+        .expect_err("a member without a grant is refused");
+    assert_eq!(
+        refused.reason(),
+        Some(crate::error_reasons::events::LIBRARY_ACCESS_DENIED)
+    );
+}
+
 /// The live feed's budgeted reads, resumed from each read's resume point,
 /// deliver exactly the events and order that unbounded reads deliver over a
 /// long history the caller mostly cannot see, and no read examines more than
