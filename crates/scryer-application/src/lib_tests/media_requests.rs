@@ -538,6 +538,18 @@ async fn auto_approved_media_request_queues_wanted_search_without_manage_titles(
 async fn series_request_without_monitor_type_gets_default_monitoring() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    harness
+        .app
+        .update_library_settings(
+            &harness.user,
+            &library_id,
+            LibrarySettingsOverrideDraft {
+                default_monitor_type: Some("MISSING_AND_FUTURE_EPISODES".into()),
+                ..empty_library_settings_override()
+            },
+        )
+        .await
+        .expect("library default monitoring should save");
     let mut input = media_request_input(library_id.clone(), 9032);
     input.facet = MediaFacet::Series;
     input.requested_monitor_type = None;
@@ -571,12 +583,15 @@ async fn series_request_without_monitor_type_gets_default_monitoring() {
         .find(|title| title.id == outcome.title_id)
         .expect("approved title should be stored");
     assert!(title.monitored);
-    assert!(
-        !title
-            .tags
-            .iter()
-            .any(|tag| tag.starts_with("scryer:monitor-type:")),
-        "an absent monitor type must not narrow the title to future episodes"
+    let monitor_tags = title
+        .tags
+        .iter()
+        .filter(|tag| tag.starts_with("scryer:monitor-type:"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        monitor_tags,
+        vec!["scryer:monitor-type:missingandfutureepisodes"],
+        "an absent monitor type takes the library's default monitoring"
     );
 }
 
