@@ -1715,6 +1715,29 @@ impl TitleRepository for TitleStore {
         })
     }
 
+    async fn list_library_managed_bytes(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::LibraryManagedBytes>> {
+        if library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // A library's titles all sit in the one statement that binds its id,
+        // so a chunk never splits a library's total.
+        let (library_ids, per_statement) = id_list_statements(
+            library_ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            TITLE_ID_LIST_BIND_CHUNK,
+        );
+        let mut totals = Vec::new();
+        for chunk in library_ids.chunks(per_statement) {
+            totals.extend(fetch_library_managed_bytes(&self.datastore, chunk).await?);
+        }
+        Ok(totals)
+    }
+
     async fn title_catalog_filter_options(
         &self,
         facet: Option<MediaFacet>,
@@ -5243,6 +5266,43 @@ async fn fetch_title_catalog_count(
             .unwrap_or(0)
             .max(0) as usize,
     )
+}
+
+/// Each library's managed bytes in one grouped statement. The scope is the
+/// unfiltered catalog's and the sizes are its media-size subquery's, so every
+/// total equals the managed bytes that library's own catalog reports.
+async fn fetch_library_managed_bytes(
+    datastore: &StoreDatastore,
+    library_ids: &[String],
+) -> AppResult<Vec<scryer_application::LibraryManagedBytes>> {
+    let dialect = title_catalog_dialect_for_datastore(datastore);
+    let (scope_sql, args) = build_title_catalog_where_sql(
+        None,
+        library_ids,
+        None,
+        &TitleCatalogFilter::default(),
+        dialect,
+    );
+    let media_size_sql =
+        title_catalog_media_size_subquery_scoped(dialect, TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN);
+    let sql = format!(
+        "WITH scoped_titles AS (SELECT id, library_id FROM titles WHERE {scope_sql}) \
+         SELECT scoped_titles.library_id, \
+                CAST(COALESCE(SUM(catalog_media_size.total_size_bytes), 0) AS BIGINT) AS managed_bytes \
+           FROM ({media_size_sql}) catalog_media_size \
+           JOIN scoped_titles ON scoped_titles.id = catalog_media_size.title_id \
+          GROUP BY scoped_titles.library_id"
+    );
+    SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(scryer_application::LibraryManagedBytes {
+                library_id: row.text("library_id")?,
+                managed_bytes: row.i64("managed_bytes")?.max(0),
+            })
+        })
+        .collect()
 }
 
 async fn fetch_title_catalog_managed_bytes(

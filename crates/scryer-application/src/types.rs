@@ -1522,6 +1522,14 @@ pub struct TitleCatalogAggregates {
     pub managed_bytes: bool,
 }
 
+/// The bytes of a library's tracked media files: the figure the library's
+/// unfiltered catalog reports as its managed bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryManagedBytes {
+    pub library_id: String,
+    pub managed_bytes: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct TitleCatalogResult {
     pub items: Vec<Title>,

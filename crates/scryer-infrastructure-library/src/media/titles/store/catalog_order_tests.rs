@@ -1483,6 +1483,75 @@ async fn assert_catalog_aggregate_sorts(datastore: StoreDatastore) {
         );
         assert_eq!(result.total_count, members.len(), "{label} total");
     }
+
+    // Each library's own size, read for every library in one statement, is
+    // the managed bytes that library's unfiltered catalog reports.
+    let libraries = vec![
+        series.clone(),
+        anime.clone(),
+        movie.clone(),
+        "library-without-titles".to_string(),
+    ];
+    let library_bytes = |rows: Vec<scryer_application::LibraryManagedBytes>| {
+        rows.into_iter()
+            .map(|row| (row.library_id, row.managed_bytes))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let grouped = library_bytes(
+        TitleRepository::list_library_managed_bytes(&store, &libraries)
+            .await
+            .unwrap(),
+    );
+    assert!(
+        !grouped.contains_key("library-without-titles"),
+        "a library with no tracked file is left out: {grouped:?}"
+    );
+    for library in &libraries {
+        let catalog = TitleRepository::list_for_libraries_catalog(
+            &store,
+            None,
+            std::slice::from_ref(library),
+            None,
+            TitleCatalogFilter::default(),
+            TitleCatalogSort::default(),
+            0,
+            0,
+            TitleListProjection::default(),
+            scryer_application::TitleCatalogAggregates {
+                managed_bytes: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let expected = AGGREGATE_FIXTURES
+            .iter()
+            .filter(|f| &scryer_domain::default_library_id_for_facet(&f.facet) == library)
+            .map(|f| f.size.unwrap_or(0))
+            .sum::<i64>();
+        assert_eq!(
+            grouped.get(library).copied().unwrap_or(0),
+            catalog.managed_bytes,
+            "{library} size matches its catalog"
+        );
+        assert_eq!(catalog.managed_bytes, expected, "{library} catalog bytes");
+    }
+    assert!(
+        grouped.values().any(|bytes| *bytes > 0),
+        "the fixtures hold tracked bytes: {grouped:?}"
+    );
+
+    // Past the bind limit the ids split across statements; no library's
+    // total is split with them.
+    let chunked = {
+        let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+        library_bytes(
+            TitleRepository::list_library_managed_bytes(&store, &libraries)
+                .await
+                .unwrap(),
+        )
+    };
+    assert_eq!(chunked, grouped);
 }
 
 /// The Episodes sort counts an episode as on disk, and as expected, under

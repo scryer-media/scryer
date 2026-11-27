@@ -26002,7 +26002,7 @@ type QueryRoot {
 		permission: LibraryPermissionValue
 	): [LibraryPayload!]!
 	"""
-	List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
+	List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem and, when selected, each owning library's own size; refuses callers with no such library.
 	"""
 	storageRoots: [StorageRootUsagePayload!]!
 	"""
@@ -32261,6 +32261,13 @@ type StorageRootUsagePayload {
 	Total bytes on the backing filesystem; null when it cannot be inspected.
 	"""
 	totalBytes: Long
+	"""
+	Bytes of the tracked media files of the library that owns this root
+	folder, across all of its root folders: the managed bytes its catalog
+	reports. Read from the catalog, not the filesystem, and only when
+	selected.
+	"""
+	libraryBytes: Long
 }
 
 """

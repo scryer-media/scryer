@@ -12,7 +12,7 @@ use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
     ApiKeyRecord, CollectionMediaSizeSummary, EpisodeMediaAvailability, EpisodeMediaSizeSummary,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
-    IndexerSearchStrategyEventSink, LoginVerificationChallengeRecord,
+    IndexerSearchStrategyEventSink, LibraryManagedBytes, LoginVerificationChallengeRecord,
     OAuthClientRegistrationRecord, PendingReleaseObservation, PendingReleaseRole,
     TitleCatalogFilterCounts,
 };
@@ -2313,6 +2313,17 @@ pub trait TitleRepository: Send + Sync {
             // Non-SQL test repositories do not expose media-file aggregates.
             managed_bytes: 0,
         })
+    }
+    /// The managed bytes of each library in `library_ids`, read in one pass
+    /// over the catalog: the same figure each library's unfiltered catalog
+    /// reports. A library with no tracked media file is left out.
+    async fn list_library_managed_bytes(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<Vec<LibraryManagedBytes>> {
+        // Non-SQL test repositories do not expose media-file aggregates.
+        let _ = library_ids;
+        Ok(Vec::new())
     }
     async fn title_catalog_filter_options(
         &self,

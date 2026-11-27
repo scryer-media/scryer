@@ -4908,6 +4908,9 @@ const en: LocaleDictionary = {
   "dashboard.storageFree": "{{size}} free",
   "dashboard.storageUnavailable": "Usage unavailable",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} in this library",
+  "dashboard.storageLibraryUsageHint":
+    "This library holds {{library}} TB; {{used}} TB of the volume is in use",
   "dashboard.storageLegend": "OK · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "LOW",
   "dashboard.tagCrit": "CRIT",
