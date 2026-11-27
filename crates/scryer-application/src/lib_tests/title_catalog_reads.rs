@@ -335,6 +335,9 @@ fn cutoff_falls_back_to_the_scanned_resolution_when_a_file_has_no_quality() {
         // Neither: no quality reached, as before.
         file("unknown", None, None),
         file("blank", Some(""), Some(" ")),
+        // A resolution the profile does not rank leaves no quality, as before.
+        file("unranked", None, Some("1080i")),
+        file("unparsed", None, Some("odd-scan")),
     ];
     let compact: Vec<_> = files
         .iter()
@@ -347,6 +350,8 @@ fn cutoff_falls_back_to_the_scanned_resolution_when_a_file_has_no_quality() {
         ("labelled", Some("720p")),
         ("unknown", None),
         ("blank", None),
+        ("unranked", None),
+        ("unparsed", None),
     ] {
         let scope = CutoffScope::Episode(episode.into());
         assert_eq!(

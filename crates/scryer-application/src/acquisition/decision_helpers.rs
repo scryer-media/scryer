@@ -147,7 +147,15 @@ fn best_cutoff_quality_for<'a, F: CutoffFile>(
         .filter(|file| file.primary)
         .filter(|file| matches(file))
         .filter_map(|file| {
-            let quality = crate::types::stored_quality_label(file.quality_label, file.resolution)?;
+            let quality =
+                crate::types::stored_quality_label(file.quality_label, None).or_else(|| {
+                    // A scanned resolution stands in for a missing label only
+                    // when the profile ranks it; an unranked one (`1080i`, `576p`
+                    // on most profiles) leaves the file with no quality, as before.
+                    crate::types::stored_quality_label(None, file.resolution).filter(|resolution| {
+                        rank(resolution) != crate::admission::tier_sort_key(None)
+                    })
+                })?;
             Some((file, quality))
         })
         .min_by(|(left_file, left), (right_file, right)| {
