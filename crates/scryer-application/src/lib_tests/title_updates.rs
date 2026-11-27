@@ -3755,3 +3755,102 @@ async fn library_audio_defaults_take_the_library_value_then_the_facet() {
         "an unknown library is never answered with defaults"
     );
 }
+
+#[tokio::test]
+async fn same_film_pairings_link_a_movie_title_and_the_series_movie_of_the_same_film() {
+    let (app, user) = bootstrap();
+    let add = |name: &str, facet: MediaFacet, external_ids: Vec<scryer_domain::ExternalId>| {
+        let app = &app;
+        let user = &user;
+        let name = name.to_string();
+        async move {
+            app.add_title(
+                user,
+                NewTitle {
+                    name,
+                    facet,
+                    monitored: true,
+                    external_ids,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("add title")
+        }
+    };
+    let movie = add(
+        "Fixture Film",
+        MediaFacet::Movie,
+        vec![scryer_domain::ExternalId::with_kind(
+            "tmdb", "movie", "880101",
+        )],
+    )
+    .await;
+    let show = add("Fixture Show", MediaFacet::Anime, Vec::new()).await;
+    // A show whose own TMDB series id has the film's number: TMDB numbers
+    // shows and movies apart, so it is not the film.
+    let same_number_show = add(
+        "Fixture Same Number Show",
+        MediaFacet::Series,
+        vec![scryer_domain::ExternalId::with_kind(
+            "tmdb", "series", "880101",
+        )],
+    )
+    .await;
+
+    let mut linked = test_series_movie_link(&show.id, "Fixture Film", Some(2026), None, None);
+    linked.movie.tmdb_id = Some("880101".into());
+    let mut other = test_series_movie_link(&show.id, "Fixture Other Film", Some(2026), None, None);
+    other.movie.tmdb_id = Some("880202".into());
+    let shows = &app.services.catalog.shows;
+    let linked = shows.upsert_series_movie_link(linked).await.expect("link");
+    shows
+        .upsert_series_movie_link(other)
+        .await
+        .expect("other link");
+
+    let from_movie = app
+        .same_film_pairings_for_title(&user, &movie.id)
+        .await
+        .expect("movie pairings");
+    let expected = SameFilmPairing {
+        tmdb_id: "880101".into(),
+        series_movie_link_id: linked.id.clone(),
+        series_title_id: show.id.clone(),
+        movie_title_id: Some(movie.id.clone()),
+    };
+    assert_eq!(from_movie, vec![expected.clone()]);
+
+    let from_show = app
+        .same_film_pairings_for_title(&user, &show.id)
+        .await
+        .expect("show pairings");
+    assert_eq!(from_show, vec![expected]);
+
+    assert!(
+        app.same_film_pairings_for_title(&user, &same_number_show.id)
+            .await
+            .expect("series pairings")
+            .is_empty()
+    );
+
+    let before_add = app
+        .series_movies_tracking_tmdb_movie(&user, " 880101 ")
+        .await
+        .expect("tracking film");
+    assert_eq!(
+        before_add,
+        vec![SameFilmPairing {
+            tmdb_id: "880101".into(),
+            series_movie_link_id: linked.id,
+            series_title_id: show.id,
+            movie_title_id: None,
+        }]
+    );
+    assert!(
+        app.series_movies_tracking_tmdb_movie(&user, "880303")
+            .await
+            .expect("untracked film")
+            .is_empty()
+    );
+}

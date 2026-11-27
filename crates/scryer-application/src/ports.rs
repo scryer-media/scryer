@@ -210,6 +210,14 @@ pub struct SeriesMovieExternalIdLookupMatch {
     pub lookup_index: usize,
 }
 
+/// A series-movie link whose movie carries one of the TMDB ids asked about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeriesMovieTmdbMatch {
+    pub series_movie_link_id: String,
+    pub series_title_id: String,
+    pub tmdb_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogOwnedTitleRecord {
     pub id: String,
@@ -4464,6 +4472,16 @@ pub trait ShowRepository: Send + Sync {
         library_ids: &[String],
         lookups: &[TitleExternalIdLookup],
     ) -> AppResult<Vec<SeriesMovieExternalIdLookupMatch>>;
+    /// The series-movie links, in every library, whose movie has one of
+    /// `tmdb_ids`. The default holds no links; SQL stores override it with a
+    /// read served by the movie TMDB id index.
+    async fn list_series_movie_links_by_movie_tmdb_ids(
+        &self,
+        tmdb_ids: &[String],
+    ) -> AppResult<Vec<SeriesMovieTmdbMatch>> {
+        let _ = tmdb_ids;
+        Ok(Vec::new())
+    }
     async fn get_series_movie_link_by_id(
         &self,
         link_id: &str,

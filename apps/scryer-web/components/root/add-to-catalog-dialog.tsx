@@ -38,7 +38,16 @@ import {
   INHERIT_CATALOG_QUALITY_PROFILE_VALUE,
 } from "@/lib/utils/catalog-add-quality-profile";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { libraryDefaultMovieAvailabilityQuery } from "@/lib/graphql/queries";
+import {
+  libraryDefaultMovieAvailabilityQuery,
+  seriesMoviesTrackingFilmQuery,
+} from "@/lib/graphql/queries";
+import {
+  SAME_FILM_TITLES_SLOT,
+  SameFilmNotice,
+} from "@/components/common/same-film-notice";
+import type { SameFilmPairing } from "@/lib/types/titles";
+import { filmTmdbIdForAdd, seriesMoviePlaces } from "@/lib/utils/same-film";
 import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
 import {
   catalogAudioLanguagesForSubmit,
@@ -230,6 +239,39 @@ export function AddToCatalogDialog({
       current = false;
     };
   }, [client, facet, open, selectedLibraryId]);
+  // A film another show already holds as a series movie is named before the
+  // add, so the user knows it would be tracked twice.
+  const filmTmdbId = filmTmdbIdForAdd(result, facet);
+  const [trackingSeriesMovies, setTrackingSeriesMovies] = React.useState<{
+    tmdbId: string;
+    pairings: SameFilmPairing[];
+  } | null>(null);
+  React.useEffect(() => {
+    if (!open || !filmTmdbId) return;
+    let current = true;
+    void client
+      .query<{ seriesMoviesTrackingFilm?: SameFilmPairing[] | null }>(
+        seriesMoviesTrackingFilmQuery,
+        { tmdbId: filmTmdbId },
+      )
+      .toPromise()
+      .then(({ data }) => {
+        if (current) {
+          setTrackingSeriesMovies({
+            tmdbId: filmTmdbId,
+            pairings: data?.seriesMoviesTrackingFilm ?? [],
+          });
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, filmTmdbId, open]);
+  const trackingSeriesMoviePlaces = seriesMoviePlaces(
+    trackingSeriesMovies?.tmdbId === filmTmdbId
+      ? trackingSeriesMovies?.pairings
+      : [],
+  );
   const libraryDefaultAvailability =
     loadedDefaultAvailability?.libraryId === selectedLibraryId
       ? loadedDefaultAvailability.value
@@ -365,6 +407,13 @@ export function AddToCatalogDialog({
         <CatalogActionDialogSummary result={result} facet={facet} mode="add" />
 
         <div className="space-y-6 p-5 sm:p-7">
+          <SameFilmNotice
+            places={trackingSeriesMoviePlaces}
+            sentence={t("title.sameFilmBeforeAdd", {
+              titles: SAME_FILM_TITLES_SLOT,
+            })}
+            className="rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-2.5 text-[12.5px] leading-5"
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             {libraries.length >= 1 ? (
               <label className="space-y-1 sm:col-span-2">

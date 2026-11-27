@@ -110,7 +110,7 @@ import {
   hasAppPermission,
 } from "@/lib/utils/permissions";
 import { exclusionInputFromTitle } from "@/lib/utils/lists";
-import type { Facet } from "@/lib/types/titles";
+import type { Facet, SameFilmPairing } from "@/lib/types/titles";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
 import { useTitleOverviewReactiveRefresh } from "@/lib/hooks/use-title-overview-reactive-refresh";
 import {
@@ -181,6 +181,7 @@ export type TitleDetail = {
   effectiveRecapPolicy?: string | null;
   renameEnabled?: boolean;
   seriesMovieLinks?: SeriesMovieLink[];
+  sameFilmElsewhere?: SameFilmPairing[];
   ratings?: TitleRatings | null;
   credits?: TitleCreditRecord[] | null;
   moreLikeThis?: CatalogDiscoveryItem[];

@@ -561,6 +561,28 @@ pub struct MovieEntityPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// One film tracked twice: as a series movie of a show and as a movie title,
+/// matched by TMDB movie id.
+pub struct SameFilmPairingPayload {
+    /// TMDB movie id both sides carry.
+    pub tmdb_id: String,
+    /// Series-movie link that tracks the film inside the show.
+    pub series_movie_link_id: ID,
+    /// Show that holds the series movie.
+    pub series_title_id: ID,
+    /// Name of the show.
+    pub series_title_name: String,
+    /// Facet of the show.
+    pub series_title_facet: MediaFacetValue,
+    /// Movie title that tracks the same film, or null before the movie is added.
+    pub movie_title_id: Option<ID>,
+    /// Name of the movie title, or null before the movie is added.
+    pub movie_title_name: Option<String>,
+    /// Facet of the movie title, or null before the movie is added.
+    pub movie_title_facet: Option<MediaFacetValue>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// A movie's placement and continuity metadata within a series.
 pub struct SeriesMovieLinkPayload {
     /// Stable series-movie link identifier.

@@ -816,8 +816,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // External rule imports report through `externalRuleImportStatus`:
     // 204->205.
     assert!(query_field_names.contains(&"externalRuleImportStatus"));
+    // A film tracked both as a movie and as a series movie is looked up by
+    // its TMDB id through `seriesMoviesTrackingFilm`: 205->206.
+    assert!(query_field_names.contains(&"seriesMoviesTrackingFilm"));
     assert_eq!(
-        query_field_count, 205,
+        query_field_count, 206,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -1600,12 +1603,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // A film tracked both as a movie and as a series movie adds
+    // SameFilmPairingPayload: OBJECT 580->581, public types 1066->1067.
+    assert!(public_type_names.contains(&"SameFilmPairingPayload"));
     assert_eq!(
         public_types.len(),
-        1066,
+        1067,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 580);
+    assert_eq!(kind_count("OBJECT"), 581);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).

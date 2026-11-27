@@ -3,7 +3,7 @@ use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, CatalogOwnedProbe, CatalogOwnedSeriesMovieRecord, CollectionUpdate,
     EpisodeImageUrlUpdate, EpisodeUpdate, EpisodeWrite, PrimaryCollectionSummary, ScopedExternalId,
-    SeriesMovieExternalIdLookupMatch, ShowRepository, TitleExternalIdLookup,
+    SeriesMovieExternalIdLookupMatch, SeriesMovieTmdbMatch, ShowRepository, TitleExternalIdLookup,
 };
 use scryer_domain::{
     AbsoluteScale, AnimeCommunitySeason, AnimeNumberingBridge, CalendarEpisode, Collection,
@@ -172,6 +172,13 @@ impl ShowRepository for ShowStore {
     ) -> AppResult<Vec<SeriesMovieExternalIdLookupMatch>> {
         list_series_movie_external_id_lookup_matches_query(self.read_target(), library_ids, lookups)
             .await
+    }
+
+    async fn list_series_movie_links_by_movie_tmdb_ids(
+        &self,
+        tmdb_ids: &[String],
+    ) -> AppResult<Vec<SeriesMovieTmdbMatch>> {
+        list_series_movie_links_by_movie_tmdb_ids_query(self.read_target(), tmdb_ids).await
     }
 
     async fn get_series_movie_link_by_id(
@@ -920,6 +927,60 @@ async fn list_series_movie_external_id_lookup_matches_query(
         .into_iter()
         .map(|lookup_index| SeriesMovieExternalIdLookupMatch { lookup_index })
         .collect())
+}
+
+/// The links whose movie has one of `tmdb_ids`, through
+/// `idx_movie_entities_tmdb_id` and `idx_series_movie_links_movie`. The
+/// predicate repeats the partial index's own condition so SQLite can use it
+/// with bound ids.
+async fn list_series_movie_links_by_movie_tmdb_ids_query(
+    target: SqlTarget<'_>,
+    tmdb_ids: &[String],
+) -> AppResult<Vec<SeriesMovieTmdbMatch>> {
+    let tmdb_ids = tmdb_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if tmdb_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (tmdb_ids, per_statement) = id_list_statements(
+        &tmdb_ids,
+        1,
+        0,
+        max_binds_for_target(target),
+        SQL_BIND_CHUNK,
+    );
+    let mut matches = Vec::new();
+    for chunk in tmdb_ids.chunks(per_statement) {
+        let sql = format!(
+            "SELECT sml.id AS link_id, sml.series_title_id AS series_title_id,
+                    me.tmdb_id AS tmdb_id
+             FROM movie_entities me
+             INNER JOIN series_movie_links sml ON sml.movie_entity_id = me.id
+             WHERE me.tmdb_id IS NOT NULL
+               AND me.tmdb_id <> ''
+               AND me.tmdb_id IN ({})
+             ORDER BY sml.series_title_id ASC, sml.id ASC",
+            bind_placeholders(chunk.len())
+        );
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        let execution_target = match &target {
+            SqlTarget::Sqlite(pool) => SqlTarget::Sqlite(pool),
+            SqlTarget::Postgres(pool) => SqlTarget::Postgres(pool),
+        };
+        for row in SqlRuntime::fetch_all(SqlExec::Target(execution_target), &sql, &args).await? {
+            matches.push(SeriesMovieTmdbMatch {
+                series_movie_link_id: row.text("link_id")?,
+                series_title_id: row.text("series_title_id")?,
+                tmdb_id: row.text("tmdb_id")?,
+            });
+        }
+    }
+    Ok(matches)
 }
 
 async fn get_series_movie_link_by_id_query(
