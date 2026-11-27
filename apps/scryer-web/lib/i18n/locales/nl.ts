@@ -426,6 +426,9 @@ const nl: LocaleDictionary = {
   "dashboard.storageFree": "{{size}} vrij",
   "dashboard.storageUnavailable": "Gebruik niet beschikbaar",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} in deze bibliotheek",
+  "dashboard.storageLibraryUsageHint":
+    "Deze bibliotheek beslaat {{library}} TB; {{used}} TB van het volume is in gebruik",
   "dashboard.storageLegend": "OK · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "LAAG",
   "dashboard.tagCrit": "KRITIEK",

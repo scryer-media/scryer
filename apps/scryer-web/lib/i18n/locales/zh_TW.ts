@@ -406,6 +406,9 @@ const zh_TW: LocaleDictionary = {
   "dashboard.storageFree": "剩餘 {{size}}",
   "dashboard.storageUnavailable": "無法獲取使用量",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "此媒體庫佔 {{size}}",
+  "dashboard.storageLibraryUsageHint":
+    "此媒體庫佔用 {{library}} TB；磁碟區已使用 {{used}} TB",
   "dashboard.storageLegend": "正常 · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "偏低",
   "dashboard.tagCrit": "緊急",
