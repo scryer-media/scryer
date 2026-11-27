@@ -574,6 +574,7 @@ impl SabnzbdDownloadClient {
                 let category = extract_sabnzbd_category(slot);
 
                 Some(DownloadQueueItem {
+                    client_job_protocol: None,
                     attention_reason_code: None,
                     id: nzo_id.clone(),
                     title_id: None,
@@ -649,6 +650,7 @@ impl SabnzbdDownloadClient {
                 let category = extract_sabnzbd_category(slot);
 
                 Some(DownloadQueueItem {
+                    client_job_protocol: None,
                     attention_reason_code: None,
                     id: nzo_id.clone(),
                     title_id: None,
@@ -2650,6 +2652,7 @@ fn history_queue_item_from_sab_slot(slot: &Value) -> Option<DownloadQueueItem> {
     let (state, attention_reason) = sabnzbd_history_state(status, fail_message)?;
     let category = extract_sabnzbd_category(slot);
     Some(DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: nzo_id.clone(),
         title_id: None,
@@ -2743,6 +2746,7 @@ fn completed_downloads_from_sab_slots(
                 completed_ts.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now));
 
             Some(CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "sabnzbd".to_string(),
                 client_id: String::new(),

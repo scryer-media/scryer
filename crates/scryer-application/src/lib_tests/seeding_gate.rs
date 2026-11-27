@@ -433,6 +433,7 @@ async fn host_payload_fixture(
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: tracked.client_type.clone(),
             client_id: tracked.client_id.clone(),
@@ -478,6 +479,16 @@ async fn record_host_job_ownership(
     tracked: &TrackedDownload,
     source_title: &str,
 ) {
+    // The grab record is one row per job: keep the input kind an earlier
+    // record of this job named, as the grab that wrote it would have.
+    let source_kind = app
+        .services
+        .workflow
+        .download_submissions
+        .find_by_canonical_download_id(&tracked.download_id)
+        .await
+        .unwrap()
+        .and_then(|submission| submission.source_kind);
     app.services
         .workflow
         .download_submissions
@@ -493,7 +504,7 @@ async fn record_host_job_ownership(
             source_hint: None,
             source_provider_id: None,
             source_provider_name: None,
-            source_kind: None,
+            source_kind,
             info_hash: None,
             release_size_bytes: None,
             request_signature: None,
@@ -1012,6 +1023,8 @@ async fn durable_cleanup_recovers_an_untrackable_import_and_rejects_a_reused_loc
         TrackedDownloadState::Imported,
         false,
     );
+    // A Weaver NZB row states its protocol.
+    tracked.client_item.client_job_protocol = Some(scryer_domain::ClientJobProtocol::Usenet);
     tracked.client_item.download_id = Some(tracked.download_id.to_wire());
     client
         .history_items
@@ -1055,6 +1068,8 @@ async fn durable_client_data_removal_recovers_absence_but_not_unknown_or_reused_
         TrackedDownloadState::Failed,
         true,
     );
+    // A Weaver NZB row states its protocol.
+    tracked.client_item.client_job_protocol = Some(scryer_domain::ClientJobProtocol::Usenet);
     tracked.client_item.download_id = Some(tracked.download_id.to_wire());
     client
         .history_items
@@ -1333,6 +1348,8 @@ async fn durable_native_cleanup_recovers_a_lost_response_without_redeleting() {
         TrackedDownloadState::Imported,
         false,
     );
+    // A Weaver NZB row states its protocol.
+    tracked.client_item.client_job_protocol = Some(scryer_domain::ClientJobProtocol::Usenet);
     tracked.client_item.download_id = Some(tracked.download_id.to_wire());
     client
         .history_items
@@ -2019,7 +2036,7 @@ async fn weaver_import_cleanup_removes_entry_and_payload() {
     set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
     let title = movie_title(&app, &user, "Usenet Movie").await;
 
-    let tracked = tracked_for(
+    let mut tracked = tracked_for(
         &config.id,
         "weaver",
         "nzb-1",
@@ -2027,6 +2044,10 @@ async fn weaver_import_cleanup_removes_entry_and_payload() {
         TrackedDownloadState::Imported,
         true,
     );
+    // A Weaver NZB row states its protocol, and the tracker that built this
+    // row resolved it from that report.
+    tracked.client_item.client_job_protocol = Some(scryer_domain::ClientJobProtocol::Usenet);
+    tracked.job_protocol = crate::tracked_downloads::DownloadJobProtocol::Usenet;
 
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         &app,
@@ -2195,6 +2216,8 @@ async fn native_removal_is_only_credited_after_the_request_was_sent() {
         TrackedDownloadState::Imported,
         true,
     );
+    // A Weaver NZB row states its protocol.
+    tracked.client_item.client_job_protocol = Some(scryer_domain::ClientJobProtocol::Usenet);
     tracked.client_item.download_id = Some(tracked.download_id.to_wire());
     client
         .history_items
@@ -2263,6 +2286,8 @@ async fn verified_manual_import_without_a_binding_still_removes_the_client_job()
     set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
     let title = movie_title(&app, &user, "Foreign Manual Import").await;
     let completed = scryer_domain::CompletedDownload {
+        // A Weaver NZB row states its protocol.
+        client_job_protocol: Some(scryer_domain::ClientJobProtocol::Usenet),
         subtitle_paths: Vec::new(),
         client_type: "weaver".into(),
         client_id: config.id.clone(),
@@ -2773,17 +2798,33 @@ fn last_finished_cleanup(
         .map(|(_, outcome, complete)| (outcome.clone(), *complete))
 }
 
-async fn client_failure_fixture(
-    client_type: &str,
-    remove_failed: bool,
-) -> (
+type ClientFailureFixture = (
     AppUseCase,
     User,
     Arc<StubDownloadClient>,
     Arc<TrackingDownloadSubmissionRepo>,
     scryer_domain::DownloadClientConfig,
     TrackedDownload,
-) {
+);
+
+async fn client_failure_fixture(client_type: &str, remove_failed: bool) -> ClientFailureFixture {
+    // Weaver carries torrents too: only a job Scryer recorded as Usenet is
+    // released from the torrent protections, as a grab of an NZB records it.
+    let recorded =
+        (client_type == "weaver").then_some(crate::tracked_downloads::DownloadJobProtocol::Usenet);
+    client_failure_fixture_with(client_type, remove_failed, recorded, None, None).await
+}
+
+/// A failed job whose grab record names `recorded` (no record at all when
+/// `None`), whose client row reports `reported`, and whose client seeding
+/// view is `seeding`.
+async fn client_failure_fixture_with(
+    client_type: &str,
+    remove_failed: bool,
+    recorded: Option<crate::tracked_downloads::DownloadJobProtocol>,
+    reported: Option<scryer_domain::ClientJobProtocol>,
+    seeding: Option<DownloadSeedingSnapshot>,
+) -> ClientFailureFixture {
     let client = Arc::new(StubDownloadClient::default());
     let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
     let config = create_enabled_download_client_config(&app, &user, client_type, client_type).await;
@@ -2799,15 +2840,10 @@ async fn client_failure_fixture(
         true,
     );
     tracked.client_item.download_id = Some(tracked.download_id.to_wire());
-    // Weaver carries torrents too: only a job Scryer recorded as Usenet is
-    // released from the torrent protections, as a grab of an NZB records it.
-    if client_type == "weaver" {
-        record_mixed_job(
-            &app,
-            &tracked,
-            crate::tracked_downloads::DownloadJobProtocol::Usenet,
-        )
-        .await;
+    tracked.client_item.client_job_protocol = reported;
+    tracked.client_item.seeding = seeding;
+    if let Some(job) = recorded {
+        record_mixed_job(&app, &tracked, job).await;
     }
     client
         .history_items
@@ -3847,6 +3883,7 @@ async fn a_usenet_import_retained_by_policy_still_stops_being_tracked() {
 
 fn completed_for(client_id: &str, client_type: &str, item_id: &str) -> CompletedDownload {
     CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: client_type.to_string(),
         client_id: client_id.to_string(),
@@ -4442,6 +4479,7 @@ async fn the_gate_reads_the_goals_a_grab_was_persisted_under() {
     app.services.workflow.download_submissions = repo.clone();
 
     let key = SeedGoalLookupKey {
+        client_reported_protocol: None,
         canonical_download_id: None,
         client_id: "client-1".to_string(),
         client_type: "qbittorrent".to_string(),
@@ -4489,6 +4527,7 @@ async fn the_gate_falls_back_to_the_info_hash_when_the_client_item_id_moved() {
     app.services.workflow.download_submissions = repo.clone();
 
     let key = SeedGoalLookupKey {
+        client_reported_protocol: None,
         canonical_download_id: None,
         client_id: "client-1".to_string(),
         client_type: "qbittorrent".to_string(),
@@ -4873,6 +4912,7 @@ async fn rtorrent_cleanup_retries_entry_removal_after_deleting_the_mapped_payloa
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "rtorrent".to_string(),
             client_id: config.id.clone(),
@@ -4977,6 +5017,7 @@ async fn rtorrent_cleanup_refuses_to_delete_an_output_root() {
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "rtorrent".to_string(),
             client_id: config.id,
@@ -5044,6 +5085,7 @@ async fn rtorrent_cleanup_refuses_a_symlinked_payload_ancestor() {
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "rtorrent".to_string(),
             client_id: config.id,
@@ -5112,6 +5154,7 @@ async fn rtorrent_cleanup_allows_an_output_root_below_a_symlinked_ancestor() {
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "rtorrent".to_string(),
             client_id: config.id.clone(),
@@ -5184,6 +5227,7 @@ async fn rtorrent_cleanup_deletes_a_direct_completed_file() {
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "rtorrent".to_string(),
             client_id: config.id.clone(),
@@ -5946,6 +5990,7 @@ async fn the_reconcile_tick_reads_every_settled_row_s_goals_in_one_batch() {
 
     for item_id in ["torrent-a", "torrent-b", "torrent-c"] {
         let key = SeedGoalLookupKey {
+            client_reported_protocol: None,
             canonical_download_id: None,
             client_id: "client-1".to_string(),
             client_type: "qbittorrent".to_string(),
@@ -5994,6 +6039,7 @@ async fn a_covered_row_without_goals_skips_the_identity_query_but_keeps_the_info
     let batch = SeedGoalBatch::prefetch(&app, std::slice::from_ref(&identity)).await;
 
     let key = SeedGoalLookupKey {
+        client_reported_protocol: None,
         canonical_download_id: None,
         client_id: "client-1".to_string(),
         client_type: "qbittorrent".to_string(),
@@ -6042,6 +6088,7 @@ async fn a_row_the_batch_never_covered_still_takes_the_per_row_path() {
     let batch = SeedGoalBatch::prefetch(&app, std::slice::from_ref(&covered)).await;
 
     let key = SeedGoalLookupKey {
+        client_reported_protocol: None,
         canonical_download_id: None,
         client_id: "client-1".to_string(),
         client_type: "qbittorrent".to_string(),
@@ -6087,6 +6134,7 @@ async fn a_failed_prefetch_falls_back_to_per_row_reads() {
     let batch = SeedGoalBatch::prefetch(&app, std::slice::from_ref(&identity)).await;
 
     let key = SeedGoalLookupKey {
+        client_reported_protocol: None,
         canonical_download_id: None,
         client_id: "client-1".to_string(),
         client_type: "qbittorrent".to_string(),
@@ -8049,5 +8097,275 @@ async fn a_tracked_download_takes_its_job_protocol_from_its_grab_record() {
         .await;
 
         assert_eq!(rebuilt.job_protocol, job, "{job:?}");
+    }
+}
+
+#[test]
+fn a_grab_record_outranks_the_client_report_of_a_job_protocol() {
+    use crate::seeding_gate::{DownloadJobProtocol, resolve_job_protocol};
+    use scryer_domain::ClientJobProtocol;
+    let submission = |job| DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
+        title_id: "title-fixture".into(),
+        purpose: DownloadSubmissionPurpose::Standard,
+        facet: "movie".into(),
+        download_client_id: Some("client-fixture".into()),
+        download_client_type: "weaver".into(),
+        download_client_item_id: "item-fixture".into(),
+        source_title: None,
+        source_hint: None,
+        source_provider_id: None,
+        source_provider_name: None,
+        source_kind: mixed_job_source_kind(job),
+        info_hash: None,
+        release_size_bytes: None,
+        request_signature: None,
+        scope: SubmissionScope::Orphan,
+        release_listing_json: None,
+    };
+    for (recorded, reported, expected) in [
+        (
+            Some(DownloadJobProtocol::Torrent),
+            Some(ClientJobProtocol::Usenet),
+            DownloadJobProtocol::Torrent,
+        ),
+        (
+            Some(DownloadJobProtocol::Usenet),
+            Some(ClientJobProtocol::Torrent),
+            DownloadJobProtocol::Usenet,
+        ),
+        (
+            None,
+            Some(ClientJobProtocol::Usenet),
+            DownloadJobProtocol::Usenet,
+        ),
+        (
+            None,
+            Some(ClientJobProtocol::Torrent),
+            DownloadJobProtocol::Torrent,
+        ),
+        (None, None, DownloadJobProtocol::Unknown),
+    ] {
+        let record = recorded.map(submission);
+        assert_eq!(
+            resolve_job_protocol(record.as_ref(), reported, DownloadJobProtocol::Unknown),
+            expected,
+            "{recorded:?} {reported:?}"
+        );
+    }
+}
+
+// Import: a Weaver job with no grab record is moved when Weaver reports it as
+// Usenet, and copied when it reports a torrent or nothing. A grab record that
+// names the protocol decides over the client's report.
+#[tokio::test]
+async fn a_weaver_import_follows_the_grab_record_then_the_client_report() {
+    use crate::tracked_downloads::DownloadJobProtocol;
+    use scryer_domain::ClientJobProtocol;
+    for (recorded, reported, expected) in [
+        (None, Some(ClientJobProtocol::Usenet), ImportMode::Move),
+        (
+            None,
+            Some(ClientJobProtocol::Torrent),
+            ImportMode::HardlinkOrCopy,
+        ),
+        (None, None, ImportMode::HardlinkOrCopy),
+        (
+            Some(DownloadJobProtocol::Torrent),
+            Some(ClientJobProtocol::Usenet),
+            ImportMode::HardlinkOrCopy,
+        ),
+        (
+            Some(DownloadJobProtocol::Usenet),
+            Some(ClientJobProtocol::Torrent),
+            ImportMode::Move,
+        ),
+    ] {
+        let (app, user, _) =
+            bootstrap_with_torrent_clients(Arc::new(StubDownloadClient::default()));
+        let config = create_enabled_download_client_config(&app, &user, "weaver", "weaver").await;
+        let title = movie_title(&app, &user, "Weaver Report Move Fixture").await;
+        app.update_media_settings(
+            &user,
+            MediaFacet::Movie,
+            UpdateMediaSettings {
+                import_mode: Some(ImportMode::Move),
+                ..empty_update_media_settings()
+            },
+        )
+        .await
+        .expect("configure move import mode");
+        let item_id = "weaver-report-move-1";
+        if let Some(job) = recorded {
+            let tracked = tracked_for(
+                &config.id,
+                "weaver",
+                item_id,
+                &title,
+                TrackedDownloadState::ImportPending,
+                true,
+            );
+            record_mixed_job(&app, &tracked, job).await;
+        }
+        let mut completed = completed_for(&config.id, "weaver", item_id);
+        completed.client_job_protocol = reported;
+
+        let effective = crate::seeding_gate::resolve_seeding_safe_import_mode(
+            &app,
+            Some(&title.library_id),
+            &title.facet,
+            Some(&completed),
+        )
+        .await
+        .expect("resolve seeding-safe import mode");
+
+        assert_eq!(effective, expected, "{recorded:?} {reported:?}");
+    }
+}
+
+// Client failure on the claimed path: a Weaver job with no grab record is
+// removed when Weaver reports it as Usenet and held as a torrent when it
+// reports one. A grab record that names the protocol decides over the report.
+#[tokio::test]
+async fn a_weaver_client_failure_follows_the_grab_record_then_the_client_report() {
+    use crate::tracked_downloads::DownloadJobProtocol;
+    use scryer_domain::ClientJobProtocol;
+    for (recorded, reported, removed) in [
+        (None, Some(ClientJobProtocol::Usenet), true),
+        (None, Some(ClientJobProtocol::Torrent), false),
+        (None, None, false),
+        (
+            Some(DownloadJobProtocol::Torrent),
+            Some(ClientJobProtocol::Usenet),
+            false,
+        ),
+        (
+            Some(DownloadJobProtocol::Usenet),
+            Some(ClientJobProtocol::Torrent),
+            true,
+        ),
+    ] {
+        let (app, _user, client, _repository, _config, tracked) =
+            client_failure_fixture_with("weaver", true, recorded, reported, None).await;
+
+        let result = crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .expect("the attempt reports its outcome");
+
+        let deletes = client.deleted_requests.lock().await.len();
+        if removed {
+            assert_eq!(
+                result.2,
+                TerminalDownloadCleanupOutcome::Removed,
+                "{recorded:?} {reported:?}"
+            );
+            assert_eq!(deletes, 1, "{recorded:?} {reported:?}");
+        } else {
+            assert_eq!(
+                result.2,
+                TerminalDownloadCleanupOutcome::RetryableFailure,
+                "{recorded:?} {reported:?}"
+            );
+            assert_eq!(deletes, 0, "{recorded:?} {reported:?}");
+        }
+    }
+}
+
+// TorBox on the claimed path: a client failure of a job recorded as Usenet is
+// removed with the files Scryer fetched, and one recorded as a torrent is held,
+// files and all, unless the client says it may be removed. TorBox does not
+// delete files of its own, so the host deletion runs before the entry goes.
+#[tokio::test]
+async fn a_torbox_client_failure_on_the_claimed_path_follows_its_grab_record() {
+    use crate::tracked_downloads::DownloadJobProtocol;
+    let removable = DownloadSeedingSnapshot {
+        can_remove: Some(true),
+        can_move_files: Some(true),
+        ..DownloadSeedingSnapshot::default()
+    };
+    for (recorded, seeding, removed) in [
+        (DownloadJobProtocol::Usenet, None, true),
+        (DownloadJobProtocol::Torrent, None, false),
+        (DownloadJobProtocol::Torrent, Some(removable), true),
+    ] {
+        let can_remove = seeding.is_some();
+        let (app, user, client, _repository, _config, tracked) =
+            client_failure_fixture_with("torbox", true, Some(recorded), None, seeding).await;
+        let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+
+        let result = crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .expect("the attempt reports its outcome");
+
+        let deletes = client.deleted_requests.lock().await.len();
+        if removed {
+            assert_eq!(
+                result.2,
+                TerminalDownloadCleanupOutcome::Removed,
+                "{recorded:?} can_remove: {can_remove}"
+            );
+            assert_eq!(deletes, 1, "{recorded:?} can_remove: {can_remove}");
+            assert!(!payload.exists(), "{recorded:?} can_remove: {can_remove}");
+        } else {
+            assert_eq!(
+                result.2,
+                TerminalDownloadCleanupOutcome::RetryableFailure,
+                "{recorded:?} can_remove: {can_remove}"
+            );
+            assert_eq!(deletes, 0, "{recorded:?} can_remove: {can_remove}");
+            assert!(
+                payload.join("movie.mkv").exists(),
+                "{recorded:?} can_remove: {can_remove}"
+            );
+        }
+    }
+}
+
+// The tracker builds a Weaver row with no grab record from the client's own
+// report: an NZB row is Usenet, a torrent row a torrent, and a row that
+// reports nothing stays unknown.
+#[tokio::test]
+async fn a_tracked_weaver_row_without_a_grab_record_takes_the_client_report() {
+    use crate::tracked_downloads::DownloadJobProtocol;
+    use scryer_domain::ClientJobProtocol;
+    for (reported, expected) in [
+        (Some(ClientJobProtocol::Usenet), DownloadJobProtocol::Usenet),
+        (
+            Some(ClientJobProtocol::Torrent),
+            DownloadJobProtocol::Torrent,
+        ),
+        (None, DownloadJobProtocol::Unknown),
+    ] {
+        let (app, user, _) =
+            bootstrap_with_torrent_clients(Arc::new(StubDownloadClient::default()));
+        let config = create_enabled_download_client_config(&app, &user, "weaver", "weaver").await;
+        let title = movie_title(&app, &user, "Weaver Report Tracked Fixture").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            "weaver",
+            "weaver-report-tracked-1",
+            &title,
+            TrackedDownloadState::ImportPending,
+            true,
+        );
+        tracked.client_item.client_job_protocol = reported;
+
+        let rebuilt = crate::tracked_downloads::TrackedDownloadService::build_new_tracked_download(
+            &app,
+            tracked.download_id,
+            tracked.id.clone(),
+            tracked.client_item.clone(),
+        )
+        .await;
+
+        assert_eq!(rebuilt.job_protocol, expected, "{reported:?}");
     }
 }

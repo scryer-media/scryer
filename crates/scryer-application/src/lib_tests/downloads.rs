@@ -876,6 +876,7 @@ async fn list_download_queue_reads_cached_observed_items_without_client_calls() 
         .expect("record stub submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "observed-stub".to_string(),
         title_id: None,
         episode_id: None,
@@ -963,6 +964,7 @@ async fn list_download_queue_uses_live_queue_only_for_all_activity() {
     .expect("create download client config");
 
     *download_client.history_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "history-1".to_string(),
         title_id: None,
         episode_id: None,
@@ -1076,6 +1078,7 @@ async fn list_download_queue_for_title_filters_the_shared_cache() {
         .expect("record submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "job-1".to_string(),
         title_id: Some("title-1".to_string()),
         episode_id: None,
@@ -3468,6 +3471,7 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "nzbget".into(),
             client_id: config.id.clone(),
@@ -14440,6 +14444,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
     .expect("create download client config");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "queue-1".to_string(),
         title_id: None,
         episode_id: None,
@@ -22701,6 +22706,7 @@ async fn an_existing_sidecar_survives_the_import_that_lands_beside_it() {
 /// download client keeps reporting tick after tick.
 fn foreign_client_history_item(item_id: &str) -> DownloadQueueItem {
     DownloadQueueItem {
+        client_job_protocol: None,
         id: item_id.to_string(),
         title_id: None,
         episode_id: None,

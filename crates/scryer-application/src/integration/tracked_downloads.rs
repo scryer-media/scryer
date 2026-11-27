@@ -1801,11 +1801,14 @@ impl TrackedDownloadService {
                 .flatten(),
         };
 
-        // The job's protocol comes from the same grab record, already in hand.
-        // No record leaves what an earlier resolution established.
-        if let Some(sub) = existing_submission.as_ref() {
-            td.job_protocol = DownloadJobProtocol::from_submission(sub);
-        }
+        // The job's protocol comes from the same grab record, already in hand,
+        // and without one from the client's own report. Neither leaves what an
+        // earlier resolution established.
+        td.job_protocol = crate::seeding_gate::resolve_job_protocol(
+            existing_submission.as_ref(),
+            td.client_item.client_job_protocol,
+            td.job_protocol,
+        );
 
         // 1. download_submissions lookup (highest confidence).
         if let Some(sub) = existing_submission.as_ref()
@@ -4827,6 +4830,7 @@ mod tests {
 
     fn build_client_item() -> DownloadQueueItem {
         DownloadQueueItem {
+            client_job_protocol: None,
             id: Id::new().0,
             title_id: None,
             episode_id: None,
@@ -6527,6 +6531,7 @@ mod tests {
         category: Option<&str>,
     ) -> CompletedDownload {
         CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: client_type.to_string(),
             client_id: "client-1".to_string(),

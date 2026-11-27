@@ -702,6 +702,7 @@ pub(crate) fn queue_item_for(
     };
     let failed = job.state == HttpJobState::Failed;
     DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: if failed {
             job.error_reason.clone()
         } else {
@@ -782,6 +783,7 @@ pub(crate) fn completed_download_for(
         .map(|file| file.total_bytes.unwrap_or(file.bytes_done))
         .sum::<u64>();
     Some(CompletedDownload {
+        client_job_protocol: None,
         client_type: client_type.to_string(),
         client_id: String::new(),
         download_client_item_id: job.id.clone(),

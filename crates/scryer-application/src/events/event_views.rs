@@ -2106,6 +2106,7 @@ mod tests {
         last_updated_at: i64,
     ) -> DownloadQueueItem {
         DownloadQueueItem {
+            client_job_protocol: None,
             id: id.to_string(),
             title_id: None,
             episode_id: None,

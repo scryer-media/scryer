@@ -2013,6 +2013,7 @@ fn remote_queue_item(
         .map(|progress| (progress * 100.0).floor().clamp(0.0, 99.0) as u8)
         .unwrap_or(0);
     DownloadQueueItem {
+        client_job_protocol: None,
         id: record.id.clone(),
         title_id: Some(record.title_id.clone()).filter(|id| !id.is_empty()),
         episode_id: None,

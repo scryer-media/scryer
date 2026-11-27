@@ -1177,6 +1177,7 @@ async fn delete_title_leaves_active_submission_for_unmatched_import() {
 
     *download_client.queue_items.lock().await = vec![
         DownloadQueueItem {
+            client_job_protocol: None,
             id: "queue-direct".to_string(),
             title_id: Some(created.id.clone()),
             episode_id: None,
@@ -1218,6 +1219,7 @@ async fn delete_title_leaves_active_submission_for_unmatched_import() {
             seeding: None,
         },
         DownloadQueueItem {
+            client_job_protocol: None,
             id: "queue-fallback".to_string(),
             title_id: None,
             episode_id: None,
@@ -1259,6 +1261,7 @@ async fn delete_title_leaves_active_submission_for_unmatched_import() {
             seeding: None,
         },
         DownloadQueueItem {
+            client_job_protocol: None,
             id: "queue-unrelated".to_string(),
             title_id: None,
             episode_id: None,

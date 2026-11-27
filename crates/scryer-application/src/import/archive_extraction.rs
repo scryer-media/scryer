@@ -2053,6 +2053,7 @@ mod tests {
         assert!(DownloadExtractionKey::new(Some(""), "item-1").is_none());
         assert!(DownloadExtractionKey::new(Some("  "), "item-1").is_none());
         let completed = crate::CompletedDownload {
+            client_job_protocol: None,
             client_type: "nzbget".to_string(),
             client_id: String::new(),
             download_client_item_id: "10495".to_string(),

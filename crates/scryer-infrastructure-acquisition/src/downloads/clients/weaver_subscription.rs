@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::weaver::{
-    WeaverDownloadClient, WeaverQueueItem, WeaverQueueState, WeaverTorrent,
+    WeaverDownloadClient, WeaverProtocol, WeaverQueueItem, WeaverQueueState, WeaverTorrent,
     weaver_item_to_queue_item, weaver_torrent_to_completed_download,
     weaver_ws_error_lacks_torrents,
 };
@@ -871,8 +871,15 @@ where
             if let Some(payload) = payload {
                 match subscription_id {
                     "snapshot" => {
-                        let parsed: QueueSnapshotsPayload = serde_json::from_value(payload)
+                        let mut parsed: QueueSnapshotsPayload = serde_json::from_value(payload)
                             .map_err(|e| format!("invalid queueSnapshots payload: {e}"))?;
+                        if state.stream.nzb_only {
+                            parsed
+                                .queue_snapshots
+                                .items
+                                .iter_mut()
+                                .for_each(mark_nzb_only);
+                        }
                         let jobs = &parsed.queue_snapshots.items;
                         let items = map_weaver_items(bridge_client, jobs);
                         let prefetched = torrent_completed_downloads(bridge_client, jobs);
@@ -887,8 +894,13 @@ where
                         sync_torrent_row_subscription(write, state).await?;
                     }
                     "events" => {
-                        let parsed: QueueEventsPayload = serde_json::from_value(payload)
+                        let mut parsed: QueueEventsPayload = serde_json::from_value(payload)
                             .map_err(|e| format!("invalid queueEvents payload: {e}"))?;
+                        if state.stream.nzb_only
+                            && let Some(item) = parsed.queue_events.item.as_mut()
+                        {
+                            mark_nzb_only(item);
+                        }
                         state.stream.last_cursor = Some(parsed.queue_events.cursor.clone());
                         let kind = parsed.queue_events.kind.as_str();
                         let item = parsed.queue_events.item.as_ref();
@@ -981,6 +993,11 @@ where
     }
 
     Ok(())
+}
+
+/// A row pushed by a Weaver without torrents: every job it holds is an NZB.
+fn mark_nzb_only(item: &mut WeaverQueueItem) {
+    item.protocol = Some(WeaverProtocol::Nzb);
 }
 
 /// A torrent whose content is ready is complete for import while it seeds,
@@ -1557,6 +1574,7 @@ mod tests {
         let on_page = bridge.map_queue_item(&queue_item(42, WeaverQueueState::Completed));
         let off_page = bridge.map_queue_item(&queue_item(99, WeaverQueueState::Completed));
         let mut prefetched = CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: String::new(),
             client_id: String::new(),

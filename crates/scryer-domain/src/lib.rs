@@ -3103,6 +3103,19 @@ pub struct DownloadQueueItem {
     /// nothing.
     #[serde(default)]
     pub seeding: Option<DownloadSeedingSnapshot>,
+    /// The protocol the client itself reports for this job. Only a client
+    /// that carries both protocols and states each job's sets it; `None`
+    /// for every other client.
+    #[serde(default)]
+    pub client_job_protocol: Option<ClientJobProtocol>,
+}
+
+/// A job's protocol as the download client reports it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientJobProtocol {
+    Usenet,
+    Torrent,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3316,6 +3329,11 @@ pub struct CompletedDownload {
     /// media, as absolute paths. Empty for every other client.
     #[serde(default)]
     pub subtitle_paths: Vec<String>,
+    /// The protocol the client itself reports for this job, as on
+    /// `DownloadQueueItem::client_job_protocol`. `None` for every other
+    /// client.
+    #[serde(default)]
+    pub client_job_protocol: Option<ClientJobProtocol>,
 }
 
 /// A downloaded file's name on disk and the name it was posted with.

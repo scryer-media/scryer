@@ -606,6 +606,7 @@ fn map_queue_item(
     );
     let seeding = seeding_snapshot_for_item(&item);
     DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: format!(
             "{client_type}:{}",
@@ -715,6 +716,7 @@ fn map_completed_download(
         },
     );
     CompletedDownload {
+        client_job_protocol: None,
         client_type: client_type.to_string(),
         client_id: client_id.to_string(),
         download_client_item_id: item.client_item_id,
@@ -753,6 +755,7 @@ fn map_history_item_from_completed(
     );
     let download_client_item_id = info_hash.unwrap_or_else(|| item.client_item_id.clone());
     DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: format!("{client_type}:{download_client_item_id}"),
         title_id: None,

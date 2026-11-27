@@ -10,7 +10,8 @@ use scryer_application::{
     StagedNzbStore, plugin_codes,
 };
 use scryer_domain::{
-    CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState, PostedFileName,
+    ClientJobProtocol, CompletedDownload, DownloadClientConfig, DownloadQueueItem,
+    DownloadQueueState, PostedFileName,
 };
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
@@ -1254,7 +1255,9 @@ impl WeaverDownloadClient {
                     && title_id.is_some()
                     && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
             {
-                self.query_queue_items_without_torrents(None, false).await
+                self.query_queue_items_without_torrents(None, false)
+                    .await
+                    .map(marked_nzb_only)
             }
             Err(error)
                 if [
@@ -1267,6 +1270,7 @@ impl WeaverDownloadClient {
             {
                 self.query_queue_items_without_torrents(title_id, use_title_filter)
                     .await
+                    .map(marked_nzb_only)
             }
             Err(error) => Err(error),
         }
@@ -1494,6 +1498,7 @@ impl WeaverDownloadClient {
 
     async fn query_history_items_once(
         &self,
+        document: &str,
         limit: Option<usize>,
         offset: Option<usize>,
         title_id: Option<&str>,
@@ -1503,7 +1508,7 @@ impl WeaverDownloadClient {
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("off:{value}"))
         });
         self.graphql_request::<HistoryItemsPayload>(
-            graphql_docs::HISTORY_ITEMS_QUERY,
+            document,
             json!({
                 "filter": if use_title_filter && title_id.is_some() {
                     title_attribute_filter(title_id)
@@ -1518,6 +1523,9 @@ impl WeaverDownloadClient {
         .map(|data| data.history_items)
     }
 
+    /// History with each job's protocol from a Weaver that has torrents. A
+    /// Weaver that refuses `protocol` holds NZB jobs only: it is read with the
+    /// NZB-only document and its fallbacks, as before, and every row is NZB.
     async fn query_history_items(
         &self,
         limit: Option<usize>,
@@ -1526,28 +1534,91 @@ impl WeaverDownloadClient {
         use_title_filter: bool,
     ) -> AppResult<Vec<WeaverQueueItem>> {
         match self
-            .query_history_items_once(limit, offset, title_id, use_title_filter)
+            .query_history_items_once(
+                graphql_docs::HISTORY_ITEMS_WITH_PROTOCOL_QUERY,
+                limit,
+                offset,
+                title_id,
+                use_title_filter,
+            )
             .await
         {
             Ok(data) => Ok(data),
+            // A Weaver without `attributeEquals` predates torrents too.
             Err(error)
                 if use_title_filter
                     && title_id.is_some()
                     && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
             {
-                self.query_history_items_once(limit, offset, None, false)
+                self.query_history_items_without_protocol(limit, offset, None, false)
+                    .await
+            }
+            Err(error) if is_weaver_schema_error(&error, WeaverSchemaFeature::Protocol) => {
+                self.query_history_items_without_protocol(limit, offset, title_id, use_title_filter)
                     .await
             }
             Err(error) => Err(error),
         }
     }
 
-    async fn query_history_item(&self, id: i32) -> AppResult<Option<WeaverQueueItem>> {
-        let data = self
-            .graphql_request::<serde_json::Value>(
-                graphql_docs::HISTORY_ITEM_QUERY,
-                json!({ "id": id }),
+    async fn query_history_items_without_protocol(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        title_id: Option<&str>,
+        use_title_filter: bool,
+    ) -> AppResult<Vec<WeaverQueueItem>> {
+        let items = match self
+            .query_history_items_once(
+                graphql_docs::HISTORY_ITEMS_QUERY,
+                limit,
+                offset,
+                title_id,
+                use_title_filter,
             )
+            .await
+        {
+            Ok(data) => data,
+            Err(error)
+                if use_title_filter
+                    && title_id.is_some()
+                    && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
+            {
+                self.query_history_items_once(
+                    graphql_docs::HISTORY_ITEMS_QUERY,
+                    limit,
+                    offset,
+                    None,
+                    false,
+                )
+                .await?
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(marked_nzb_only(items))
+    }
+
+    async fn query_history_item(&self, id: i32) -> AppResult<Option<WeaverQueueItem>> {
+        match self
+            .query_history_item_once(graphql_docs::HISTORY_ITEM_WITH_PROTOCOL_QUERY, id)
+            .await
+        {
+            Ok(item) => Ok(item),
+            Err(error) if is_weaver_schema_error(&error, WeaverSchemaFeature::Protocol) => Ok(self
+                .query_history_item_once(graphql_docs::HISTORY_ITEM_QUERY, id)
+                .await?
+                .map(nzb_only)),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn query_history_item_once(
+        &self,
+        document: &str,
+        id: i32,
+    ) -> AppResult<Option<WeaverQueueItem>> {
+        let data = self
+            .graphql_request::<serde_json::Value>(document, json!({ "id": id }))
             .await?;
         let item = data.get("historyItem").ok_or_else(|| {
             AppError::Repository("weaver historyItem response is missing its result".into())
@@ -1944,6 +2015,7 @@ pub fn weaver_item_to_queue_item(job: &WeaverQueueItem) -> DownloadQueueItem {
         tracked_status_messages: Vec::new(),
         tracked_match_type: None,
         seeding: weaver_seeding_snapshot(job),
+        client_job_protocol: weaver_client_job_protocol(job),
     }
 }
 
@@ -2030,6 +2102,7 @@ fn completed_download_at(
 
     CompletedDownload {
         subtitle_paths: Vec::new(),
+        client_job_protocol: weaver_client_job_protocol(job),
         client_type: "weaver".to_string(),
         client_id: String::new(),
         download_client_item_id: job.id.to_string(),
@@ -2169,8 +2242,31 @@ fn compat_job_to_queue_item(job: PublishedWeaverJob) -> WeaverQueueItem {
         completed_at: None,
         attention: None,
         posted_file_names: Vec::new(),
-        protocol: None,
+        // A Weaver that only answers `jobs` predates torrents.
+        protocol: Some(WeaverProtocol::Nzb),
         torrent: None,
+    }
+}
+
+/// A row read from a Weaver without torrents: every job it holds is an NZB.
+fn nzb_only(mut item: WeaverQueueItem) -> WeaverQueueItem {
+    item.protocol = Some(WeaverProtocol::Nzb);
+    item
+}
+
+fn marked_nzb_only(items: Vec<WeaverQueueItem>) -> Vec<WeaverQueueItem> {
+    items.into_iter().map(nzb_only).collect()
+}
+
+/// The protocol Weaver reports for a row, as Scryer's tracker reads it. A
+/// protocol a newer Weaver added says neither.
+fn weaver_client_job_protocol(job: &WeaverQueueItem) -> Option<ClientJobProtocol> {
+    if job.is_torrent() {
+        return Some(ClientJobProtocol::Torrent);
+    }
+    match job.protocol {
+        Some(WeaverProtocol::Nzb) => Some(ClientJobProtocol::Usenet),
+        _ => None,
     }
 }
 
@@ -3187,14 +3283,16 @@ mod tests {
 
     use super::{
         QueueItemsPayload, SubmissionPayload, WeaverDownloadClient, WeaverQueueItem,
-        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, weaver_http_failure,
-        weaver_item_to_queue_item,
+        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, nzb_only,
+        weaver_http_failure, weaver_item_to_completed_download, weaver_item_to_queue_item,
     };
     use scryer_application::{
         AppError, DownloadClient, DownloadClientAddRequest, DownloadSubmissionPurpose,
         ResolvedDownloadArtifact,
     };
-    use scryer_domain::{DownloadClientConfig, DownloadQueueState, MediaFacet, Title};
+    use scryer_domain::{
+        ClientJobProtocol, DownloadClientConfig, DownloadQueueState, MediaFacet, Title,
+    };
     use scryer_outbound_http::OutboundHttpError;
     use std::sync::Arc;
     use std::time::Duration;
@@ -5942,6 +6040,11 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].download_client_item_id, "42");
         assert!(items[0].seeding.is_none());
+        // Every job an NZB-only Weaver holds is Usenet.
+        assert_eq!(
+            items[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
         assert!(completed.is_empty());
     }
 
@@ -6061,5 +6164,127 @@ mod tests {
         let other = json!([{ "message": "Unknown field \"health\" on type \"QueueItem\"." }]);
         assert!(!super::weaver_ws_error_lacks_torrents(Some(&other)));
         assert!(!super::weaver_ws_error_lacks_torrents(None));
+    }
+
+    fn history_row(protocol: Option<&str>) -> serde_json::Value {
+        let mut row = json!({
+            "id": 4242,
+            "name": "Synthetic.Protocol.Row",
+            "state": "COMPLETE",
+            "error": null,
+            "progressPercent": 100.0,
+            "totalBytes": 4096,
+            "category": "movies",
+            "attributes": [],
+            "clientRequestId": null,
+            "outputDir": "/downloads/complete/Synthetic.Protocol.Row",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "completedAt": "2026-01-01T00:10:00Z",
+            "attention": null
+        });
+        if let Some(protocol) = protocol {
+            row["protocol"] = json!(protocol);
+        }
+        row
+    }
+
+    // Weaver states each row's protocol to Scryer: an NZB row is Usenet, a
+    // torrent row a torrent, and a row that names none (or a protocol a newer
+    // Weaver added) says nothing. A row read from an NZB-only Weaver is Usenet.
+    #[test]
+    fn weaver_rows_report_their_protocol_to_scryer() {
+        let row = |protocol| -> WeaverQueueItem {
+            serde_json::from_value(history_row(protocol)).expect("a history row")
+        };
+        assert_eq!(
+            weaver_item_to_queue_item(&row(Some("NZB"))).client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        assert_eq!(
+            weaver_item_to_queue_item(&row(None)).client_job_protocol,
+            None
+        );
+        assert_eq!(
+            weaver_item_to_queue_item(&nzb_only(row(None))).client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        let torrent = torrent_job("COMPLETE", false, true, true);
+        assert_eq!(
+            weaver_item_to_queue_item(&torrent).client_job_protocol,
+            Some(ClientJobProtocol::Torrent)
+        );
+        let completed = weaver_item_to_completed_download(&row(Some("NZB")))
+            .expect("a complete row is a completed download");
+        assert_eq!(
+            completed.client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+    }
+
+    // A Weaver with torrents answers history with each row's protocol.
+    #[tokio::test]
+    async fn history_from_a_weaver_with_torrents_carries_each_rows_protocol() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query HistoryItemsWithProtocol"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "historyItems": [history_row(Some("NZB"))] }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let downloads = client
+            .list_completed_downloads()
+            .await
+            .expect("completed downloads load");
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+    }
+
+    // An NZB-only Weaver refuses `protocol`: history is read again with the
+    // NZB-only document, and every row it holds is Usenet.
+    #[tokio::test]
+    async fn every_history_row_of_an_nzb_only_weaver_is_usenet() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query HistoryItemsWithProtocol"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{ "message": "Unknown field \"protocol\" on type \"HistoryItem\"." }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query HistoryItems("))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "historyItems": [history_row(None)] }
+            })))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let history = client.list_history().await.expect("history loads");
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        let downloads = client
+            .list_completed_downloads()
+            .await
+            .expect("completed downloads load");
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
     }
 }

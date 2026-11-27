@@ -4952,6 +4952,7 @@ mod tests {
                 .unwrap()
                 .push((client_ids.to_vec(), client_types.to_vec()));
             Ok(vec![scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: "default".to_string(),
@@ -6617,6 +6618,7 @@ mod tests {
 
     fn test_queue_item(id: &str) -> DownloadQueueItem {
         DownloadQueueItem {
+            client_job_protocol: None,
             attention_reason_code: None,
             id: format!("queue-{id}"),
             title_id: None,
@@ -8882,6 +8884,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(scryer_domain::CompletedDownload {
+                        client_job_protocol: None,
                         subtitle_paths: Vec::new(),
                         client_type: "qbittorrent".to_string(),
                         client_id: String::new(),
@@ -8998,6 +9001,7 @@ mod tests {
 
         client_a.completed_downloads.lock().unwrap().extend([
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9013,6 +9017,7 @@ mod tests {
                 posted_file_names: Vec::new(),
             },
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9030,6 +9035,7 @@ mod tests {
         ]);
         client_b.completed_downloads.lock().unwrap().extend([
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9045,6 +9051,7 @@ mod tests {
                 posted_file_names: Vec::new(),
             },
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9111,6 +9118,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9173,6 +9181,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9267,6 +9276,7 @@ mod tests {
             let release_dir = root.path().join(release_name);
             std::fs::create_dir(&release_dir).unwrap();
             let mut item = scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "any-torrent-client".to_string(),
                 client_id: "client-a".to_string(),
@@ -9298,6 +9308,7 @@ mod tests {
             "missing.7z",
         ] {
             let mut item = scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "any-torrent-client".to_string(),
                 client_id: "client-a".to_string(),
@@ -9500,6 +9511,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "torrent-client".to_string(),
                 client_id: String::new(),
@@ -9578,6 +9590,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9630,6 +9643,7 @@ mod tests {
         // recent activity, so they arrive on the snapshot, unconditioned.
         *client.prefetched_completed.lock().unwrap() =
             Some(vec![scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),

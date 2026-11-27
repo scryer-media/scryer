@@ -158,7 +158,7 @@ mod tests {
     }
 
     fn item(id: &str, state: DownloadQueueState) -> DownloadQueueItem {
-        DownloadQueueItem {
+        DownloadQueueItem { client_job_protocol: None,
             id: id.to_string(),
             title_id: None,
             episode_id: None,
@@ -2623,7 +2623,7 @@ mod tests {
             let files = tempfile::tempdir().unwrap();
             let sentinel = files.path().join("payload.mkv");
             std::fs::write(&sentinel, b"synthetic fixture payload").unwrap();
-            row.completed_source = Some(scryer_domain::CompletedDownload {
+            row.completed_source = Some(scryer_domain::CompletedDownload { client_job_protocol: None,
                 client_type: row.client_type.clone(), client_id: row.client_id.clone(),
                 download_client_item_id: row.client_item.download_client_item_id.clone(),
                 download_id: Some(row.download_id.to_string()), name: "synthetic payload".into(),
