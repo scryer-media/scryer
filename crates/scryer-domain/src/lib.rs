@@ -4368,6 +4368,11 @@ pub struct TitleHistoryRecord {
 /// identity is the infohash when the release has one -- content identity is the
 /// same wherever the torrent came from -- and otherwise the indexer it failed
 /// on plus its normalized name.
+///
+/// Retention: blocks are kept forever. History retention never prunes the
+/// `blocklist` table; a row goes only when an operator removes it, when its
+/// title is deleted, or when the indexer a release-only block names is
+/// deleted.
 #[derive(Clone, Debug)]
 pub struct BlocklistEntry {
     pub id: String,
