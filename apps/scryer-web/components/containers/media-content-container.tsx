@@ -997,16 +997,18 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
-    if (effectiveViewMode === "poster" || effectiveViewMode === "graph") {
+    if (effectiveViewMode === "graph") {
       return defaultTitleCatalogSortState;
     }
     if (titleCatalogSort.key === "name") {
       return titleCatalogSort;
     }
     const columnKey = titleCatalogSort.key as TitleTableColumnKey;
+    // The poster view has no columns: it sorts by any supported key.
     if (
       !isTitleTableColumnSupportedForView(columnKey, view) ||
-      visibleTitleTableColumns[columnKey] !== true
+      (effectiveViewMode !== "poster" &&
+        visibleTitleTableColumns[columnKey] !== true)
     ) {
       return defaultTitleCatalogSortState;
     }

@@ -7,6 +7,7 @@ import { useLocation } from "react-router";
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   ChevronDown,
   Clock,
   Columns3,
@@ -2479,9 +2480,11 @@ export function MediaContentView({
       return;
     }
     const columnKey = titleCatalogSortKey as TitleTableColumnKey;
+    // The poster view has no columns: it sorts by any supported key.
+    const needsVisibleColumn = viewMode !== "poster";
     if (
       !isTitleTableColumnSupported(columnKey) ||
-      visibleTitleTableColumns[columnKey] !== true
+      (needsVisibleColumn && visibleTitleTableColumns[columnKey] !== true)
     ) {
       updateTitleCatalogSort("name");
     }
@@ -2489,8 +2492,21 @@ export function MediaContentView({
     isTitleTableColumnSupported,
     titleCatalogSortKey,
     updateTitleCatalogSort,
+    viewMode,
     visibleTitleTableColumns,
   ]);
+  const posterSortKeys = React.useMemo(
+    () => [
+      "name" as const,
+      ...titleTableColumnGroups
+        .flatMap((group) => group.columns)
+        .filter(
+          (key): key is Exclude<TitleTableColumnKey, "actions"> =>
+            key !== "actions",
+        ),
+    ],
+    [titleTableColumnGroups],
+  );
 
   React.useEffect(() => {
     setTitleFilterInputValue((current) =>
@@ -3388,6 +3404,78 @@ export function MediaContentView({
                   })}
                 </div>
               ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      ) : effectiveViewMode === "poster" &&
+        !selectedTitleCompactDrawerActive ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 w-9 rounded-[10px] border !border-[rgba(var(--scry-accent-rgb),0.55)] bg-[var(--scry-inset)] px-0 text-[var(--scry-muted2)] shadow-none transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+              aria-label={t("title.sortBy")}
+              title={t("title.sortBy")}
+            >
+              <ArrowUpDown className="!size-4" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            className="w-[236px] rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-soft)] p-[7px] shadow-[0_18px_44px_rgba(0,0,0,0.55)]"
+          >
+            <div className="px-2 pb-2 pt-1 text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]">
+              {t("title.sortBy")}
+            </div>
+            <div
+              role="radiogroup"
+              aria-label={t("title.sortBy")}
+              className="max-h-[min(32rem,70vh)] overflow-y-auto pr-1"
+            >
+              {posterSortKeys.map((sortKey) => {
+                const active = titleCatalogSortKey === sortKey;
+                const label =
+                  sortKey === "name"
+                    ? t("label.name")
+                    : titleTableColumnLabel(sortKey, t, view);
+                const directionLabel =
+                  titleCatalogSortDirection === "asc"
+                    ? t("title.sortAscending")
+                    : t("title.sortDescending");
+                return (
+                  <button
+                    key={sortKey}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => updateTitleCatalogSort(sortKey)}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2.5 rounded-[8px] px-2 py-[7px] text-left text-[13px] text-[var(--scry-text2)] transition hover:bg-[var(--scry-hover)]",
+                      active &&
+                        "bg-[var(--scry-hover)] text-[var(--scry-ink2)]",
+                    )}
+                  >
+                    <span className="min-w-0 truncate">{label}</span>
+                    {active ? (
+                      <span
+                        className="flex shrink-0 items-center"
+                        title={directionLabel}
+                      >
+                        {titleCatalogSortDirection === "asc" ? (
+                          <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <ArrowDown
+                            className="h-3.5 w-3.5"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span className="sr-only">{directionLabel}</span>
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </PopoverContent>
         </Popover>
