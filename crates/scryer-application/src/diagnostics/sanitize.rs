@@ -398,7 +398,16 @@ const NAME_ALLOWLIST: &[&str] = &[
     "facetname",
 ];
 
-const ENTITY_NAME_KEYS: &[&str] = &["name", "label", "labels", "tag", "tags", "keylabel"];
+/// Search text names titles the way a title name does.
+const ENTITY_NAME_KEYS: &[&str] = &[
+    "name",
+    "label",
+    "labels",
+    "tag",
+    "tags",
+    "keylabel",
+    "searchtext",
+];
 
 const PATH_KEY_WORDS: &[&str] = &[
     "path",
