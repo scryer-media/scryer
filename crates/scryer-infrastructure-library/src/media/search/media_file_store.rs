@@ -1119,7 +1119,8 @@ const EPISODE_PROGRESS_COUNTS: &str = "COUNT(*) AS episode_records_total,
 /// add up. `owner_id` is `owner`, the column the caller groups on.
 ///
 /// The aired-through day is the statement's first bind. An episode is aired
-/// when its air date's day is on or before it. A file counts when it is a live
+/// when it has a full air date whose day is on or before it; a year or a
+/// month alone has not aired. A file counts when it is a live
 /// primary file not awaiting review; it is asked as EXISTS, so an episode with
 /// several files is still one row. `countable` leaves out unnamed, TBA and
 /// undated placeholder episodes, and whatever `countable_prefix` adds.
@@ -1133,7 +1134,7 @@ fn episode_progress_rows_sql(
     format!(
         "SELECT {owner} AS owner_id,
                 CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
-                CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                CASE WHEN length(trim(COALESCE(e.air_date, ''))) >= 10
                       AND substr(trim(e.air_date), 1, 10) <= {{}}
                      THEN 1 ELSE 0 END AS aired,
                 CASE WHEN EXISTS (
@@ -6388,7 +6389,7 @@ mod tests {
         }
 
         // (id, title, collection, air date, monitored, has a file)
-        let episodes: [(&str, &Title, &Collection, Option<&str>, bool, bool); 13] = [
+        let episodes: [(&str, &Title, &Collection, Option<&str>, bool, bool); 15] = [
             (
                 "progress-e1",
                 &title,
@@ -6486,6 +6487,23 @@ mod tests {
                 false,
                 false,
             ),
+            // Only a year or a month is known: not aired yet.
+            (
+                "progress-q3",
+                &quiet,
+                &quiet_season,
+                Some("2026"),
+                true,
+                false,
+            ),
+            (
+                "progress-q4",
+                &quiet,
+                &quiet_season,
+                Some("2026-04"),
+                true,
+                false,
+            ),
         ];
         for (index, (id, owner, collection, air_date, monitored, has_file)) in
             episodes.into_iter().enumerate()
@@ -6568,11 +6586,12 @@ mod tests {
         );
 
         // Nothing has aired monitored and nothing is on disk: nothing is
-        // expected, which shows as complete.
+        // expected, which shows as complete. A year or a month alone does not
+        // count as aired, even though it sorts before the day.
         let quiet_summary = &by_title[&quiet.id];
         assert_eq!(quiet_summary.episodes_expected, 0);
         assert_eq!(quiet_summary.episodes_on_disk, 0);
-        assert_eq!(quiet_summary.episode_records_total, 2);
+        assert_eq!(quiet_summary.episode_records_total, 4);
 
         // A day later e8 has aired too.
         let tomorrow = media_files
@@ -6611,7 +6630,7 @@ mod tests {
         );
         let quiet_season_summary = &by_collection[&quiet_season.id];
         assert_eq!(quiet_season_summary.episodes_expected, 0);
-        assert_eq!(quiet_season_summary.episode_records_total, 2);
+        assert_eq!(quiet_season_summary.episode_records_total, 4);
     }
 
     /// A scope whose Primary file awaits review keeps that file for search

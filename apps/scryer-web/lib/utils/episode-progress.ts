@@ -48,12 +48,15 @@ export function episodeProgressText({ onDisk, expected }: EpisodeProgressCounts)
   return `${onDisk} / ${expected}`;
 }
 
-/** A local calendar day as `YYYY-MM-DD`, the form air dates are compared in. */
-export function localCalendarDay(date: Date) {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
+/**
+ * The UTC calendar day as `YYYY-MM-DD`. The server decides whether an episode
+ * has aired against the UTC day, so the client compares against the same one.
+ */
+export function utcCalendarDay(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
+
+const FULL_AIR_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Counts loaded episodes the way the server does, for a season whose counts
@@ -71,8 +74,9 @@ export function countEpisodeProgress(
   let onDisk = 0;
   let expected = 0;
   for (const episode of episodes) {
+    // Only a full date can have aired; a year or a month alone is too vague.
     const airDay = episode.airDate?.trim().slice(0, 10) ?? "";
-    const aired = airDay !== "" && airDay <= today;
+    const aired = FULL_AIR_DAY.test(airDay) && airDay <= today;
     if (episode.hasFile) {
       onDisk += 1;
     }
