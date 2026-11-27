@@ -5845,3 +5845,103 @@ fn a_spaced_episode_label_keeps_its_existing_limits() {
         );
     }
 }
+
+#[test]
+fn hyphenated_video_codec_number_is_not_an_episode() {
+    for facet in [
+        ContextFacetHint::Anime,
+        ContextFacetHint::Series,
+        ContextFacetHint::Unknown,
+    ] {
+        let mut target = context(facet, "Show A");
+        target.known_years = vec![1987];
+        for raw in [
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 DD 2.0-GRP",
+            "Show.A.1987.S01.576i.DVD.REMUX.MPEG-2.DD.2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX MPEG-2 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 DD 5.1-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 FLAC 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG2 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG.2 DD 2.0-GRP",
+            "Show A S01 576i DVD REMUX MPEG-2 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 DD-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX H-264 DD 2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX H-265 DD 5.1-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX X-264 DD 2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX VC-1 DD 2.0-GRP",
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(1), "{facet:?} {raw}: {episode:?}");
+            assert!(episode.full_season, "{facet:?} {raw}: {episode:?}");
+            assert!(
+                episode.episode_numbers.is_empty(),
+                "{facet:?} {raw}: {episode:?}"
+            );
+            assert!(
+                episode.absolute_episode_numbers.is_empty(),
+                "{facet:?} {raw}: {episode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ordinal_season_before_agreeing_episode_marker_is_not_title() {
+    let mut aliased = context(ContextFacetHint::Anime, "Show A");
+    aliased.aliases.push(ContextAlias {
+        name: "Romaji A".to_string(),
+    });
+    for target in [
+        aliased,
+        context(ContextFacetHint::Anime, "Show A"),
+        context(ContextFacetHint::Series, "Show A"),
+    ] {
+        // The dashed form already reads the ordinal as season information.
+        let dashed = crate::best_parse_for_target(
+            "[GRP] Romaji A 3rd Season - 05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+            &target,
+        );
+        assert!(
+            !dashed.normalized_title.contains("SEASON"),
+            "{:?}",
+            dashed.normalized_title
+        );
+        for (raw, season) in [
+            (
+                "[GRP] Romaji A 3rd Season S3E05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+                3,
+            ),
+            (
+                "[GRP] Romaji A 3rd Season S3E05-2026 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+                3,
+            ),
+            (
+                "[GRP] Romaji A 2nd Season S2E05-2026 [1080p WEBRip HEVC AAC][MultiSub][ABCD1234]",
+                2,
+            ),
+            (
+                "[GRP] Romaji A 4th Season S04E05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+                4,
+            ),
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            assert_eq!(parsed.normalized_title, dashed.normalized_title, "{raw}");
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(season), "{raw}: {episode:?}");
+            assert_eq!(episode.episode_numbers, vec![5], "{raw}: {episode:?}");
+        }
+    }
+}
+
+#[test]
+fn ordinal_season_before_disagreeing_episode_marker_stays_title() {
+    let target = context(ContextFacetHint::Anime, "Show A");
+    let raw = "[GRP] Romaji A 3rd Season S2E05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]";
+    let parsed = crate::best_parse_for_target(raw, &target);
+    assert_eq!(parsed.normalized_title, "ROMAJI A 3RD SEASON", "{raw}");
+    let episode = parsed.episode.expect(raw);
+    assert_eq!(episode.season, Some(2), "{raw}: {episode:?}");
+    assert_eq!(episode.episode_numbers, vec![5], "{raw}: {episode:?}");
+}
