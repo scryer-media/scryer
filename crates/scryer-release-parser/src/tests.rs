@@ -5845,3 +5845,44 @@ fn a_spaced_episode_label_keeps_its_existing_limits() {
         );
     }
 }
+
+#[test]
+fn hyphenated_video_codec_number_is_not_an_episode() {
+    for facet in [
+        ContextFacetHint::Anime,
+        ContextFacetHint::Series,
+        ContextFacetHint::Unknown,
+    ] {
+        let mut target = context(facet, "Show A");
+        target.known_years = vec![1987];
+        for raw in [
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 DD 2.0-GRP",
+            "Show.A.1987.S01.576i.DVD.REMUX.MPEG-2.DD.2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX MPEG-2 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 DD 5.1-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 FLAC 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG2 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG.2 DD 2.0-GRP",
+            "Show A S01 576i DVD REMUX MPEG-2 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 DD-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX H-264 DD 2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX H-265 DD 5.1-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX X-264 DD 2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX VC-1 DD 2.0-GRP",
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(1), "{facet:?} {raw}: {episode:?}");
+            assert!(episode.full_season, "{facet:?} {raw}: {episode:?}");
+            assert!(
+                episode.episode_numbers.is_empty(),
+                "{facet:?} {raw}: {episode:?}"
+            );
+            assert!(
+                episode.absolute_episode_numbers.is_empty(),
+                "{facet:?} {raw}: {episode:?}"
+            );
+        }
+    }
+}

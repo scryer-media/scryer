@@ -3855,6 +3855,11 @@ fn parse_identity_at(
     if family != ParseFamily::Movie && is_audio_channel_layout_digit(tokens, index) {
         return None;
     }
+    // Likewise the number of a split video codec (`MPEG-2`, `H-264`) names the
+    // video track, never an episode.
+    if family != ParseFamily::Movie && is_split_video_codec_number(tokens, index) {
+        return None;
+    }
     // An episode-shaped revision inside an exact known title remains title text.
     if split_episode_revision(&tokens.get(index)?.normalized).is_some()
         && context.aliases.iter().any(|alias| {
@@ -4660,6 +4665,26 @@ fn is_audio_channel_layout_digit(tokens: &[Token], index: usize) -> bool {
         .last()
         .is_some_and(u8::is_ascii_digit)
         && token_has_audio_codec(previous.normalized.as_str())
+}
+
+/// Whether the token is the number of a video codec the lexer split from its
+/// name at a hyphen or a dot (`MPEG-2`, `H-264`, `X.265`, `VC-1`).
+fn is_split_video_codec_number(tokens: &[Token], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else {
+        return false;
+    };
+    let Some(previous) = index.checked_sub(1).and_then(|before| tokens.get(before)) else {
+        return false;
+    };
+    matches!(
+        token.separator_before,
+        SeparatorKind::Hyphen | SeparatorKind::Dot
+    ) && same_technical_scope(previous, token)
+        && parse_split_video_codec(
+            previous.normalized.as_str(),
+            Some(token.normalized.as_str()),
+        )
+        .is_some()
 }
 
 /// [`audio_channel_has_audio_context`] for a two-token layout, confined to the
@@ -5930,7 +5955,7 @@ fn absolute_companion_allowed(
     value: u32,
     context: &ContextIndex,
 ) -> bool {
-    if value > 2000 {
+    if value > 2000 || is_split_video_codec_number(tokens, index) {
         return false;
     }
     let Some(token) = tokens.get(index) else {
