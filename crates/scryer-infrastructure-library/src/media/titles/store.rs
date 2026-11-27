@@ -33,6 +33,7 @@ use crate::media::canonical_tags::{
     attach_metadata_tags_to_titles, load_title_metadata_ratings, load_title_metadata_tags,
     replace_title_metadata_ratings_tx, replace_title_metadata_tags_tx,
 };
+use crate::media::episode_air::episode_aired_by_sql;
 use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::media::monitor_selections::{
     OWNER_KIND_TITLE, load_monitor_selection, replace_monitor_selection_tx,
@@ -5791,7 +5792,6 @@ fn title_catalog_outstanding_episode_exists(dialect: TitleCatalogSqlDialect) -> 
             AND catalog_episode_collection.collection_index <> '0' \
             AND trim(COALESCE(catalog_episode.title, '')) <> '' \
             AND upper(trim(catalog_episode.title)) NOT IN ('TBA', 'TBD') \
-            AND trim(COALESCE(catalog_episode.air_date, '')) <> '' \
             AND {} \
             AND {} \
             AND NOT EXISTS (SELECT 1 FROM file_episode_map catalog_episode_file \
@@ -5847,15 +5847,14 @@ fn title_catalog_needs_attention_predicate(dialect: TitleCatalogSqlDialect) -> S
     )
 }
 
-/// An episode that has already aired, in the terms the catalogue stores air dates.
-///
-/// The column is text and dates are compared as text elsewhere, so today's date is the
-/// bound; an announced season is not missing work yet.
+/// An episode that has already aired by today, by the rule every episode count
+/// uses: a full air date on or before the day. An announced season is not missing
+/// work yet, and neither is an episode dated only by its year or month.
 fn title_catalog_aired_episode_predicate(dialect: TitleCatalogSqlDialect, alias: &str) -> String {
     match dialect {
-        TitleCatalogSqlDialect::Sqlite => format!("{alias}.air_date <= CURRENT_DATE"),
+        TitleCatalogSqlDialect::Sqlite => episode_aired_by_sql(alias, "CURRENT_DATE"),
         TitleCatalogSqlDialect::Postgres => {
-            format!("{alias}.air_date <= CAST(CURRENT_DATE AS TEXT)")
+            episode_aired_by_sql(alias, "CAST(CURRENT_DATE AS TEXT)")
         }
     }
 }
@@ -6787,9 +6786,7 @@ fn title_catalog_episode_progress_subquery_scoped(
            FROM (
                 SELECT e.title_id,
                        CASE WHEN {} THEN 1 ELSE 0 END AS monitored,
-                       CASE WHEN length(trim(COALESCE(e.air_date, ''))) >= 10
-                             AND substr(trim(e.air_date), 1, 10) <= {{}}
-                            THEN 1 ELSE 0 END AS aired,
+                       CASE WHEN {aired} THEN 1 ELSE 0 END AS aired,
                        CASE WHEN EXISTS (
                             SELECT 1
                               FROM file_episode_map fem
@@ -6804,7 +6801,8 @@ fn title_catalog_episode_progress_subquery_scoped(
            ) episode
           GROUP BY episode.title_id",
         title_catalog_bool_column_is_true(dialect, "e.monitored"),
-        title_catalog_live_media_file_predicate(dialect, "mf")
+        title_catalog_live_media_file_predicate(dialect, "mf"),
+        aired = episode_aired_by_sql("e", "{}"),
     )
 }
 
@@ -7743,6 +7741,7 @@ async fn load_title_episode_shapes(
     };
     let monitored = title_catalog_bool_column_is_true(dialect, "e.monitored");
     let live_file = title_catalog_live_media_file_predicate(dialect, "mf");
+    let aired = episode_aired_by_sql("e", "{}");
     let mut shapes = Vec::new();
     for chunk in ids.chunks(per_statement) {
         let placeholders = std::iter::repeat_n("{}", chunk.len())
@@ -7767,9 +7766,7 @@ async fn load_title_episode_shapes(
                            {season_number} AS season_number,
                            CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
                            substr(trim(e.air_date), 1, 10) AS air_day,
-                           CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
-                                 AND substr(trim(e.air_date), 1, 10) <= {{}}
-                                THEN 1 ELSE 0 END AS aired,
+                           CASE WHEN {aired} THEN 1 ELSE 0 END AS aired,
                            CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
                                  AND substr(trim(e.air_date), 1, 10) > {{}}
                                 THEN 1 ELSE 0 END AS upcoming,
@@ -10489,7 +10486,10 @@ mod tests {
             "{partial}"
         );
         assert!(
-            partial.contains("catalog_episode.air_date <= CURRENT_DATE"),
+            partial.contains(&crate::media::episode_air::episode_aired_by_sql(
+                "catalog_episode",
+                "CURRENT_DATE"
+            )),
             "{partial}"
         );
         assert!(
@@ -10541,7 +10541,10 @@ mod tests {
         )
         .0;
         assert!(
-            postgres.contains("catalog_episode.air_date <= CAST(CURRENT_DATE AS TEXT)"),
+            postgres.contains(&crate::media::episode_air::episode_aired_by_sql(
+                "catalog_episode",
+                "CAST(CURRENT_DATE AS TEXT)"
+            )),
             "{postgres}"
         );
     }
