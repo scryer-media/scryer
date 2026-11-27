@@ -6472,6 +6472,8 @@ const ru: LocaleDictionary = {
   "indexerSearch.skipReason.queryBudget": "Превышен лимит запросов",
   "indexerSearch.skipReason.queryBudgetUntil":
     "Превышен лимит запросов до {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Превышен лимит запросов, повторный запрос через {{seconds}} с",
   "indexerSearch.queryBudget.partlySearched":
     "Опрошен частично: лимит запросов остановил оставшиеся запросы. Результаты отправленных запросов сохранены.",
   "indexerSearch.health.retryFailed": "Повторить неудачные",

@@ -2109,6 +2109,10 @@ const cs: LocaleDictionary = {
     "Selhalo indexerů: {{count}} ({{names}})",
   "title.contextReleaseSearchIndexerSkipped":
     "Vynecháno indexerů: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "Částečně prohledáno indexerů kvůli limitu dotazů: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: znovu za {{seconds}} s",
   "title.noReleasesFound": "Pro {{name}} nebyla nalezena žádná vydání.",
   "title.searchNeedsDownloadClientTitle":
     "Vyhledávání vyžaduje klienta pro stahování",
@@ -6889,6 +6893,13 @@ const cs: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "V ústupu po nedávných selháních",
   "indexerSearch.skipReason.backedOffUntil": "V ústupu do {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Nepodporuje textové vyhledávání",
+  "indexerSearch.skipReason.queryBudget": "Překročen limit dotazů",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Překročen limit dotazů do {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Překročen limit dotazů, znovu za {{seconds}} s",
+  "indexerSearch.queryBudget.partlySearched":
+    "Prohledáno částečně: limit dotazů zastavil zbývající požadavky. Výsledky odeslaných požadavků zůstávají.",
   "indexerSearch.refine.title": "Upřesnit",
   "indexerSearch.refine.reset": "Obnovit výchozí",
   "indexerSearch.facet.protocol": "Protokol",

@@ -177,6 +177,43 @@ fn cross_indexer_release_dedup_prefers_higher_priority_source() {
 }
 
 #[test]
+fn cross_indexer_release_dedup_tells_apart_indexers_that_share_a_name() {
+    let listing = |indexer_id: &str, url: &str| {
+        let mut result = make_search_result(
+            "Synthetic Indexer",
+            "Signal.Run.S01E12.720p.WEB-DL.x264-NTb",
+            url,
+            DownloadSourceKind::NzbUrl,
+        );
+        result.indexer_id = Some(indexer_id.to_string());
+        result
+    };
+
+    // Two configurations with one name are two indexers: one copy survives.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            listing("indexer-a", "https://example.test/a"),
+            listing("indexer-b", "https://example.test/b"),
+        ],
+        &HashMap::new(),
+        "nzb",
+    );
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].indexer_id.as_deref(), Some("indexer-a"));
+
+    // Two listings from one indexer are distinct and both stay.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            listing("indexer-a", "https://example.test/a1"),
+            listing("indexer-a", "https://example.test/a2"),
+        ],
+        &HashMap::new(),
+        "nzb",
+    );
+    assert_eq!(deduped.len(), 2);
+}
+
+#[test]
 fn cross_indexer_release_dedup_prefers_unlimited_grabs() {
     let mut limited = make_search_result(
         "Limited Source",
@@ -534,7 +571,7 @@ fn an_infohash_block_ignores_both_the_indexer_and_the_name() {
 }
 
 #[test]
-fn structured_dispatch_queries_collapse_equivalent_episode_variants() {
+fn structured_dispatch_queries_collapse_only_the_title_into_the_episode_request() {
     let queries = vec![
         "Synthetic Atlas 035".to_string(),
         "Synthetic Atlas S02E11".to_string(),
@@ -544,7 +581,14 @@ fn structured_dispatch_queries_collapse_equivalent_episode_variants() {
 
     let deduped = dedupe_structured_dispatch_queries(queries, Some(2), Some(11), Some(35));
 
-    assert_eq!(deduped, vec!["Synthetic Atlas 035".to_string()]);
+    assert_eq!(
+        deduped,
+        vec![
+            "Synthetic Atlas 035".to_string(),
+            "Synthetic Atlas S02E11".to_string(),
+            "Synthetic Atlas S02".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -589,11 +633,13 @@ fn structured_dispatch_queries_keep_a_contradicting_season_episode_token() {
 
     let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), Some(53));
 
-    // The forms that merely restate season=1&ep=53 still collapse.
+    // Only the plain title, sent as the S01E53 request, collapses.
     assert_eq!(
         deduped,
         vec![
             "Synthetic Atlas 053".to_string(),
+            "Synthetic Atlas S01E53".to_string(),
+            "Synthetic Atlas S01".to_string(),
             "Synthetic Atlas S04E17".to_string(),
         ]
     );
@@ -614,8 +660,8 @@ fn text_safe_dispatch_queries_keep_a_contradicting_season_episode_token() {
     assert_eq!(deduped, queries);
 }
 
-/// A bare `Sxx` that names a different season is kept for the same reason,
-/// while the one matching the dispatch still collapses.
+/// A bare `Sxx` asks for the season alone, so it is kept whether or not it
+/// names the dispatch's season.
 #[test]
 fn structured_dispatch_queries_keep_a_contradicting_season_token() {
     let queries = vec![
@@ -624,15 +670,9 @@ fn structured_dispatch_queries_keep_a_contradicting_season_token() {
         "Synthetic Atlas S04".to_string(),
     ];
 
-    let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), None);
+    let deduped = dedupe_structured_dispatch_queries(queries.clone(), Some(1), Some(53), None);
 
-    assert_eq!(
-        deduped,
-        vec![
-            "Synthetic Atlas".to_string(),
-            "Synthetic Atlas S04".to_string(),
-        ]
-    );
+    assert_eq!(deduped, queries);
 }
 
 #[test]
@@ -1013,4 +1053,57 @@ fn a_query_budget_skip_becomes_partial_only_for_an_indexer_another_query_reached
         Some(std::time::Duration::from_secs(40))
     );
     assert!(reasons["idx-unasked"].is_not_searched_for_query_budget());
+}
+
+#[test]
+fn an_indexer_reason_does_not_depend_on_which_query_finishes_first() {
+    let answer = |outcome: IndexerSearchOutcome| {
+        vec![IndexerQueryOutcome {
+            indexer_id: "idx-a".to_string(),
+            outcome,
+            page: None,
+        }]
+    };
+    let kept_back = answer(IndexerSearchOutcome::Partial {
+        empty: true,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+        retry_after: Some(std::time::Duration::from_secs(40)),
+    });
+    for partial_reason in [
+        IndexerSearchIncompleteReason::RateLimited,
+        IndexerSearchIncompleteReason::UpstreamFailure,
+        IndexerSearchIncompleteReason::FanoutBranchFailed,
+        IndexerSearchIncompleteReason::MalformedContent,
+    ] {
+        // This query reached the indexer and returned rows, then ended short.
+        let answered = answer(IndexerSearchOutcome::Partial {
+            empty: false,
+            reason: Some(partial_reason),
+            retry_after: None,
+        });
+        let settle = |first: &[IndexerQueryOutcome], second: &[IndexerQueryOutcome]| {
+            let mut reasons = HashMap::new();
+            let mut searched = HashSet::new();
+            record_query_indexer_outcomes(&mut reasons, &mut searched, first);
+            record_query_indexer_outcomes(&mut reasons, &mut searched, second);
+            settle_query_budget_reasons(&mut reasons, &searched);
+            let reason = reasons.remove("idx-a").expect("idx-a fell short");
+            (
+                searched.contains("idx-a"),
+                reason.kind,
+                reason.code,
+                reason.message,
+            )
+        };
+
+        let budget_first = settle(&kept_back, &answered);
+        let budget_last = settle(&answered, &kept_back);
+        assert_eq!(budget_first, budget_last, "{partial_reason:?}");
+        assert!(budget_first.0, "{partial_reason:?}: rows mean it was asked");
+        assert_ne!(
+            budget_first.2,
+            Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED),
+            "{partial_reason:?}"
+        );
+    }
 }

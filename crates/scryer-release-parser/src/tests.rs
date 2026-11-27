@@ -5870,6 +5870,13 @@ fn hyphenated_video_codec_number_is_not_an_episode() {
             "Show A 1987 S01 1080p BluRay REMUX H-265 DD 5.1-GRP",
             "Show A 1987 S01 1080p BluRay REMUX X-264 DD 2.0-GRP",
             "Show A 1987 S01 1080p BluRay REMUX VC-1 DD 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-4 DD 2.0-GRP",
+            "Show.A.1987.S01.576i.DVD.REMUX.MPEG-4.DD.2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG2 AC-3 2.0-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-2 AC-3 2.0-GRP",
+            "Show.A.1987.S01.576i.DVD.REMUX.MPEG2.AC-3.2.0-GRP",
+            "Show A 1987 S01 1080p BluRay REMUX H-264 E-AC-3 5.1-GRP",
+            "Show A 1987 S01 576i DVD REMUX MPEG-4 AC-3 2.0-GRP",
         ] {
             let parsed = crate::best_parse_for_target(raw, &target);
             let episode = parsed.episode.expect(raw);
@@ -5932,6 +5939,66 @@ fn ordinal_season_before_agreeing_episode_marker_is_not_title() {
             assert_eq!(episode.season, Some(season), "{raw}: {episode:?}");
             assert_eq!(episode.episode_numbers, vec![5], "{raw}: {episode:?}");
         }
+    }
+}
+
+#[test]
+fn ordinal_season_before_agreeing_season_marker_is_not_title() {
+    let mut aliased = context(ContextFacetHint::Anime, "Show A");
+    aliased.aliases.push(ContextAlias {
+        name: "Romaji A".to_string(),
+    });
+    for target in [
+        aliased,
+        context(ContextFacetHint::Anime, "Show A"),
+        context(ContextFacetHint::Series, "Show A"),
+    ] {
+        let dashed = crate::best_parse_for_target(
+            "[GRP] Romaji A 3rd Season - 05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+            &target,
+        );
+        for (raw, season) in [
+            ("[GRP] Romaji A 3rd Season S03 [1080p WEB-DL AVC AAC]", 3),
+            ("[GRP] Romaji A 3rd Season S3 [1080p WEB-DL AVC AAC]", 3),
+            (
+                "[GRP] Romaji A 2nd Season S02 [1080p WEBRip HEVC AAC][MultiSub]",
+                2,
+            ),
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            assert_eq!(parsed.normalized_title, dashed.normalized_title, "{raw}");
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(season), "{raw}: {episode:?}");
+            assert!(episode.full_season, "{raw}: {episode:?}");
+            assert!(episode.episode_numbers.is_empty(), "{raw}: {episode:?}");
+        }
+    }
+}
+
+#[test]
+fn ordinal_season_before_disagreeing_season_marker_stays_title() {
+    let target = context(ContextFacetHint::Anime, "Show A");
+    let raw = "[GRP] Romaji A 3rd Season S02 [1080p WEB-DL AVC AAC]";
+    let parsed = crate::best_parse_for_target(raw, &target);
+    assert_eq!(parsed.normalized_title, "ROMAJI A 3RD SEASON", "{raw}");
+    let episode = parsed.episode.expect(raw);
+    assert_eq!(episode.season, Some(2), "{raw}: {episode:?}");
+    assert!(episode.full_season, "{raw}: {episode:?}");
+}
+
+#[test]
+fn ordinal_word_in_a_real_title_stays_title() {
+    let target = context(ContextFacetHint::Series, "3rd Lantern of the Quarry");
+    for raw in [
+        "3rd.Lantern.of.the.Quarry.S03.1080p.WEB-DL.AAC2.0.H.264-GRP",
+        "3rd.Lantern.of.the.Quarry.S03E05.1080p.WEB-DL.AAC2.0.H.264-GRP",
+    ] {
+        let parsed = crate::best_parse_for_target(raw, &target);
+        assert_eq!(
+            parsed.normalized_title, "3RD LANTERN OF THE QUARRY",
+            "{raw}"
+        );
+        assert_eq!(parsed.episode.expect(raw).season, Some(3), "{raw}");
     }
 }
 

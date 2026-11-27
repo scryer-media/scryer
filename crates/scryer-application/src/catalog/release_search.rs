@@ -663,20 +663,54 @@ pub(crate) struct ScoredSearchOutcome {
     pub search_session_id: String,
 }
 
-/// Whether an outcome shows the indexer was sent the query.
+/// Whether an outcome shows the indexer was sent the query. Every partial
+/// answer reached the indexer except one its query budget kept from being
+/// sent, and an answer that carried rows reached it whatever its reason.
 fn outcome_sent_request(outcome: IndexerSearchOutcome) -> bool {
     match outcome {
         IndexerSearchOutcome::Complete { .. } => true,
-        IndexerSearchOutcome::Partial { reason, .. } => matches!(
-            reason,
-            None | Some(
-                IndexerSearchIncompleteReason::QueryBudgetPartial
-                    | IndexerSearchIncompleteReason::PageCeilingReached
-                    | IndexerSearchIncompleteReason::SaturatedPartition
-                    | IndexerSearchIncompleteReason::Unattested
-            )
-        ),
+        IndexerSearchOutcome::Partial { empty, reason, .. } => {
+            !empty || reason != Some(IndexerSearchIncompleteReason::QueryBudgetExhausted)
+        }
         _ => false,
+    }
+}
+
+/// Folds one query's per-indexer outcomes into the search's record of which
+/// indexers were sent a request and why any of them fell short.
+fn record_query_indexer_outcomes(
+    reasons: &mut HashMap<String, IncompleteIndexerReason>,
+    searched: &mut HashSet<String>,
+    outcomes: &[IndexerQueryOutcome],
+) {
+    for outcome in outcomes {
+        if outcome_sent_request(outcome.outcome) && !searched.contains(&outcome.indexer_id) {
+            searched.insert(outcome.indexer_id.clone());
+        }
+        if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
+            record_incomplete_indexer_reason(reasons, outcome.indexer_id.clone(), reason);
+        }
+    }
+}
+
+/// Records why an indexer did not cover the search when several of its
+/// queries say so. The reason kept does not depend on the order the queries
+/// finish in: the more serious outcome wins, and between two of the same
+/// outcome the longer wait.
+fn record_incomplete_indexer_reason(
+    reasons: &mut HashMap<String, IncompleteIndexerReason>,
+    indexer_id: String,
+    reason: IncompleteIndexerReason,
+) {
+    match reasons.entry(indexer_id) {
+        std::collections::hash_map::Entry::Occupied(mut kept) => {
+            if reason.outranks(kept.get()) {
+                kept.insert(reason);
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(reason);
+        }
     }
 }
 
@@ -1152,33 +1186,19 @@ fn structured_dispatch_query_shape(
     StructuredDispatchQueryShape::Other
 }
 
+/// The dedupe for a search whose every indexer dispatches season and episode
+/// as nab parameters. Only forms that go out as the same request merge: the
+/// nab dispatch strips a trailing `SxxEyy` that restates the parameters, so
+/// `{title} S01E05` and the plain `{title}` both send `q={title}&season=1&ep=5`.
+/// `{title} S01` asks for the season alone, and `{title} 005` keeps its
+/// absolute number in the text; each is a request of its own.
 fn dedupe_structured_dispatch_queries(
     queries: Vec<String>,
     season: Option<u32>,
     episode: Option<u32>,
     absolute_episode: Option<u32>,
 ) -> Vec<String> {
-    if season.is_none() && episode.is_none() && absolute_episode.is_none() {
-        return queries;
-    }
-
-    let mut deduped = Vec::with_capacity(queries.len());
-    let mut seen = std::collections::HashSet::new();
-
-    for query in queries {
-        let normalized =
-            normalize_structured_dispatch_query(&query, season, episode, absolute_episode);
-        let key_source = if normalized.is_empty() {
-            query.trim()
-        } else {
-            normalized.as_str()
-        };
-        if seen.insert(key_source.to_ascii_lowercase()) {
-            deduped.push(query);
-        }
-    }
-
-    deduped
+    dedupe_structured_dispatch_queries_by_shape(queries, season, episode, absolute_episode, true)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1243,6 +1263,9 @@ pub(crate) struct IncompleteIndexerReason {
     /// How long to wait before asking the indexer again, when the outcome
     /// says. The message repeats it for people; code reads this field.
     pub retry_after: Option<std::time::Duration>,
+    /// Which reason is kept when several queries of one search give one
+    /// indexer different reasons; higher is more serious.
+    precedence: u8,
 }
 impl IncompleteIndexerReason {
     pub fn failed(message: String) -> Self {
@@ -1251,7 +1274,13 @@ impl IncompleteIndexerReason {
             message,
             code: None,
             retry_after: None,
+            precedence: u8::MAX,
         }
+    }
+
+    /// Whether this reason replaces `kept` for the same indexer.
+    fn outranks(&self, kept: &Self) -> bool {
+        (self.precedence, self.retry_after) > (kept.precedence, kept.retry_after)
     }
 
     /// Whether the indexer answered part of the search before its query
@@ -1389,7 +1418,37 @@ pub(crate) fn incomplete_indexer_reason(
         },
         code,
         retry_after,
+        precedence: incomplete_outcome_precedence(outcome),
     })
+}
+
+/// How serious an outcome is when one indexer's queries end differently: a
+/// query its budget kept back ranks lowest, then a query its budget cut
+/// short, then a contained or rate-limited answer, then failures.
+fn incomplete_outcome_precedence(outcome: IndexerSearchOutcome) -> u8 {
+    use IndexerSearchIncompleteReason as Reason;
+    match outcome {
+        IndexerSearchOutcome::Partial { reason, .. } => match reason {
+            Some(Reason::QueryBudgetExhausted) => 0,
+            Some(Reason::QueryBudgetPartial) => 1,
+            Some(Reason::Unattested) => 2,
+            Some(Reason::PageCeilingReached) => 3,
+            Some(Reason::SaturatedPartition) => 4,
+            Some(Reason::RateLimited) => 5,
+            None => 8,
+            Some(Reason::MalformedContent) => 9,
+            Some(Reason::FanoutBranchFailed) => 10,
+            Some(Reason::UpstreamFailure) => 11,
+        },
+        IndexerSearchOutcome::Deferred { .. } => 6,
+        IndexerSearchOutcome::Skipped { .. } => 7,
+        IndexerSearchOutcome::ClientUnavailable { .. } => 12,
+        IndexerSearchOutcome::Errored => 13,
+        IndexerSearchOutcome::Complete { .. }
+        | IndexerSearchOutcome::Unsupported
+        | IndexerSearchOutcome::BackedOff { .. }
+        | IndexerSearchOutcome::LocalLimit { .. } => 0,
+    }
 }
 
 fn completely_covered_indexers(
@@ -1432,6 +1491,19 @@ fn dedupe_text_safe_structured_dispatch_queries(
     episode: Option<u32>,
     absolute_episode: Option<u32>,
 ) -> Vec<String> {
+    dedupe_structured_dispatch_queries_by_shape(queries, season, episode, absolute_episode, false)
+}
+
+/// Keep one query per title and dispatch shape. `title_is_episode_request`
+/// counts a plain title as the `SxxEyy` request, which holds only when
+/// season and episode travel as parameters.
+fn dedupe_structured_dispatch_queries_by_shape(
+    queries: Vec<String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+    title_is_episode_request: bool,
+) -> Vec<String> {
     if season.is_none() && episode.is_none() && absolute_episode.is_none() {
         return queries;
     }
@@ -1447,10 +1519,13 @@ fn dedupe_text_safe_structured_dispatch_queries(
         } else {
             normalized.as_str()
         };
-        let key = (
-            key_source.to_ascii_lowercase(),
-            structured_dispatch_query_shape(&query, absolute_episode),
-        );
+        let shape = match structured_dispatch_query_shape(&query, absolute_episode) {
+            StructuredDispatchQueryShape::Other if title_is_episode_request => {
+                StructuredDispatchQueryShape::SeasonEpisode
+            }
+            shape => shape,
+        };
+        let key = (key_source.to_ascii_lowercase(), shape);
         if seen.insert(key) {
             deduped.push(query);
         }
@@ -1628,6 +1703,16 @@ fn source_grab_sort_priority(candidate: &IndexerSearchResult, configured: i64) -
     i64::from(class) * 2_000_000_000 + usage * 1_000 + configured.clamp(0, 999)
 }
 
+/// Whether two results came from the same indexer. Indexer names are not
+/// unique, so two configurations that share a name and provider still count
+/// as different indexers when both results carry their configuration id.
+fn same_indexer_listing(first: &IndexerSearchResult, second: &IndexerSearchResult) -> bool {
+    match (first.indexer_id.as_deref(), second.indexer_id.as_deref()) {
+        (Some(first_id), Some(second_id)) if first_id != second_id => false,
+        _ => first.source == second.source,
+    }
+}
+
 pub(crate) fn dedupe_cross_indexer_release_results(
     results: Vec<IndexerSearchResult>,
     indexer_priority_by_name: &HashMap<String, i64>,
@@ -1652,7 +1737,7 @@ pub(crate) fn dedupe_cross_indexer_release_results(
 
         if let Some(survivors) = best_by_key.get_mut(&key) {
             let existing = &results[survivors[0]];
-            if existing.source == result.source {
+            if same_indexer_listing(existing, result) {
                 survivors.push(idx);
                 continue;
             }
@@ -2289,6 +2374,13 @@ impl AppUseCase {
             SearchMode::Auto => queries.into_iter().take(1).collect(),
             SearchMode::Interactive => queries,
         };
+        if search_subject_kind == ReleaseSearchSubjectKind::Episode {
+            debug!(
+                collapsed = collapse_structured_queries,
+                query_count = effective_queries.len(),
+                "release search: structured episode query collapse"
+            );
+        }
         let effective_queries = if collapse_structured_queries {
             dedupe_structured_dispatch_queries(effective_queries, season, episode, absolute_episode)
         } else if mode == SearchMode::Auto
@@ -2460,18 +2552,11 @@ impl AppUseCase {
             match result {
                 Ok(Ok(response)) => {
                     successful_searches += 1;
-                    for outcome in &response.indexer_outcomes {
-                        if outcome_sent_request(outcome.outcome)
-                            && !searched_indexer_ids.contains(&outcome.indexer_id)
-                        {
-                            searched_indexer_ids.insert(outcome.indexer_id.clone());
-                        }
-                        if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
-                            incomplete_indexer_reasons
-                                .entry(outcome.indexer_id.clone())
-                                .or_insert(reason);
-                        }
-                    }
+                    record_query_indexer_outcomes(
+                        &mut incomplete_indexer_reasons,
+                        &mut searched_indexer_ids,
+                        &response.indexer_outcomes,
+                    );
                     record_query_coverage_outcomes(
                         &mut coverage_by_indexer,
                         &response.indexer_outcomes,
@@ -2910,9 +2995,13 @@ impl AppUseCase {
                 &next.complete_indexer_ids,
                 &next.unsupported_indexer_ids,
             );
-            outcome
-                .incomplete_indexer_reasons
-                .extend(next.incomplete_indexer_reasons);
+            for (indexer_id, reason) in next.incomplete_indexer_reasons {
+                record_incomplete_indexer_reason(
+                    &mut outcome.incomplete_indexer_reasons,
+                    indexer_id,
+                    reason,
+                );
+            }
             outcome
                 .searched_indexer_ids
                 .extend(next.searched_indexer_ids);
@@ -3949,7 +4038,7 @@ mod structured_dispatch_query_tests {
     }
 
     #[test]
-    fn broad_structured_dedupe_still_collapses_equivalent_parameterized_queries() {
+    fn parameterized_dedupe_merges_only_queries_sent_as_the_same_request() {
         let queries = vec![
             "Silver Horizon 033".to_string(),
             "Silver Horizon S02E05".to_string(),
@@ -3959,7 +4048,28 @@ mod structured_dispatch_query_tests {
 
         let deduped = dedupe_structured_dispatch_queries(queries, Some(2), Some(5), Some(33));
 
-        assert_eq!(deduped, vec!["Silver Horizon 033".to_string()]);
+        // The plain title goes out as the `S02E05` request; the absolute and
+        // season-only forms are requests of their own.
+        assert_eq!(
+            deduped,
+            vec![
+                "Silver Horizon 033".to_string(),
+                "Silver Horizon S02E05".to_string(),
+                "Silver Horizon S02".to_string(),
+            ]
+        );
+
+        // A plain title listed first stands for the episode request.
+        let deduped = dedupe_structured_dispatch_queries(
+            vec![
+                "Silver Horizon".to_string(),
+                "Silver Horizon S02E05".to_string(),
+            ],
+            Some(2),
+            Some(5),
+            None,
+        );
+        assert_eq!(deduped, vec!["Silver Horizon".to_string()]);
     }
 
     #[test]
