@@ -2471,6 +2471,8 @@ impl CatalogQueries {
     }
 
     /// Search indexers for a title, series movie link, or episode and return at most 200 results.
+    /// A free-text `query` is refused with `INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`;
+    /// run it with `startInteractiveReleaseSearch` instead.
     async fn search_releases(
         &self,
         ctx: &Context<'_>,

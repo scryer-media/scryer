@@ -83,8 +83,13 @@ not run them.
    `FAILED` = the hard link call failed and the file was copied; `reason` and
    `osErrorCode` carry the error, and the log has a WARN
    `hard link failed; handing import to copy lane` for it. `NOT_POSSIBLE` =
-   the destination cannot hold a link (another volume or filesystem).
-   Imports recorded before placements were kept have no `filePlacements`.
+   the disk refused the link as not possible here: another volume, a
+   filesystem without hard links, or one that answers a link with an
+   invalid-argument error. `osErrorCode` carries the error when the disk gave
+   one, and the log has an INFO
+   `hard link is not possible here; handing import to copy lane` with the
+   error and both paths; search for it with
+   `log-search.sh $B 'hard link is not possible' INFO`. Imports recorded before placements were kept have no `filePlacements`.
 
 ## Wrong release chosen
 

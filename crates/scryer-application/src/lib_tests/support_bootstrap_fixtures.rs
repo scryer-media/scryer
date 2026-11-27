@@ -1959,6 +1959,7 @@ pub(super) fn empty_library_settings_override() -> LibrarySettingsOverrideDraft 
         metadata_language: None,
         use_season_folders: None,
         default_monitor_type: None,
+        default_title_tags: None,
         quality_profile_id: None,
         request_quality_profile_ids: None,
         scoring_persona: None,

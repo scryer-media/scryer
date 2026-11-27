@@ -484,6 +484,7 @@ pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayloa
         use_season_folders: settings.use_season_folders,
         default_monitor_type: settings.default_monitor_type,
         default_monitor_type_override: settings.default_monitor_type_override,
+        default_title_tags: settings.default_title_tags,
         quality_profile_id_override: settings.quality_profile_id_override.map(Into::into),
         quality_profile_id: settings.quality_profile_id.into(),
         request_quality_profile_ids_override: settings
