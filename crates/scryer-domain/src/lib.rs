@@ -732,9 +732,12 @@ impl LibraryPermissionMask {
     /// Manage Titles also implies Manage Subtitles: a title manager has always
     /// been able to delete and blocklist a title's external subtitles, so the
     /// narrower permission must never take that away from an existing grant.
+    /// Manage Titles implies View too: managing a library's titles without
+    /// seeing them is not a grant anyone can use.
     pub fn with_request_shadowing(self) -> Self {
         let mut mask = self;
         if mask.contains(Self::MANAGE_TITLES) {
+            mask.insert(Self::VIEW);
             mask.insert(Self::AUTO_APPROVE_REQUESTS);
             mask.insert(Self::REQUEST);
             mask.insert(Self::MANAGE_SUBTITLES);
@@ -744,6 +747,9 @@ impl LibraryPermissionMask {
         mask
     }
 
+    /// Strip the bits [`Self::with_request_shadowing`] adds back. View is the
+    /// exception: an explicit View stands on its own, so taking Manage Titles
+    /// away later leaves it in place.
     pub fn normalized_for_storage(self) -> Self {
         if self.contains(Self::MANAGE_TITLES) {
             Self(
@@ -871,14 +877,12 @@ impl UserAuthorization {
             LibraryPermission::AutoApproveRequests => self
                 .library_permissions(library_id)
                 .can_auto_approve_requests(),
-            // Manage Titles shadows Manage Subtitles, so the stored mask is
-            // expanded before the check; storage keeps only the broader bit.
-            LibraryPermission::ManageSubtitles => self
-                .library_permissions(library_id)
-                .with_request_shadowing()
-                .contains(LibraryPermissionMask::MANAGE_SUBTITLES),
+            // Manage Titles shadows View and Manage Subtitles, so the stored
+            // mask is expanded before the check; storage keeps only the
+            // broader bit.
             _ => self
                 .library_permissions(library_id)
+                .with_request_shadowing()
                 .contains(LibraryPermissionMask::from_permission(permission)),
         }
     }
@@ -899,21 +903,12 @@ impl UserAuthorization {
                         .values()
                         .any(|permissions| permissions.can_auto_approve_requests())
             }
-            LibraryPermission::ManageSubtitles => {
-                let shadowed = |permissions: &LibraryPermissionMask| {
-                    permissions
-                        .with_request_shadowing()
-                        .contains(LibraryPermissionMask::MANAGE_SUBTITLES)
-                };
-                shadowed(&self.default_library) || self.libraries.values().any(shadowed)
-            }
             _ => {
                 let required = LibraryPermissionMask::from_permission(permission);
-                self.default_library.contains(required)
-                    || self
-                        .libraries
-                        .values()
-                        .any(|permissions| permissions.contains(required))
+                let shadowed = |permissions: &LibraryPermissionMask| {
+                    permissions.with_request_shadowing().contains(required)
+                };
+                shadowed(&self.default_library) || self.libraries.values().any(shadowed)
             }
         }
     }

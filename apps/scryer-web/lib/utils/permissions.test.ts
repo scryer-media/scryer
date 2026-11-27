@@ -333,6 +333,57 @@ test("the shadow tooltip names Manage Titles for Manage Subtitles", () => {
   );
 });
 
+test("Manage Titles implies View, and storage keeps an explicit View", () => {
+  const titleManager = normalizeJwtPermissionClaims(
+    [],
+    [{ libraryId: "library-primary", permissions: ["manageTitles"] }],
+  );
+  assert.equal(
+    hasLibraryPermission(
+      titleManager,
+      "library-primary",
+      LIBRARY_PERMISSIONS.view,
+    ),
+    true,
+  );
+  assert.equal(
+    hasAnyLibraryPermission(titleManager, LIBRARY_PERMISSIONS.view),
+    true,
+  );
+  assert.equal(
+    hasLibraryPermission(
+      titleManager,
+      "library-other",
+      LIBRARY_PERMISSIONS.view,
+    ),
+    false,
+  );
+  assert.equal(
+    libraryPermissionShadowSource(
+      [LIBRARY_PERMISSIONS.manageTitles],
+      LIBRARY_PERMISSIONS.view,
+    ),
+    "Manage Titles",
+  );
+  assert.deepEqual(
+    normalizeLibraryPermissionsForStorage([
+      LIBRARY_PERMISSIONS.view,
+      LIBRARY_PERMISSIONS.manageTitles,
+    ]).sort(),
+    [LIBRARY_PERMISSIONS.manageTitles, LIBRARY_PERMISSIONS.view].sort(),
+  );
+
+  // Resolve Imports alone still does not grant View.
+  const resolver = normalizeJwtPermissionClaims(
+    [],
+    [{ libraryId: "library-primary", permissions: ["resolveImports"] }],
+  );
+  assert.equal(
+    hasAnyLibraryPermission(resolver, LIBRARY_PERMISSIONS.view),
+    false,
+  );
+});
+
 test("a Manage Titles holder passes the Manage Subtitles gate", () => {
   const titleManager = normalizeJwtPermissionClaims(
     [],
