@@ -93,6 +93,7 @@ import type {
   DownloadClientRoutingEntry,
   IndexerCategoryRoutingSettings,
   IndexerRecord,
+  JobRun,
   LibraryScanSummary,
   LibraryRecord,
   LibrarySettingsDraft,
@@ -2104,6 +2105,11 @@ export function MediaContentView({
     ) => Promise<void> | void;
     refreshMovieTitleOptions: (title: TitleRecord) => Promise<void> | void;
     deleteCatalogTitle: (title: TitleRecord) => void;
+    /** Hides titles whose deletion was queued from an overview. */
+    trackQueuedTitleDeletion: (
+      acceptedTitleIds: readonly string[],
+      run: JobRun,
+    ) => void;
     isDeletingCatalogTitleById: Record<string, boolean>;
     isMobile: boolean;
     viewMode: ContentViewMode;
@@ -2316,6 +2322,7 @@ export function MediaContentView({
     updateMovieTitleOptions,
     refreshMovieTitleOptions,
     deleteCatalogTitle,
+    trackQueuedTitleDeletion,
     isDeletingCatalogTitleById,
     viewMode,
     viewModePending,
@@ -4293,6 +4300,7 @@ export function MediaContentView({
                         initialEpisodeId={routeOverviewEpisodeId}
                         onTitleNotFound={handleOverviewTitleNotFound}
                         onBackToList={onCloseOverview}
+                        onTitleDeletionQueued={trackQueuedTitleDeletion}
                         onTitleResolved={(resolvedTitle) => {
                           if (resolvedTitle.id !== seriesSidePanelTitleId) {
                             onOpenOverview(view, resolvedTitle);

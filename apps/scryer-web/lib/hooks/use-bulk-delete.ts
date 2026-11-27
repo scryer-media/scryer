@@ -32,12 +32,13 @@ type UseBulkDeleteArgs = {
   client: Client;
   t: Translate;
   setGlobalStatus: SetGlobalStatus;
-  recordCriticalCatalogMutation: () => void;
   registerInteractiveJobRun: (run: JobRun) => void;
-  scheduleDeletionJobFallbackChecks: () => void;
-  setPendingDeletedTitleIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  /** Hides the queued titles and follows the deletion job in the catalog. */
+  trackQueuedTitleDeletion: (
+    acceptedTitleIds: readonly string[],
+    run: JobRun | null,
+  ) => void;
   setSelectedTitleIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  deletionJobIdsRef: React.MutableRefObject<Set<string>>;
   batchFailureDetail: (error: unknown) => string | null;
   withFailureDetail: (message: string, detail: string | null) => string;
   aggregateDeletePreviews: (previews: DeletePreview[]) => DeletePreview | null;
@@ -51,12 +52,9 @@ export function useBulkDelete({
   client,
   t,
   setGlobalStatus,
-  recordCriticalCatalogMutation,
   registerInteractiveJobRun,
-  scheduleDeletionJobFallbackChecks,
-  setPendingDeletedTitleIds,
+  trackQueuedTitleDeletion,
   setSelectedTitleIds,
-  deletionJobIdsRef,
   batchFailureDetail,
   withFailureDetail,
   aggregateDeletePreviews,
@@ -288,22 +286,11 @@ export function useBulkDelete({
         throw result.error;
       }
       const acceptedIds = result.data?.deleteTitles?.acceptedTitleIds ?? [];
-      if (acceptedIds.length > 0) {
-        recordCriticalCatalogMutation();
-      }
       const run = normalizeJobRun(result.data?.deleteTitles?.jobRun);
+      trackQueuedTitleDeletion(acceptedIds, run);
       if (run) {
-        deletionJobIdsRef.current.add(run.id);
         registerInteractiveJobRun(run);
-        scheduleDeletionJobFallbackChecks();
       }
-      setPendingDeletedTitleIds((current) => {
-        const next = new Set(current);
-        for (const id of acceptedIds) {
-          next.add(id);
-        }
-        return next;
-      });
       setSelectedTitleIds(new Set());
       closeBulkDeleteDialog();
       setGlobalStatus(
@@ -359,16 +346,13 @@ export function useBulkDelete({
     canExcludeFromLists,
     client,
     closeBulkDeleteDialog,
-    deletionJobIdsRef,
-    recordCriticalCatalogMutation,
     registerInteractiveJobRun,
-    scheduleDeletionJobFallbackChecks,
     selectedTitles,
     setBulkActionBusy,
     setGlobalStatus,
-    setPendingDeletedTitleIds,
     setSelectedTitleIds,
     t,
+    trackQueuedTitleDeletion,
   ]);
 
   const openBulkTitleDelete = React.useCallback(() => {
