@@ -303,6 +303,36 @@ impl TitlePayload {
 }
 
 #[ComplexObject]
+impl UserPayload {
+    /// Media servers this user has an active, verified account link to, such
+    /// as the server whose login created the account. Pending invites and
+    /// disabled links are not listed.
+    async fn linked_media_servers(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ExternalAccountProviderValue>> {
+        let providers = match loaders_from_ctx(ctx) {
+            Some(loaders) => {
+                loaders
+                    .linked_media_servers
+                    .load_one(self.id.to_string())
+                    .await?
+            }
+            None => app_from_ctx(ctx)?
+                .users_linked_media_servers(std::slice::from_ref(&*self.id))
+                .await
+                .map_err(to_gql_error)?
+                .remove(self.id.as_str()),
+        };
+        Ok(providers
+            .unwrap_or_default()
+            .into_iter()
+            .map(ExternalAccountProviderValue::from_domain)
+            .collect())
+    }
+}
+
+#[ComplexObject]
 impl TitlePayload {
     /// Effective movie availability for the instance's configured market and delay.
     async fn movie_availability(

@@ -7373,6 +7373,10 @@ const en: LocaleDictionary = {
     "Reset authentication factors for {{name}}? All active sessions and registered authentication factors will be revoked. They will need their primary credentials again. If the login policy requires MFA, they will need to enroll a new passkey or authenticator; otherwise their next password login will succeed without enrollment.",
   "settings.loginEnabled": "Login enabled",
   "settings.loginDisabled": "Login disabled",
+  "settings.accountOrigin.scryer": "Scryer account",
+  "settings.accountOrigin.mediaServerLogin": "Created by {{provider}} login",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Created by media server login",
+  "settings.linkedMediaServer": "Linked to {{provider}}",
   "settings.enableLogin": "Enable login",
   "settings.disableLogin": "Disable login",
   "settings.disableLoginConfirm":

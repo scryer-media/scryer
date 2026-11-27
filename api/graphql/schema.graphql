@@ -37129,6 +37129,12 @@ type UserPayload {
 	Library-specific permission grants.
 	"""
 	libraryPermissions: [UserLibraryPermissionGrantPayload!]!
+	"""
+	Media servers this user has an active, verified account link to, such
+	as the server whose login created the account. Pending invites and
+	disabled links are not listed.
+	"""
+	linkedMediaServers: [ExternalAccountProviderValue!]!
 }
 
 """

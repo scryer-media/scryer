@@ -30,7 +30,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { isVisibleExternalAccountProvider } from "@/lib/constants/integration-providers";
+import {
+  externalAccountProviderLabel as providerLabel,
+  isVisibleExternalAccountProvider,
+} from "@/lib/constants/integration-providers";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type {
@@ -100,19 +103,6 @@ type ExternalAccountInvitesPanelProps = {
   unlinkExternalAccount: (id: string) => Promise<void>;
   unlinkingAccountId: string | null;
 };
-
-function providerLabel(provider: ExternalAccountProvider): string {
-  switch (provider) {
-    case "PLEX":
-      return "Plex";
-    case "JELLYFIN":
-      return "Jellyfin";
-    case "EMBY":
-      return "Emby";
-    default:
-      return provider;
-  }
-}
 
 function providerConnections(
   settings: ExternalAuthRuntimeSettings,

@@ -2307,6 +2307,10 @@ const zh_TW: LocaleDictionary = {
     "確定要重設 {{name}} 的身分驗證要素嗎？所有使用中登入階段與已註冊的驗證要素都將被撤銷。他們將需要再次使用其主要憑證。若登入政策要求 MFA，他們將需要註冊新的通行密鑰或驗證器；否則下次密碼登入將無需註冊即可成功。",
   "settings.loginEnabled": "已啟用登入",
   "settings.loginDisabled": "已停用登入",
+  "settings.accountOrigin.scryer": "Scryer 帳號",
+  "settings.accountOrigin.mediaServerLogin": "由 {{provider}} 登入建立",
+  "settings.accountOrigin.mediaServerLoginUnknown": "由媒體伺服器登入建立",
+  "settings.linkedMediaServer": "已連結 {{provider}}",
   "settings.enableLogin": "啟用登入",
   "settings.disableLogin": "停用登入",
   "settings.disableLoginConfirm":

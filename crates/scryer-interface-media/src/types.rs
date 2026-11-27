@@ -58,6 +58,88 @@ impl From<scryer_application::FileScoreEvaluationView> for FileScoreEvaluationPa
     }
 }
 
+/// Session or restricted authentication result returned after authentication.
+#[derive(SimpleObject, Clone)]
+pub struct LoginPayload {
+    /// Access token or short-lived MFA-enrollment token; clients must treat it as secret.
+    pub token: String,
+    /// Authenticated user summary without password or credential secrets.
+    pub user: UserPayload,
+    /// Token expiry as a UTC timestamp.
+    pub expires_at: DateTime<Utc>,
+    /// UTC time through which MFA verification remains fresh, or null when not verified.
+    pub mfa_verified_until: Option<DateTime<Utc>>,
+    /// UTC time through which account-security changes may be authorized.
+    pub security_action_verified_until: Option<DateTime<Utc>>,
+    /// True when the token can only complete MFA enrollment.
+    pub mfa_enrollment_required: bool,
+    /// True when the token can only replace an administrator-provided temporary password.
+    pub password_change_required: bool,
+    /// Whether the session was requested to persist.
+    pub persist_session: bool,
+}
+
+/// Result of the operator's first-run authentication decision.
+#[derive(SimpleObject)]
+pub struct InitialAuthenticationPayload {
+    /// Whether the initial authentication decision is durably complete.
+    pub completed: bool,
+    /// Login tokens for password authentication; null when authentication is disabled.
+    pub login: Option<LoginPayload>,
+    /// Whether the saved network choice takes effect only after a restart.
+    pub restart_required_for_bind: bool,
+    /// Whether the network choice was not saved because SCRYER_BIND sets the address.
+    pub bind_ignored_because_pinned: bool,
+}
+
+/// Result of completing MFA enrollment during login.
+#[derive(SimpleObject, Clone)]
+pub struct LoginMfaEnrollmentCompletePayload {
+    /// Updated TOTP status without the shared secret.
+    pub status: TotpStatusPayload,
+    /// Newly generated one-time recovery codes.
+    pub recovery_codes: Vec<String>,
+    /// Authenticated login payload issued after enrollment completes.
+    pub login: LoginPayload,
+}
+
+/// Result of completing passkey enrollment during a restricted login enrollment session.
+#[derive(SimpleObject, Clone)]
+pub struct LoginPasskeyEnrollmentCompletePayload {
+    /// Registered passkey summary.
+    pub passkey: PasskeySummaryPayload,
+    /// Authenticated login payload issued after enrollment completes.
+    pub login: LoginPayload,
+}
+
+/// User summary with authorization and credential-presence flags, never credential values.
+#[derive(SimpleObject, Clone)]
+#[graphql(complex)]
+pub struct UserPayload {
+    /// ID of the user.
+    pub id: ID,
+    /// Login username.
+    pub username: String,
+    /// Whether password or external login is enabled.
+    pub login_enabled: bool,
+    /// Whether this is the default administrator account.
+    pub is_default_admin: bool,
+    /// Whether a password is configured, without revealing it.
+    pub has_password: bool,
+    /// Whether a local password must be replaced before the next local-password session is full.
+    pub password_change_required: bool,
+    /// Whether MFA is configured, without revealing its secret.
+    pub has_mfa: bool,
+    /// Whether a passkey is configured.
+    pub has_passkey: bool,
+    /// Local or externally provisioned account origin.
+    pub account_kind: UserAccountKindValue,
+    /// Application-wide permissions granted to the user.
+    pub app_permissions: Vec<AppPermissionValue>,
+    /// Library-specific permission grants.
+    pub library_permissions: Vec<UserLibraryPermissionGrantPayload>,
+}
+
 #[derive(SimpleObject, Clone)]
 #[graphql(complex)]
 /// Catalog metadata, monitoring settings, and media identity for a title.

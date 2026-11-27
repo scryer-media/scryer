@@ -1871,6 +1871,143 @@ async fn graphql_users_auth_factor_status_matches_the_single_user_read() {
 }
 
 #[tokio::test]
+async fn graphql_users_list_only_active_verified_media_server_links() {
+    let ctx = TestContext::new().await;
+    let now = Utc::now();
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let mut created = Vec::new();
+    for username in ["emberfall_linked", "cinderwake_pending", "ashgrove_local"] {
+        created.push(
+            ctx.app
+                .create_user(
+                    &admin,
+                    username.to_string(),
+                    "s3cr3t!!".to_string(),
+                    AppPermissionMask::NONE,
+                    vec![],
+                )
+                .await
+                .expect("create user"),
+        );
+    }
+    let media_servers =
+        MediaServerConnectionStore::new(ctx.db.datastore(), ctx.db.encryption_key_state());
+    for (id, provider) in [
+        ("jellyfin-emberfall", MediaServerProvider::Jellyfin),
+        ("plex-emberfall", MediaServerProvider::Plex),
+        ("plex-cinderwake", MediaServerProvider::Plex),
+    ] {
+        MediaServerConnectionRepository::create(
+            &media_servers,
+            MediaServerConnection {
+                id: id.to_string(),
+                provider,
+                display_name: id.to_string(),
+                base_url: ctx.smg_server.uri(),
+                external_url: None,
+                enabled: true,
+                login_enabled: true,
+                linking_enabled: true,
+                auto_add_enabled: false,
+                default_app_permissions: AppPermissionMask::NONE,
+                default_library_grants: Vec::new(),
+                machine_id: None,
+                api_key: Some(format!("{id}-api-key")),
+                emby_server_id: None,
+                emby_connect_enabled: false,
+                path_mappings: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("seed media server connection");
+    }
+    // One user is linked to Jellyfin and to two Plex servers; another has
+    // only a pending and a disabled link.
+    for (id, user, provider, connection, status, verified) in [
+        (
+            "link-1",
+            &created[0],
+            "plex",
+            "plex-emberfall",
+            "active",
+            true,
+        ),
+        (
+            "link-2",
+            &created[0],
+            "jellyfin",
+            "jellyfin-emberfall",
+            "active",
+            true,
+        ),
+        (
+            "link-3",
+            &created[0],
+            "plex",
+            "plex-cinderwake",
+            "active",
+            true,
+        ),
+        (
+            "link-4",
+            &created[1],
+            "jellyfin",
+            "jellyfin-emberfall",
+            "pending_claim",
+            false,
+        ),
+        (
+            "link-5",
+            &created[1],
+            "plex",
+            "plex-emberfall",
+            "disabled",
+            true,
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO user_external_accounts
+                (id, user_id, provider, connection_id, external_user_id, username,
+                 status, verified_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(&user.id)
+        .bind(provider)
+        .bind(connection)
+        .bind(format!("{id}-external"))
+        .bind(format!("{id}-name"))
+        .bind(status)
+        .bind(verified.then(|| now.to_rfc3339()))
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(ctx.db.pool())
+        .await
+        .expect("seed external account");
+    }
+
+    let body = schema_exec(
+        &ctx,
+        "{ users { id linkedMediaServers } }",
+        Some(manage_users_actor("link-status-manager")),
+    )
+    .await;
+    assert_no_errors(&body);
+    let rows = body["data"]["users"].as_array().expect("users");
+    let linked = |user: &User| {
+        rows.iter()
+            .find(|row| row["id"].as_str() == Some(user.id.as_str()))
+            .map(|row| row["linkedMediaServers"].clone())
+            .expect("created user listed")
+    };
+    assert_eq!(linked(&created[0]), json!(["JELLYFIN", "PLEX"]));
+    assert_eq!(linked(&created[1]), json!([]));
+    assert_eq!(linked(&created[2]), json!([]));
+}
+
+#[tokio::test]
 async fn graphql_set_user_login_enabled_updates_status_and_auth_epoch() {
     let ctx = TestContext::new().await;
     let admin = ctx.app.find_or_create_default_user().await.unwrap();

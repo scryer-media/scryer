@@ -2543,7 +2543,7 @@ export const acquisitionSearchJobQuery = `query AcquisitionSearchJob($id: ID!) {
   }
 }`;
 
-export const usersQuery = `query Users {
+export const usersQuery = `query Users($includeLinkedMediaServers: Boolean! = false) {
   users {
     id
     username
@@ -2554,6 +2554,7 @@ export const usersQuery = `query Users {
     hasMfa
     hasPasskey
     accountKind
+    linkedMediaServers @include(if: $includeLinkedMediaServers)
     appPermissions
     libraryPermissions {
       libraryId
