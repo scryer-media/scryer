@@ -341,30 +341,36 @@ function SmgScryerUpdateBanner({
   return (
     <div
       data-slot="root-shell-notice"
-      className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] text-[var(--scry-body)] backdrop-blur"
+      role="status"
+      className="border-b border-[var(--scry-accent-dark)] bg-[image:var(--scry-accent-grad)] bg-[var(--scry-accent)] text-white shadow-[0_10px_30px_rgba(var(--scry-accent-rgb),0.35)]"
     >
-      <div className="mx-auto flex w-full max-w-[1480px] items-center gap-3 px-4 py-2 text-sm">
-        <CircleFadingArrowUp
-          className="h-4 w-4 flex-none text-[var(--scry-accent-ring)]"
-          aria-hidden="true"
-        />
-        <div className="min-w-0 flex-1 truncate">
-          <span className="font-medium text-[var(--scry-ink2)]">
-            {t("smgUpdate.title")}
+      <div className="mx-auto flex w-full max-w-[1480px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+        <span className="relative flex h-10 w-10 flex-none items-center justify-center">
+          <span
+            className="absolute inset-0 rounded-full bg-white/30 motion-safe:animate-ping"
+            aria-hidden="true"
+          />
+          <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--scry-accent-dark)] shadow-[0_6px_18px_rgba(2,6,23,0.25)]">
+            <CircleFadingArrowUp className="h-6 w-6" aria-hidden="true" />
           </span>
-          <span className="ml-2 text-[var(--scry-muted)]">
+        </span>
+        <div className="min-w-0 flex-1 basis-56">
+          <div className="text-base font-bold leading-tight tracking-tight">
+            {t("smgUpdate.title")}
+          </div>
+          <div className="mt-0.5 text-sm font-medium text-white/90">
             {t("smgUpdate.body", {
               current: currentVersion || t("label.unknown"),
               latest: latestVersion || t("label.unknown"),
             })}
-          </span>
+          </div>
         </div>
         {releaseUrl ? (
           <a
             href={releaseUrl}
             target="_blank"
             rel="noreferrer"
-            className="flex-none rounded-[8px] border border-[var(--scry-border2)] bg-[rgba(var(--scry-accent-rgb),0.12)] px-2.5 py-1 text-xs font-medium text-[var(--scry-accent-text)] transition hover:border-[var(--scry-bhover2)] hover:bg-[rgba(var(--scry-accent-rgb),0.18)]"
+            className="flex-none rounded-[10px] border border-white/60 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
           >
             {t("smgUpdate.releaseNotes")}
           </a>
@@ -372,7 +378,7 @@ function SmgScryerUpdateBanner({
         {status?.eligible ? (
           <ApplicationUpgradeAction
             status={status}
-            className="flex-none"
+            className="h-10 flex-none rounded-[10px] border-white bg-white px-4 text-sm font-bold text-[var(--scry-accent-dark)] shadow-[0_6px_18px_rgba(2,6,23,0.25)] hover:bg-white/90 hover:text-[var(--scry-accent-dark)]"
             refreshStatus={refresh}
             onStatusChanged={() => void refresh()}
           />
@@ -382,7 +388,7 @@ function SmgScryerUpdateBanner({
           onClick={onDismiss}
           label={t("label.dismiss")}
           appearance="ghost"
-          className="h-7 w-7 flex-none rounded-[8px]"
+          className="h-8 w-8 flex-none rounded-[8px] text-white/80 hover:bg-white/15 hover:text-white"
         >
           <X className="h-4 w-4" />
         </IconButton>

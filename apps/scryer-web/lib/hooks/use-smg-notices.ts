@@ -17,6 +17,11 @@ import type {
   SmgScryerUpdateNotice,
   SmgVersionCompatibilityNotice,
 } from "@/components/root/types";
+import {
+  parseSmgScryerUpdateDismissal,
+  smgScryerUpdateSnoozeRemainingMs,
+  type SmgScryerUpdateDismissal,
+} from "@/lib/utils/smg-update-snooze";
 
 const CLOCK_SKEW_REASON = "METADATA_GATEWAY_CLOCK_SKEW";
 const CLOCK_SKEW_TOAST_ID = "metadata-gateway-clock-skew";
@@ -88,6 +93,20 @@ function buildSmgScryerUpdateDismissalValue(
   return `${latest}:${notice.latestVersion.trim()}`;
 }
 
+function readSmgScryerUpdateDismissal(): SmgScryerUpdateDismissal | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return parseSmgScryerUpdateDismissal(
+      window.localStorage.getItem(SMG_SCRYER_UPDATE_DISMISSED_KEY),
+      Date.now(),
+    );
+  } catch {
+    return null;
+  }
+}
+
 export function useSmgNotices({
   t,
   settingsSubscriptionEnabled = true,
@@ -120,14 +139,8 @@ export function useSmgNotices({
   const lastRoutineSmgNoticeRefreshAtRef = useRef(
     initialSessionCache?.refreshedAt ?? 0,
   );
-  const [dismissedSmgScryerUpdate, setDismissedSmgScryerUpdate] = useState(
-    () => {
-      if (typeof window === "undefined") {
-        return "";
-      }
-      return window.localStorage.getItem(SMG_SCRYER_UPDATE_DISMISSED_KEY) ?? "";
-    },
-  );
+  const [dismissedSmgScryerUpdate, setDismissedSmgScryerUpdate] =
+    useState<SmgScryerUpdateDismissal | null>(readSmgScryerUpdateDismissal);
 
   const refreshSmgVersionCompatibilityNotice = useCallback(async () => {
     try {
@@ -295,22 +308,41 @@ export function useSmgNotices({
     () => buildSmgScryerUpdateDismissalValue(smgScryerUpdateNotice),
     [smgScryerUpdateNotice],
   );
+  // The snooze ends on its own timer, so the reminder returns in a tab that
+  // stays open as well as on the next load.
+  useEffect(() => {
+    if (!dismissedSmgScryerUpdate) {
+      return;
+    }
+    const timeoutId = window.setTimeout(
+      () => setDismissedSmgScryerUpdate(null),
+      smgScryerUpdateSnoozeRemainingMs(dismissedSmgScryerUpdate, Date.now()),
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [dismissedSmgScryerUpdate]);
+
   const showSmgScryerUpdateReminder =
     !smgVersionCompatibilityNotice &&
     Boolean(smgScryerUpdateNotice?.available) &&
     Boolean(smgScryerUpdateDismissalValue) &&
-    dismissedSmgScryerUpdate !== smgScryerUpdateDismissalValue;
+    dismissedSmgScryerUpdate?.value !== smgScryerUpdateDismissalValue;
 
   const dismissSmgScryerUpdateReminder = useCallback(() => {
     if (!smgScryerUpdateDismissalValue) {
       return;
     }
-    setDismissedSmgScryerUpdate(smgScryerUpdateDismissalValue);
-    if (typeof window !== "undefined") {
+    const dismissal = {
+      value: smgScryerUpdateDismissalValue,
+      dismissedAt: Date.now(),
+    };
+    setDismissedSmgScryerUpdate(dismissal);
+    try {
       window.localStorage.setItem(
         SMG_SCRYER_UPDATE_DISMISSED_KEY,
-        smgScryerUpdateDismissalValue,
+        JSON.stringify(dismissal),
       );
+    } catch {
+      // Best effort only; without storage the reminder returns on reload.
     }
   }, [smgScryerUpdateDismissalValue]);
 
