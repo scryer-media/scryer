@@ -10436,6 +10436,11 @@ type InstanceFeaturesPayload {
 	Facets an administrator turned off for the whole instance.
 	"""
 	disabledFacets: [MediaFacetValue!]!
+	"""
+	Facets the current user can view, request into, add titles to or
+	manage a library of.
+	"""
+	viewableFacets: [MediaFacetValue!]!
 }
 
 """

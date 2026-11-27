@@ -120,7 +120,7 @@ import {
 } from "@/lib/utils/routes";
 import { cn } from "@/lib/utils";
 import { facetById, isMediaView, facetForView } from "@/lib/facets/registry";
-import { useFacets } from "@/lib/facets/use-facets";
+import { useCatalogFacets } from "@/lib/facets/use-facets";
 import { BackendRestartOverlay } from "@/components/common/backend-restart-overlay";
 import {
   resolveTitleOverviewTargetById,
@@ -1342,7 +1342,8 @@ function AuthenticatedHomePage({
     [navigateToOverview],
   );
 
-  const facetVisibility = useFacets();
+  // Catalog entries also leave the facets this user has no use for.
+  const facetVisibility = useCatalogFacets();
   const topNav = useMemo(
     () => [
       {

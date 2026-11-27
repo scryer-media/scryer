@@ -7,6 +7,7 @@ import {
   combineHiddenFacets,
   filterVisibleFacets,
   hiddenFacetsFromUiSettings,
+  hideUnusableCatalogFacets,
   isFacetVisible,
   visibleFacetOr,
   visibleFacets,
@@ -76,6 +77,24 @@ export function useFacets(): FacetVisibility {
       ),
     [key, disabledKey],
   );
+}
+
+/**
+ * `useFacets()` narrowed for the catalog entries only (navigation, route
+ * commands and the redirect to a catalog): it also leaves out the facets the
+ * user cannot view, request into, add to or manage. Pickers, discovery and
+ * search keep using `useFacets()`.
+ */
+export function useCatalogFacets(): FacetVisibility {
+  const base = useFacets();
+  const { viewableFacets } = useInstanceFeatures();
+  const viewableKey = viewableFacets ? viewableFacets.join(",") : null;
+  return React.useMemo(() => {
+    const viewable =
+      viewableKey === null ? null : viewableKey ? viewableKey.split(",") : [];
+    const hidden = hideUnusableCatalogFacets(base.hidden, viewable);
+    return hidden === base.hidden ? base : facetVisibility(hidden);
+  }, [base, viewableKey]);
 }
 
 /** Facets an administrator turned off for the whole instance. */

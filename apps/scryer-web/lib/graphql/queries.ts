@@ -3966,6 +3966,7 @@ export const instanceFeaturesQuery = `query InstanceFeatures {
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
     disabledFacets
+    viewableFacets
   }
 }`;
 
