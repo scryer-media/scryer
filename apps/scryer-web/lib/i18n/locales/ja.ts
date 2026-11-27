@@ -1526,6 +1526,11 @@ const ja: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "このファイルに複数のエピソードを割り当てる",
   "queue.manualImportApplySuggestions": "すべてに候補を適用",
+  "queue.manualImportVerdict.UPGRADE": "アップグレード",
+  "queue.manualImportVerdict.EQUAL": "同等の品質",
+  "queue.manualImportVerdict.DOWNGRADE": "ダウングレード",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "新しいファイル",
+  "queue.manualImportVerdictEstimated": "推定",
   "queue.removeFailed": "削除に失敗しました",
   "queue.manualImportTooltip":
     "手動インポートは対応が必要なキューアイテムで利用できます。",

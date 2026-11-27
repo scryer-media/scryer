@@ -1964,6 +1964,11 @@ const nl: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Meerdere afleveringen aan dit bestand toewijzen",
   "queue.manualImportApplySuggestions": "Suggesties op alles toepassen",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Zelfde kwaliteit",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Nieuw bestand",
+  "queue.manualImportVerdictEstimated": "geschat",
   "queue.removeFailed": "Mislukte verwijderen",
   "queue.manualImportTooltip":
     "Handmatige import is beschikbaar voor wachtrijitems die aandacht vereisen.",

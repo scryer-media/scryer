@@ -1571,6 +1571,11 @@ const pt_BR: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Atribuir vários episódios a este arquivo",
   "queue.manualImportApplySuggestions": "Aplicar sugestões a todos",
+  "queue.manualImportVerdict.UPGRADE": "Melhoria",
+  "queue.manualImportVerdict.EQUAL": "Mesma qualidade",
+  "queue.manualImportVerdict.DOWNGRADE": "Piora",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Arquivo novo",
+  "queue.manualImportVerdictEstimated": "estimado",
   "queue.removeFailed": "Falha ao remover",
   "queue.manualImportTooltip":
     "A importação manual está disponível para itens da fila que precisam de atenção.",

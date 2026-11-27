@@ -2398,6 +2398,11 @@ const cs: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Přiřadit tomuto souboru více epizod",
   "queue.manualImportApplySuggestions": "Použít návrhy na vše",
+  "queue.manualImportVerdict.UPGRADE": "Vylepšení",
+  "queue.manualImportVerdict.EQUAL": "Stejná kvalita",
+  "queue.manualImportVerdict.DOWNGRADE": "Zhoršení",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Nový soubor",
+  "queue.manualImportVerdictEstimated": "odhad",
   "queue.removeFailed": "Odebrání se nezdařilo",
   "queue.manualImportTooltip":
     "Ruční import je dostupný pro položky fronty vyžadující pozornost.",
