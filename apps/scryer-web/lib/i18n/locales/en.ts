@@ -4350,6 +4350,8 @@ const en: LocaleDictionary = {
     "Choose both a season and episode.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "A series movie search cannot include a season or episode.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "This search takes a title, not free text. Run a free-text search as an interactive search instead.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Choose a title to search for releases.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":

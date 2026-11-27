@@ -26435,6 +26435,8 @@ type QueryRoot {
 	): WantedItemPayload
 	"""
 	Search indexers for a title, series movie link, or episode and return at most 200 results.
+	A free-text `query` is refused with `INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`;
+	run it with `startInteractiveReleaseSearch` instead.
 	"""
 	searchReleases(
 		"""
@@ -31076,12 +31078,14 @@ enum ScriptTriggerValue {
 }
 
 """
-Filters for an interactive release search. Exactly one of `titleId` and
-`query` names the subject.
+Filters for a release search. `startInteractiveReleaseSearch` takes
+exactly one of `titleId` and `query` as the subject; `searchReleases`
+takes `titleId` and refuses `query`.
 """
 input SearchReleasesInput {
 	"""
-	Title identity whose releases are searched; required unless `query` is given.
+	Title identity whose releases are searched. Required by
+	`searchReleases`; an interactive search needs it unless `query` is given.
 	"""
 	titleId: ID
 	"""
@@ -31100,9 +31104,9 @@ input SearchReleasesInput {
 	episode: String
 	"""
 	Optional limit. A title search lists at most this many results
-	(default 50, max 200); a `query` search asks each indexer for this many
-	(default 100, 1 to 500); `aggregatePageSize` sets how many merged results
-	each page lists.
+	(default 50, max 200). An interactive `query` search asks each indexer
+	for this many (default 100, 1 to 500); `aggregatePageSize` sets how many
+	merged results each page lists.
 	"""
 	limit: Int
 	"""
@@ -31112,7 +31116,9 @@ input SearchReleasesInput {
 	"""
 	aggregatePageSize: Int
 	"""
-	Raw operator query sent as typed to each indexer, without a catalog title.
+	Raw operator query sent as typed to each indexer, without a catalog
+	title. Interactive searches only: `searchReleases` refuses it with
+	`INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`.
 	"""
 	query: String
 	"""

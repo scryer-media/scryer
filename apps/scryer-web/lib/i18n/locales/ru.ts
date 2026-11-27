@@ -11442,6 +11442,8 @@ const ru: LocaleDictionary = {
     "Выберите и сезон, и эпизод.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "Поиск фильма сериала не может включать сезон или эпизод.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "Этот поиск принимает тайтл, а не произвольный текст. Для поиска по тексту запустите интерактивный поиск.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Выберите тайтл для поиска релизов.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":
