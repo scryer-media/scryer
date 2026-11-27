@@ -165,8 +165,13 @@ function itemIdentityKey(item: DiscoveryHomeCard) {
   return `${item.targetKind}:${item.targetKey}`;
 }
 
-function itemTypeLabel(item: DiscoveryHomeCard) {
-  const raw = item.contentType || item.targetKind;
+// The label follows the resolved facet, so an anime film reads MOVIE while
+// Anime is hidden. Items with no facet fall back to their own kind.
+function itemTypeLabel(
+  item: DiscoveryHomeCard,
+  facet: DiscoveryContentType | null | undefined,
+) {
+  const raw = facet ?? (item.contentType || item.targetKind);
   return raw.replace(/[_-]+/g, " ").trim().toUpperCase();
 }
 
@@ -456,7 +461,7 @@ function DiscoveryRailCard({
         title={discoveryItemDisplayTitle(item)}
         year={subtitle}
         facet={facet}
-        facetLabel={itemTypeLabel(item)}
+        facetLabel={itemTypeLabel(item, facet)}
         posterUrl={selectPosterVariantUrl(item.posterUrl, "w250")}
         isAdult={item.isAdult}
         addable={addable}
@@ -895,7 +900,7 @@ function DiscoveryHero({
               {FacetIcon ? (
                 <FacetIcon className="h-3.5 w-3.5" aria-hidden="true" />
               ) : null}
-              {itemTypeLabel(item)}
+              {itemTypeLabel(item, facet)}
             </span>
           </div>
           <h2
