@@ -1032,14 +1032,15 @@ impl AppUseCase {
             } else {
                 outcome.and_then(incomplete_indexer_reason)
             };
-            let partly_searched = incomplete
-                .as_ref()
-                .is_some_and(IncompleteIndexerReason::is_partly_searched);
+            let answered_short = incomplete.as_ref().is_some_and(|reason| {
+                reason.is_partly_searched()
+                    || (source.delivered > 0 && reason.answered_when_rows_delivered())
+            });
             view.status = if source.pending {
                 InteractiveReleaseSearchIndexerStatus::Searching
             } else if skip.is_some() {
                 InteractiveReleaseSearchIndexerStatus::Skipped
-            } else if source.stopped && !partly_searched {
+            } else if source.stopped && !answered_short {
                 InteractiveReleaseSearchIndexerStatus::Failed
             } else {
                 InteractiveReleaseSearchIndexerStatus::Completed
@@ -1314,6 +1315,8 @@ impl AppUseCase {
                         .await;
                     }
                     Ok((batch, failure_reason, None, unroutable)) => {
+                        let delivered_rows =
+                            !batch.is_empty() || unroutable.values().any(|count| *count > 0);
                         self.merge_interactive_indexer_batch(
                             &job_id,
                             &indexer_id,
@@ -1342,10 +1345,18 @@ impl AppUseCase {
                                 )
                                 .await;
                             }
-                            // Searched in part: the merged results stay and
+                            // Searched in part, or stopped short at a rate
+                            // limit or the provider's result limit after
+                            // delivering rows: the merged results stay and
                             // the indexer reads as answered, with the reason
-                            // and the delay beside it.
-                            Some(reason) if reason.is_partly_searched() => {
+                            // and the delay beside it. What it delivered
+                            // decides this, not which of its queries' reasons
+                            // was kept.
+                            Some(reason)
+                                if reason.is_partly_searched()
+                                    || (delivered_rows
+                                        && reason.answered_when_rows_delivered()) =>
+                            {
                                 self.set_interactive_indexer_status(
                                     &job_id,
                                     &indexer_id,

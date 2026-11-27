@@ -315,3 +315,49 @@ fn compact_cutoff_facts_preserve_every_scope_decision() {
         );
     }
 }
+
+#[test]
+fn cutoff_falls_back_to_the_scanned_resolution_when_a_file_has_no_quality() {
+    use crate::acquisition::decision_helpers::{CutoffScope, analyzed_cutoff_quality_for_scope};
+    let file = |episode: &str, quality: Option<&str>, resolution: Option<&str>| TitleMediaFile {
+        episode_id: Some(episode.into()),
+        quality_label: quality.map(Into::into),
+        resolution: resolution.map(Into::into),
+        created_at: "2026-01-01".into(),
+        ..Default::default()
+    };
+    let files = vec![
+        // Scanned, never labelled: judged at its resolution.
+        file("scanned", None, Some("1080p")),
+        file("blank-label", Some("  "), Some(" 720p ")),
+        // Labelled: the label decides, as before.
+        file("labelled", Some("720p"), Some("2160p")),
+        // Neither: no quality reached, as before.
+        file("unknown", None, None),
+        file("blank", Some(""), Some(" ")),
+    ];
+    let compact: Vec<_> = files
+        .iter()
+        .map(crate::MediaFileCutoffSummary::from)
+        .collect();
+    let criteria = crate::QualityProfileCriteria::default();
+    for (episode, expected) in [
+        ("scanned", Some("1080p")),
+        ("blank-label", Some("720p")),
+        ("labelled", Some("720p")),
+        ("unknown", None),
+        ("blank", None),
+    ] {
+        let scope = CutoffScope::Episode(episode.into());
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(&files, &scope, &criteria),
+            expected,
+            "{episode}"
+        );
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(&compact, &scope, &criteria),
+            expected,
+            "{episode}: compact rows"
+        );
+    }
+}

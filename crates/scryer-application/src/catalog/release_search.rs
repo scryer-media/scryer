@@ -1289,6 +1289,14 @@ impl IncompleteIndexerReason {
         self.code == Some(crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED)
     }
 
+    /// Whether an indexer that delivered rows still counts as answered with
+    /// this reason beside it: it stopped short at its budget, a rate limit or
+    /// the provider's result limit rather than failing. Which of several
+    /// such reasons wins never decides the indexer's status.
+    pub fn answered_when_rows_delivered(&self) -> bool {
+        self.kind != IncompleteIndexerKind::Failed
+    }
+
     /// Whether the indexer was never asked because its query budget had no
     /// slot within the wait an interactive search allows.
     pub fn is_not_searched_for_query_budget(&self) -> bool {
@@ -1713,15 +1721,31 @@ fn same_indexer_listing(first: &IndexerSearchResult, second: &IndexerSearchResul
     }
 }
 
+/// A release name as two indexers may spell it differently: its letters and
+/// digits only, ASCII-lowercased, so `Show.S01E01.WEB-DL.H.264` and
+/// `Show S01E01 WEBDL H264` are one release.
+fn release_name_identity(title: &str) -> String {
+    title
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
 pub(crate) fn dedupe_cross_indexer_release_results(
     results: Vec<IndexerSearchResult>,
     indexer_priority_by_name: &HashMap<String, i64>,
     preferred_source_kind: &str,
 ) -> Vec<IndexerSearchResult> {
-    // Per key, the surviving results: all from one indexer, since releases
-    // from the same indexer are distinct listings and never displace each
-    // other. The first one stands for the group against other indexers.
-    let mut best_by_key: std::collections::HashMap<String, Vec<usize>> =
+    // A listing only gives way to another indexer's listing of the same
+    // release: the same dedup key and the same release name. The key alone
+    // also joins distinct releases of one episode (another service, an added
+    // episode title), and a release only one indexer carries must survive.
+    //
+    // Per release, the surviving results: all from one indexer, since
+    // listings from the same indexer never displace each other. The first one
+    // stands for the group against other indexers.
+    let mut best_by_release: std::collections::HashMap<(String, String), Vec<usize>> =
         std::collections::HashMap::new();
     let mut remove_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
@@ -1734,8 +1758,9 @@ pub(crate) fn dedupe_cross_indexer_release_results(
         if key.is_empty() {
             continue;
         }
+        let release = (key, release_name_identity(&result.title));
 
-        if let Some(survivors) = best_by_key.get_mut(&key) {
+        if let Some(survivors) = best_by_release.get_mut(&release) {
             let existing = &results[survivors[0]];
             if same_indexer_listing(existing, result) {
                 survivors.push(idx);
@@ -1769,7 +1794,7 @@ pub(crate) fn dedupe_cross_indexer_release_results(
                 remove_indices.insert(idx);
             }
         } else {
-            best_by_key.insert(key, vec![idx]);
+            best_by_release.insert(release, vec![idx]);
         }
     }
 
