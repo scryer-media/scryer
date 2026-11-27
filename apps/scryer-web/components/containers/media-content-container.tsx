@@ -1488,6 +1488,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     storageKeySuffix: "window",
     // Narrow screens scroll the page instead of the grid.
     anchorAttribute: "data-catalog-title-id",
+    anchorRootSelector: "[data-catalog-poster-grid='true']",
   });
 
   React.useLayoutEffect(() => {

@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  anchoredScrollTop,
+  captureScrollAnchors,
   pickScrollAnchors,
   resolveAnchoredScrollTop,
+  type ScrollTarget,
 } from "./use-overview-window-scroll-restoration.ts";
 
 const ROW_HEIGHT = 100;
@@ -79,4 +82,78 @@ test("the anchored offset never goes above the top", () => {
     () => 0,
   );
   assert.equal(next, 0);
+});
+
+const ANCHOR_ATTRIBUTE = "data-catalog-title-id";
+
+/** A container holding rows laid out like `gridRows`, as the DOM reports them. */
+function fakeRowRoot(keys: string[], firstTop: number) {
+  const rows = gridRows(keys, firstTop).map((row) => ({
+    getAttribute: (name: string) =>
+      name === ANCHOR_ATTRIBUTE ? row.key : null,
+    getBoundingClientRect: () => ({ top: row.top, bottom: row.bottom }),
+    key: row.key,
+  }));
+  const root = {
+    querySelectorAll: (selector: string) => {
+      assert.equal(selector, `[${ANCHOR_ATTRIBUTE}]`);
+      return rows;
+    },
+    querySelector: (selector: string) =>
+      rows.find((row) => selector === `[${ANCHOR_ATTRIBUTE}="${row.key}"]`) ??
+      null,
+  };
+  return root as unknown as ParentNode;
+}
+
+test("window mode takes anchors only from the list's own container", () => {
+  const page = { scrollY: 400 } as unknown as ScrollTarget;
+  const grid = fakeRowRoot(["a", "b", "c", "d", "e", "f"], -150);
+  assert.deepEqual(
+    captureScrollAnchors(page, "window", ANCHOR_ATTRIBUTE, grid),
+    [
+      { key: "d", offset: -50 },
+      { key: "e", offset: -50 },
+      { key: "f", offset: -50 },
+    ],
+  );
+  // With no container mounted there is nothing to anchor to, rather than
+  // whatever else on the page carries the attribute.
+  assert.deepEqual(
+    captureScrollAnchors(page, "window", ANCHOR_ATTRIBUTE, null),
+    [],
+  );
+});
+
+test("window mode restores to the row found in the list's container", () => {
+  const css = globalThis as { CSS?: { escape: (value: string) => string } };
+  const previousCss = css.CSS;
+  css.CSS = { escape: (value) => value };
+  try {
+    const page = { scrollY: 400 } as unknown as ScrollTarget;
+    // Row "d" now sits 30px lower than its saved offset of -50.
+    const grid = fakeRowRoot(["a", "b", "c", "d", "e", "f"], -120);
+    assert.equal(
+      anchoredScrollTop(
+        page,
+        "window",
+        ANCHOR_ATTRIBUTE,
+        [{ key: "d", offset: -50 }],
+        grid,
+      ),
+      430,
+    );
+    assert.equal(
+      anchoredScrollTop(
+        page,
+        "window",
+        ANCHOR_ATTRIBUTE,
+        [{ key: "d", offset: -50 }],
+        null,
+      ),
+      null,
+    );
+  } finally {
+    css.CSS = previousCss;
+  }
 });

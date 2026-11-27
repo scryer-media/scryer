@@ -120,10 +120,19 @@ function readSavedScrollAnchors(storageKey: string) {
   );
 }
 
-/** Where anchored rows are looked up, and the top edge they are measured from. */
-function anchorFrame(target: ScrollTarget, kind: ScrollTargetKind) {
+/**
+ * Where anchored rows are looked up, and the top edge they are measured from.
+ * When the page scrolls, rows are looked up only inside `windowRoot`, the
+ * list's own container, so nothing else on the page can be taken for a row;
+ * without it there is nothing to anchor to.
+ */
+function anchorFrame(
+  target: ScrollTarget,
+  kind: ScrollTargetKind,
+  windowRoot: ParentNode | null,
+) {
   if (kind === "window") {
-    return { root: document as ParentNode, viewportTop: 0 };
+    return windowRoot ? { root: windowRoot, viewportTop: 0 } : null;
   }
   const element = target as HTMLElement;
   return {
@@ -132,12 +141,17 @@ function anchorFrame(target: ScrollTarget, kind: ScrollTargetKind) {
   };
 }
 
-function captureScrollAnchors(
+export function captureScrollAnchors(
   target: ScrollTarget,
   kind: ScrollTargetKind,
   anchorAttribute: string,
-) {
-  const { root, viewportTop } = anchorFrame(target, kind);
+  windowRoot: ParentNode | null,
+): ScrollAnchor[] {
+  const frame = anchorFrame(target, kind, windowRoot);
+  if (!frame) {
+    return [];
+  }
+  const { root, viewportTop } = frame;
   const rows = root.querySelectorAll<HTMLElement>(`[${anchorAttribute}]`);
   return pickScrollAnchors(
     rows.length,
@@ -154,13 +168,18 @@ function captureScrollAnchors(
   );
 }
 
-function anchoredScrollTop(
+export function anchoredScrollTop(
   target: ScrollTarget,
   kind: ScrollTargetKind,
   anchorAttribute: string,
   anchors: readonly ScrollAnchor[],
-) {
-  const { root, viewportTop } = anchorFrame(target, kind);
+  windowRoot: ParentNode | null,
+): number | null {
+  const frame = anchorFrame(target, kind, windowRoot);
+  if (!frame) {
+    return null;
+  }
+  const { root, viewportTop } = frame;
   return resolveAnchoredScrollTop(
     anchors,
     readScrollTop(target, kind),
@@ -172,8 +191,8 @@ function anchoredScrollTop(
   );
 }
 
-type ScrollTarget = Window | HTMLElement;
-type ScrollTargetKind = "window" | "element";
+export type ScrollTarget = Window | HTMLElement;
+export type ScrollTargetKind = "window" | "element";
 
 function storageKeyForPath(pathname: string, suffix: string) {
   return `${OVERVIEW_SCROLL_STORAGE_PREFIX}${pathname}:${suffix}`;
@@ -304,6 +323,7 @@ function useOverviewScrollRestoration({
   getMaxScrollTop,
   restoreScrollTop,
   anchorAttribute,
+  getAnchorRoot,
 }: {
   enabled: boolean;
   ready: boolean;
@@ -314,6 +334,8 @@ function useOverviewScrollRestoration({
   restoreScrollTop?: (nextTop: number) => void;
   /** The attribute whose value keys each row. */
   anchorAttribute?: string;
+  /** In window mode, the list's container that rows are looked up in. */
+  getAnchorRoot?: () => ParentNode | null;
 }) {
   const location = useLocation();
   const pendingScrollTopRef = React.useRef<number | null>(null);
@@ -373,7 +395,12 @@ function useOverviewScrollRestoration({
       if (pendingScrollTopRef.current != null) {
         return;
       }
-      const anchors = captureScrollAnchors(target, kind, anchorAttribute);
+      const anchors = captureScrollAnchors(
+        target,
+        kind,
+        anchorAttribute,
+        getAnchorRoot?.() ?? null,
+      );
       overviewScrollAnchorMemory.set(storageKey, anchors);
       window.sessionStorage.setItem(
         anchorStorageKey(storageKey),
@@ -436,7 +463,7 @@ function useOverviewScrollRestoration({
         window.clearTimeout(anchorTimer);
       }
     };
-  }, [anchorAttribute, enabled, getTarget, kind, storageKey]);
+  }, [anchorAttribute, enabled, getAnchorRoot, getTarget, kind, storageKey]);
 
   React.useLayoutEffect(() => {
     if (!enabled || !ready || typeof window === "undefined") {
@@ -470,7 +497,13 @@ function useOverviewScrollRestoration({
       const anchors = pendingAnchorsRef.current;
       const anchoredTop =
         anchorAttribute && anchors
-          ? anchoredScrollTop(target, kind, anchorAttribute, anchors)
+          ? anchoredScrollTop(
+              target,
+              kind,
+              anchorAttribute,
+              anchors,
+              getAnchorRoot?.() ?? null,
+            )
           : null;
       if (anchoredTop != null) {
         // Rows above the anchor take their real height as they render, some
@@ -554,6 +587,7 @@ function useOverviewScrollRestoration({
   }, [
     anchorAttribute,
     enabled,
+    getAnchorRoot,
     getMaxScrollTop,
     getTarget,
     kind,
@@ -567,6 +601,7 @@ export function useOverviewWindowScrollRestoration({
   ready,
   storageKeySuffix = "window",
   anchorAttribute,
+  anchorRootSelector,
 }: {
   enabled: boolean;
   ready: boolean;
@@ -576,10 +611,19 @@ export function useOverviewWindowScrollRestoration({
    * restored to the same row instead of the same pixel offset.
    */
   anchorAttribute?: string;
+  /** Selects the list's container; rows are looked up only inside it. */
+  anchorRootSelector?: string;
 }) {
   const getTarget = React.useCallback(
     () => (typeof window === "undefined" ? null : window),
     [],
+  );
+  const getAnchorRoot = React.useCallback(
+    () =>
+      anchorRootSelector && typeof document !== "undefined"
+        ? document.querySelector(anchorRootSelector)
+        : null,
+    [anchorRootSelector],
   );
 
   useOverviewScrollRestoration({
@@ -588,6 +632,7 @@ export function useOverviewWindowScrollRestoration({
     storageKeySuffix,
     kind: "window",
     anchorAttribute,
+    getAnchorRoot,
     getTarget,
   });
 }
