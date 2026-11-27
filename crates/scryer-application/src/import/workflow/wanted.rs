@@ -104,7 +104,10 @@ async fn execute_resolved_episode_import(
     // One file for several episodes is named the way rename names a file
     // linked to all of them, so a rename right after the import changes
     // nothing. A single-episode file keeps the caller's tokens.
-    let span = crate::library::rename::multi_episode_rename_tokens(target_episodes);
+    let span_collections =
+        crate::library::rename::multi_episode_rename_collections(app, target_episodes).await?;
+    let span =
+        crate::library::rename::multi_episode_rename_tokens(target_episodes, &span_collections);
     let span = span.as_ref();
     let rename_episode_number = span
         .and_then(|span| span.episode.as_deref())
