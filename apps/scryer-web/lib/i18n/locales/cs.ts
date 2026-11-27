@@ -1337,6 +1337,12 @@ const cs: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Oprávnění",
   "settings.mediaServerAutoAddEnabled":
     "Automaticky přidávat nové ověřené uživatele",
+  "settings.mediaServerRefreshOffer":
+    "Obnovit knihovnu tohoto serveru, když Scryer importuje, přejmenuje, smaže nebo přesune média",
+  "settings.mediaServerRefreshOfferHelp":
+    "Přihlásí toto připojení v Oznámeních k: {{events}}. Tam to můžete změnit nebo odebrat.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Obnovení knihovny po importech vyžaduje oznamovací plugin tohoto serveru, který není nainstalován. Pro instalaci otevřete",
   "settings.mediaServerPathMappings": "Mapování cest",
   "settings.mediaServerPathMappingsHelp":
     "Každé pravidlo se ukládá jako cesta na serveru => cesta ve Scryeru.",
@@ -3898,6 +3904,8 @@ const cs: LocaleDictionary = {
   "status.editingRule": "Úprava pravidla {{name}}",
   "status.deletingRule": "Smazat pravidlo {{name}}?",
   "status.mediaServerCreated": "Připojení mediálního serveru uloženo.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Připojení mediálního serveru uloženo, ale tyto odběry obnovení knihovny nebyly vytvořeny: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Připojení mediálního serveru aktualizováno.",
   "status.mediaServerDeleted": "Mediální server {{name}} smazán.",
   "status.plexServersDiscovered": "Servery Plex načteny.",

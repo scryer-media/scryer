@@ -1183,6 +1183,12 @@ const ru: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Разрешения",
   "settings.mediaServerAutoAddEnabled":
     "Автоматически добавлять новых подтверждённых пользователей",
+  "settings.mediaServerRefreshOffer":
+    "Обновлять библиотеку этого сервера, когда Scryer импортирует, переименовывает, удаляет или перемещает медиа",
+  "settings.mediaServerRefreshOfferHelp":
+    "Подписывает это подключение в разделе «Уведомления» на: {{events}}. Изменить или удалить подписку можно там.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Для обновления библиотеки после импорта нужен плагин уведомлений этого сервера, но он не установлен. Чтобы установить его, откройте",
   "settings.defaultAppPermissions": "Разрешения приложения по умолчанию",
   "settings.defaultLibraryPermissions": "Разрешения библиотеки по умолчанию",
   "settings.mediaServerPathMappings": "Сопоставление путей",
@@ -3704,6 +3710,8 @@ const ru: LocaleDictionary = {
   "status.editingRule": "Редактирование правила {{name}}",
   "status.deletingRule": "Удалить правило {{name}}?",
   "status.mediaServerCreated": "Подключение к медиасерверу сохранено.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Подключение к медиасерверу сохранено, но эти подписки на обновление библиотеки не созданы: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Подключение к медиасерверу обновлено.",
   "status.mediaServerDeleted": "Медиасервер {{name}} удалён.",
   "status.plexServersDiscovered": "Серверы Plex загружены.",

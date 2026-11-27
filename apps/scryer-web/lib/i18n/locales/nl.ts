@@ -1116,6 +1116,12 @@ const nl: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Rechten",
   "settings.mediaServerAutoAddEnabled":
     "Nieuwe geverifieerde gebruikers automatisch toevoegen",
+  "settings.mediaServerRefreshOffer":
+    "De bibliotheek van deze server vernieuwen wanneer Scryer media importeert, hernoemt, verwijdert of verplaatst",
+  "settings.mediaServerRefreshOfferHelp":
+    "Abonneert deze verbinding onder Meldingen op: {{events}}. Je kunt dit daar wijzigen of verwijderen.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Bibliotheekvernieuwing na imports heeft de meldingsplugin van deze server nodig, die niet is geïnstalleerd. Open om hem te installeren",
   "settings.mediaServerPathMappings": "Padmappings",
   "settings.mediaServerPathMappingsHelp":
     "Elke regel wordt opgeslagen als serverpad => Scryer-pad.",
@@ -3220,6 +3226,8 @@ const nl: LocaleDictionary = {
   "status.editingRule": "Regel {{name}} bewerken",
   "status.deletingRule": "Regel {{name}} verwijderen?",
   "status.mediaServerCreated": "Mediaserververbinding opgeslagen.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Mediaserververbinding opgeslagen, maar deze abonnementen voor bibliotheekvernieuwing zijn niet aangemaakt: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Mediaserververbinding bijgewerkt.",
   "status.mediaServerDeleted": "Mediaserver {{name}} verwijderd.",
   "status.plexServersDiscovered": "Plex-servers geladen.",

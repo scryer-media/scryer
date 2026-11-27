@@ -5955,6 +5955,12 @@ const en: LocaleDictionary = {
   "settings.mediaServerEnabled": "Enable media server connection",
   "settings.mediaServerAuthCapabilities": "Permissions",
   "settings.mediaServerAutoAddEnabled": "Auto-add new verified users",
+  "settings.mediaServerRefreshOffer":
+    "Refresh this server's library when Scryer imports, renames, deletes or moves media",
+  "settings.mediaServerRefreshOfferHelp":
+    "Subscribes this connection under Notifications to: {{events}}. You can change or remove it there.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Library refresh after imports needs this server's notification plugin, which is not installed. To install it, open",
   "settings.mediaServerPathMappings": "Path Mappings",
   "settings.mediaServerPathMappingsHelp":
     "Each rule is saved as server path => Scryer path.",
@@ -8755,6 +8761,8 @@ const en: LocaleDictionary = {
   "status.editingRule": "Editing rule {{name}}",
   "status.deletingRule": "Delete rule {{name}}?",
   "status.mediaServerCreated": "Media server connection saved.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Media server connection saved, but these library refresh subscriptions were not created: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Media server connection updated.",
   "status.mediaServerDeleted": "Deleted media server {{name}}.",
   "status.plexServersDiscovered": "Plex servers loaded.",
