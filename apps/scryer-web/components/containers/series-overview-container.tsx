@@ -371,6 +371,11 @@ type SeriesOverviewContainerProps = {
   heroLeadingAction?: React.ReactNode;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
+  /** Tells the list behind this overview that a deletion was queued. */
+  onTitleDeletionQueued?: (
+    acceptedTitleIds: readonly string[],
+    run: JobRun,
+  ) => void;
   onTitleResolved?: (title: OverviewTitleTarget) => void;
   initialEpisodeId?: string | null;
 };
@@ -425,6 +430,7 @@ export const SeriesOverviewContainer = React.memo(
     heroLeadingAction,
     onTitleNotFound,
     onBackToList,
+    onTitleDeletionQueued,
     onTitleResolved,
     initialEpisodeId,
   }: SeriesOverviewContainerProps) {
@@ -1635,9 +1641,11 @@ export const SeriesOverviewContainer = React.memo(
           .toPromise();
         if (error) throw error;
         const run = normalizeJobRun(data?.deleteTitles?.jobRun);
-        if (!run || !data?.deleteTitles?.acceptedTitleIds?.includes(title.id)) {
+        const acceptedTitleIds = data?.deleteTitles?.acceptedTitleIds ?? [];
+        if (!run || !acceptedTitleIds.includes(title.id)) {
           throw new Error(t("status.apiError"));
         }
+        onTitleDeletionQueued?.(acceptedTitleIds, run);
         setDeleteDialogOpen(false);
         setDeleteFilesOnDisk(false);
 
@@ -1694,6 +1702,7 @@ export const SeriesOverviewContainer = React.memo(
       client,
       deleteFilesOnDisk,
       onBackToList,
+      onTitleDeletionQueued,
       onTitleNotFound,
       registerInteractiveJobRun,
       titleDeletePreview,

@@ -2591,6 +2591,10 @@ const ru: LocaleDictionary = {
     "Сбросить MFA для пользователя {{name}}? При следующем входе ему потребуется повторно настроить MFA.",
   "settings.loginEnabled": "Вход разрешён",
   "settings.loginDisabled": "Вход запрещён",
+  "settings.accountOrigin.scryer": "Учётная запись Scryer",
+  "settings.accountOrigin.mediaServerLogin": "Создана при входе через {{provider}}",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Создана при входе через медиасервер",
+  "settings.linkedMediaServer": "Связана с {{provider}}",
   "settings.enableLogin": "Разрешить вход",
   "settings.disableLogin": "Запретить вход",
   "settings.disableLoginConfirm":

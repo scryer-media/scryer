@@ -136,7 +136,9 @@ export function SettingsUsersContainer() {
 
   const refreshUsers = useCallback(async () => {
     try {
-      const { data, error } = await client.query(usersQuery, {}).toPromise();
+      const { data, error } = await client
+        .query(usersQuery, { includeLinkedMediaServers: true })
+        .toPromise();
       if (error) throw error;
       const users = (data.users || []).map((user: UserRecord) => ({
         ...user,

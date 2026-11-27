@@ -184,7 +184,10 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
-import { catalogDeletionRefresh } from "@/lib/utils/catalog-deletion-refresh";
+import {
+  catalogDeletionRefresh,
+  withPendingDeletedTitleIds,
+} from "@/lib/utils/catalog-deletion-refresh";
 import {
   reactiveRefreshEpoch,
   useReactiveRefresh,
@@ -2472,6 +2475,27 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       );
   }, [clearDeletionFallbackTimers, refreshTrackedDeletionJobs]);
 
+  /**
+   * Hides titles whose deletion was just queued and follows the deletion job,
+   * so their rows leave the list even when the event feed cannot say which
+   * titles were deleted. Every delete action in this catalog reports here.
+   */
+  const trackQueuedTitleDeletion = React.useCallback(
+    (acceptedTitleIds: readonly string[], run: JobRun | null) => {
+      if (acceptedTitleIds.length > 0) {
+        recordCriticalCatalogMutation();
+      }
+      if (run) {
+        deletionJobIdsRef.current.add(run.id);
+        scheduleDeletionJobFallbackChecks();
+      }
+      setPendingDeletedTitleIds((current) =>
+        withPendingDeletedTitleIds(current, acceptedTitleIds),
+      );
+    },
+    [recordCriticalCatalogMutation, scheduleDeletionJobFallbackChecks],
+  );
+
   React.useEffect(
     () => clearDeletionFallbackTimers,
     [clearDeletionFallbackTimers],
@@ -2524,12 +2548,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     client,
     t,
     setGlobalStatus,
-    recordCriticalCatalogMutation,
     registerInteractiveJobRun,
-    scheduleDeletionJobFallbackChecks,
-    setPendingDeletedTitleIds,
+    trackQueuedTitleDeletion,
     setSelectedTitleIds,
-    deletionJobIdsRef,
     batchFailureDetail,
     withFailureDetail,
     aggregateDeletePreviews,
@@ -4429,22 +4450,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         .toPromise();
       if (result.error) throw result.error;
       const acceptedIds = result.data?.deleteTitles?.acceptedTitleIds ?? [];
-      if (acceptedIds.length > 0) {
-        recordCriticalCatalogMutation();
-      }
       const run = normalizeJobRun(result.data?.deleteTitles?.jobRun);
+      trackQueuedTitleDeletion(acceptedIds, run);
       if (run) {
-        deletionJobIdsRef.current.add(run.id);
         registerInteractiveJobRun(run);
-        scheduleDeletionJobFallbackChecks();
       }
-      setPendingDeletedTitleIds((current) => {
-        const next = new Set(current);
-        for (const id of acceptedIds) {
-          next.add(id);
-        }
-        return next;
-      });
       if (
         routeOverviewTitleId !== null &&
         acceptedIds.includes(routeOverviewTitleId)
@@ -4497,13 +4507,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     deleteFilesOnDisk,
     client,
     handleCloseOverview,
-    recordCriticalCatalogMutation,
     registerInteractiveJobRun,
-    scheduleDeletionJobFallbackChecks,
     titleDeletePreview,
     titleDeleteTypedConfirmation,
     t,
     titleToDelete,
+    trackQueuedTitleDeletion,
     routeOverviewTitleId,
     setGlobalStatus,
     setDeleteTitleLoadingById,
@@ -5507,6 +5516,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           titleFilter,
           setTitleFilter,
           refreshTitles,
+          refetchCatalogTitles: refetchCatalogTitlesById,
           titleLoading,
           catalogTotalTitleCount: catalogPaginationState.totalCount,
           catalogBulkLoadedCount,
@@ -5618,6 +5628,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           clearSelectedOverviewTitle,
           scanLibrary: handleLibraryScan,
           deleteCatalogTitle: requestDeleteTitle,
+          trackQueuedTitleDeletion,
           isDeletingCatalogTitleById: deleteTitleLoadingById,
           isMobile,
           viewMode: effectiveViewMode,

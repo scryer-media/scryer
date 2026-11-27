@@ -2207,6 +2207,10 @@ const nl: LocaleDictionary = {
     "Authenticatiefactoren resetten voor {{name}}? Alle actieve sessies en geregistreerde authenticatiefactoren worden ingetrokken. Ze hebben hun primaire credentials opnieuw nodig. Als het loginbeleid MFA vereist, moeten ze een nieuwe passkey of authenticator registreren; anders slaagt hun volgende wachtwoordlogin zonder registratie.",
   "settings.loginEnabled": "Login ingeschakeld",
   "settings.loginDisabled": "Login uitgeschakeld",
+  "settings.accountOrigin.scryer": "Scryer-account",
+  "settings.accountOrigin.mediaServerLogin": "Aangemaakt via {{provider}}-login",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Aangemaakt via mediaserver-login",
+  "settings.linkedMediaServer": "Gekoppeld aan {{provider}}",
   "settings.enableLogin": "Login inschakelen",
   "settings.disableLogin": "Login uitschakelen",
   "settings.disableLoginConfirm":

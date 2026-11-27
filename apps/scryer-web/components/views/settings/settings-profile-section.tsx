@@ -38,7 +38,10 @@ import {
 } from "react";
 import { useTheme } from "next-themes";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
-import { isVisibleExternalAccountProvider } from "@/lib/constants/integration-providers";
+import {
+  externalAccountProviderLabel as providerLabel,
+  isVisibleExternalAccountProvider,
+} from "@/lib/constants/integration-providers";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
   useUiDateTimeFormat,
@@ -151,19 +154,6 @@ function formatTimestamp(
   dateTimeFormat: UiDateTimeFormat,
 ): string {
   return formatUiDateTime(value, dateTimeFormat, { fallback: "—" });
-}
-
-function providerLabel(provider: LinkedAccount["provider"]): string {
-  switch (provider) {
-    case "PLEX":
-      return "Plex";
-    case "JELLYFIN":
-      return "Jellyfin";
-    case "EMBY":
-      return "Emby";
-    default:
-      return provider;
-  }
 }
 
 function connectionLabel(connection: ExternalAuthRuntimeConnection): string {

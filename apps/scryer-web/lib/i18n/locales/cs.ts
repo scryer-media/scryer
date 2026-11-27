@@ -2659,6 +2659,10 @@ const cs: LocaleDictionary = {
     "Obnovit ověřovací faktory pro {{name}}? Všechny aktivní relace a registrované ověřovací faktory budou zrušeny. Uživatel bude muset znovu zadat primární přihlašovací údaje. Pokud zásady přihlašování vyžadují MFA, bude muset zaregistrovat nový přístupový klíč nebo autentikátor; jinak se jeho příští přihlášení heslem podaří i bez registrace.",
   "settings.loginEnabled": "Přihlašování zapnuto",
   "settings.loginDisabled": "Přihlašování vypnuto",
+  "settings.accountOrigin.scryer": "Účet Scryer",
+  "settings.accountOrigin.mediaServerLogin": "Vytvořeno přihlášením přes {{provider}}",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Vytvořeno přihlášením přes mediální server",
+  "settings.linkedMediaServer": "Propojeno s {{provider}}",
   "settings.enableLogin": "Zapnout přihlašování",
   "settings.disableLogin": "Vypnout přihlašování",
   "settings.disableLoginConfirm":

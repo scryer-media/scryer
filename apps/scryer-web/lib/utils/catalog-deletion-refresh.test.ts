@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { catalogDeletionRefresh } from "./catalog-deletion-refresh.ts";
+import {
+  catalogDeletionRefresh,
+  withPendingDeletedTitleIds,
+} from "./catalog-deletion-refresh.ts";
 import {
   createReactiveRefreshEngine,
   type DomainEvent,
@@ -63,4 +66,16 @@ test("a degraded refresh reports unknown deletions instead of a title list", () 
   engine.flush();
   assert.equal(unknown, 1);
   assert.deepEqual(removed, []);
+});
+
+test("a queued deletion hides its titles until the deletion settles", () => {
+  const current = new Set(["title-earlier"]);
+
+  const next = withPendingDeletedTitleIds(current, ["title-queued"]);
+  assert.deepEqual([...next].sort(), ["title-earlier", "title-queued"]);
+  assert.deepEqual([...current], ["title-earlier"]);
+
+  // Nothing new to hide keeps the same set, so the list does not re-render.
+  assert.equal(withPendingDeletedTitleIds(next, ["title-queued"]), next);
+  assert.equal(withPendingDeletedTitleIds(next, []), next);
 });

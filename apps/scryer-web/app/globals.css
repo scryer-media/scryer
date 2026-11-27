@@ -903,6 +903,56 @@ body {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
+/* The users table scrolls sideways when the page is narrower than its
+ * columns, so its actions column stays pinned to the row end. The pinned
+ * cells are opaque so the cells scrolling under them do not show through,
+ * carry an edge that marks the hidden columns, and repeat the row's hover
+ * fill. */
+[data-slot="table-actions-head"][data-ui="settings-user-actions-head"],
+[data-slot="table-actions-cell"][data-ui="settings-user-actions-cell"] {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow:
+    inset 1px 0 0 var(--scry-line2),
+    -10px 0 12px -12px rgba(15, 23, 42, 0.45);
+}
+
+.dark [data-slot="table-actions-head"][data-ui="settings-user-actions-head"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 1px 0 0 var(--scry-line2),
+    -10px 0 12px -12px rgba(0, 0, 0, 0.8);
+}
+
+.dark [data-slot="table-actions-cell"][data-ui="settings-user-actions-cell"] {
+  box-shadow:
+    inset 1px 0 0 var(--scry-line2),
+    -10px 0 12px -12px rgba(0, 0, 0, 0.8);
+}
+
+[data-slot="table-actions-cell"][data-ui="settings-user-actions-cell"] {
+  background: var(--scry-card2);
+}
+
+[data-ui="settings-user-table-row"]:hover
+  > [data-slot="table-actions-cell"][data-ui="settings-user-actions-cell"] {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--accent) 42%, transparent),
+      color-mix(in srgb, var(--accent) 42%, transparent)
+    ),
+    var(--scry-card2);
+}
+
+/* The dark row band fades out before the row end, so the pinned cell keeps
+ * its plain fill there. */
+.dark
+  [data-ui="settings-user-table-row"]:hover
+  > [data-slot="table-actions-cell"][data-ui="settings-user-actions-cell"] {
+  background: var(--scry-card2);
+}
+
 /* Standard tables keep the original per-cell dark hover gradient. Catalog and
  * settings rows (excluded here) span the same gradient across the whole row.
  * A row opts in by carrying one of the data-ui values listed below, so both
