@@ -5753,7 +5753,9 @@ fn resolve_series_rename_metadata(
                     .map(|value| value.to_string())
             })
             .unwrap_or_default();
-        let episode = format_number_token(collect_episode_numbers(&linked_episodes), 2, false)
+        let span = linked_episode_span_tokens(&linked_episodes);
+        let episode = span
+            .episode
             .or_else(|| non_empty_owned(primary_episode.episode_number.clone()))
             .or_else(|| parsed_episode.and_then(parsed_episode_token))
             .unwrap_or_default();
@@ -5765,15 +5767,14 @@ fn resolve_series_rename_metadata(
                 .or_else(|| collection.and_then(|value| non_empty_string(&value.collection_index)))
                 .or_else(|| non_empty_owned(primary_episode.season_number.clone()))
                 .unwrap_or_else(|| season.clone()),
-            absolute_episode: format_number_token(
-                collect_absolute_episode_numbers(&linked_episodes),
-                3,
-                true,
-            )
-            .or_else(|| normalize_absolute_episode_token(primary_episode.absolute_number.clone()))
-            .or_else(|| parsed_episode.and_then(parsed_absolute_episode_token))
-            .unwrap_or_else(|| episode.clone()),
-            episode_title: join_episode_titles(&linked_episodes).unwrap_or_default(),
+            absolute_episode: span
+                .absolute_episode
+                .or_else(|| {
+                    normalize_absolute_episode_token(primary_episode.absolute_number.clone())
+                })
+                .or_else(|| parsed_episode.and_then(parsed_absolute_episode_token))
+                .unwrap_or_else(|| episode.clone()),
+            episode_title: span.episode_title.unwrap_or_default(),
             season,
             episode,
         };
@@ -5815,6 +5816,45 @@ fn select_sorted_episodes<'a>(
         .collect::<Vec<_>>();
     episodes.sort_by_key(|episode| episode_sort_key(episode, collections_by_id));
     episodes
+}
+
+/// The numbering tokens a file linked to several catalog episodes is named
+/// with: the episode and absolute numbers as a range (`01-02`) and the
+/// episode titles joined. A field is `None` when no linked episode carries
+/// that value, and the caller keeps its own fallback.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinkedEpisodeSpanTokens {
+    pub(crate) episode: Option<String>,
+    pub(crate) absolute_episode: Option<String>,
+    pub(crate) episode_title: Option<String>,
+}
+
+/// The span tokens of episodes already in rename order.
+fn linked_episode_span_tokens(episodes: &[&Episode]) -> LinkedEpisodeSpanTokens {
+    LinkedEpisodeSpanTokens {
+        episode: format_number_token(collect_episode_numbers(episodes), 2, false),
+        absolute_episode: format_number_token(collect_absolute_episode_numbers(episodes), 3, true),
+        episode_title: join_episode_titles(episodes),
+    }
+}
+
+/// The span tokens rename gives a file linked to every one of `episodes`, for
+/// an import that places one file for several episodes. `None` for one
+/// episode or none: a single-episode file keeps the tokens of that episode.
+pub(crate) fn multi_episode_rename_tokens(episodes: &[Episode]) -> Option<LinkedEpisodeSpanTokens> {
+    if episodes.len() < 2 {
+        return None;
+    }
+    let episodes_by_id = episodes
+        .iter()
+        .map(|episode| (episode.id.clone(), episode.clone()))
+        .collect::<HashMap<_, _>>();
+    let episode_ids = episodes
+        .iter()
+        .map(|episode| episode.id.clone())
+        .collect::<Vec<_>>();
+    let sorted = select_sorted_episodes(&episode_ids, &episodes_by_id, &HashMap::new());
+    (sorted.len() > 1).then(|| linked_episode_span_tokens(&sorted))
 }
 
 fn collect_episode_numbers(episodes: &[&Episode]) -> Vec<u32> {

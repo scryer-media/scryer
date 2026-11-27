@@ -1818,16 +1818,7 @@ async fn set_collections_monitored_tx(
     collection_ids: &[String],
     monitored: bool,
 ) -> AppResult<()> {
-    if collection_ids.is_empty() {
-        return Ok(());
-    }
-
-    let placeholders = bind_placeholders(collection_ids.len());
-    let sql = format!("UPDATE collections SET monitored = {{}} WHERE id IN ({placeholders})");
-    let mut args = vec![SqlArg::Bool(monitored)];
-    args.extend(collection_ids.iter().cloned().map(SqlArg::Text));
-    tx.execute(&sql, &args).await?;
-    Ok(())
+    set_monitored_by_ids_tx(tx, "collections", collection_ids, monitored).await
 }
 
 async fn delete_collection_tx(tx: &mut SqlTx<'_>, collection_id: &str) -> AppResult<()> {
@@ -2045,15 +2036,30 @@ async fn set_episodes_monitored_tx(
     episode_ids: &[String],
     monitored: bool,
 ) -> AppResult<()> {
-    if episode_ids.is_empty() {
+    set_monitored_by_ids_tx(tx, "episodes", episode_ids, monitored).await
+}
+
+/// `UPDATE {table} SET monitored = ? WHERE id IN (...)` for every id, split
+/// across statements only when one statement would exceed the engine's bind
+/// limit. Every statement runs in the caller's transaction.
+async fn set_monitored_by_ids_tx(
+    tx: &mut SqlTx<'_>,
+    table: &'static str,
+    ids: &[String],
+    monitored: bool,
+) -> AppResult<()> {
+    if ids.is_empty() {
         return Ok(());
     }
-
-    let placeholders = bind_placeholders(episode_ids.len());
-    let sql = format!("UPDATE episodes SET monitored = {{}} WHERE id IN ({placeholders})");
-    let mut args = vec![SqlArg::Bool(monitored)];
-    args.extend(episode_ids.iter().cloned().map(SqlArg::Text));
-    tx.execute(&sql, &args).await?;
+    let limit = crate::media::id_list_statements::max_binds(&SqlExec::Tx(&mut *tx));
+    let (ids, per_statement) = id_list_statements(ids, 1, 1, limit, SQL_BIND_CHUNK);
+    for chunk in ids.chunks(per_statement) {
+        let placeholders = bind_placeholders(chunk.len());
+        let sql = format!("UPDATE {table} SET monitored = {{}} WHERE id IN ({placeholders})");
+        let mut args = vec![SqlArg::Bool(monitored)];
+        args.extend(chunk.iter().cloned().map(SqlArg::Text));
+        tx.execute(&sql, &args).await?;
+    }
     Ok(())
 }
 
@@ -2907,6 +2913,63 @@ mod tests {
 
         assert_eq!(candidates[0].collection_index, "1");
         assert_eq!(candidates[0].label.as_deref(), Some("1080P"));
+    }
+
+    async fn monitored_rows_after(ids: &[&str], max_binds: Option<usize>) -> Vec<(String, bool)> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite pool");
+        sqlx::query("CREATE TABLE episodes (id TEXT PRIMARY KEY, monitored INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create episodes");
+        for id in ["ep-a", "ep-b", "ep-c", "ep-d", "ep-e"] {
+            sqlx::query("INSERT INTO episodes (id, monitored) VALUES (?, 1)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .expect("seed episode");
+        }
+        let ids = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        let mut tx = super::SqlTx::Sqlite(pool.begin().await.expect("begin"));
+        {
+            let _lowered =
+                max_binds.map(crate::media::id_list_statements::lower_max_binds_for_tests);
+            super::set_episodes_monitored_tx(&mut tx, &ids, false)
+                .await
+                .expect("unmonitor episodes");
+        }
+        let super::SqlTx::Sqlite(tx) = tx else {
+            unreachable!("sqlite transaction")
+        };
+        tx.commit().await.expect("commit");
+        sqlx::query_as::<_, (String, bool)>("SELECT id, monitored FROM episodes ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("read episodes")
+    }
+
+    /// A list longer than one statement can bind changes the same rows as the
+    /// single statement does.
+    #[tokio::test]
+    async fn an_episode_id_list_past_the_bind_limit_sets_what_one_statement_would() {
+        let ids = ["ep-d", "ep-a", "ep-d", "ep-b", "ep-missing"];
+        let single = monitored_rows_after(&ids, None).await;
+        let chunked = monitored_rows_after(&ids, Some(2)).await;
+
+        assert_eq!(chunked, single);
+        assert_eq!(
+            single,
+            vec![
+                ("ep-a".to_string(), false),
+                ("ep-b".to_string(), false),
+                ("ep-c".to_string(), true),
+                ("ep-d".to_string(), false),
+                ("ep-e".to_string(), true),
+            ]
+        );
     }
 }
 

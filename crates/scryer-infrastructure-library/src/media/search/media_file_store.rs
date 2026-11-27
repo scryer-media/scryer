@@ -1496,6 +1496,25 @@ impl MediaFileRepository for MediaFileStore {
         .await
     }
 
+    async fn title_has_media_files(&self, title_id: &str) -> AppResult<bool> {
+        let dialect = dialect_for_datastore(&self.datastore);
+        let sql = format!(
+            "SELECT 1 AS present
+             FROM media_files mf
+             WHERE mf.title_id = {{}}
+               AND {}
+             LIMIT 1",
+            live_media_file_predicate(dialect, "mf")
+        );
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(title_id.to_string())],
+        )
+        .await?
+        .is_some())
+    }
+
     async fn list_primary_file_cutoffs_for_title(
         &self,
         title_id: &str,
@@ -6104,6 +6123,65 @@ mod tests {
         let written = stored().await.expect("the claim's hash");
         assert_eq!(written.full_blake3, placed.full_blake3);
         assert_eq!(written.mark.as_deref(), Some("placed-mark"));
+    }
+
+    /// The existence read answers what the full listing implies: no file,
+    /// only a recycled file, and a live file beside a recycled one.
+    #[tokio::test]
+    async fn title_media_file_existence_matches_the_live_listing() {
+        async fn agrees(media_files: &MediaFileStore, title_id: &str, label: &str) -> bool {
+            let listed = !media_files
+                .list_media_files_for_title(title_id)
+                .await
+                .expect("listing")
+                .is_empty();
+            let exists = media_files
+                .title_has_media_files(title_id)
+                .await
+                .expect("existence read");
+            assert_eq!(exists, listed, "{label}");
+            exists
+        }
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_exists_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-file-exists");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+
+        assert!(!agrees(&media_files, &title.id, "no files").await);
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: "/library/Sample/.scryer-recycle/20260404_000000_deadbeef/Sample.mkv"
+                    .to_string(),
+                size_bytes: 10,
+                ..Default::default()
+            })
+            .await
+            .expect("recycled file should insert");
+        assert!(!agrees(&media_files, &title.id, "only a recycled file").await);
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: "/library/Sample/Sample.mkv".to_string(),
+                size_bytes: 10,
+                ..Default::default()
+            })
+            .await
+            .expect("live file should insert");
+        assert!(agrees(&media_files, &title.id, "a live file").await);
+
+        let _ = std::fs::remove_file(db);
     }
 
     #[tokio::test]

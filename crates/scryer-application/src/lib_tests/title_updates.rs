@@ -3755,3 +3755,304 @@ async fn library_audio_defaults_take_the_library_value_then_the_facet() {
         "an unknown library is never answered with defaults"
     );
 }
+
+/// A series with one season holding `episode_count` episodes, every one
+/// monitored or not as `monitored` says, with the title and season left in the
+/// same state.
+async fn series_with_season_episodes(
+    app: &AppUseCase,
+    user: &User,
+    name: &str,
+    episode_count: u32,
+    monitored: bool,
+) -> (Title, Collection, Vec<Episode>) {
+    let title = app
+        .add_title(
+            user,
+            NewTitle {
+                name: name.into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("series should be added");
+    let collection = app
+        .create_collection(
+            user,
+            title.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("season should be created");
+    let mut episodes = Vec::new();
+    for number in 1..=episode_count {
+        episodes.push(
+            app.create_episode(
+                user,
+                title.id.clone(),
+                Some(collection.id.clone()),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                None,
+                Some(format!("Synthetic Episode {number}")),
+                None,
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("episode should be created"),
+        );
+    }
+    if !monitored {
+        app.set_collection_monitored(user, &collection.id, false)
+            .await
+            .expect("season should be unmonitored");
+        app.set_title_monitored(user, &title.id, false)
+            .await
+            .expect("title should be unmonitored");
+    }
+    let title = app.get_title(user, &title.id).await.unwrap().unwrap();
+    let collection = app
+        .services
+        .catalog
+        .shows
+        .get_collection_by_id(&collection.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stored = Vec::new();
+    for episode in &episodes {
+        stored.push(
+            app.services
+                .catalog
+                .shows
+                .get_episode_by_id(&episode.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    (title, collection, stored)
+}
+
+async fn stored_episode_monitored(app: &AppUseCase, episode_id: &str) -> bool {
+    app.services
+        .catalog
+        .shows
+        .get_episode_by_id(episode_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .monitored
+}
+
+#[tokio::test]
+async fn set_episodes_monitored_changes_every_listed_episode_across_titles() {
+    let (app, user) = bootstrap();
+    let (_, _, first) = series_with_season_episodes(&app, &user, "Batch Series A", 3, true).await;
+    let (_, _, second) = series_with_season_episodes(&app, &user, "Batch Series B", 2, true).await;
+
+    let requested = vec![
+        second[1].id.clone(),
+        first[0].id.clone(),
+        second[1].id.clone(),
+        first[2].id.clone(),
+    ];
+    let updated = app
+        .set_episodes_monitored(&user, &requested, false)
+        .await
+        .expect("batch unmonitor should succeed");
+
+    assert_eq!(
+        updated
+            .iter()
+            .map(|episode| episode.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            second[1].id.as_str(),
+            first[0].id.as_str(),
+            first[2].id.as_str()
+        ],
+        "episodes come back in request order, a repeated id once"
+    );
+    assert!(updated.iter().all(|episode| !episode.monitored));
+    for episode in [&first[0], &first[2], &second[1]] {
+        assert!(!stored_episode_monitored(&app, &episode.id).await);
+    }
+    for episode in [&first[1], &second[0]] {
+        assert!(
+            stored_episode_monitored(&app, &episode.id).await,
+            "an episode the request did not name keeps its state"
+        );
+    }
+}
+
+#[tokio::test]
+async fn set_episodes_monitored_monitors_the_season_and_title_like_the_single_mutation() {
+    let (app, user) = bootstrap();
+    let (title, collection, episodes) =
+        series_with_season_episodes(&app, &user, "Batch Parents", 3, false).await;
+    assert!(!title.monitored && !collection.monitored);
+    assert!(episodes.iter().all(|episode| !episode.monitored));
+
+    let updated = app
+        .set_episodes_monitored(
+            &user,
+            &[episodes[0].id.clone(), episodes[1].id.clone()],
+            true,
+        )
+        .await
+        .expect("batch monitor should succeed");
+
+    assert!(updated.iter().all(|episode| episode.monitored));
+    assert!(!stored_episode_monitored(&app, &episodes[2].id).await);
+    let collection = app
+        .services
+        .catalog
+        .shows
+        .get_collection_by_id(&collection.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        collection.monitored,
+        "the season is monitored with its episode"
+    );
+    let title = app.get_title(&user, &title.id).await.unwrap().unwrap();
+    assert!(title.monitored, "the title is monitored with its episode");
+}
+
+#[tokio::test]
+async fn set_episodes_monitored_refuses_unknown_ids_and_changes_nothing() {
+    let (app, user) = bootstrap();
+    let (_, _, episodes) = series_with_season_episodes(&app, &user, "Batch Unknown", 2, true).await;
+
+    let error = app
+        .set_episodes_monitored(
+            &user,
+            &[
+                episodes[0].id.clone(),
+                "missing-episode-b".into(),
+                "missing-episode-a".into(),
+            ],
+            false,
+        )
+        .await
+        .expect_err("an unknown id refuses the batch");
+
+    let AppError::ValidationRefused { reason, facts, .. } = &error else {
+        panic!("expected a coded refusal, got {error}");
+    };
+    assert_eq!(
+        *reason,
+        crate::error_reasons::catalog::EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES
+    );
+    assert_eq!(
+        facts,
+        &vec![crate::RefusalFact::list(
+            crate::error_reasons::catalog::EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT,
+            vec!["missing-episode-b".into(), "missing-episode-a".into()],
+        )]
+    );
+    assert!(stored_episode_monitored(&app, &episodes[0].id).await);
+}
+
+#[tokio::test]
+async fn set_episodes_monitored_refuses_a_list_over_the_maximum_before_reading() {
+    let (app, user) = bootstrap();
+    let (_, _, episodes) =
+        series_with_season_episodes(&app, &user, "Batch Too Large", 1, true).await;
+    let mut requested = vec![episodes[0].id.clone()];
+    requested.extend(
+        (0..crate::catalog::workflow::EPISODE_MONITOR_BATCH_MAX).map(|n| format!("synthetic-{n}")),
+    );
+
+    let error = app
+        .set_episodes_monitored(&user, &requested, false)
+        .await
+        .expect_err("a list over the maximum is refused");
+
+    let AppError::ValidationRefused { reason, facts, .. } = &error else {
+        panic!("expected a coded refusal, got {error}");
+    };
+    assert_eq!(
+        *reason,
+        crate::error_reasons::catalog::EPISODE_MONITOR_BATCH_TOO_LARGE
+    );
+    assert_eq!(
+        facts,
+        &vec![
+            crate::RefusalFact::new(
+                crate::error_reasons::catalog::EPISODE_MONITOR_BATCH_MAX_IDS_FACT,
+                crate::catalog::workflow::EPISODE_MONITOR_BATCH_MAX.to_string(),
+            ),
+            crate::RefusalFact::new(
+                crate::error_reasons::catalog::EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT,
+                (crate::catalog::workflow::EPISODE_MONITOR_BATCH_MAX + 1).to_string(),
+            ),
+        ]
+    );
+    assert!(stored_episode_monitored(&app, &episodes[0].id).await);
+}
+
+#[tokio::test]
+async fn set_episodes_monitored_requires_title_management_on_every_title() {
+    let (app, user) = bootstrap();
+    let (_, _, episodes) = series_with_season_episodes(&app, &user, "Batch Denied", 2, true).await;
+    let viewer = test_user_with_app_permissions("viewer", AppPermissionMask::default());
+
+    let error = app
+        .set_episodes_monitored(
+            &viewer,
+            &episodes
+                .iter()
+                .map(|episode| episode.id.clone())
+                .collect::<Vec<_>>(),
+            false,
+        )
+        .await
+        .expect_err("an actor without title management is refused");
+
+    assert_eq!(
+        error.reason(),
+        Some(crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED),
+        "{error}"
+    );
+    for episode in &episodes {
+        assert!(stored_episode_monitored(&app, &episode.id).await);
+    }
+}
+
+#[tokio::test]
+async fn set_episodes_monitored_refuses_a_title_under_a_location_operation() {
+    let (app, user) = bootstrap();
+    let (_, _, free) = series_with_season_episodes(&app, &user, "Batch Free", 1, true).await;
+    let (moving, _, held) = series_with_season_episodes(&app, &user, "Batch Moving", 1, true).await;
+    app.runtime.library.location_ownership.claim_all(
+        "move",
+        &[crate::location::ownership_guard::OwnedEntity::Title(
+            moving.id.clone(),
+        )],
+    );
+
+    let error = app
+        .set_episodes_monitored(&user, &[free[0].id.clone(), held[0].id.clone()], false)
+        .await
+        .expect_err("a moving title refuses the batch");
+
+    assert!(
+        matches!(error, AppError::LocationOperationBusy(_)),
+        "{error}"
+    );
+    assert!(stored_episode_monitored(&app, &free[0].id).await);
+    assert!(stored_episode_monitored(&app, &held[0].id).await);
+}
