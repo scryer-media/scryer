@@ -1558,7 +1558,10 @@ pub(crate) fn dedupe_cross_indexer_release_results(
     indexer_priority_by_name: &HashMap<String, i64>,
     preferred_source_kind: &str,
 ) -> Vec<IndexerSearchResult> {
-    let mut best_by_key: std::collections::HashMap<String, usize> =
+    // Per key, the surviving results: all from one indexer, since releases
+    // from the same indexer are distinct listings and never displace each
+    // other. The first one stands for the group against other indexers.
+    let mut best_by_key: std::collections::HashMap<String, Vec<usize>> =
         std::collections::HashMap::new();
     let mut remove_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
@@ -1572,8 +1575,12 @@ pub(crate) fn dedupe_cross_indexer_release_results(
             continue;
         }
 
-        if let Some(&existing_idx) = best_by_key.get(&key) {
-            let existing = &results[existing_idx];
+        if let Some(survivors) = best_by_key.get_mut(&key) {
+            let existing = &results[survivors[0]];
+            if existing.source == result.source {
+                survivors.push(idx);
+                continue;
+            }
 
             let existing_prio = indexer_priority_by_name
                 .get(&existing.source)
@@ -1596,13 +1603,13 @@ pub(crate) fn dedupe_cross_indexer_release_results(
             };
 
             if new_wins {
-                remove_indices.insert(existing_idx);
-                best_by_key.insert(key, idx);
+                remove_indices.extend(survivors.drain(..));
+                survivors.push(idx);
             } else {
                 remove_indices.insert(idx);
             }
         } else {
-            best_by_key.insert(key, idx);
+            best_by_key.insert(key, vec![idx]);
         }
     }
 

@@ -247,6 +247,146 @@ fn cross_indexer_release_dedup_prefers_lower_grab_usage() {
     assert_eq!(deduped[0].source, "Lower Usage");
 }
 
+const SAME_KEY_FIRST: &str = "[GRP] Synthetic Run S02E06 1080p BILI WEB-DL AAC2.0 H.264";
+const SAME_KEY_SECOND: &str =
+    "[GRP] Synthetic Run S02E06 The Paper Lantern 1080p CR WEB-DL AAC2.0 H.264";
+
+fn assert_same_dedup_key(left: &str, right: &str) {
+    assert_eq!(
+        crate::release_dedup::build_release_dedup_key(&parse_release_metadata(left)),
+        crate::release_dedup::build_release_dedup_key(&parse_release_metadata(right)),
+    );
+}
+
+#[test]
+fn cross_indexer_release_dedup_keeps_distinct_releases_from_one_indexer() {
+    assert_same_dedup_key(SAME_KEY_FIRST, SAME_KEY_SECOND);
+    let results = vec![
+        make_search_result(
+            "Shared Source",
+            SAME_KEY_FIRST,
+            "https://example.test/first",
+            DownloadSourceKind::NzbUrl,
+        ),
+        make_search_result(
+            "Shared Source",
+            SAME_KEY_SECOND,
+            "https://example.test/second",
+            DownloadSourceKind::NzbUrl,
+        ),
+    ];
+
+    let deduped = dedupe_cross_indexer_release_results(
+        results,
+        &HashMap::from([("Shared Source".to_string(), 10)]),
+        "nzb",
+    );
+
+    let urls: Vec<_> = deduped
+        .iter()
+        .map(|result| result.download_url.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        urls,
+        ["https://example.test/first", "https://example.test/second"]
+    );
+}
+
+#[test]
+fn cross_indexer_release_dedup_judges_one_indexers_releases_together() {
+    assert_same_dedup_key(SAME_KEY_FIRST, SAME_KEY_SECOND);
+    let priorities = HashMap::from([
+        ("Shared Source".to_string(), 50),
+        ("Other Source".to_string(), 10),
+    ]);
+    let unrelated = "Synthetic.Lantern.S01E01.720p.WEB-DL.x264-OTH";
+
+    // The other indexer wins on priority, so both releases of the shared
+    // indexer give way to it, including the one that arrives after it.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_FIRST,
+                "https://example.test/shared-first",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                unrelated,
+                "https://example.test/unrelated",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Other Source",
+                SAME_KEY_FIRST,
+                "https://example.test/other",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_SECOND,
+                "https://example.test/shared-second",
+                DownloadSourceKind::NzbUrl,
+            ),
+        ],
+        &priorities,
+        "nzb",
+    );
+    let urls: Vec<_> = deduped
+        .iter()
+        .map(|result| result.download_url.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://example.test/unrelated",
+            "https://example.test/other"
+        ]
+    );
+
+    // The shared indexer wins, so both of its releases stay, in order.
+    let priorities = HashMap::from([
+        ("Shared Source".to_string(), 10),
+        ("Other Source".to_string(), 50),
+    ]);
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            make_search_result(
+                "Other Source",
+                SAME_KEY_FIRST,
+                "https://example.test/other",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_FIRST,
+                "https://example.test/shared-first",
+                DownloadSourceKind::NzbUrl,
+            ),
+            make_search_result(
+                "Shared Source",
+                SAME_KEY_SECOND,
+                "https://example.test/shared-second",
+                DownloadSourceKind::NzbUrl,
+            ),
+        ],
+        &priorities,
+        "nzb",
+    );
+    let urls: Vec<_> = deduped
+        .iter()
+        .map(|result| result.download_url.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://example.test/shared-first",
+            "https://example.test/shared-second"
+        ]
+    );
+}
+
 #[test]
 fn only_admissible_automatic_decisions_are_reusable() {
     for decision in [

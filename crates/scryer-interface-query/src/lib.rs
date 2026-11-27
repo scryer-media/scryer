@@ -2443,11 +2443,23 @@ impl CatalogQueries {
             season,
             episode,
             limit,
+            query,
             ..
         } = input;
 
         // One-shot search is title-anchored only; a query subject is a job
-        // (`startInteractiveReleaseSearch`), never a blocking resolver.
+        // (`startInteractiveReleaseSearch`), never a blocking resolver. A
+        // query is refused rather than ignored, so a caller never mistakes
+        // title results for results of its query.
+        if query
+            .as_deref()
+            .is_some_and(|query| !query.trim().is_empty())
+        {
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED,
+                "searchReleases does not take a query; run a free-text search with startInteractiveReleaseSearch",
+            )));
+        }
         let Some(title_id) = title_id else {
             return Err(to_gql_error(AppError::validation_refused(
                 scryer_interface_core::refusal::INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED,
