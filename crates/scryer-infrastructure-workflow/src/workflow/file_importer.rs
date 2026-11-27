@@ -6070,8 +6070,8 @@ mod tests {
     }
 
     /// A platform error number that says nothing about whether a link can be
-    /// made, as a filesystem that refuses a link for its own reasons gives.
-    const EINVAL: i32 = 22;
+    /// made, as a disk that fails a link call for its own reasons gives.
+    const LINK_ERROR: i32 = 5;
 
     #[test]
     fn a_failed_hard_link_is_copied_recorded_and_logged_once() {
@@ -6081,7 +6081,7 @@ mod tests {
         std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
         let coordinator = ImportPlacementCoordinator::new(1, 2);
         let options = ImportFileOptions {
-            link_answer: LinkAnswer::Fails(EINVAL),
+            link_answer: LinkAnswer::Fails(LINK_ERROR),
             ..Default::default()
         };
 
@@ -6101,7 +6101,7 @@ mod tests {
             Some(ImportLinkFallback {
                 cause: ImportLinkFallbackCause::Failed,
                 reason: disk::reason::DISK_OPERATION_FAILED.to_string(),
-                os_error_code: Some(EINVAL),
+                os_error_code: Some(LINK_ERROR),
             })
         );
         assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
@@ -6116,8 +6116,12 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{logs}");
         let warning = warnings[0];
         assert!(warning.contains("WARN"), "{warning}");
-        assert!(warning.contains("os_error_code=Some(22)"), "{warning}");
-        assert!(warning.contains("error_kind=InvalidInput"), "{warning}");
+        assert!(warning.contains("os_error_code=Some(5)"), "{warning}");
+        let kind = io::Error::from_raw_os_error(LINK_ERROR).kind();
+        assert!(
+            warning.contains(&format!("error_kind={kind:?}")),
+            "{warning}"
+        );
         assert!(warning.contains("DISK_OPERATION_FAILED"), "{warning}");
         assert!(warning.contains(&source.display().to_string()), "{warning}");
         assert!(warning.contains(&dest.display().to_string()), "{warning}");
@@ -6127,9 +6131,9 @@ mod tests {
     fn a_failed_hard_link_reaches_the_parent_over_the_worker_protocol() {
         let report = LinkRefusal {
             reason: disk::reason::DISK_OPERATION_FAILED,
-            error_kind: io::ErrorKind::InvalidInput,
-            os_error_code: Some(EINVAL),
-            words: "Invalid argument".to_string(),
+            error_kind: io::ErrorKind::Other,
+            os_error_code: Some(LINK_ERROR),
+            words: "Input/output error".to_string(),
         }
         .report(ImportLinkFallbackCause::Failed);
         let event = ImportFileWorkerEvent::CopyRequired {
