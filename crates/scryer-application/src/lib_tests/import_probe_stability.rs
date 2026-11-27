@@ -10,8 +10,7 @@ async fn probe_stability_metadata_matrix() {
             .await
             .unwrap();
         let mut original = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
         )
         .unwrap();
         original.extend_from_slice(&[0; 16]);
@@ -460,8 +459,7 @@ async fn probe_stability_second_validation_still_enforces_runtime_policy() {
         let source = tempfile::tempdir().unwrap();
         let path = source.path().join("source.mkv");
         std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
             &path,
         )
         .unwrap();
@@ -547,7 +545,7 @@ async fn probe_stability_preserves_inner_rejection_when_outer_snapshots_match() 
         let source = tempfile::tempdir().unwrap();
         let path = source.path().join("source.mkv");
         std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
             &path,
         ).unwrap();
         let before = CopyingFileImporter.snapshot_import_source(&path).await.unwrap();

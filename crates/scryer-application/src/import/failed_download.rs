@@ -14,6 +14,10 @@ use crate::{AppUseCase, ClientJobLocator};
 /// Called for downloads that have not reached a terminal tracked state. If the
 /// client reports failure, transitions to FailedPending before import can run.
 pub fn check(td: &mut TrackedDownload) {
+    check_at(td, chrono::Utc::now());
+}
+
+pub(crate) fn check_at(td: &mut TrackedDownload, now: chrono::DateTime<chrono::Utc>) {
     if td.blocklist_confirmation_failed {
         return;
     }
@@ -28,10 +32,22 @@ pub fn check(td: &mut TrackedDownload) {
     }
 
     if td.client_item.state != DownloadQueueState::Failed {
+        // A job that left the failed state (retried in the client) gets a
+        // fresh answer if it fails again.
+        td.failed_without_grab_recheck = None;
         return;
     }
 
     if !tracked_download_has_scryer_failure_origin(td) {
+        warn_download_not_grabbed(td);
+        return;
+    }
+
+    if td
+        .failed_without_grab_recheck
+        .as_ref()
+        .is_some_and(|recheck| recheck.next_retry_at > now)
+    {
         warn_download_not_grabbed(td);
         return;
     }
@@ -51,8 +67,23 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
     }
 
     match tracked_download_grabbed_submission_lookup(app, td).await {
-        Ok(true) => {}
+        Ok(true) => td.failed_without_grab_recheck = None,
         Ok(false) => {
+            // The origin marker and the missing row disagree. Remember the
+            // answer so `check` stops re-queueing the job every poll, and ask
+            // again on a backoff: a fresh grab writes its row only after the
+            // client accepted the job, so the row can still arrive.
+            let attempts = td
+                .failed_without_grab_recheck
+                .as_ref()
+                .map(|recheck| recheck.attempts.saturating_add(1))
+                .unwrap_or(1);
+            td.failed_without_grab_recheck =
+                Some(crate::tracked_downloads::ImportExecutionRetryState {
+                    attempts,
+                    next_retry_at: chrono::Utc::now()
+                        + crate::tracked_downloads::import_execution_retry_delay(attempts),
+                });
             warn_download_not_grabbed(td);
             td.state = TrackedDownloadState::Downloading;
             td.skip_reacquire_on_failure = false;

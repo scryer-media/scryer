@@ -134,6 +134,7 @@ fn tracked_for(
         facet: Some("movie".to_string()),
         source_title: Some(title.name.clone()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -151,6 +152,7 @@ fn tracked_for(
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     }
 }
 
@@ -4392,6 +4394,7 @@ async fn the_gate_reads_the_goals_a_grab_was_persisted_under() {
         client_type: "qbittorrent".to_string(),
         client_item_id: item_id.to_string(),
         info_hash: Some(item_id.to_string()),
+        job_protocol: crate::seeding_gate::DownloadJobProtocol::Unknown,
     };
     let goals = app
         .resolved_seed_goals(&key, None)
@@ -4438,6 +4441,7 @@ async fn the_gate_falls_back_to_the_info_hash_when_the_client_item_id_moved() {
         client_type: "qbittorrent".to_string(),
         client_item_id: "some-other-item-id".to_string(),
         info_hash: Some(info_hash.to_string()),
+        job_protocol: crate::seeding_gate::DownloadJobProtocol::Unknown,
     };
     let goals = app
         .resolved_seed_goals(&key, None)
@@ -5894,6 +5898,7 @@ async fn the_reconcile_tick_reads_every_settled_row_s_goals_in_one_batch() {
             client_type: "qbittorrent".to_string(),
             client_item_id: item_id.to_string(),
             info_hash: None,
+            job_protocol: crate::seeding_gate::DownloadJobProtocol::Unknown,
         };
         let goals = app
             .resolved_seed_goals(&key, Some(&batch))
@@ -5941,6 +5946,7 @@ async fn a_covered_row_without_goals_skips_the_identity_query_but_keeps_the_info
         client_type: "qbittorrent".to_string(),
         client_item_id: "moved-item-id".to_string(),
         info_hash: Some(info_hash.to_string()),
+        job_protocol: crate::seeding_gate::DownloadJobProtocol::Unknown,
     };
     let goals = app
         .resolved_seed_goals(&key, Some(&batch))
@@ -5988,6 +5994,7 @@ async fn a_row_the_batch_never_covered_still_takes_the_per_row_path() {
         client_type: "qbittorrent".to_string(),
         client_item_id: "uncovered".to_string(),
         info_hash: None,
+        job_protocol: crate::seeding_gate::DownloadJobProtocol::Unknown,
     };
     let goals = app
         .resolved_seed_goals(&key, Some(&batch))
@@ -6032,6 +6039,7 @@ async fn a_failed_prefetch_falls_back_to_per_row_reads() {
         client_type: "qbittorrent".to_string(),
         client_item_id: "torrent-a".to_string(),
         info_hash: None,
+        job_protocol: crate::seeding_gate::DownloadJobProtocol::Unknown,
     };
     let goals = app
         .resolved_seed_goals(&key, Some(&batch))
@@ -7460,5 +7468,533 @@ async fn nzbget_retained_state_blocks_stale_cleanup_and_checkpoint_recovery() {
                 "{label}"
             );
         }
+    }
+}
+
+// ── clients carrying both usenet and torrent jobs ─────────────────────────
+
+const MIXED_CLIENT_TYPE: &str = "mixed-fixture";
+
+/// A plugin provider for one client type that declares both NZB and torrent
+/// inputs, the way a debrid-style service that takes either would.
+struct MixedProtocolPluginProvider;
+
+impl DownloadClientPluginProvider for MixedProtocolPluginProvider {
+    fn client_for_config(
+        &self,
+        _: &scryer_domain::DownloadClientConfig,
+    ) -> Option<Arc<dyn DownloadClient>> {
+        Some(Arc::new(StubDownloadClient {
+            native_data_removal: true,
+            ..Default::default()
+        }))
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        vec![MIXED_CLIENT_TYPE.to_string()]
+    }
+
+    fn accepted_inputs_for_provider(&self, provider_type: &str) -> Vec<String> {
+        if provider_type.eq_ignore_ascii_case(MIXED_CLIENT_TYPE) {
+            ["nzb", "nzb_url", "torrent_file", "magnet_uri"]
+                .map(str::to_string)
+                .to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+fn bootstrap_with_mixed_client(
+    download_client: Arc<StubDownloadClient>,
+) -> (AppUseCase, User, Arc<TrackingDownloadSubmissionRepo>) {
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (mut app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    app.services.integrations.download_client_plugin_provider = crate::RuntimeFeature::enabled(
+        Arc::new(MixedProtocolPluginProvider) as Arc<dyn DownloadClientPluginProvider>,
+    );
+    (app, user, download_submissions)
+}
+
+/// The grab record a job of each kind leaves behind. `Unknown` records no
+/// input kind, as a row written before the kind was recorded would.
+fn mixed_job_source_kind(
+    job: crate::tracked_downloads::DownloadJobProtocol,
+) -> Option<crate::DownloadSourceKind> {
+    use crate::tracked_downloads::DownloadJobProtocol;
+    match job {
+        DownloadJobProtocol::Usenet => Some(crate::DownloadSourceKind::NzbUrl),
+        DownloadJobProtocol::Torrent => Some(crate::DownloadSourceKind::TorrentFile),
+        DownloadJobProtocol::Unknown => None,
+    }
+}
+
+async fn record_mixed_job(
+    app: &AppUseCase,
+    tracked: &TrackedDownload,
+    job: crate::tracked_downloads::DownloadJobProtocol,
+) {
+    app.services
+        .workflow
+        .download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: tracked.download_id,
+            title_id: tracked.title_id.clone().unwrap_or_default(),
+            purpose: DownloadSubmissionPurpose::Standard,
+            facet: tracked.facet.clone().unwrap_or_default(),
+            download_client_id: Some(tracked.client_id.clone()),
+            download_client_type: tracked.client_type.clone(),
+            download_client_item_id: tracked.client_item.download_client_item_id.clone(),
+            source_title: tracked.source_title.clone(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: mixed_job_source_kind(job),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Orphan,
+            release_listing_json: None,
+        })
+        .await
+        .unwrap();
+}
+
+const MIXED_JOBS: [crate::tracked_downloads::DownloadJobProtocol; 3] = [
+    crate::tracked_downloads::DownloadJobProtocol::Usenet,
+    crate::tracked_downloads::DownloadJobProtocol::Torrent,
+    crate::tracked_downloads::DownloadJobProtocol::Unknown,
+];
+
+#[tokio::test]
+async fn only_a_recorded_usenet_job_on_a_mixed_client_escapes_the_torrent_protections() {
+    use crate::seeding_gate::{DownloadJobProtocol, download_job_is_torrent};
+    let (app, _, _) = bootstrap_with_mixed_client(Arc::new(StubDownloadClient::default()));
+
+    assert!(!download_job_is_torrent(
+        &app,
+        MIXED_CLIENT_TYPE,
+        DownloadJobProtocol::Usenet
+    ));
+    assert!(download_job_is_torrent(
+        &app,
+        MIXED_CLIENT_TYPE,
+        DownloadJobProtocol::Torrent
+    ));
+    assert!(download_job_is_torrent(
+        &app,
+        MIXED_CLIENT_TYPE,
+        DownloadJobProtocol::Unknown
+    ));
+    assert!(crate::seeding_gate::client_type_is_torrent(
+        &app,
+        MIXED_CLIENT_TYPE
+    ));
+
+    // Single-protocol clients answer from the client whatever the job says.
+    let (app, _, _) = bootstrap_with_torrent_clients(Arc::new(StubDownloadClient::default()));
+    for job in MIXED_JOBS {
+        assert!(download_job_is_torrent(&app, "qbittorrent", job), "{job:?}");
+        assert!(!download_job_is_torrent(&app, "nzbget", job), "{job:?}");
+        // Missing plugin metadata is not evidence of a Usenet client.
+        assert!(
+            download_job_is_torrent(&app, "unknown-fixture-client", job),
+            "{job:?}"
+        );
+    }
+}
+
+#[test]
+fn a_grab_record_names_its_job_protocol_only_from_positive_evidence() {
+    use crate::seeding_gate::DownloadJobProtocol;
+    let submission = |source_kind, info_hash: Option<&str>| DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
+        title_id: "title-fixture".into(),
+        purpose: DownloadSubmissionPurpose::Standard,
+        facet: "movie".into(),
+        download_client_id: Some("client-fixture".into()),
+        download_client_type: MIXED_CLIENT_TYPE.into(),
+        download_client_item_id: "item-fixture".into(),
+        source_title: None,
+        source_hint: None,
+        source_provider_id: None,
+        source_provider_name: None,
+        source_kind,
+        info_hash: info_hash.map(str::to_owned),
+        release_size_bytes: None,
+        request_signature: None,
+        scope: SubmissionScope::Orphan,
+        release_listing_json: None,
+    };
+    for (kind, hash, expected) in [
+        (
+            Some(crate::DownloadSourceKind::NzbFile),
+            None,
+            DownloadJobProtocol::Usenet,
+        ),
+        (
+            Some(crate::DownloadSourceKind::NzbUrl),
+            None,
+            DownloadJobProtocol::Usenet,
+        ),
+        (
+            Some(crate::DownloadSourceKind::TorrentFile),
+            None,
+            DownloadJobProtocol::Torrent,
+        ),
+        (
+            Some(crate::DownloadSourceKind::MagnetUri),
+            None,
+            DownloadJobProtocol::Torrent,
+        ),
+        (
+            Some(crate::DownloadSourceKind::HttpResource),
+            None,
+            DownloadJobProtocol::Unknown,
+        ),
+        (None, None, DownloadJobProtocol::Unknown),
+        // A row that records an info hash is a torrent whatever its input says.
+        (
+            Some(crate::DownloadSourceKind::NzbUrl),
+            Some("0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c"),
+            DownloadJobProtocol::Torrent,
+        ),
+        (
+            Some(crate::DownloadSourceKind::NzbUrl),
+            Some("  "),
+            DownloadJobProtocol::Usenet,
+        ),
+    ] {
+        assert_eq!(
+            DownloadJobProtocol::from_submission(&submission(kind, hash)),
+            expected,
+            "{kind:?} {hash:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_configured_move_survives_only_for_a_recorded_usenet_job_on_a_mixed_client() {
+    for job in MIXED_JOBS {
+        let (app, user, _) = bootstrap_with_mixed_client(Arc::new(StubDownloadClient::default()));
+        let config =
+            create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+        let title = movie_title(&app, &user, "Mixed Move Fixture").await;
+        app.update_media_settings(
+            &user,
+            MediaFacet::Movie,
+            UpdateMediaSettings {
+                import_mode: Some(ImportMode::Move),
+                ..empty_update_media_settings()
+            },
+        )
+        .await
+        .expect("configure move import mode");
+        let item_id = "mixed-move-1";
+        let tracked = tracked_for(
+            &config.id,
+            MIXED_CLIENT_TYPE,
+            item_id,
+            &title,
+            TrackedDownloadState::ImportPending,
+            true,
+        );
+        record_mixed_job(&app, &tracked, job).await;
+
+        let effective = crate::seeding_gate::resolve_seeding_safe_import_mode(
+            &app,
+            Some(&title.library_id),
+            &title.facet,
+            Some(&completed_for(&config.id, MIXED_CLIENT_TYPE, item_id)),
+        )
+        .await
+        .expect("resolve seeding-safe import mode");
+
+        let expected = if job == crate::seeding_gate::DownloadJobProtocol::Usenet {
+            ImportMode::Move
+        } else {
+            ImportMode::HardlinkOrCopy
+        };
+        assert_eq!(effective, expected, "{job:?}");
+    }
+}
+
+#[tokio::test]
+async fn terminal_cleanup_on_a_mixed_client_holds_every_job_but_a_recorded_usenet_one() {
+    for job in MIXED_JOBS {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let (app, user, _) = bootstrap_with_mixed_client(download_client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "Mixed Cleanup Fixture").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            MIXED_CLIENT_TYPE,
+            "mixed-cleanup-1",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        tracked.job_protocol = job;
+        record_mixed_job(&app, &tracked, job).await;
+
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Imported,
+            None,
+        )
+        .await;
+
+        if job == crate::seeding_gate::DownloadJobProtocol::Usenet {
+            assert_ne!(
+                outcome,
+                TerminalDownloadCleanupOutcome::HeldForSeeding,
+                "{job:?}"
+            );
+            assert!(outcome.seeding.is_none(), "{job:?}");
+            assert_eq!(
+                download_client.deleted_requests.lock().await.len(),
+                1,
+                "{job:?}"
+            );
+        } else {
+            assert_eq!(
+                outcome,
+                TerminalDownloadCleanupOutcome::HeldForSeeding,
+                "{job:?}"
+            );
+            assert!(
+                download_client.deleted_requests.lock().await.is_empty(),
+                "{job:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_mixed_client_job_retained_by_policy_stays_tracked_unless_recorded_as_usenet() {
+    for job in MIXED_JOBS {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let (app, user, _) = bootstrap_with_mixed_client(download_client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, false, true).await;
+        let title = movie_title(&app, &user, "Mixed Retained Fixture").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            MIXED_CLIENT_TYPE,
+            "mixed-retained-1",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        tracked.job_protocol = job;
+        record_mixed_job(&app, &tracked, job).await;
+        let id = tracked.id.clone();
+        let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+        tracker.insert_for_tests(tracked);
+
+        crate::app_usecase_integration::finalize_tracked_terminal_state(
+            &app,
+            &mut tracker,
+            &id,
+            TrackedDownloadState::Imported,
+        )
+        .await;
+
+        if job == crate::seeding_gate::DownloadJobProtocol::Usenet {
+            assert!(tracker.find(&id).is_none(), "{job:?}");
+        } else {
+            let retained = tracker.find(&id).expect("a possible torrent stays tracked");
+            assert!(retained.retained_in_client_after_cleanup, "{job:?}");
+        }
+        assert!(
+            download_client.deleted_requests.lock().await.is_empty(),
+            "{job:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_a_recorded_usenet_job_on_a_mixed_client_keeps_the_warning_timeout() {
+    for job in MIXED_JOBS {
+        let (app, user, _) = bootstrap_with_mixed_client(Arc::new(StubDownloadClient::default()));
+        let config =
+            create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+        let title = movie_title(&app, &user, "Mixed Warning Fixture").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            MIXED_CLIENT_TYPE,
+            "mixed-warning-1",
+            &title,
+            TrackedDownloadState::Downloading,
+            true,
+        );
+        tracked.job_protocol = job;
+        tracked.client_item.state = DownloadQueueState::Warning;
+        tracked.client_item.is_scryer_origin = true;
+
+        assert_eq!(
+            crate::app_usecase_integration::warning_timeout_applies(&app, &tracked),
+            job == crate::seeding_gate::DownloadJobProtocol::Usenet,
+            "{job:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_held_import_on_a_mixed_client_waits_for_seeding_unless_recorded_as_usenet() {
+    for job in MIXED_JOBS {
+        let (app, user, _) = bootstrap_with_mixed_client(Arc::new(StubDownloadClient::default()));
+        let config =
+            create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "Mixed Held Fixture").await;
+        let tracked = tracked_for(
+            &config.id,
+            MIXED_CLIENT_TYPE,
+            "mixed-held-1",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        record_mixed_job(&app, &tracked, job).await;
+
+        let policy = crate::import::import::held_download_client_policy(
+            &app,
+            &ClientJobLocator::new(Some(&config.id), MIXED_CLIENT_TYPE, "mixed-held-1"),
+            None,
+        )
+        .await
+        .expect("read the held download's client policy");
+
+        let expected = if job == crate::seeding_gate::DownloadJobProtocol::Usenet {
+            crate::import::import::HeldDownloadClientPolicy::Removes
+        } else {
+            crate::import::import::HeldDownloadClientPolicy::RemovesAfterSeeding
+        };
+        assert_eq!(policy, expected, "{job:?}");
+    }
+}
+
+/// The unhashed-torrent cleanup fixture on a client carrying both protocols.
+/// The client's name for the job cannot match the release title, so only a
+/// torrent identity comparison can prove the entry is ours.
+async fn unhashed_mixed_cleanup_fixture(
+    client: &Arc<StubDownloadClient>,
+    job: crate::tracked_downloads::DownloadJobProtocol,
+) -> (AppUseCase, crate::DownloadCleanupRecord) {
+    let (app, user, _) = bootstrap_with_mixed_client(client.clone());
+    let config =
+        create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Lanternfall Signal").await;
+    let hash = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
+    let source_title = "Lanternfall.Signal.2031.1080p.WEB-DL.x264-SYNTH";
+    let client_name = "[Synthgroup] Lanternfall Signal (2031) [1080p] [Dual Audio]";
+    let mut tracked = tracked_for(
+        &config.id,
+        MIXED_CLIENT_TYPE,
+        hash,
+        &title,
+        TrackedDownloadState::Imported,
+        false,
+    );
+    tracked.source_title = Some(source_title.into());
+    tracked.client_item.download_id = None;
+    tracked.client_item.title_name = client_name.into();
+    tracked.client_item.seeding = Some(DownloadSeedingSnapshot {
+        is_private: Some(false),
+        can_remove: Some(true),
+        ..Default::default()
+    });
+    record_mixed_job(&app, &tracked, job).await;
+    app.services
+        .workflow
+        .download_registry
+        .resolve_observation(&ObservedClientJob {
+            locator: ClientJobLocator::new(Some(&config.id), MIXED_CLIENT_TYPE, hash),
+            wire_token: Some(tracked.download_id.to_wire()),
+            observed_name: Some(source_title.into()),
+            observed_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let record = cleanup_record_for(&tracked);
+    (app, record)
+}
+
+#[tokio::test]
+async fn mixed_client_cleanup_matches_torrent_identity_only_for_a_job_not_recorded_as_usenet() {
+    for job in [
+        crate::tracked_downloads::DownloadJobProtocol::Torrent,
+        crate::tracked_downloads::DownloadJobProtocol::Unknown,
+    ] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, record) = unhashed_mixed_cleanup_fixture(&client, job).await;
+        let (_, tracked, cleanup) =
+            crate::import::import::run_claimed_download_cleanup(&app, record, None)
+                .await
+                .expect("the torrent hash proves identity");
+        assert!(tracked.is_some(), "{job:?}");
+        assert_eq!(
+            cleanup.outcome,
+            TerminalDownloadCleanupOutcome::Removed,
+            "{job:?}"
+        );
+        assert_eq!(client.deleted_requests.lock().await.len(), 1, "{job:?}");
+    }
+
+    // A usenet job has no torrent identity, so its item id is never read as
+    // a hash; the name check alone decides, and it cannot match here.
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, record) = unhashed_mixed_cleanup_fixture(
+        &client,
+        crate::tracked_downloads::DownloadJobProtocol::Usenet,
+    )
+    .await;
+    assert_cleanup_abandoned(
+        crate::import::import::run_claimed_download_cleanup(&app, record, None).await,
+    );
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_tracked_download_takes_its_job_protocol_from_its_grab_record() {
+    for job in MIXED_JOBS {
+        let (app, user, _) = bootstrap_with_mixed_client(Arc::new(StubDownloadClient::default()));
+        let config =
+            create_enabled_download_client_config(&app, &user, "Mixed", MIXED_CLIENT_TYPE).await;
+        let title = movie_title(&app, &user, "Mixed Resolve Fixture").await;
+        let tracked = tracked_for(
+            &config.id,
+            MIXED_CLIENT_TYPE,
+            "mixed-resolve-1",
+            &title,
+            TrackedDownloadState::Downloading,
+            true,
+        );
+        record_mixed_job(&app, &tracked, job).await;
+
+        let rebuilt = crate::tracked_downloads::TrackedDownloadService::build_new_tracked_download(
+            &app,
+            tracked.download_id,
+            tracked.id.clone(),
+            tracked.client_item.clone(),
+        )
+        .await;
+
+        assert_eq!(rebuilt.job_protocol, job, "{job:?}");
     }
 }

@@ -1786,7 +1786,7 @@ fn probed_episode_analysis(channels: i32, layout: &str) -> crate::MediaFileAnaly
         revision: scryer_media_types::ANALYSIS_REVISION,
         streams: vec![scryer_media_types::StreamDetail {
             kind: scryer_media_types::StreamKind::Audio,
-            codec: Some("aac".to_string()),
+            codec: Some(scryer_media_types::Codec::Aac),
             channels: Some(channels),
             metadata: scryer_media_types::StreamMetadata {
                 channel_layout: Some(layout.to_string()),
@@ -3365,7 +3365,7 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     );
     let dir = tempfile::tempdir().expect("tempdir");
     let video_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
+        .join("test-fixtures/media/h264_aac.mkv");
     let primary = dir.path().join("Manual.Movie.2024.1080p.WEB-DL.mkv");
     std::fs::copy(&video_fixture, &primary).expect("copy primary video fixture");
     let named_sample = dir.path().join("Manual.Movie.2024.1080p.WEB-DL-sample.mkv");

@@ -424,8 +424,8 @@ async fn set_folder_template(ctx: &TestContext, facet: MediaFacet, template: &st
 fn mediainfo_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("scryer-mediainfo")
-        .join("tests")
+        .join("scryer-application")
+        .join("test-fixtures")
         .join("media")
         .join(name)
 }
@@ -3066,6 +3066,7 @@ fn tracked_movie_download(
         facet: Some("movie".to_string()),
         source_title: None,
         indexer: None,
+        job_protocol: scryer_application::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -3083,6 +3084,7 @@ fn tracked_movie_download(
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     }
 }
 

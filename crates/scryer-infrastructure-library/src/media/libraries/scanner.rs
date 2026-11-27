@@ -508,7 +508,7 @@ mod tests {
                 .path()
                 .join(format!("Release.{}_", entry.extension.to_uppercase()));
             std::fs::write(&path, b"video").expect("write video");
-            if entry.is_standalone_video() {
+            if scryer_media_types::formats::is_standalone_video_format(entry) {
                 expected.push(path_to_stored_string(&path));
             }
         }

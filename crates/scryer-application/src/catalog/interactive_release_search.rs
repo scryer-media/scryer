@@ -1863,6 +1863,7 @@ impl AppUseCase {
             info_hash_hint: info_hash_hint.clone(),
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             // No title means no quality profile to read tracker-minimum
             // honouring off, so the release's own minimums are not clamped
             // in — the same position the manual queue path takes.

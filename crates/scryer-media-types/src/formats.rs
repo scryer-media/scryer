@@ -1,49 +1,9 @@
-//! Accepted media suffixes and their native container families.
+//! Accepted media suffixes, their native container families, and which of them
+//! Scryer treats as standalone library items.
 
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaFormat {
-    Matroska,
-    Mp4,
-    Avi,
-    Asf,
-    QuickTime,
-    MpegTs,
-    WebM,
-    Flv,
-    Ogg,
-    Ogm,
-    RealMedia,
-    Dv,
-    H264,
-    MpegVideo,
-    Svq3,
-    MpegProgram,
-    StreamLink,
-    DiscImage,
-    Playlist,
-    Companion,
-    Unsupported,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaHandling {
-    Native,
-    StreamLink,
-    DiscImage,
-    Playlist,
-    Companion,
-    Unsupported,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaProbeCapability {
-    Native,
-    ContentOnly,
-    Unsupported,
-    NotApplicable,
-}
+pub use mediaprobe::formats::*;
 
 /// Whether a recognized suffix may represent its own library item.
 ///
@@ -56,143 +16,95 @@ pub enum MediaLibraryRole {
     ProbeOnly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MediaFormatRegistration {
-    pub extension: &'static str,
-    pub format: MediaFormat,
-    pub container_aliases: &'static [&'static str],
-    pub handling: MediaHandling,
-    pub probe: MediaProbeCapability,
-    pub library: MediaLibraryRole,
-}
-
-impl MediaFormatRegistration {
-    /// A recognized video that can represent its own library item.
-    pub fn is_standalone_video(&self) -> bool {
-        self.library == MediaLibraryRole::Standalone && self.handling != MediaHandling::Companion
-    }
-}
-
-macro_rules! media_formats {
-    ($(($extension:literal, $format:ident, $handling:ident, $probe:ident, $library:ident, [$($alias:literal),*])),* $(,)?) => {
-        pub const MEDIA_FORMATS: &[MediaFormatRegistration] = &[$(
-            MediaFormatRegistration {
-                extension: $extension,
-                format: MediaFormat::$format,
-                container_aliases: &[$($alias),*],
-                handling: MediaHandling::$handling,
-                probe: MediaProbeCapability::$probe,
-                library: MediaLibraryRole::$library,
-            },
+macro_rules! library_roles {
+    ($(($extension:literal, $role:ident)),* $(,)?) => {
+        /// The library role of every registered suffix, in registry order.
+        pub const MEDIA_LIBRARY_ROLES: &[(&str, MediaLibraryRole)] = &[$(
+            ($extension, MediaLibraryRole::$role),
         )*];
-        pub const VIDEO_EXTENSIONS: &[&str] = &[$($extension),*];
     };
 }
 
-// Container aliases belong to the preferred suffix; filename aliases retain
-// their own suffix when an existing file is imported.
-media_formats! {
-    ("mkv", Matroska, Native, Native, Standalone, ["matroska", "mkv"]),
-    ("mp4", Mp4, Native, Native, Standalone, ["mp4"]),
-    ("avi", Avi, Native, Native, Standalone, ["avi"]),
-    ("wmv", Asf, Native, Native, Standalone, ["asf", "wmv"]),
-    ("mov", QuickTime, Native, Native, Standalone, ["mov"]),
-    ("m4v", Mp4, Native, Native, Standalone, ["m4v"]),
-    ("ts", MpegTs, Native, Native, Standalone, ["mpegts", "ts"]),
-    ("m2ts", MpegTs, Native, Native, Standalone, ["m2ts"]),
-    ("webm", WebM, Native, Native, Standalone, ["webm"]),
-    ("flv", Flv, Native, Native, Standalone, ["flv"]),
-    ("ogv", Ogg, Native, Native, Standalone, ["ogg", "ogv"]),
-    ("ogm", Ogm, Native, Native, Standalone, ["ogm"]),
-    ("strm", StreamLink, StreamLink, NotApplicable, Standalone, []),
-    ("mpg", MpegProgram, Native, Native, Standalone, ["mpeg", "mpg"]),
-    ("mpeg", MpegProgram, Native, Native, Standalone, []),
-    ("vob", MpegProgram, Native, Native, Standalone, ["vob"]),
-    ("iso", DiscImage, DiscImage, NotApplicable, Standalone, []),
-    ("3gp", Mp4, Native, Native, Standalone, []),
-    ("asf", Asf, Native, Native, Standalone, []),
-    ("asx", Playlist, Playlist, NotApplicable, Standalone, []),
-    ("avc", H264, Native, Native, Standalone, ["h264", "avc"]),
-    ("bin", DiscImage, DiscImage, NotApplicable, Standalone, []),
-    ("bivx", Avi, Native, ContentOnly, Standalone, []),
-    ("dat", MpegProgram, Native, ContentOnly, Standalone, []),
-    ("divx", Avi, Native, ContentOnly, Standalone, []),
-    ("dvr-ms", Asf, Native, Native, Standalone, []),
-    ("dv", Dv, Native, Native, Standalone, ["dv"]),
-    ("fli", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("ifo", Companion, Companion, NotApplicable, ProbeOnly, []),
-    ("img", DiscImage, DiscImage, NotApplicable, Standalone, []),
-    ("m2t", MpegTs, Native, Native, ProbeOnly, []),
-    ("m2v", MpegVideo, Native, Native, Standalone, ["mpegvideo", "m2v"]),
-    ("m3u", Playlist, Playlist, NotApplicable, Standalone, []),
-    ("mts", MpegTs, Native, Native, ProbeOnly, []),
-    ("nrg", DiscImage, DiscImage, NotApplicable, Standalone, []),
-    ("nsv", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("nuv", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("ogg", Ogg, Native, Native, ProbeOnly, []),
-    ("ogx", Ogg, Native, Native, ProbeOnly, []),
-    ("pva", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("qt", QuickTime, Native, Native, Standalone, []),
-    ("rm", RealMedia, Native, Native, Standalone, ["realmedia", "rm"]),
-    ("rmvb", RealMedia, Native, Native, Standalone, []),
-    ("svq3", Svq3, Native, ContentOnly, Standalone, []),
-    ("ty", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("viv", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("vp3", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("wpl", Playlist, Playlist, NotApplicable, Standalone, []),
-    ("wtv", Unsupported, Unsupported, Unsupported, Standalone, []),
-    ("xvid", Avi, Native, ContentOnly, Standalone, []),
+library_roles! {
+    ("mkv", Standalone),
+    ("mp4", Standalone),
+    ("avi", Standalone),
+    ("wmv", Standalone),
+    ("mov", Standalone),
+    ("m4v", Standalone),
+    ("ts", Standalone),
+    ("m2ts", Standalone),
+    ("webm", Standalone),
+    ("flv", Standalone),
+    ("ogv", Standalone),
+    ("ogm", Standalone),
+    ("strm", Standalone),
+    ("mpg", Standalone),
+    ("mpeg", Standalone),
+    ("vob", Standalone),
+    ("iso", Standalone),
+    ("3gp", Standalone),
+    ("asf", Standalone),
+    ("asx", Standalone),
+    ("avc", Standalone),
+    ("bin", Standalone),
+    ("bivx", Standalone),
+    ("dat", Standalone),
+    ("divx", Standalone),
+    ("dvr-ms", Standalone),
+    ("dv", Standalone),
+    ("fli", Standalone),
+    ("ifo", ProbeOnly),
+    ("img", Standalone),
+    ("m2t", ProbeOnly),
+    ("m2v", Standalone),
+    ("m3u", Standalone),
+    ("mts", ProbeOnly),
+    ("nrg", Standalone),
+    ("nsv", Standalone),
+    ("nuv", Standalone),
+    ("ogg", ProbeOnly),
+    ("ogx", ProbeOnly),
+    ("pva", Standalone),
+    ("qt", Standalone),
+    ("rm", Standalone),
+    ("rmvb", Standalone),
+    ("svq3", Standalone),
+    ("ty", Standalone),
+    ("viv", Standalone),
+    ("vp3", Standalone),
+    ("wpl", Standalone),
+    ("wtv", Standalone),
+    ("xvid", Standalone),
 }
 
-pub fn media_format_for_extension(extension: &str) -> Option<&'static MediaFormatRegistration> {
-    MEDIA_FORMATS
+/// The library role of a registered suffix, matched against the registry's
+/// canonical lowercase spelling.
+pub fn library_role(registration: &MediaFormatRegistration) -> Option<MediaLibraryRole> {
+    MEDIA_LIBRARY_ROLES
         .iter()
-        .find(|entry| entry.extension.eq_ignore_ascii_case(extension))
+        .find(|(extension, _)| *extension == registration.extension)
+        .map(|(_, role)| *role)
 }
 
-/// Normalizes only the established trailing filename junk, never an inner suffix.
-///
-/// Every registered extension is ASCII, so a stem that is not valid UTF-8 is
-/// still recognized: invalid sequences become replacement characters, which
-/// keeps the stem non-empty and leaves the extension bytes untouched.
-pub fn canonical_video_extension(path: &Path) -> Option<&'static str> {
-    let name = path.file_name()?.to_string_lossy();
-    let name = name.trim().trim_end_matches(|ch: char| {
-        ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`' | '_' | '.')
-    });
-    let (stem, extension) = name.rsplit_once('.')?;
-    if stem.is_empty() {
-        return None;
-    }
-    media_format_for_extension(extension).map(|entry| entry.extension)
-}
-
-pub fn media_format_for_path(path: &Path) -> Option<&'static MediaFormatRegistration> {
-    media_format_for_extension(canonical_video_extension(path)?)
+/// A recognized video that can represent its own library item.
+pub fn is_standalone_video_format(registration: &MediaFormatRegistration) -> bool {
+    library_role(registration) == Some(MediaLibraryRole::Standalone)
+        && registration.handling != MediaHandling::Companion
 }
 
 /// Suffixes that can be standalone library items, in registry order.
 pub fn standalone_video_extensions() -> impl Iterator<Item = &'static str> {
     MEDIA_FORMATS
         .iter()
-        .filter(|entry| entry.is_standalone_video())
+        .filter(|entry| is_standalone_video_format(entry))
         .map(|entry| entry.extension)
 }
 
 /// A recognized video that can represent its own library item, rather than a
 /// companion or a suffix registered for probing only.
 pub fn is_standalone_video_path(path: &Path) -> bool {
-    media_format_for_path(path).is_some_and(MediaFormatRegistration::is_standalone_video)
-}
-
-pub fn preferred_video_extension_for_container(container: &str) -> Option<&'static str> {
-    MEDIA_FORMATS.iter().find_map(|entry| {
-        entry
-            .container_aliases
-            .iter()
-            .any(|alias| alias.eq_ignore_ascii_case(container))
-            .then_some(entry.extension)
-    })
+    media_format_for_path(path).is_some_and(is_standalone_video_format)
 }
 
 #[cfg(test)]
@@ -201,27 +113,27 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn recognition_probe_capability_and_handling_are_independent() {
-        for extension in ["dat", "bivx", "divx", "xvid", "svq3"] {
-            let entry = media_format_for_extension(extension).unwrap();
-            assert_eq!(entry.handling, MediaHandling::Native);
-            assert_eq!(entry.probe, MediaProbeCapability::ContentOnly);
-        }
-        for extension in ["fli", "nsv", "nuv", "pva", "ty", "viv", "vp3", "wtv"] {
-            let entry = media_format_for_extension(extension).unwrap();
-            assert_eq!(entry.handling, MediaHandling::Unsupported);
-            assert_eq!(entry.probe, MediaProbeCapability::Unsupported);
-        }
-        for extension in ["asx", "m3u", "wpl"] {
+    fn every_registered_extension_has_exactly_one_library_role() {
+        assert_eq!(MEDIA_LIBRARY_ROLES.len(), MEDIA_FORMATS.len());
+        for entry in MEDIA_FORMATS {
             assert_eq!(
-                media_format_for_extension(extension).unwrap().handling,
-                MediaHandling::Playlist
+                MEDIA_LIBRARY_ROLES
+                    .iter()
+                    .filter(|(extension, _)| *extension == entry.extension)
+                    .count(),
+                1,
+                "{}",
+                entry.extension
             );
         }
-        assert_eq!(
-            media_format_for_extension("ifo").unwrap().handling,
-            MediaHandling::Companion
-        );
+        for (extension, _) in MEDIA_LIBRARY_ROLES {
+            assert!(
+                MEDIA_FORMATS
+                    .iter()
+                    .any(|entry| entry.extension == *extension),
+                "{extension} has a library role but no registration"
+            );
+        }
     }
 
     #[test]
@@ -247,66 +159,49 @@ mod tests {
         assert!(is_standalone_video_path(Path::new("Release.MKV_")));
     }
 
+    /// The suffix lists the web client checks paths against.
+    fn web_media_formats() -> String {
+        let list = |extensions: &mut dyn Iterator<Item = &str>| {
+            extensions
+                .map(|extension| format!("  \"{extension}\",\n"))
+                .collect::<String>()
+        };
+        format!(
+            "// Generated from the mediaprobe registry and the library roles in\n\
+             // crates/scryer-media-types. After changing either, run\n\
+             // SCRYER_WRITE_WEB_MEDIA_FORMATS=1 cargo nextest run -p scryer-media-types web_media_formats\n\
+             export const VIDEO_EXTENSIONS = [\n{}] as const;\n\
+             \n\
+             // Suffixes that can be standalone library files; the rest are registered for\n\
+             // probing and classification only.\n\
+             export const STANDALONE_VIDEO_EXTENSIONS = [\n{}] as const;\n",
+            list(&mut MEDIA_FORMATS.iter().map(|entry| entry.extension)),
+            list(&mut standalone_video_extensions()),
+        )
+    }
+
+    #[test]
+    fn web_media_formats_match_the_registry() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/scryer-web/lib/utils/media-formats.generated.ts");
+        let expected = web_media_formats();
+        if std::env::var_os("SCRYER_WRITE_WEB_MEDIA_FORMATS").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        assert!(
+            std::fs::read_to_string(&path).unwrap() == expected,
+            "{} is stale; rerun this test with SCRYER_WRITE_WEB_MEDIA_FORMATS=1",
+            path.display()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
-    fn non_utf8_stems_keep_their_video_extension() {
+    fn non_utf8_stems_keep_their_standalone_role() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
         let path = Path::new(OsStr::from_bytes(b"/library/Synthetic-\xFF.mkv"));
-        assert_eq!(canonical_video_extension(path), Some("mkv"));
         assert!(is_standalone_video_path(path));
-        let junk = Path::new(OsStr::from_bytes(b"/library/\xFE\xFF.MKV_ "));
-        assert_eq!(canonical_video_extension(junk), Some("mkv"));
-        let not_video = Path::new(OsStr::from_bytes(b"/library/Synthetic-\xFF.nfo"));
-        assert_eq!(canonical_video_extension(not_video), None);
-        let bare = Path::new(OsStr::from_bytes(b"/library/.mkv\xFF"));
-        assert_eq!(canonical_video_extension(bare), None);
-    }
-
-    #[test]
-    fn registry_is_complete_and_unambiguous() {
-        assert_eq!(MEDIA_FORMATS.len(), 50);
-        assert_eq!(VIDEO_EXTENSIONS.len(), MEDIA_FORMATS.len());
-        let mut extensions = HashSet::new();
-        let mut aliases = HashSet::new();
-        for entry in MEDIA_FORMATS {
-            assert!(extensions.insert(entry.extension));
-            assert_eq!(entry.extension, entry.extension.to_ascii_lowercase());
-            assert_eq!(media_format_for_extension(entry.extension), Some(entry));
-            for alias in entry.container_aliases {
-                assert!(aliases.insert(*alias), "duplicate container alias {alias}");
-                assert_eq!(
-                    preferred_video_extension_for_container(alias),
-                    Some(entry.extension)
-                );
-            }
-            for suffix in [entry.extension.to_owned(), entry.extension.to_uppercase()] {
-                for junk in ["", "_", "\"", ". ", "'`_\t"] {
-                    let path = format!("Release.{suffix}{junk}");
-                    assert_eq!(
-                        canonical_video_extension(Path::new(&path)),
-                        Some(entry.extension)
-                    );
-                }
-                for path in [
-                    format!("Release.{suffix}.exe"),
-                    format!("Release.{suffix}x"),
-                    format!(".{suffix}"),
-                ] {
-                    assert_eq!(canonical_video_extension(Path::new(&path)), None);
-                }
-            }
-        }
-        assert_eq!(preferred_video_extension_for_container("OGM"), Some("ogm"));
-        assert_eq!(preferred_video_extension_for_container("ogg"), Some("ogv"));
-        assert_eq!(
-            media_format_for_extension("strm").unwrap().handling,
-            MediaHandling::StreamLink
-        );
-        assert_eq!(
-            media_format_for_extension("iso").unwrap().handling,
-            MediaHandling::DiscImage
-        );
     }
 }

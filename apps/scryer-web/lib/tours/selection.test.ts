@@ -195,9 +195,9 @@ test("onboarding shows each account only the stops it can open", () => {
     "lists",
     "activity",
     "indexers",
+    "media-servers",
     "quality-profiles",
     "rules",
-    "media-servers",
     "notifications",
     "plugins",
   ]);

@@ -79,6 +79,52 @@ const zh_HK: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "頻寬限制（KB/s）",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "由此用戶端的所有下載共用。留空或 0 表示不限制。",
+  "settings.downloadClientTorboxApiKey": "API 權杖",
+  "settings.downloadClientTorboxApiKeyHelp": "TorBox 帳戶的 API 權杖。",
+  "settings.downloadClientTorboxCachedOnly": "僅限已快取",
+  "settings.downloadClientTorboxCachedOnlyHelp": "拒絕 TorBox 尚未快取的下載。",
+  "httpRelease.refusal.filePathInvalid":
+    "此下載中有檔案的路徑無法儲存到其下載資料夾內。",
+  "httpRelease.refusal.tooManyFiles":
+    "此下載的檔案數量超過單一下載可容納的數量。",
+  "httpRelease.refusal.linkKeyInvalid": "此下載中有檔案沒有可用的連結參照。",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "此下載中有檔案需要此下載器無法取得的連結。",
+  "httpRelease.refusal.linkRefused": "伺服器一再拒絕某個檔案的下載連結。",
+  "httpRelease.refusal.linkUnavailable": "某個檔案始終沒有可用的下載連結。",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox 拒絕了 API 權杖。",
+  "error.reason.TORBOX_PLAN_RESTRICTED": "TorBox 方案不包含此功能。",
+  "error.reason.TORBOX_ACTIVE_LIMIT": "TorBox 帳戶已達到進行中下載數量的上限。",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox 帳戶處於冷卻期，暫不接受新的下載。",
+  "error.reason.TORBOX_MONTHLY_LIMIT": "TorBox 帳戶已達到每月下載上限。",
+  "error.reason.TORBOX_HOURLY_LIMIT": "已達到每小時新增 TorBox 下載的上限。",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "此下載超過 TorBox 方案允許的大小。",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox 沒有快取此下載，而此用戶端只接受已快取的下載。",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox 無法讀取該種子。",
+  "error.reason.TORBOX_INVALID_NZB": "無法讀取 NZB。",
+  "error.reason.TORBOX_DUPLICATE_ITEM": "此下載已在 TorBox 帳戶中。",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox 沒有此項目。",
+  "error.reason.TORBOX_LINK_OFFLINE": "TorBox 下載連結已離線。",
+  "error.reason.TORBOX_RATE_LIMITED": "TorBox 正在限制接受要求的頻率。",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox 無法使用。",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox 將此下載中的一個檔案標記為已感染。",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox 只以 zip 壓縮檔形式提供此下載中的一個檔案。",
+  "error.reason.TORBOX_NO_VIDEO_FILE": "此 TorBox 下載中沒有影片檔案。",
+  "error.reason.TORBOX_REMOTE_FAILED": "TorBox 回報此下載失敗。",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox 中已不再有此下載。",
+  "error.reason.TORBOX_STALLED": "此下載在 TorBox 上停滯。",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "此 TorBox 下載中的檔案名稱無法在此系統上儲存。",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "此發行沒有可傳送到 TorBox 的磁力連結、種子檔案或 NZB。",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED": "TorBox 不支援對此下載執行此操作。",
+  "error.reason.TORBOX_JOB_NOT_FOUND": "此 TorBox 用戶端沒有該下載。",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "TorBox 用戶端沒有 API 權杖。",
   "settings.publicUrlTitle": "公開 URL",
   "settings.publicUrlHelp":
     "用戶及服務存取 Scryer 所用的地址，例如 https://scryer.example.com。帳戶連結及 OAuth 會即時使用變更；密鑰要在 Scryer 重新啟動後才使用。",

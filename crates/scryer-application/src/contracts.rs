@@ -1184,7 +1184,7 @@ pub struct PendingReleasesPageQuery {
 }
 
 /// Parsed media properties from media analysis — application-layer DTO.
-/// A single audio stream, mirroring `scryer_mediainfo::AudioStreamDetail`.
+/// One audio stream of the stored summary, built by `media::analysis_summary`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioStreamDetail {
     pub codec: Option<String>,
@@ -1195,7 +1195,7 @@ pub struct AudioStreamDetail {
     pub bitrate_kbps: Option<i32>,
 }
 
-/// A single subtitle stream, mirroring `scryer_mediainfo::SubtitleStreamDetail`.
+/// One subtitle stream of the stored summary, built by `media::analysis_summary`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubtitleStreamDetail {
     pub codec: Option<String>,
@@ -1205,7 +1205,8 @@ pub struct SubtitleStreamDetail {
     pub default: bool,
 }
 
-/// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
+/// Scryer's stored media summary: the parser's details plus the flat fields
+/// `media::analysis_summary` derives from them.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MediaFileAnalysis {
@@ -1631,6 +1632,10 @@ pub struct DownloadClientAddRequest {
     pub info_hash_hint: Option<String>,
     pub seed_goal_ratio: Option<f64>,
     pub seed_goal_seconds: Option<i64>,
+    /// The resolved seeding profile never lets the torrent be removed. Set by
+    /// the router beside the goals; `false` when no profile resolved. Host
+    /// side only: it is not sent to plugin download clients.
+    pub seed_never_remove: bool,
     /// Tracker-declared minimums carried by the release (`minimum_seed_ratio` /
     /// `minimum_seed_time_minutes` and the season-pack twins in the indexer
     /// `extra` map). The grab-time resolver clamps profile goals up to these
@@ -1767,6 +1772,7 @@ impl DownloadClientAddRequest {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,

@@ -4116,6 +4116,7 @@ impl AppUseCase {
                     info_hash_hint: info_hash_hint.clone(),
                     seed_goal_ratio: None,
                     seed_goal_seconds: None,
+                    seed_never_remove: false,
                     tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
                     tracker_min_seed_time_minutes: seed_minimums.min_seed_time_minutes,
                     season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,

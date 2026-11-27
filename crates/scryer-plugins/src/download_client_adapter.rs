@@ -2100,6 +2100,7 @@ mod tests {
             info_hash_hint: Some("abcdef0123456789abcdef0123456789abcdef01".to_string()),
             seed_goal_ratio: Some(1.5),
             seed_goal_seconds: Some(3661),
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,

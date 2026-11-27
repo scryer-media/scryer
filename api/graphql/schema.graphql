@@ -19800,9 +19800,9 @@ type MetadataEpisodePayload {
 	"""
 	name: String!
 	"""
-	Original air date.
+	Original air date, or null when the episode is undated.
 	"""
-	aired: Date!
+	aired: Date
 	"""
 	Runtime in minutes.
 	"""
@@ -20124,9 +20124,9 @@ type MetadataSeriesPayload {
 	"""
 	status: String!
 	"""
-	First-air date.
+	First-air date, or null when the provider has none.
 	"""
-	firstAired: Date!
+	firstAired: Date
 	"""
 	Overview text.
 	"""

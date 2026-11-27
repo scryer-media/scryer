@@ -36,6 +36,7 @@ pub mod network_bind;
 pub mod public_url;
 pub mod rate_limit_proxy_policy;
 pub mod title_delete;
+pub mod torbox_refusal;
 
 /// Completed-history rows the poller considers each cycle.
 ///

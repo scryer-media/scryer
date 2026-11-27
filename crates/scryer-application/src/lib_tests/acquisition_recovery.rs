@@ -1675,6 +1675,7 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         facet: Some("movie".to_string()),
         source_title: Some("Fixture.Release.2020.1080p-GROUP".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -1692,6 +1693,7 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         burned_by_import_gate: true,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -1809,6 +1811,7 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
         client_id: "primary".to_string(),
         client_type: "nzbget".to_string(),
         client_item,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         completed_source: None,
         state: scryer_domain::TrackedDownloadState::FailedPending,
         status: scryer_domain::TrackedDownloadStatus::Error,
@@ -1833,6 +1836,7 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
         burned_by_import_gate,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
     crate::failed_download_handler::process_failed(&app, &mut tracked).await;
     assert_eq!(tracked.state, scryer_domain::TrackedDownloadState::Failed);
@@ -2026,6 +2030,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         facet: Some("movie".to_string()),
         source_title: Some("Failed.Release.1080p.WEB-DL".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -2043,6 +2048,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -2925,6 +2931,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         facet: Some("series".to_string()),
         source_title: Some("Pals.S05.720p.BluRay.DD5.1.x264-NTb".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -2942,6 +2949,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -3176,6 +3184,7 @@ async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() 
         facet: Some("movie".to_string()),
         source_title: Some("Observed.Failure.Safety.2024.1080p.WEB-DL".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::TitleParse,
@@ -3193,6 +3202,7 @@ async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() 
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -3452,6 +3462,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         facet: Some("anime".to_string()),
         source_title: Some("Season.Pack.Failure.Recovery.S07.1080p.WEB-DL".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -3469,6 +3480,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;

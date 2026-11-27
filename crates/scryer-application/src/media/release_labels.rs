@@ -27,10 +27,10 @@ pub(crate) fn resolve_release_labels_from_analysis(
         .map(str::to_string);
 
     let metadata = selected_audio_metadata(details);
-    let best = scryer_media_types::primary_audio_stream_index(
-        audio_streams.iter().enumerate().map(|(index, stream)| {
+    let best = scryer_media_types::primary_audio_position(audio_streams.iter().enumerate().map(
+        |(index, stream)| {
             let disposition = metadata.get(index).map(|item| &item.metadata.disposition);
-            (
+            scryer_media_types::AudioCandidate::new(
                 disposition.is_some_and(|d| d.default == Some(true)),
                 disposition.is_some_and(|d| d.commentary == Some(true)),
                 stream
@@ -38,8 +38,8 @@ pub(crate) fn resolve_release_labels_from_analysis(
                     .as_deref()
                     .or_else(|| metadata.get(index).and_then(|item| item.name.as_deref())),
             )
-        }),
-    )
+        },
+    ))
     .map(|index| {
         let stream = &audio_streams[index];
         (
@@ -310,7 +310,7 @@ mod tests {
             revision: scryer_media_types::ANALYSIS_REVISION,
             streams: vec![scryer_media_types::StreamDetail {
                 kind: scryer_media_types::StreamKind::Audio,
-                codec: Some("aac".to_string()),
+                codec: Some(scryer_media_types::Codec::Aac),
                 channels,
                 metadata: scryer_media_types::StreamMetadata {
                     channel_layout: layout.map(str::to_string),

@@ -1443,7 +1443,7 @@ mod tests {
     #[cfg(feature = "runtime-media-analysis")]
     fn copy_mediainfo_fixture(destination: &std::path::Path) {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
+            .join("test-fixtures/media/h264_aac.mkv");
         std::fs::copy(fixture, destination).expect("copy MediaInfo fixture");
     }
 
@@ -1469,7 +1469,7 @@ mod tests {
         assert_eq!(candidate.canonical_path, trusted_root);
         let facts = candidate.video_facts.expect("video facts");
         assert_eq!(facts.container_format.as_deref(), Some("matroska"));
-        assert_eq!(facts.video_codec.as_deref(), Some("hevc"));
+        assert_eq!(facts.video_codec.as_deref(), Some("h264"));
         assert!(facts.duration_seconds.is_some_and(|duration| duration > 0));
     }
 

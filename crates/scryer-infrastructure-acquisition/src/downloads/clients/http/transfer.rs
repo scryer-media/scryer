@@ -815,6 +815,21 @@ pub(crate) async fn transfer_file(
     context: &TransferContext<'_>,
     file: &mut HttpJobFile,
 ) -> Result<(), TransferError> {
+    transfer_file_from(context, file, None).await
+}
+
+/// [`transfer_file`], fetching from `link` instead of the resource's own URL
+/// when one is given.
+///
+/// A link is a URL resolved for this one transfer. It is only read here and
+/// never written into `file`, so no checkpoint records it. A refusal of a
+/// link (`403` or another 4xx) is returned at once: the caller resolves a
+/// new link rather than asking the refused one again.
+pub(crate) async fn transfer_file_from(
+    context: &TransferContext<'_>,
+    file: &mut HttpJobFile,
+    link: Option<&reqwest::Url>,
+) -> Result<(), TransferError> {
     if file.complete {
         return Ok(());
     }
@@ -834,7 +849,7 @@ pub(crate) async fn transfer_file(
     }
     // Recorded before an interruption: the resource already used up its
     // retries, so it is not asked again.
-    if file.forbidden_answers > MAX_FORBIDDEN_RETRIES {
+    if link.is_none() && file.forbidden_answers > MAX_FORBIDDEN_RETRIES {
         return Err(TransferError::Forbidden(format!(
             "the server answered {} to all {} requests",
             StatusCode::FORBIDDEN,
@@ -844,8 +859,11 @@ pub(crate) async fn transfer_file(
     if has_expired(&file.resource, (context.clock)()) {
         return Err(TransferError::Permanent(EXPIRED_URL.into()));
     }
-    let resource_url = reqwest::Url::parse(&file.resource.url)
-        .map_err(|error| TransferError::Permanent(format!("invalid resource URL: {error}")))?;
+    let resource_url = match link {
+        Some(link) => link.clone(),
+        None => reqwest::Url::parse(&file.resource.url)
+            .map_err(|error| TransferError::Permanent(format!("invalid resource URL: {error}")))?,
+    };
 
     let mut transient_failures = 0u32;
     let mut restarts = 0u32;
@@ -913,6 +931,12 @@ pub(crate) async fn transfer_file(
             }
             ResponseVerdict::Failed(TransferError::Permanent(message)) => {
                 return Err(TransferError::Permanent(message));
+            }
+            // A refused link is replaced by the caller, not asked again.
+            ResponseVerdict::Failed(
+                error @ (TransferError::Rejected(_) | TransferError::Forbidden(_)),
+            ) if link.is_some() => {
+                return Err(error);
             }
             // A refusal after the URL expired is the expiry, not the
             // resource: it is neither retried nor counted against the

@@ -565,6 +565,7 @@ impl AppUseCase {
                     info_hash_hint: info_hash_hint.clone(),
                     seed_goal_ratio: None,
                     seed_goal_seconds: None,
+                    seed_never_remove: false,
                     // Manual/interactive queueing carries a resolved source URL,
                     // not the indexer release object, so there is no `extra` map to
                     // read tracker minimums from on this path.

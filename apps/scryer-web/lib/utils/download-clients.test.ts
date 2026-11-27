@@ -305,3 +305,65 @@ test("the built-in HTTP downloader is offered with its own settings and no addre
     { key: "max_concurrent_downloads", intValue: 3 },
   );
 });
+
+test("TorBox is offered with a token, a download folder and the downloader limits, and no address", () => {
+  const option = buildDownloadClientTypeOptions([]).find(
+    (entry) => entry.value === "torbox",
+  );
+  assert.ok(option, "torbox is a built-in type");
+  assert.ok(isHostlessDownloadClientType("TorBox"));
+  assert.equal(
+    downloadClientConnectionTestBlocker(
+      draft({ clientType: "torbox", host: "", port: "" }),
+    ),
+    null,
+  );
+  const fields = option.configFields ?? [];
+  assert.deepEqual(
+    fields.map((field) => field.key),
+    [
+      "api_key",
+      "download_dir",
+      "cached_only",
+      "max_concurrent_downloads",
+      "max_connections_per_host",
+      "bandwidth_limit_kbps",
+    ],
+  );
+  const cachedOnly = fields.find((field) => field.key === "cached_only");
+  assert.equal(cachedOnly?.fieldType, "BOOL");
+  assert.equal(cachedOnly?.defaultValue, "false");
+
+  const values = buildDownloadClientConfigValues(
+    draft({
+      clientType: "torbox",
+      host: "",
+      port: "",
+      configValues: {
+        api_key: "synthetic-token",
+        download_dir: "/srv/synthetic-downloads",
+        cached_only: "true",
+      },
+    }),
+    fields,
+  );
+  assert.deepEqual(
+    values.find((value) => value.key === "api_key"),
+    { key: "api_key", secretValue: "synthetic-token" },
+  );
+  assert.deepEqual(
+    values.find((value) => value.key === "cached_only"),
+    { key: "cached_only", boolValue: true },
+  );
+  assert.ok(!values.some((value) => value.key === "host"));
+
+  const cleared = buildDownloadClientConfigValues(
+    draft({ clientType: "torbox", configValues: { api_key: "" } }),
+    fields,
+    new Set(["api_key"]),
+  );
+  assert.deepEqual(
+    cleared.find((value) => value.key === "api_key" && "clearSecret" in value),
+    { key: "api_key", clearSecret: true },
+  );
+});

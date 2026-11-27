@@ -1263,10 +1263,10 @@ fn whatever_grab_admits_import_admits() {
 
 // ── D5: one FileDoc constructor ─────────────────────────────────────────────
 
-/// **The FileDoc round trip**, rooted in a `scryer_mediainfo::MediaAnalysis` —
+/// **The FileDoc round trip**, rooted in the parser's `AnalysisDetails` —
 /// the type the probe actually returns.
 ///
-/// Import used to build its rule document straight from that type
+/// Import used to build its rule document straight from the probe's output
 /// (`build_file_doc`), which copies the probe's raw codec string: `"h264"`.
 /// Re-deriving an incumbent's bar goes through `MediaFileAnalysis`, whose
 /// `video_codec` is a parsed `VideoCodec` rendered as `"H.264"`. Any user rule
@@ -1275,64 +1275,100 @@ fn whatever_grab_admits_import_admits() {
 /// it, because both of its documents came from `file_doc_from_analysis`.
 ///
 /// One constructor now: import builds
-/// `file_doc_from_analysis(&build_media_file_analysis(&mediainfo))`.
-#[cfg(feature = "runtime-media-analysis")]
+/// `file_doc_from_analysis(&analysis_summary::summarize(details))`.
 #[test]
 fn a_file_doc_survives_mediainfo_to_row_to_re_derivation() {
+    use scryer_media_types::{
+        AnalysisDetails, StreamDetail, StreamDisposition, StreamKind, StreamMetadata,
+    };
     // Constructed rather than probed: the point is the conversion chain, and a
     // real probe would only exercise whatever the fixture file happens to hold.
-    let mediainfo = scryer_mediainfo::MediaAnalysis {
-        details: Default::default(),
-        video_codec: Some("h264".to_string()),
-        video_width: Some(1920),
-        video_height: Some(1080),
-        video_bitrate_kbps: Some(8_500),
-        video_bit_depth: Some(8),
-        video_hdr_format: None,
-        dovi_profile: None,
-        dovi_bl_compat_id: None,
-        video_frame_rate: Some("23.976".to_string()),
-        video_profile: Some("High".to_string()),
-        audio_codec: Some("eac3".to_string()),
-        audio_profile: Some("Atmos".to_string()),
-        audio_channels: Some(6),
-        audio_bitrate_kbps: Some(640),
-        audio_languages: vec!["eng".to_string(), "jpn".to_string()],
-        audio_streams: vec![
-            scryer_mediainfo::AudioStreamDetail {
-                codec: Some("eac3".to_string()),
-                profile: Some("Atmos".to_string()),
+    let stream = |kind, id: &str, codec: &str, metadata: StreamMetadata| StreamDetail {
+        kind,
+        codec: Some(codec.into()),
+        metadata: StreamMetadata {
+            id: Some(id.to_string()),
+            ..metadata
+        },
+        ..Default::default()
+    };
+    let default_track = StreamDisposition {
+        default: Some(true),
+        ..Default::default()
+    };
+    let details = AnalysisDetails {
+        container_format: Some("matroska".to_string()),
+        duration_seconds: Some(7_020.0),
+        chapter_count: Some(12),
+        selected_video_id: Some("0".to_string()),
+        streams: vec![
+            StreamDetail {
+                width: Some(1920),
+                height: Some(1080),
+                ..stream(
+                    StreamKind::Video,
+                    "0",
+                    "h264",
+                    StreamMetadata {
+                        bitrate_bps: Some(8_500_000),
+                        bit_depth: Some(8),
+                        profile: Some("High".to_string()),
+                        nominal_frame_rate_fps: Some(23.976),
+                        ..Default::default()
+                    },
+                )
+            },
+            StreamDetail {
                 channels: Some(6),
                 language: Some("eng".to_string()),
                 name: Some("English".to_string()),
-                bitrate_kbps: Some(640),
+                ..stream(
+                    StreamKind::Audio,
+                    "1",
+                    "eac3",
+                    StreamMetadata {
+                        profile: Some("Atmos".to_string()),
+                        bitrate_bps: Some(640_000),
+                        disposition: default_track.clone(),
+                        ..Default::default()
+                    },
+                )
             },
-            scryer_mediainfo::AudioStreamDetail {
-                codec: Some("aac".to_string()),
-                profile: Some("LC".to_string()),
+            StreamDetail {
                 channels: Some(2),
                 language: Some("jpn".to_string()),
-                name: None,
-                bitrate_kbps: Some(192),
+                ..stream(
+                    StreamKind::Audio,
+                    "2",
+                    "aac",
+                    StreamMetadata {
+                        profile: Some("LC".to_string()),
+                        bitrate_bps: Some(192_000),
+                        ..Default::default()
+                    },
+                )
+            },
+            StreamDetail {
+                language: Some("eng".to_string()),
+                name: Some("English (SDH)".to_string()),
+                ..stream(
+                    StreamKind::Subtitle,
+                    "3",
+                    "subrip",
+                    StreamMetadata {
+                        disposition: default_track,
+                        ..Default::default()
+                    },
+                )
             },
         ],
-        subtitle_languages: vec!["eng".to_string()],
-        subtitle_codecs: vec!["subrip".to_string()],
-        subtitle_streams: vec![scryer_mediainfo::SubtitleStreamDetail {
-            codec: Some("subrip".to_string()),
-            language: Some("eng".to_string()),
-            name: Some("English (SDH)".to_string()),
-            forced: false,
-            default: true,
-        }],
-        has_multiaudio: true,
-        duration_seconds: Some(7_020),
-        num_chapters: Some(12),
-        container_format: Some("matroska".to_string()),
+        ..Default::default()
     };
 
     // What import computes and persists.
-    let stored_analysis = crate::post_download_gate::build_media_file_analysis(&mediainfo);
+    let stored_analysis = crate::media::analysis_summary::summarize(details);
+    assert!(stored_analysis.has_multiaudio);
+    assert_eq!(stored_analysis.audio_codec.as_deref(), Some("eac3"));
     let at_import = crate::user_rule_input::file_doc_from_analysis(&stored_analysis);
 
     // The row import writes, then the document re-derived from it.

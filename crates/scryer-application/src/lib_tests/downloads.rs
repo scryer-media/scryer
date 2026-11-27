@@ -2744,6 +2744,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         facet: None,
         source_title: Some("Observed.Download".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Unmatched,
@@ -2761,6 +2762,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     });
     let submission = DownloadSubmission {
         download_id: scryer_domain::download_identity::DownloadId::new(),
@@ -5356,6 +5358,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         facet: Some("movie".to_string()),
         source_title: Some(title.name.clone()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -5373,6 +5376,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     let cache = match tick {
@@ -6045,8 +6049,7 @@ const PACK_VIDEO_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
 fn write_pack_video(dir: &Path, file_name: &str) -> std::path::PathBuf {
     let path = dir.join(file_name);
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv");
     std::fs::copy(fixture, &path).expect("copy source video fixture");
     std::fs::OpenOptions::new()
         .write(true)
@@ -7486,7 +7489,7 @@ async fn automatic_import_rejects_download_whose_only_file_matches_no_episode() 
 }
 
 #[cfg(feature = "runtime-media-analysis")]
-#[path = "../../../scryer-mediainfo/tests/support/disc_image.rs"]
+#[path = "authored_disc/disc_image.rs"]
 mod authored_disc_image;
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -7557,8 +7560,7 @@ async fn catalog_scan_and_final_import_join_the_same_native_probe() {
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv");
     let size = std::fs::metadata(&path).unwrap().len() as i64;
     let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
     let (release, references) =
@@ -7618,7 +7620,7 @@ async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("changing.mkv");
     let original = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
     )
     .unwrap();
     std::fs::write(&path, &original).unwrap();
@@ -7749,52 +7751,9 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         .await
         .unwrap();
     let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
-    for name in [
-        "h264_aac.mkv",
-        "matrix_ts_002.m2ts",
-        "av1_sequence_pq.mp4",
-        "av1_sequence_pq.mkv",
-        "hevc_sequence_pq.mp4",
-        "hevc_hdr10plus.mp4",
-        "dv_profile5.mkv",
-        "dv_profile7.mkv",
-        "dv_profile8.mkv",
-        "hevc_hdr10plus.mkv",
-        "hevc_sequence_pq.mkv",
-        "chapters_nero.mp4",
-        "chapters_quicktime.mp4",
-        "matrix_mkv_004.mkv",
-        "matrix_mkv_005.mkv",
-        "matrix_mp4_002.m4v",
-        "matrix_mp4_011.m4v",
-        "matrix_ts_003.ts",
-        "matrix_ts_004.m2ts",
-        "matrix_mkv_003.mkv",
-        "matrix_mkv_007.mkv",
-        "matrix_mkv_020.mkv",
-        "matrix_mp4_008.m4v",
-        "ogv_theora_opus_surround.ogv",
-        "ogv_theora_vorbis.ogv",
-        "matrix_avi_001.avi",
-        "matrix_avi_009.avi",
-        "matrix_avi_013.avi",
-        "matrix_avi_005.avi",
-        "matrix_mkv_015.mkv",
-        "matrix_ts_016.m2ts",
-        "matrix_ts_005.ts",
-        "wmv_wmv1_aac_surround.wmv",
-        "wmv_wmv1_wmav1.wmv",
-        "wmv_wmv1_mp3_mono.wmv",
-        "wmv_wmv2_video_only.wmv",
-        "flv_flv1_pcm_s16le.flv",
-        "flv_flv1_pcm_u8.flv",
-        "flv_flv1_speex.flv",
-        "flv_h264_mp3.flv",
-        "ps_mpeg1_mp2.mpg",
-        "ps_mpeg2_mp2.vob",
-    ] {
+    for name in ["h264_aac.mkv", "h264_aac.mp4", "matrix_ts_002.m2ts"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media")
+            .join("test-fixtures/media")
             .join(name);
         let crate::MediaAnalysisOutcome::Valid(catalog) =
             analyzer.analyze_file(path.clone()).await.unwrap()
@@ -7872,8 +7831,7 @@ async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
         let fixture = fail_closed_pack_fixture().await;
         let source_dir = tempfile::tempdir().unwrap();
         let mut clip = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/matrix_ts_002.m2ts"),
         )
         .unwrap();
         if kind == "encrypted" {
@@ -7988,8 +7946,7 @@ async fn manual_disc_import_for_filesystem(udf_metadata_partition: Option<bool>)
         );
     }
     let clip = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/matrix_ts_002.m2ts"),
     )
     .unwrap();
     let image_files = [
@@ -8188,7 +8145,7 @@ fn write_extensionless_video(dir: &Path, fixture: &str) -> std::path::PathBuf {
     let path = dir.join("dXRUKoYEAJ58jradJdxMKKxgczVTvt");
     std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media")
+            .join("test-fixtures/media")
             .join(fixture),
         &path,
     )
@@ -12690,8 +12647,9 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let native = scryer_mediainfo::analyze_catalog_file(&source).unwrap();
-    assert!(scryer_mediainfo::is_valid_video(&native));
+    let probed = mediaprobe::probe(&source).unwrap();
+    assert!(probed.is_playable_video());
+    let native = crate::media::analysis_summary::summarize(probed);
     let policy = scryer_rules::UserPolicy {
         id: "reject_probed_files".into(),
         name: "Reject probed files".into(),
@@ -12904,7 +12862,9 @@ async fn additional_movie_preparation_persists_native_analysis_and_manual_probe_
                 .unwrap()
                 .set_len(PACK_VIDEO_SIZE_BYTES)
                 .unwrap();
-            Some(scryer_mediainfo::analyze_catalog_file(&source).unwrap())
+            Some(crate::media::analysis_summary::summarize(
+                mediaprobe::probe(&source).unwrap(),
+            ))
         } else {
             // Harmless non-video bytes under a video extension exercise the
             // explicitly retained manual probe-error override.
@@ -16022,6 +15982,7 @@ impl DispositionFixture {
             facet: Some("movie".to_string()),
             source_title: Some(self.completed.name.clone()),
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: scryer_domain::TitleMatchType::Submission,
@@ -16039,6 +16000,7 @@ impl DispositionFixture {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 
@@ -21579,6 +21541,7 @@ async fn exercise_missing_download_recovery(fail_event_append: bool) {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,

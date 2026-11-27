@@ -21,7 +21,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use xtask_support::{TaskContext, ok, run_status, step, warn};
 
-mod media_fixtures;
 mod oauth_dev_flow;
 mod profile;
 
@@ -123,7 +122,6 @@ enum Commands {
     Release(ReleaseArgs),
     Builtins(BuiltinsArgs),
     Migrations(MigrationsArgs),
-    MediaFixtures(media_fixtures::MediaFixturesArgs),
     BuildTestPluginFixture,
     #[command(name = "oauth")]
     OAuth(OAuthArgs),
@@ -314,11 +312,6 @@ fn main() -> Result<()> {
         Commands::Release(args) => delegate_release(&ctx, &args),
         Commands::Builtins(args) => delegate_builtins(&ctx, &args),
         Commands::Migrations(args) => delegate_migrations(&ctx, &args),
-        Commands::MediaFixtures(args) => match args.command {
-            media_fixtures::MediaFixturesCommand::Generate(args) => {
-                media_fixtures::generate(&ctx, &args)
-            }
-        },
         Commands::BuildTestPluginFixture => build_test_plugin_fixture(&ctx),
         Commands::OAuth(args) => match args.command {
             OAuthCommand::DevFlow(args) => oauth_dev_flow::run(&ctx, args),

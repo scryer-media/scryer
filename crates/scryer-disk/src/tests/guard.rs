@@ -16,13 +16,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// The disk service itself, and the three crates clippy.toml names as exempt.
-const EXEMPT_CRATES: [&str; 4] = [
-    "scryer-disk",
-    "scryer-launcher",
-    "scryer-mediainfo",
-    "scryer-mock-apis",
-];
+/// The disk service itself, and the two crates clippy.toml names as exempt.
+const EXEMPT_CRATES: [&str; 3] = ["scryer-disk", "scryer-launcher", "scryer-mock-apis"];
 /// Directories that hold only test, bench or example code.
 const EXEMPT_DIRS: [&str; 5] = ["tests", "lib_tests", "benches", "examples", "target"];
 /// `disk-guard:` comments on production code in the guarded sources today. A

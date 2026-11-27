@@ -909,15 +909,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bytestring"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca79160522b4aed4a69bab673bee78d3884d44240c78c96cb04b7557d532b4dc"
-dependencies = [
- "bytes",
-]
-
-[[package]]
 name = "cbc"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3699,6 +3690,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mediaprobe"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e020d3c0ed027cee5c3df7911db52db41bc5155800328ac012fbbe92f04e2968"
+dependencies = [
+ "isolang",
+ "mp4parse",
+ "ogg",
+ "riff",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4057,15 +4063,6 @@ checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi",
  "libc",
-]
-
-[[package]]
-name = "nutype-enum"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1e13adea6de269faa0724df58f43f6fe2a81af7094f1dcb8b5b968eb2103cb3"
-dependencies = [
- "scuffle-workspace-hack",
 ]
 
 [[package]]
@@ -5706,6 +5703,7 @@ dependencies = [
  "http",
  "jsonwebtoken",
  "libc",
+ "mediaprobe",
  "metrics",
  "metrics-util",
  "proxy-tunnels",
@@ -5720,7 +5718,6 @@ dependencies = [
  "scryer-domain",
  "scryer-logging",
  "scryer-media-types",
- "scryer-mediainfo",
  "scryer-outbound-http",
  "scryer-plugin-sdk",
  "scryer-release-parser",
@@ -6283,25 +6280,7 @@ dependencies = [
 name = "scryer-media-types"
 version = "0.23.1"
 dependencies = [
- "serde",
-]
-
-[[package]]
-name = "scryer-mediainfo"
-version = "0.23.1"
-dependencies = [
- "bytes",
- "isolang",
- "mp4parse",
- "ogg",
- "riff",
- "scryer-media-types",
- "scuffle-h264",
- "scuffle-h265",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "toml",
+ "mediaprobe",
 ]
 
 [[package]]
@@ -6442,63 +6421,6 @@ dependencies = [
  "salsa20",
  "sha2 0.11.1",
 ]
-
-[[package]]
-name = "scuffle-bytes-util"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0417748c2a42f4a08d4e634b68b1d64f22a8c24bef2e7ac93df33aa61202a45b"
-dependencies = [
- "byteorder",
- "bytes",
- "bytestring",
- "scuffle-workspace-hack",
-]
-
-[[package]]
-name = "scuffle-expgolomb"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48d21330974c941e4c0aedc1e7255ea809e8cbac51e135209f6d67843ad1b94d"
-dependencies = [
- "scuffle-bytes-util",
- "scuffle-workspace-hack",
-]
-
-[[package]]
-name = "scuffle-h264"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34ea4785ddd4440e626ec52557d29ae4e3ef576540eeb83b8928a767e6320588"
-dependencies = [
- "byteorder",
- "bytes",
- "nutype-enum",
- "scuffle-bytes-util",
- "scuffle-expgolomb",
- "scuffle-workspace-hack",
-]
-
-[[package]]
-name = "scuffle-h265"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b04b276c2f79846b7968abe6f87cedf951e06fd2a2b72d99c457e85d7e40f3fb"
-dependencies = [
- "bitflags 2.13.2",
- "byteorder",
- "bytes",
- "nutype-enum",
- "scuffle-bytes-util",
- "scuffle-expgolomb",
- "scuffle-workspace-hack",
-]
-
-[[package]]
-name = "scuffle-workspace-hack"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8028ded836a0d9fabdfa4d713389b76a2098b5153f50a135c8faed7e3a3d5ae2"
 
 [[package]]
 name = "sec1"
@@ -7455,7 +7377,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

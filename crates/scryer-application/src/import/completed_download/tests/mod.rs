@@ -2046,6 +2046,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         facet: Some(facet.to_string()),
         source_title: Some(release_title.to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: TitleMatchType::Submission,
@@ -2063,6 +2064,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     }
 }
 

@@ -36,6 +36,20 @@ pub const DESTINATION_EXISTS: &str = "HTTP_RELEASE_DESTINATION_EXISTS";
 pub const PUBLICATION_FAILED: &str = "HTTP_RELEASE_PUBLICATION_FAILED";
 /// An existing output lacks matching durable publication evidence.
 pub const RECOVERY_UNVERIFIED: &str = "HTTP_RELEASE_RECOVERY_UNVERIFIED";
+/// A file's path or the job folder is not a plain relative path inside the
+/// job folder: it is absolute, empty, holds `..` or an empty component, or
+/// collides with another file of the same job.
+pub const FILE_PATH_INVALID: &str = "HTTP_RELEASE_FILE_PATH_INVALID";
+/// The job names more files than one download may hold.
+pub const TOO_MANY_FILES: &str = "HTTP_RELEASE_TOO_MANY_FILES";
+/// A file's link key is empty or longer than the downloader records.
+pub const LINK_KEY_INVALID: &str = "HTTP_RELEASE_LINK_KEY_INVALID";
+/// A file's link is resolved on demand, and this downloader has no resolver.
+pub const LINK_SOURCE_UNAVAILABLE: &str = "HTTP_RELEASE_LINK_SOURCE_UNAVAILABLE";
+/// The server kept refusing freshly resolved links for a file.
+pub const LINK_REFUSED: &str = "HTTP_RELEASE_LINK_REFUSED";
+/// The link source kept asking to wait, and the file was given up on.
+pub const LINK_UNAVAILABLE: &str = "HTTP_RELEASE_LINK_UNAVAILABLE";
 
 /// Every reason an HTTP release refusal can name. Clients key translations
 /// on these, so adding, renaming, or removing one must be deliberate.
@@ -54,6 +68,12 @@ pub const ALL: &[&str] = &[
     DESTINATION_EXISTS,
     PUBLICATION_FAILED,
     RECOVERY_UNVERIFIED,
+    FILE_PATH_INVALID,
+    TOO_MANY_FILES,
+    LINK_KEY_INVALID,
+    LINK_SOURCE_UNAVAILABLE,
+    LINK_REFUSED,
+    LINK_UNAVAILABLE,
 ];
 
 #[cfg(test)]

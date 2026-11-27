@@ -1,26 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import {
   STANDALONE_VIDEO_EXTENSIONS,
   VIDEO_EXTENSIONS,
 } from "./media-formats.generated.ts";
 import { canonicalVideoExtension, videoFileStem } from "./media-formats.ts";
-
-test("generated media registry matches the authoritative Rust declaration", () => {
-  const result = spawnSync(
-    process.execPath,
-    [
-      fileURLToPath(
-        new URL("../../scripts/generate-media-formats.mjs", import.meta.url),
-      ),
-      "--check",
-    ],
-    { encoding: "utf8", timeout: 30_000 },
-  );
-  assert.equal(result.status, 0, result.stderr);
-});
 
 test("every registered suffix normalizes case and trailing junk without accepting deceptive suffixes", () => {
   for (const extension of VIDEO_EXTENSIONS) {

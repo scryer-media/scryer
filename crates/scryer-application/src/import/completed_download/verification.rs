@@ -1464,6 +1464,7 @@ mod expected_episode_release_title_tests {
             facet: Some("series".to_string()),
             source_title: source_title.map(str::to_string),
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::TitleParse,
@@ -1481,6 +1482,7 @@ mod expected_episode_release_title_tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 

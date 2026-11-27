@@ -7,6 +7,7 @@ import type {
 import type { Translate } from "@/components/root/types";
 import { MEDIA_REFUSAL_KEYS } from "./media-error-message.ts";
 import { HTTP_RELEASE_REFUSAL_KEYS } from "./http-release-error-message.ts";
+import { TORBOX_REFUSAL_KEYS } from "./torbox-error-message.ts";
 
 export function importRetrySucceeded(
   result: { decision?: string; skipReason?: string | null } | null | undefined,
@@ -499,6 +500,7 @@ const IMPORT_ATTENTION_REFUSAL_KEYS: Readonly<Record<string, string>> = {
 
 const QUEUE_ATTENTION_REASON_KEYS: Readonly<Record<string, string>> = {
   ...HTTP_RELEASE_REFUSAL_KEYS,
+  ...TORBOX_REFUSAL_KEYS,
   ...MEDIA_REFUSAL_KEYS,
   ...IMPORT_ATTENTION_REFUSAL_KEYS,
   download_password_retry: "queue.attention.downloadPasswordRetry",
@@ -520,6 +522,7 @@ export function buildQueueStatusDetail(
     ...(code &&
     t &&
     (Object.hasOwn(HTTP_RELEASE_REFUSAL_KEYS, code) ||
+      Object.hasOwn(TORBOX_REFUSAL_KEYS, code) ||
       Object.hasOwn(MEDIA_REFUSAL_KEYS, code) ||
       Object.hasOwn(IMPORT_ATTENTION_REFUSAL_KEYS, code))
       ? []

@@ -1203,6 +1203,103 @@ async fn burned_torrent_rejection_does_not_delete_download_data() {
     assert!(source.exists());
 }
 
+/// A client fixture that declares both NZB and torrent inputs.
+struct MixedProtocolPluginProvider;
+
+const MIXED_CLIENT_TYPE: &str = "mixed-fixture";
+
+impl crate::DownloadClientPluginProvider for MixedProtocolPluginProvider {
+    fn client_for_config(
+        &self,
+        _: &scryer_domain::DownloadClientConfig,
+    ) -> Option<std::sync::Arc<dyn crate::DownloadClient>> {
+        None
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        vec![MIXED_CLIENT_TYPE.to_string()]
+    }
+
+    fn accepted_inputs_for_provider(&self, provider_type: &str) -> Vec<String> {
+        if provider_type.eq_ignore_ascii_case(MIXED_CLIENT_TYPE) {
+            ["nzb", "nzb_url", "torrent_file", "magnet_uri"]
+                .map(str::to_string)
+                .to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// On a client carrying both protocols, a burned rejection deletes the job
+/// directory only for a job its grab record proves is usenet. A torrent job,
+/// and a job whose kind is unknown, keep their data for seeding.
+#[tokio::test]
+async fn burned_rejection_on_a_mixed_client_deletes_only_a_recorded_usenet_job() {
+    use crate::seeding_gate::DownloadJobProtocol;
+
+    for (job_protocol, deletes) in [
+        (DownloadJobProtocol::Usenet, true),
+        (DownloadJobProtocol::Torrent, false),
+        (DownloadJobProtocol::Unknown, false),
+    ] {
+        let settings = Arc::new(super::route_gate::RoutingSettingsRepo::default());
+        settings
+            .set_routing(
+                "movie",
+                r#"{"client-1":{"enabled":true,"removeCompleted":true,"removeFailed":true}}"#,
+            )
+            .await;
+        let mut app = build_app_with_download_client_configs_submissions_and_settings(
+            vec![build_title("title-1", "Fixture Show", MediaFacet::Movie)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            TestAppRepositories {
+                download_client: Arc::new(NullDownloadClient),
+                download_client_configs: Arc::new(NullDownloadClientConfigRepository),
+                download_submissions: Arc::new(
+                    crate::null_repositories::NullDownloadSubmissionRepository,
+                ),
+                settings,
+            },
+        );
+        let plugin_provider: std::sync::Arc<dyn crate::DownloadClientPluginProvider> =
+            std::sync::Arc::new(MixedProtocolPluginProvider);
+        app.services.integrations.download_client_plugin_provider =
+            crate::RuntimeFeature::enabled(plugin_provider);
+        let mut td = build_tracked_download("title-1", "movie", "Fixture.Show.S01E01.1080p.WEB-DL");
+        td.client_type = MIXED_CLIENT_TYPE.to_string();
+        td.client_item.client_type = MIXED_CLIENT_TYPE.to_string();
+        td.job_protocol = job_protocol;
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let job_dir = temp_dir.path().join("completed/job");
+        let source = job_dir.join("release/episode.mkv");
+        std::fs::create_dir_all(source.parent().expect("source parent")).expect("create source");
+        std::fs::write(&source, b"video").expect("write source");
+        let unrelated = temp_dir.path().join("unrelated.mkv");
+        std::fs::write(&unrelated, b"unrelated").expect("write unrelated");
+        let mut completed = build_completed_download(
+            "Fixture.Show.S01E01.1080p.WEB-DL",
+            job_dir.to_string_lossy().as_ref(),
+            None,
+        );
+        completed.client_type = MIXED_CLIENT_TYPE.to_string();
+        let mut result = failed_execution_result("release language does not match the title");
+        result.decision = ImportDecision::Rejected;
+        result.release_burned = true;
+        result.source_path = source.to_string_lossy().into_owned();
+
+        assert!(
+            !apply_import_result_with_completed(&app, &mut td, result, 0, Some(&completed), None)
+                .await
+        );
+        assert_eq!(td.state, TrackedDownloadState::Failed, "{job_protocol:?}");
+        assert_eq!(job_dir.exists(), !deletes, "{job_protocol:?}");
+        assert!(unrelated.exists(), "{job_protocol:?}");
+    }
+}
+
 #[tokio::test]
 async fn apply_result_does_not_verify_unresolved_identity_rejection_as_imported() {
     let title = build_title("title-1", "Show", MediaFacet::Series);

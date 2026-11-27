@@ -41,7 +41,7 @@ class MatrixTests(unittest.TestCase):
         names = ["scryer", "scryer-application", "scryer-plugins",
                  "scryer-infrastructure-runtime", "scryer-infrastructure-library",
                  "scryer-infrastructure-datastore", "scryer-infrastructure-identity",
-                 "scryer-interface", "scryer-domain", "scryer-mediainfo"]
+                 "scryer-interface", "scryer-domain", "scryer-media-types"]
         data = document(*(package(name) for name in names))
         data["packages"][0]["targets"] = [
             {"name": name, "kind": ["test"], "test": True}

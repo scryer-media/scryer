@@ -149,15 +149,6 @@ async fn attach_library_presence(
         .collect())
 }
 
-fn parse_metadata_date(value: String, field: &str) -> GqlResult<Date> {
-    parse_iso_date(Some(value)).ok_or_else(|| {
-        to_gql_error(AppError::validation_refused(
-            scryer_interface_core::refusal::INTERFACE_METADATA_DATE_INVALID,
-            format!("invalid {field} date"),
-        ))
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 #[Object]
 impl MetadataQueries {
@@ -444,19 +435,19 @@ impl MetadataQueries {
                         "w300",
                     )
                     .expect("metadata episode image registration with an owner always returns a URL");
-                    Ok(MetadataEpisodePayload {
+                    MetadataEpisodePayload {
                         tvdb_id: episode_tvdb_id.map(|id| id.to_string()).unwrap_or_default(),
                         tmdb_id: e.tmdb_id,
                         episode_number: e.episode_number,
                         season_number: e.season_number,
                         name: e.name,
-                        aired: parse_metadata_date(e.aired, "metadata episode aired")?,
+                        aired: parse_iso_date(Some(e.aired)),
                         runtime_minutes: e.runtime_minutes,
                         is_filler: e.is_filler,
                         image_url,
-                    })
+                    }
                 })
-                .collect::<GqlResult<Vec<_>>>()?
+                .collect()
         } else {
             vec![]
         };
@@ -479,7 +470,7 @@ impl MetadataQueries {
             slug: series.slug,
             year: series.year,
             status: series.content_status,
-            first_aired: parse_metadata_date(series.first_aired, "metadata series first_aired")?,
+            first_aired: parse_iso_date(Some(series.first_aired)),
             overview: series.overview,
             network: series.network,
             runtime_minutes: series.runtime_minutes,

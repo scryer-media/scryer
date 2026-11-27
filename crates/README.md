@@ -15,7 +15,6 @@ domain → application → infrastructure/interface adapters → the `scryer` bi
 | `scryer-release-parser` | Deterministic release-name parser with title-context targeting. |
 | `scryer-rules` | Rego rule evaluation (via `regorus`) and built-in rule sets. |
 | `scryer-outbound-http` | Outbound HTTP client with rate-limit, retry, cooldown, and redirect policy. |
-| `scryer-mediainfo` | Container/codec probing for media files (MKV, MP4, AVI, TS, OGG, FLV, ASF). |
 | `scryer-webauthn` | WebAuthn/passkey helpers used by the security workflows. |
 | `scryer-runtime-info` | CPU feature / build-lane detection for release binaries. |
 | `scryer-launcher` | Container entry point that drops privileges and `exec`s `scryer`. |

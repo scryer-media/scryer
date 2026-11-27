@@ -1885,6 +1885,7 @@ impl AppUseCase {
                 info_hash_hint: pr.info_hash.clone(),
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 // Captured off the release `extra` map when the row was parked
                 // (migration 0165), so a delayed grab gets the same tracker
                 // clamp as an immediate one. Rows parked before that migration
