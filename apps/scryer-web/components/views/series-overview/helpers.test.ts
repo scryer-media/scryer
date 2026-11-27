@@ -28,6 +28,8 @@ function collection(
     episodesOwned: null,
     episodesMonitored: null,
     episodesTotal: null,
+    episodesOnDisk: null,
+    episodesExpected: null,
     episodeRecordsTotal: null,
     createdAt: "2026-01-01T00:00:00Z",
   };

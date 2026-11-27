@@ -1996,8 +1996,8 @@ const cs: LocaleDictionary = {
   "title.table.runtime": "Délka",
   "title.table.avgRuntime": "Prům. délka",
   "title.table.episodeProgressTooltip": "Epizody: {{owned}} / {{total}}",
-  "title.table.episodeProgressTooltipWithTotal":
-    "Epizody: {{owned}} / {{total}} (sledováno: {{monitored}})",
+  "title.table.episodeProgressExpectedTooltip":
+    "Epizody: {{onDisk}} / {{expected}} (celkem: {{total}})",
   "title.table.status": "Stav",
   "title.table.root": "Kořen",
   "title.table.popularity": "Popularita",

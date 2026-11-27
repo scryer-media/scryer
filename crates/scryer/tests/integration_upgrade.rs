@@ -276,18 +276,20 @@ impl MediaFileRepository for FailingPathUpdateMediaFileRepo {
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         self.inner
-            .list_title_episode_progress_summaries(title_ids)
+            .list_title_episode_progress_summaries(title_ids, aired_through)
             .await
     }
 
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         self.inner
-            .list_collection_episode_progress_summaries(title_ids)
+            .list_collection_episode_progress_summaries(title_ids, aired_through)
             .await
     }
 

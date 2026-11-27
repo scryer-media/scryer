@@ -2422,7 +2422,10 @@ async fn media_file_aggregates_ignore_additional_files_but_listing_includes_them
     assert_eq!(cutoff_summaries[0].quality_tier, "1080P");
 
     let progress_summaries = media_files
-        .list_title_episode_progress_summaries(&[series_title.id.clone()])
+        .list_title_episode_progress_summaries(
+            &[series_title.id.clone()],
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("fixed day"),
+        )
         .await
         .expect("episode progress summaries should list");
     assert_eq!(progress_summaries.len(), 1);
