@@ -950,8 +950,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Staging a request subject's metadata adds `stageMyRequestMetadata`:
     // 300->301.
     assert!(mutation_field_names.contains(&"stageMyRequestMetadata"));
+    // Changing monitoring for a selection of episodes adds
+    // `setEpisodesMonitored`, one call instead of one per episode: 301->302.
+    assert!(mutation_field_names.contains(&"setEpisodesMonitored"));
     assert_eq!(
-        mutation_field_count, 301,
+        mutation_field_count, 302,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1588,9 +1591,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Episode monitoring for a selection adds SetEpisodesMonitoredInput:
+    // INPUT_OBJECT 253->254, public types 1062->1063.
+    assert!(public_type_names.contains(&"SetEpisodesMonitoredInput"));
     assert_eq!(
         public_types.len(),
-        1062,
+        1063,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 578);
@@ -1599,7 +1605,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
     assert!(public_type_names.contains(&"SetLibraryFullHashBackfillInput"));
-    assert_eq!(kind_count("INPUT_OBJECT"), 253);
+    assert_eq!(kind_count("INPUT_OBJECT"), 254);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     assert_eq!(kind_count("ENUM"), 219);
@@ -5165,6 +5171,7 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
           fixTitleMatch: __type(name: "FixTitleMatchInput") { inputFields { name type { ...TypeRef } } }
           setCollectionMonitored: __type(name: "SetCollectionMonitoredInput") { inputFields { name type { ...TypeRef } } }
           setEpisodeMonitored: __type(name: "SetEpisodeMonitoredInput") { inputFields { name type { ...TypeRef } } }
+          setEpisodesMonitored: __type(name: "SetEpisodesMonitoredInput") { inputFields { name type { ...TypeRef } } }
           setSeriesMovieMonitored: __type(name: "SetSeriesMovieMonitoredInput") { inputFields { name type { ...TypeRef } } }
           deleteMediaFile: __type(name: "DeleteMediaFileInput") { inputFields { name type { ...TypeRef } } }
           reassignEpisodeFile: __type(name: "ReassignEpisodeFileInput") { inputFields { name type { ...TypeRef } } }
@@ -5311,6 +5318,7 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     }
 
     assert_non_null_id_list("deleteTitlesPreview", "titleIds");
+    assert_non_null_id_list("setEpisodesMonitored", "episodeIds");
     assert_non_null_id_list("deleteEpisodeFiles", "episodeIds");
     assert_non_null_id_list("deleteEpisodeFilesPreview", "episodeIds");
     assert_non_null_id_list("bindPendingImport", "episodeIds");

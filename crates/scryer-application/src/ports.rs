@@ -11034,6 +11034,20 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
 
     async fn delete_acquisition_scope_states_for_episode(&self, episode_id: &str) -> AppResult<()>;
 
+    /// [`Self::delete_acquisition_scope_states_for_episode`] for every episode
+    /// in `episode_ids`. The default issues one call per episode and stops at
+    /// the first failure; SQL stores delete the rows in one transaction.
+    async fn delete_acquisition_scope_states_for_episodes(
+        &self,
+        episode_ids: &[String],
+    ) -> AppResult<()> {
+        for episode_id in episode_ids {
+            self.delete_acquisition_scope_states_for_episode(episode_id)
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String>;
 
     /// `insert_release_decision` for each decision in order, one result per

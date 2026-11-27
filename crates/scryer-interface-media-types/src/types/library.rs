@@ -1351,6 +1351,15 @@ pub struct SetEpisodeMonitoredInput {
 }
 
 #[derive(InputObject, Clone)]
+/// Monitoring state change for several episodes at once.
+pub struct SetEpisodesMonitoredInput {
+    /// Episode identities to update. A repeated id counts once.
+    pub episode_ids: Vec<ID>,
+    /// Whether the episodes are monitored.
+    pub monitored: bool,
+}
+
+#[derive(InputObject, Clone)]
 /// Monitoring state change for a series-movie link.
 pub struct SetSeriesMovieMonitoredInput {
     /// Series-movie link identity to update.

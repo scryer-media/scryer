@@ -767,8 +767,18 @@ pub mod catalog {
     pub const MOVIE_ENTITY_NOT_FOUND: &str = "CATALOG_MOVIE_ENTITY_NOT_FOUND";
     /// The title tag is invalid.
     pub const TAG_INVALID: &str = "CATALOG_TAG_INVALID";
+    /// One episode monitoring change named more distinct episodes than it
+    /// accepts. Carries [`EPISODE_MONITOR_BATCH_MAX_IDS_FACT`] and
+    /// [`EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT`].
+    pub const EPISODE_MONITOR_BATCH_TOO_LARGE: &str = "CATALOG_EPISODE_MONITOR_BATCH_TOO_LARGE";
+    /// One episode monitoring change named episodes that do not exist.
+    /// Carries [`EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT`].
+    pub const EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES: &str =
+        "CATALOG_EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        EPISODE_MONITOR_BATCH_TOO_LARGE,
+        EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES,
         TAG_INVALID,
         TITLE_NOT_FOUND,
         SEARCH_QUERY_REQUIRED,
@@ -854,6 +864,44 @@ pub mod catalog {
         SMG_NO_SERIES_NOT_FOUND,
         MOVIE_ENTITY_NOT_FOUND,
     ];
+
+    /// The most distinct episodes one monitoring change accepts.
+    pub const EPISODE_MONITOR_BATCH_MAX_IDS_FACT: &str = "maxEpisodeIds";
+    /// How many distinct episodes the refused monitoring change named.
+    pub const EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT: &str = "requestedEpisodeIds";
+    /// The requested episode ids that match no episode, in request order.
+    pub const EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT: &str = "unknownEpisodeIds";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[
+        EPISODE_MONITOR_BATCH_MAX_IDS_FACT,
+        EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT,
+        EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod security {
