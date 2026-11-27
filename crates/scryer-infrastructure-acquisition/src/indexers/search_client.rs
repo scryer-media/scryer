@@ -1154,15 +1154,18 @@ impl ListingProbe {
                 }
                 ListingRelation::Reads(listing) => listing,
             };
-            let own_state = reusable.remove(&strategy.strategy_id);
             let ReplayOutcome::Served(count) = self
                 .replay_listing(listing, &strategy.strategy_id, page_sink)
                 .await?
             else {
-                strategy.request.page_cursor = None;
+                // The listing cannot answer this strategy, so it reads live.
+                // It keeps its own state: selection resumes its own paged
+                // read from the stored cursor and honours its gates, instead
+                // of reading from the first page again on every pass.
                 plan.strategies.push(strategy);
                 continue;
             };
+            let own_state = reusable.remove(&strategy.strategy_id);
             plan.replayed = plan.replayed.saturating_add(count);
             let idle = listing.advanced_at < idle_before;
             if !listing.finished && idle {
@@ -25273,6 +25276,44 @@ mod tests {
                 assert!(result_titles(&response).contains(&harbor(1, episode)));
             }
         }).await.expect("unsafe listing regression timed out");
+    }
+
+    #[tokio::test]
+    async fn a_reader_of_an_unreplayable_listing_reads_on_from_its_own_cursor() {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let (client, fetches, pool) = listing_search_client(title_level_pages(12)).await;
+            background_pass(&client, "owner", (1, 1)).await;
+
+            // Every pass of the reader finds a page of the listing that no
+            // replay can rebuild, so it reads live. Each pass reads on where
+            // its own last pass stopped, so the read reaches the end of the
+            // listing instead of starting from the first page again.
+            for (session, pages) in [
+                ("reader-1", 1..=5),
+                ("reader-2", 6..=10),
+                ("reader-3", 11..=12),
+            ] {
+                sqlx::query(
+                    "UPDATE indexer_search_candidate_sources SET reusable_until = '2000-01-01T00:00:00Z'
+                      WHERE candidate_id IN (SELECT id FROM indexer_search_candidates WHERE title = ?)",
+                )
+                .bind(harbor(1, 2))
+                .execute(&pool)
+                .await
+                .expect("make a listing page unreplayable");
+                let asked = fetched(&fetches);
+                background_pass(&client, session, (1, 2)).await;
+                assert_eq!(
+                    id_fetches(&fetches, asked),
+                    pages
+                        .map(|page| (Some(1), Some(2), page_cursor(page)))
+                        .collect::<Vec<_>>(),
+                    "{session} reads on from its own cursor"
+                );
+            }
+        })
+        .await
+        .expect("unreplayable listing reader timed out");
     }
 
     #[tokio::test]
