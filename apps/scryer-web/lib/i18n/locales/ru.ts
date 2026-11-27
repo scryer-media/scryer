@@ -4,6 +4,9 @@ const ru: LocaleDictionary = {
   "settings.defaultMonitorType": "Отслеживание новых тайтлов по умолчанию",
   "settings.defaultMonitorTypeHelp":
     "Начальный выбор при добавлении или запросе тайтла. Существующие тайтлы и подписки на списки не меняются.",
+  "settings.libraryDefaultTitleTags": "Теги для новых тайтлов",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Добавляются к каждому тайтлу, добавленному в эту библиотеку вручную, из списка или при одобрении запроса. Тайтлы, найденные сканированием библиотеки, и уже добавленные тайтлы не меняются.",
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Эта версия Prowlarr не поддерживается. Обновите Prowlarr до версии 2.0 или новее.",
   "error.reason.STANDBY_NOT_FOUND":
@@ -11451,6 +11454,8 @@ const ru: LocaleDictionary = {
     "Выберите и сезон, и эпизод.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "Поиск фильма сериала не может включать сезон или эпизод.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "Этот поиск принимает тайтл, а не произвольный текст. Для поиска по тексту запустите интерактивный поиск.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Выберите тайтл для поиска релизов.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":

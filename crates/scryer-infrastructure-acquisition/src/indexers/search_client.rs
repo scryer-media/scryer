@@ -8635,7 +8635,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     debug!(
                         indexer = indexer_name.as_str(),
                         facet = facet.as_str(),
-                        query = search_query.as_str(),
+                        search_text = search_query.as_str(),
                         reason = "zero_usable_results",
                         "indexer search falling back to title tier"
                     );
@@ -10671,7 +10671,7 @@ fn filter_strategy_results(
             if !title_ok && !exact_cour_mapping_covers_requested_episode(parsed, context) {
                 tracing::debug!(
                     strategy = context.strategy_label,
-                    query = %context.query,
+                    search_text = %context.query,
                     expected = ?expected_titles,
                     got = ?release_titles,
                     "title guard: title mismatch"
@@ -10694,7 +10694,7 @@ fn filter_strategy_results(
             {
                 tracing::debug!(
                     strategy = context.strategy_label,
-                    query = %context.query,
+                    search_text = %context.query,
                     expected_season = expected_s,
                     got_season = rs,
                     "title guard: season mismatch"
@@ -10710,7 +10710,7 @@ fn filter_strategy_results(
             {
                 tracing::debug!(
                     strategy = context.strategy_label,
-                    query = %context.query,
+                    search_text = %context.query,
                     expected_episode = expected_e,
                     got_episodes = ?res_ep.episode_numbers,
                     "title guard: episode mismatch"
@@ -10740,7 +10740,7 @@ fn filter_strategy_results(
             if !admissible && !exact_cour_mapping_covers_requested_episode(parsed, context) {
                 tracing::debug!(
                     strategy = context.strategy_label,
-                    query = %context.query,
+                    search_text = %context.query,
                     admissible = ?pairs,
                     got_season = ?res_ep.season,
                     got_episodes = ?res_ep.episode_numbers,

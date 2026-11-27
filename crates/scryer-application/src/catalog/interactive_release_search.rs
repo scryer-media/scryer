@@ -21,8 +21,8 @@ pub use raw::{
 };
 
 use super::release_search::{
-    IncompleteIndexerReason, QualityProfileLookup, compare_release_search_results,
-    dedupe_cross_indexer_release_results, incomplete_indexer_reason,
+    QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
+    incomplete_indexer_reason,
 };
 use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
@@ -33,7 +33,7 @@ use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext,
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, info};
+use tracing::{Instrument, debug, info};
 
 /// Overall deadline for a job; stragglers past this are marked failed.
 const INTERACTIVE_RELEASE_SEARCH_DEADLINE: std::time::Duration =
@@ -913,6 +913,11 @@ impl AppUseCase {
                 query = logged_query,
                 category = category,
                 indexers = context.dispatch.len(),
+                "starting interactive release search"
+            );
+            debug!(
+                job_id = context.job_id.as_str(),
+                search_text = logged_query,
                 "starting interactive release search"
             );
         });

@@ -4,6 +4,9 @@ const en: LocaleDictionary = {
   "settings.defaultMonitorType": "Default monitoring for new titles",
   "settings.defaultMonitorTypeHelp":
     "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
+  "settings.libraryDefaultTitleTags": "Tags for new titles",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Added to every title added to this library, by hand, from a list or by approving a request. Titles found by a library scan and titles already here are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":
@@ -4350,6 +4353,8 @@ const en: LocaleDictionary = {
     "Choose both a season and episode.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "A series movie search cannot include a season or episode.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "This search takes a title, not free text. Run a free-text search as an interactive search instead.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Choose a title to search for releases.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":
@@ -7111,6 +7116,15 @@ const en: LocaleDictionary = {
   "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
   "queue.manualImportVerdict.NO_CURRENT_FILE": "New file",
   "queue.manualImportVerdictEstimated": "estimated",
+  "queue.manualImportApplySuggestionsSelected": "Apply suggestions to selected",
+  "queue.manualImportSelectAll": "Select all",
+  "queue.manualImportSelectNone": "Select none",
+  "queue.manualImportSelectInvert": "Invert selection",
+  "queue.manualImportSelectMatching": "Select matching",
+  "queue.manualImportSelectMatchingLabel": "File name contains…",
+  "queue.manualImportSelectedCount": "{{count}} selected",
+  "queue.manualImportSkipSelected": "Skip selected",
+  "queue.manualImportAssignSelected": "Assign target to selected…",
   "queue.removeFailed": "Remove Failed",
   "queue.manualImportTooltip":
     "Manual import is available for attention-required queue items.",
@@ -7410,7 +7424,8 @@ const en: LocaleDictionary = {
   "settings.loginDisabled": "Login disabled",
   "settings.accountOrigin.scryer": "Scryer account",
   "settings.accountOrigin.mediaServerLogin": "Created by {{provider}} login",
-  "settings.accountOrigin.mediaServerLoginUnknown": "Created by media server login",
+  "settings.accountOrigin.mediaServerLoginUnknown":
+    "Created by media server login",
   "settings.linkedMediaServer": "Linked to {{provider}}",
   "settings.enableLogin": "Enable login",
   "settings.disableLogin": "Disable login",
@@ -9629,8 +9644,10 @@ const en: LocaleDictionary = {
   "history.placementRenamed": "Moved into place",
   "history.placementAlreadyPresent": "Already in the library",
   "history.linkFallbackFailed": "Copied because the hard link failed",
-  "history.linkFallbackNotPossible": "Copied because a hard link is not possible here",
-  "history.linkFallbackUnverifiable": "Copied because the hard link could not be verified",
+  "history.linkFallbackNotPossible":
+    "Copied because a hard link is not possible here",
+  "history.linkFallbackUnverifiable":
+    "Copied because the hard link could not be verified",
   "history.linkFallbackError": "error {{code}}",
 
   // Indexer error diagnostics

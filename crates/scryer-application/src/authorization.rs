@@ -469,6 +469,18 @@ impl LibraryPermissionContext {
         })
     }
 
+    /// Whether the actor holds `permission` on `library_id`.
+    pub(crate) fn allows(&self, library_id: &str, permission: LibraryPermission) -> bool {
+        effective_library_permission(&self.authorization, library_id, permission)
+    }
+
+    /// Whether the actor holds `permission` on every library.
+    pub(crate) fn allows_on_every_library(&self, permission: LibraryPermission) -> bool {
+        self.candidate_library_ids.iter().all(|library_id| {
+            effective_library_permission(&self.authorization, library_id, permission)
+        })
+    }
+
     /// [`AppUseCase::authorized_library_ids`] for `permission`.
     pub(crate) fn library_ids(&self, permission: LibraryPermission) -> Vec<String> {
         self.candidate_library_ids

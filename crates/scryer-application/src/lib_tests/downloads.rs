@@ -8674,8 +8674,13 @@ async fn manual_import_assigns_one_file_to_every_mapped_episode() {
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files");
+    // The store lists the file once per linked episode; it is one file.
     assert_eq!(
-        media_files.len(),
+        media_files
+            .iter()
+            .map(|file| file.id.as_str())
+            .collect::<HashSet<_>>()
+            .len(),
         1,
         "one file must land once, not once per episode: {media_files:?}"
     );
@@ -8877,6 +8882,117 @@ async fn manual_import_names_a_single_episode_file_from_that_episode_alone() {
         "{file_name}"
     );
     assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
+#[tokio::test]
+async fn manual_import_orders_a_file_spanning_collections_the_way_rename_does() {
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        episode,
+        ..
+    } = fail_closed_pack_fixture().await;
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        UpdateMediaSettings {
+            rename_template: Some(
+                "{title} - S{season:2}E{episode:2}{?episode_title: - {episode_title}} - {quality}.{ext}"
+                    .to_string(),
+            ),
+            ..empty_update_media_settings()
+        },
+    )
+    .await
+    .expect("series rename template should update");
+    // The second episode sits in an arc told before the fixture's season, so
+    // rename lists its title first although its episode number is higher.
+    let earlier_arc = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Arc,
+            collection_index: "90".to_string(),
+            label: Some("Earlier Arc".to_string()),
+            ordered_path: None,
+            narrative_order: Some("0".to_string()),
+            first_episode_number: Some("2".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create earlier arc");
+    let arc_episode = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            Some(earlier_arc.id),
+            "standard".into(),
+            Some("2".into()),
+            Some("1".into()),
+            Some("S01E02".into()),
+            Some("Arc Opener".into()),
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create arc episode");
+    let episode_ids = vec![episode.id.clone(), arc_episode.id.clone()];
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let release_title = "Fail.Closed.Pack.Arc.1080p.WEB-DL";
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let item_id = "manual-import-one-file-across-collections";
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    let results = crate::import_workflow::execute_manual_import(
+        &app,
+        &user,
+        item_id,
+        &title.id,
+        Some(&completed),
+        vec![ManualImportFileMapping {
+            disc_selection: None,
+            file_path: source_file.to_string_lossy().into_owned(),
+            episode_id: None,
+            episode_ids: episode_ids.clone(),
+            series_movie_link_id: None,
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+    )
+    .await
+    .expect("execute manual import");
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].success, "{results:?}");
+
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    let file_name = Path::new(&media_files[0].file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("library file name")
+        .to_string();
+    assert_eq!(
+        file_name, "Fail Closed Pack - S01E01-02 - Arc Opener + Pilot - 1080p.mkv",
+        "{file_name}"
+    );
+    let preview = app
+        .preview_rename_for_title(&user, &title.id, MediaFacet::Series)
+        .await
+        .expect("preview episode rename");
+    assert_rename_proposes_nothing(&preview, &media_files[0].id);
 }
 
 #[tokio::test]

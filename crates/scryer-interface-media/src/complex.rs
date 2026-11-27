@@ -408,8 +408,9 @@ impl TitlePayload {
 #[ComplexObject]
 impl UserPayload {
     /// Media servers this user has an active, verified account link to, such
-    /// as the server whose login created the account. Pending invites and
-    /// disabled links are not listed.
+    /// as the server whose login created the account. Listed in link-creation
+    /// order, earliest first. Pending invites and disabled links are not
+    /// listed.
     async fn linked_media_servers(
         &self,
         ctx: &Context<'_>,

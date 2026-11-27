@@ -1968,6 +1968,56 @@ async fn an_empty_folder_inside_or_around_another_titles_folder_is_never_taken()
     );
 }
 
+#[tokio::test]
+async fn a_folder_holding_only_a_stray_file_is_not_taken_as_empty() {
+    let seeded = StaleRecordedTitle::seed().await;
+    std::fs::write(seeded.empty_folder.join("notes.txt"), b"stray").expect("write stray file");
+    seeded
+        .assert_refused_and_unchanged(
+            &seeded.empty_folder,
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn a_folder_with_media_two_levels_down_is_not_taken_as_empty() {
+    let seeded = StaleRecordedTitle::seed().await;
+    let fixture = &seeded.fixture;
+    let selection = fixture.folder("Selection");
+    let film = fixture.folder("Selection/Group/Nested Record Film (2008)");
+    std::fs::write(film.join("Nested Record Film (2008).mkv"), b"video").expect("write media");
+    seeded
+        .assert_refused_and_unchanged(
+            &selection,
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn a_truly_empty_folder_is_still_taken() {
+    let seeded = StaleRecordedTitle::seed().await;
+    assert_eq!(
+        std::fs::read_dir(&seeded.empty_folder)
+            .expect("read empty folder")
+            .count(),
+        0
+    );
+    seeded
+        .assign(&seeded.empty_folder)
+        .await
+        .expect("the empty folder is taken");
+    assert_eq!(
+        seeded
+            .fixture
+            .folder_path_of(&seeded.title.id)
+            .await
+            .as_deref(),
+        Some(seeded.empty_folder.to_string_lossy().as_ref())
+    );
+}
+
 /// A folder spelled with `..` can read as inside a root while naming somewhere
 /// else entirely, so dotted spellings are refused before any root check.
 #[tokio::test]
