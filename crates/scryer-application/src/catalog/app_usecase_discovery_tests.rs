@@ -177,6 +177,43 @@ fn cross_indexer_release_dedup_prefers_higher_priority_source() {
 }
 
 #[test]
+fn cross_indexer_release_dedup_tells_apart_indexers_that_share_a_name() {
+    let listing = |indexer_id: &str, url: &str| {
+        let mut result = make_search_result(
+            "Synthetic Indexer",
+            "Signal.Run.S01E12.720p.WEB-DL.x264-NTb",
+            url,
+            DownloadSourceKind::NzbUrl,
+        );
+        result.indexer_id = Some(indexer_id.to_string());
+        result
+    };
+
+    // Two configurations with one name are two indexers: one copy survives.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            listing("indexer-a", "https://example.test/a"),
+            listing("indexer-b", "https://example.test/b"),
+        ],
+        &HashMap::new(),
+        "nzb",
+    );
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].indexer_id.as_deref(), Some("indexer-a"));
+
+    // Two listings from one indexer are distinct and both stay.
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![
+            listing("indexer-a", "https://example.test/a1"),
+            listing("indexer-a", "https://example.test/a2"),
+        ],
+        &HashMap::new(),
+        "nzb",
+    );
+    assert_eq!(deduped.len(), 2);
+}
+
+#[test]
 fn cross_indexer_release_dedup_prefers_unlimited_grabs() {
     let mut limited = make_search_result(
         "Limited Source",

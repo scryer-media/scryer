@@ -1628,6 +1628,16 @@ fn source_grab_sort_priority(candidate: &IndexerSearchResult, configured: i64) -
     i64::from(class) * 2_000_000_000 + usage * 1_000 + configured.clamp(0, 999)
 }
 
+/// Whether two results came from the same indexer. Indexer names are not
+/// unique, so two configurations that share a name and provider still count
+/// as different indexers when both results carry their configuration id.
+fn same_indexer_listing(first: &IndexerSearchResult, second: &IndexerSearchResult) -> bool {
+    match (first.indexer_id.as_deref(), second.indexer_id.as_deref()) {
+        (Some(first_id), Some(second_id)) if first_id != second_id => false,
+        _ => first.source == second.source,
+    }
+}
+
 pub(crate) fn dedupe_cross_indexer_release_results(
     results: Vec<IndexerSearchResult>,
     indexer_priority_by_name: &HashMap<String, i64>,
@@ -1652,7 +1662,7 @@ pub(crate) fn dedupe_cross_indexer_release_results(
 
         if let Some(survivors) = best_by_key.get_mut(&key) {
             let existing = &results[survivors[0]];
-            if existing.source == result.source {
+            if same_indexer_listing(existing, result) {
                 survivors.push(idx);
                 continue;
             }
