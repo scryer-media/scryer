@@ -984,6 +984,85 @@ pub(crate) fn title_history_record_from_domain_event(
             data.source_path.clone(),
             data.destination_path.clone(),
         ),
+        DomainEventPayload::SubtitleDownloaded(data) => {
+            let file_label = data.subtitle_path.as_deref().map(subtitle_file_label);
+            (
+                Some(data.title.title_name.clone()),
+                Some(data.title.facet.clone()),
+                TitleHistoryEventType::SubtitleDownloaded,
+                file_label.clone(),
+                file_label,
+                data.provider.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+                None,
+                None,
+                data.subtitle_path.clone(),
+            )
+        }
+        DomainEventPayload::SubtitleSearchFailed(data) => (
+            Some(data.title.title_name.clone()),
+            Some(data.title.facet.clone()),
+            TitleHistoryEventType::SubtitleFailed,
+            None,
+            data.language.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            data.reason.clone(),
+            None,
+            None,
+            None,
+        ),
+        DomainEventPayload::SubtitleDeleted(data)
+        | DomainEventPayload::SubtitleBlocklisted(data) => {
+            let blocklisted = matches!(&event.payload, DomainEventPayload::SubtitleBlocklisted(_));
+            let file_label = subtitle_file_label(&data.subtitle_path);
+            (
+                Some(data.title.title_name.clone()),
+                Some(data.title.facet.clone()),
+                if blocklisted {
+                    TitleHistoryEventType::SubtitleBlocklisted
+                } else {
+                    TitleHistoryEventType::SubtitleDeleted
+                },
+                Some(file_label.clone()),
+                Some(file_label),
+                data.provider.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+                if blocklisted {
+                    data.reason.clone()
+                } else {
+                    None
+                },
+                Some(data.subtitle_path.clone()),
+                None,
+            )
+        }
         DomainEventPayload::TitleUpdated(_) => return None,
         _ => return None,
     };
@@ -1182,6 +1261,10 @@ fn event_episode_ids(event: &DomainEvent) -> Vec<String> {
         DomainEventPayload::MediaFileDeleted(data) => data.episode_ids.iter(),
         DomainEventPayload::MediaFileRestored(data) => data.episode_ids.iter(),
         DomainEventPayload::MediaFileUpgraded(data) => data.episode_ids.iter(),
+        DomainEventPayload::SubtitleDownloaded(data) => data.episode_ids.iter(),
+        DomainEventPayload::SubtitleSearchFailed(data) => data.episode_ids.iter(),
+        DomainEventPayload::SubtitleDeleted(data)
+        | DomainEventPayload::SubtitleBlocklisted(data) => data.episode_ids.iter(),
         _ => return ids,
     };
 
@@ -1191,6 +1274,15 @@ fn event_episode_ids(event: &DomainEvent) -> Vec<String> {
         }
     }
     ids
+}
+
+/// The file name a subtitle row shows; the full path stays in the row's path
+/// field.
+fn subtitle_file_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn event_collection_id(event: &DomainEvent) -> Option<String> {
@@ -1621,6 +1713,7 @@ mod tests {
         JobRunStartedEventData, LibraryScanCompletedEventData, LibraryScanProgressedEventData,
         MediaFacet, MediaFileAnalyzedEventData, MediaFileDeletedEventData, MediaFileDeletedReason,
         MediaFileUpgradedEventData, MediaPathUpdate, MediaUpdateType, ReleaseGrabbedEventData,
+        SubtitleDownloadedEventData, SubtitleRemovedEventData, SubtitleSearchFailedEventData,
         TitleContextSnapshot,
     };
 
@@ -2411,6 +2504,102 @@ mod tests {
         assert_eq!(
             session.summary.as_ref().map(|summary| summary.skipped),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn subtitle_events_project_to_episode_scoped_title_history() {
+        let now = Utc::now();
+        let removed = |blocklist_reason: Option<&str>| SubtitleRemovedEventData {
+            title: title_snapshot("Example", MediaFacet::Series),
+            subtitle_path: "/data/Example.S01E01.en.srt".to_string(),
+            language: "eng".to_string(),
+            provider: Some("opensubtitles".to_string()),
+            media_file_id: "mf-1".to_string(),
+            episode_ids: vec!["ep-1".to_string()],
+            reason: blocklist_reason.map(str::to_string),
+        };
+        let events = vec![
+            event(
+                1,
+                now,
+                DomainEventPayload::SubtitleDownloaded(SubtitleDownloadedEventData {
+                    title: title_snapshot("Example", MediaFacet::Series),
+                    subtitle_path: Some("/data/Example.S01E01.en.srt".to_string()),
+                    language: Some("eng".to_string()),
+                    provider: Some("opensubtitles".to_string()),
+                    media_file_id: Some("mf-1".to_string()),
+                    episode_ids: vec!["ep-1".to_string()],
+                    sync_applied: Some(true),
+                    sync_offset_ms: Some(-1_250),
+                }),
+            ),
+            event(
+                2,
+                now + Duration::seconds(10),
+                DomainEventPayload::SubtitleSearchFailed(SubtitleSearchFailedEventData {
+                    title: title_snapshot("Example", MediaFacet::Series),
+                    language: Some("fre".to_string()),
+                    reason: Some("no provider returned a match".to_string()),
+                    media_file_id: Some("mf-1".to_string()),
+                    episode_ids: vec!["ep-1".to_string()],
+                }),
+            ),
+            event(
+                3,
+                now + Duration::seconds(20),
+                DomainEventPayload::SubtitleDeleted(removed(None)),
+            ),
+            event(
+                4,
+                now + Duration::seconds(30),
+                DomainEventPayload::SubtitleBlocklisted(removed(Some("out of sync"))),
+            ),
+            event(
+                5,
+                now + Duration::seconds(40),
+                DomainEventPayload::SubtitleDownloaded(SubtitleDownloadedEventData {
+                    title: title_snapshot("Example", MediaFacet::Series),
+                    subtitle_path: Some("/data/Example.S01E02.en.srt".to_string()),
+                    language: Some("eng".to_string()),
+                    provider: None,
+                    media_file_id: Some("mf-2".to_string()),
+                    episode_ids: vec!["ep-2".to_string()],
+                    sync_applied: None,
+                    sync_offset_ms: None,
+                }),
+            ),
+        ];
+
+        let records = title_history_records_for_episode_from_domain_events(&events, "ep-1", 10);
+
+        let types = records
+            .iter()
+            .map(|record| record.event_type)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            types,
+            vec![
+                TitleHistoryEventType::SubtitleBlocklisted,
+                TitleHistoryEventType::SubtitleDeleted,
+                TitleHistoryEventType::SubtitleFailed,
+                TitleHistoryEventType::SubtitleDownloaded,
+            ]
+        );
+        assert_eq!(records[0].blocklist_reason.as_deref(), Some("out of sync"));
+        assert_eq!(records[1].blocklist_reason, None);
+        assert_eq!(
+            records[1].display_title.as_deref(),
+            Some("Example.S01E01.en.srt")
+        );
+        assert_eq!(
+            records[2].failure_reason.as_deref(),
+            Some("no provider returned a match")
+        );
+        assert_eq!(records[3].source_system.as_deref(), Some("opensubtitles"));
+        assert_eq!(
+            records[3].dest_path.as_deref(),
+            Some("/data/Example.S01E01.en.srt")
         );
     }
 }

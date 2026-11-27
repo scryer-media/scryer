@@ -930,3 +930,166 @@ async fn whole_show_watch_preview_requires_one_verified_person_for_all_aired_epi
         "unplayed future episode is excluded from the completion inventory"
     );
 }
+
+/// An episode head reads the episode's own watchers from `input.episode`;
+/// `input.facts` beside it stays the show's, which names only who watched
+/// every aired episode.
+#[tokio::test]
+async fn an_episode_head_sees_the_linked_viewer_of_that_episode() {
+    let execution = execution_app(None);
+    let user = execution.user;
+    let accounts = vec![linked_account("viewer-a", "jf-a")];
+    let signals = Arc::new(InMemorySignalRepo::swept(&accounts));
+    let app = execution.app.with_test_overrides(|services| {
+        services
+            .with_media_server_connection_store(Arc::new(StubSignalConnections {
+                connections: vec![jellyfin_connection(true)],
+                fail_list: false,
+                ..Default::default()
+            }))
+            .with_external_account_store(Arc::new(StubExternalAccounts { accounts }))
+            .with_media_server_signal_store(signals.clone())
+    });
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Household Viewing".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create show");
+    let season = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create season");
+    let mut episodes = Vec::new();
+    for number in ["1", "2"] {
+        episodes.push(
+            app.create_episode(
+                &user,
+                title.id.clone(),
+                Some(season.id.clone()),
+                "standard".into(),
+                Some(number.into()),
+                Some("1".into()),
+                None,
+                Some(format!("Part {number}")),
+                Some("2020-01-01".into()),
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("create episode"),
+        );
+    }
+    let (linked_play, guest_play) = (&episodes[0], &episodes[1]);
+    record_complete_sweep(&signals).await;
+    record_episode_plays(
+        &signals,
+        "jf-a",
+        "viewer-a",
+        &title.id,
+        std::slice::from_ref(&linked_play.id),
+    )
+    .await;
+    // Every account's plays, the unlinked guest's among them.
+    let audience = [("jf-a", linked_play), ("jf-guest", guest_play)]
+        .into_iter()
+        .map(|(account, episode)| crate::ports::AudiencePlay {
+            connection_id: CONNECTION_ID.to_string(),
+            external_account_id: account.to_string(),
+            provider_item_id: format!("jf-{}", episode.id),
+            kind: MediaServerSignalKind::Episode,
+            scryer_title_id: Some(title.id.clone()),
+            scryer_episode_id: Some(episode.id.clone()),
+            play_count: 1,
+            last_played_at: Some(Utc::now()),
+        })
+        .collect::<Vec<_>>();
+    signals
+        .replace_connection_audience(CONNECTION_ID, &audience, Utc::now())
+        .await
+        .expect("record audience");
+
+    let preview = app
+        .preview_lifecycle_rule(
+            &user,
+            LifecyclePreviewRequest {
+                source: LifecyclePreviewSource::Inline {
+                    library_ids: vec![],
+                    rego_source: "package watched\nimport rego.v1\n\n\
+                        unmonitor_episode if {\n\
+                        \t\"viewer-a\" in input.episode.facts.watched_by_user_ids\n\
+                        }\n"
+                    .into(),
+                    grace_days: 0,
+                },
+                selection: LifecyclePreviewSelection::Titles(vec![title.id.clone()]),
+            },
+        )
+        .await
+        .expect("preview episode watch rule");
+
+    let episode_result = |episode: &Episode| {
+        preview
+            .titles
+            .iter()
+            .find(|result| {
+                result.subject_kind == LifecycleRuleSubjectKind::Episode
+                    && result.subject_id == episode.id
+            })
+            .unwrap_or_else(|| panic!("preview has episode {}", episode.id))
+    };
+    let watched = episode_result(linked_play);
+    let unlinked = episode_result(guest_play);
+    assert_eq!(watched.outcome, Some(LifecycleOutcome::Match));
+    assert_eq!(unlinked.outcome, Some(LifecycleOutcome::NoMatch));
+
+    let facts = |result: &crate::lifecycle_rules::LifecyclePreviewTitleResult| {
+        result
+            .facts
+            .clone()
+            .expect("a settings manager sees the facts")
+    };
+    let watched = facts(watched);
+    let unlinked = facts(unlinked);
+    assert_eq!(
+        watched["episode"]["facts"]["watched_by_user_ids"],
+        serde_json::json!(["viewer-a"]),
+        "{watched:#}"
+    );
+    assert_eq!(
+        unlinked["episode"]["facts"]["watched_by_user_ids"],
+        serde_json::json!([]),
+        "an unlinked account's play names nobody: {unlinked:#}"
+    );
+    assert_eq!(
+        unlinked["episode"]["facts"]["watched_by_anyone"],
+        serde_json::json!(true),
+        "{unlinked:#}"
+    );
+    // The show's own facts: nobody has watched every aired episode.
+    for document in [&watched, &unlinked] {
+        assert_eq!(
+            document["facts"]["watched_by_user_ids"],
+            serde_json::json!([]),
+            "{document:#}"
+        );
+    }
+}

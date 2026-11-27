@@ -703,7 +703,7 @@ async fn search_indexers_for_title_keeps_direct_nab_searches_uncategorized_when_
 }
 
 #[tokio::test]
-async fn search_indexers_for_episode_dedupes_equivalent_structured_series_queries() {
+async fn search_indexers_for_episode_sends_the_episode_and_season_requests_for_a_series() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let recording_client = Arc::new(RecordingStructuredQueryIndexerClient::default());
     let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
@@ -788,17 +788,25 @@ async fn search_indexers_for_episode_dedupes_equivalent_structured_series_querie
     let calls = recording_client.calls.lock().await.clone();
     assert_eq!(
         calls,
-        vec![RecordedStructuredQueryCall {
-            query: "Synthetic Signal S02E11".to_string(),
-            season: Some(2),
-            episode: Some(11),
-            absolute_episode: None,
-        }]
+        vec![
+            RecordedStructuredQueryCall {
+                query: "Synthetic Signal S02E11".to_string(),
+                season: Some(2),
+                episode: Some(11),
+                absolute_episode: None,
+            },
+            RecordedStructuredQueryCall {
+                query: "Synthetic Signal S02".to_string(),
+                season: Some(2),
+                episode: Some(11),
+                absolute_episode: None,
+            },
+        ]
     );
 }
 
 #[tokio::test]
-async fn search_indexers_for_episode_dedupes_equivalent_structured_anime_queries() {
+async fn search_indexers_for_episode_sends_absolute_episode_and_season_requests_for_anime() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let recording_client = Arc::new(RecordingStructuredQueryIndexerClient::default());
     let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
@@ -883,12 +891,26 @@ async fn search_indexers_for_episode_dedupes_equivalent_structured_anime_queries
     let calls = recording_client.calls.lock().await.clone();
     assert_eq!(
         calls,
-        vec![RecordedStructuredQueryCall {
-            query: "Synthetic Atlas 035".to_string(),
-            season: Some(2),
-            episode: Some(11),
-            absolute_episode: Some(35),
-        }]
+        vec![
+            RecordedStructuredQueryCall {
+                query: "Synthetic Atlas 035".to_string(),
+                season: Some(2),
+                episode: Some(11),
+                absolute_episode: Some(35),
+            },
+            RecordedStructuredQueryCall {
+                query: "Synthetic Atlas S02E11".to_string(),
+                season: Some(2),
+                episode: Some(11),
+                absolute_episode: Some(35),
+            },
+            RecordedStructuredQueryCall {
+                query: "Synthetic Atlas S02".to_string(),
+                season: Some(2),
+                episode: Some(11),
+                absolute_episode: Some(35),
+            },
+        ]
     );
 }
 

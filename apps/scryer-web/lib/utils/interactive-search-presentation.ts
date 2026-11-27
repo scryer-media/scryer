@@ -37,8 +37,18 @@ export type InteractiveSearchPresentation = {
   searchedIndexerCount: number;
   totalIndexerCount: number;
   failedIndexerNames: string[];
-  /** Indexers the run never queried (routing/scope/capability), with the reason when known. */
-  skippedIndexers: Array<{ name: string; reason: string | null }>;
+  /**
+   * Indexers the run never queried (routing/scope/capability, budget), with
+   * the server's sentence when known and the coded facts to translate it.
+   */
+  skippedIndexers: Array<{
+    name: string;
+    reason: string | null;
+    skipReason: InteractiveSearchIndexerProgress["skipReason"] | null;
+    skippedUntil: string | null;
+    failureReasonCode: string | null;
+    retryAfterSeconds: number | null;
+  }>;
   /**
    * Indexers that answered some requests before their query budget stopped
    * the rest, with the seconds until they can be asked again when known.
@@ -84,6 +94,10 @@ export function deriveInteractiveSearchPresentation({
       .map((indexer) => ({
         name: indexer.name,
         reason: indexer.failureReason,
+        skipReason: indexer.skipReason ?? null,
+        skippedUntil: indexer.skippedUntil ?? null,
+        failureReasonCode: indexer.failureReasonCode ?? null,
+        retryAfterSeconds: indexer.retryAfterSeconds ?? null,
       })),
     partlySearchedIndexers: indexers
       .filter(

@@ -1750,6 +1750,17 @@ const nl: LocaleDictionary = {
     "{{count}} indexer(s) mislukt: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) overgeslagen: {{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} indexer(s) deels doorzocht, boven hun querylimiet: {{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: kan over {{seconds}} s opnieuw worden gevraagd",
+  "indexerSearch.skipReason.queryBudget": "Boven de querylimiet",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Boven de querylimiet tot {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Boven de querylimiet, opnieuw over {{seconds}} s",
+  "indexerSearch.queryBudget.partlySearched":
+    "Deels doorzocht: de querylimiet hield de overige verzoeken tegen. Resultaten van de verzonden verzoeken blijven behouden.",
   "title.noReleasesFound": "Geen releases gevonden voor {{name}}.",
   "title.searchNeedsDownloadClientTitle": "Zoeken vereist een downloadclient",
   "title.searchNeedsDownloadClientDescription":
@@ -3932,6 +3943,10 @@ const nl: LocaleDictionary = {
   "history.rematched": "Opnieuw gematcht",
   "history.seedingStarted": "Seeden",
   "history.seedingCompleted": "Seeden voltooid",
+  "history.subtitleDownloaded": "Ondertitel gedownload",
+  "history.subtitleFailed": "Ondertitel mislukt",
+  "history.subtitleDeleted": "Ondertitel verwijderd",
+  "history.subtitleBlocklisted": "Ondertitel geblokkeerd",
   "history.downloadIgnored": "Genegeerd",
   "history.downloadMissing": "Niet zichtbaar in client",
   "history.facet": "Facet",

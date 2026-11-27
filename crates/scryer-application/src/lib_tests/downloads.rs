@@ -8734,6 +8734,150 @@ async fn manual_import_assigns_one_file_to_every_mapped_episode() {
     );
 }
 
+/// Manually import one file for the fixture's first `episode_count` episodes
+/// of season 1, and return the library file name it landed under together
+/// with the rename preview for the title taken right after.
+async fn manual_import_one_file_for_episodes(
+    episode_count: u32,
+) -> (String, crate::RenamePlan, String) {
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        episode,
+        ..
+    } = fail_closed_pack_fixture().await;
+    // The default series template names no episode title; this one does, so
+    // the joined titles of a multi-episode file are part of the name.
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        UpdateMediaSettings {
+            rename_template: Some(
+                "{title} - S{season:2}E{episode:2}{?episode_title: - {episode_title}} - {quality}.{ext}"
+                    .to_string(),
+            ),
+            ..empty_update_media_settings()
+        },
+    )
+    .await
+    .expect("series rename template should update");
+    let mut episode_ids = vec![episode.id.clone()];
+    for number in 2..=episode_count {
+        let sibling = create_pack_episode_in_fixture_season(&app, &user, &title.id, number).await;
+        episode_ids.push(sibling.id);
+    }
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let release_title = "Fail.Closed.Pack.Joined.1080p.WEB-DL";
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let item_id = format!("manual-import-one-file-{episode_count}-episodes");
+    let completed =
+        series_pack_completed_download(&item_id, &title.id, release_title, source_dir.path());
+
+    let results = crate::import_workflow::execute_manual_import(
+        &app,
+        &user,
+        &item_id,
+        &title.id,
+        Some(&completed),
+        vec![ManualImportFileMapping {
+            disc_selection: None,
+            file_path: source_file.to_string_lossy().into_owned(),
+            episode_id: None,
+            episode_ids: episode_ids.clone(),
+            series_movie_link_id: None,
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+    )
+    .await
+    .expect("execute manual import");
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].success, "{results:?}");
+    assert_eq!(results[0].episode_ids, episode_ids, "{results:?}");
+
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    // One file, listed once per linked episode.
+    assert_eq!(media_files.len(), episode_ids.len(), "{media_files:?}");
+    assert!(
+        media_files.iter().all(|file| file.id == media_files[0].id),
+        "{media_files:?}"
+    );
+    let mut linked = media_files
+        .iter()
+        .filter_map(|file| file.episode_id.clone())
+        .collect::<Vec<_>>();
+    linked.sort();
+    let mut expected = episode_ids.clone();
+    expected.sort();
+    assert_eq!(linked, expected, "{media_files:?}");
+    let file_name = Path::new(&media_files[0].file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("library file name")
+        .to_string();
+    let preview = app
+        .preview_rename_for_title(&user, &title.id, MediaFacet::Series)
+        .await
+        .expect("preview episode rename");
+    (file_name, preview, media_files[0].id.clone())
+}
+
+/// The preview item of the imported file proposes no change.
+fn assert_rename_proposes_nothing(preview: &crate::RenamePlan, media_file_id: &str) {
+    let items = preview
+        .items
+        .iter()
+        .filter(|item| item.media_file_id.as_deref() == Some(media_file_id))
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 1, "{preview:?}");
+    assert_eq!(
+        items[0].write_action,
+        crate::RenameWriteAction::Noop,
+        "{preview:?}"
+    );
+}
+
+#[tokio::test]
+async fn manual_import_names_a_two_episode_file_with_the_rename_range() {
+    let (file_name, preview, media_file_id) = manual_import_one_file_for_episodes(2).await;
+
+    assert_eq!(
+        file_name, "Fail Closed Pack - S01E01-02 - Pilot + Season 1 Episode 2 - 1080p.mkv",
+        "{file_name}"
+    );
+    assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
+#[tokio::test]
+async fn manual_import_names_a_three_episode_file_with_the_rename_range() {
+    let (file_name, preview, media_file_id) = manual_import_one_file_for_episodes(3).await;
+
+    assert_eq!(
+        file_name,
+        "Fail Closed Pack - S01E01-02-03 - Pilot + Season 1 Episode 2 + Season 1 Episode 3 - 1080p.mkv",
+        "{file_name}"
+    );
+    assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
+#[tokio::test]
+async fn manual_import_names_a_single_episode_file_from_that_episode_alone() {
+    let (file_name, preview, media_file_id) = manual_import_one_file_for_episodes(1).await;
+
+    assert_eq!(
+        file_name, "Fail Closed Pack - S01E01 - Pilot - 1080p.mkv",
+        "{file_name}"
+    );
+    assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
 #[tokio::test]
 async fn manual_import_rejects_a_mapping_that_spans_two_seasons() {
     // One file lands under one season folder with one name, so a mapping

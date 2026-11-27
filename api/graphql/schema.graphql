@@ -5403,6 +5403,14 @@ enum DomainEventTypeValue {
 	"""
 	SUBTITLE_SEARCH_FAILED
 	"""
+	A subtitle file was deleted.
+	"""
+	SUBTITLE_DELETED
+	"""
+	A subtitle was deleted and its provider file blocklisted.
+	"""
+	SUBTITLE_BLOCKLISTED
+	"""
 	A library scan started.
 	"""
 	LIBRARY_SCAN_STARTED
@@ -20340,6 +20348,24 @@ type MutationRoot {
 		input: SetEpisodeMonitoredInput!
 	): EpisodePayload!
 	"""
+	Set monitoring for several episodes and return them, in request order.
+	Checks and side effects are those of `setEpisodeMonitored`, done once
+	for the whole list; a repeated id is answered once. The request is
+	refused whole and nothing changes when it names more than 10000
+	distinct episodes (reason `CATALOG_EPISODE_MONITOR_BATCH_TOO_LARGE`,
+	with the `maxEpisodeIds` and `requestedEpisodeIds` extensions), when
+	any id matches no episode (reason
+	`CATALOG_EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES`, with those ids in the
+	`unknownEpisodeIds` extension), or when the actor cannot manage one of
+	the episodes' titles.
+	"""
+	setEpisodesMonitored(
+		"""
+		Episode identities and desired monitored state.
+		"""
+		input: SetEpisodesMonitoredInput!
+	): [EpisodePayload!]!
+	"""
 	Set monitoring for a series-movie link and return the updated link.
 	"""
 	setSeriesMovieMonitored(
@@ -31615,6 +31641,20 @@ input SetEpisodeMonitoredInput {
 }
 
 """
+Monitoring state change for several episodes at once.
+"""
+input SetEpisodesMonitoredInput {
+	"""
+	Episode identities to update. A repeated id counts once.
+	"""
+	episodeIds: [ID!]!
+	"""
+	Whether the episodes are monitored.
+	"""
+	monitored: Boolean!
+}
+
+"""
 Download-client mapping for one indexer.
 """
 input SetIndexerDownloadClientMappingInput {
@@ -33918,6 +33958,22 @@ enum TitleHistoryEventTypeValue {
 	Torrent's seeding obligation was discharged.
 	"""
 	SEEDING_COMPLETED
+	"""
+	A subtitle was downloaded, automatically or by hand.
+	"""
+	SUBTITLE_DOWNLOADED
+	"""
+	An automatic subtitle download failed.
+	"""
+	SUBTITLE_FAILED
+	"""
+	A subtitle file was deleted.
+	"""
+	SUBTITLE_DELETED
+	"""
+	A subtitle was deleted and its provider file blocklisted.
+	"""
+	SUBTITLE_BLOCKLISTED
 }
 
 """

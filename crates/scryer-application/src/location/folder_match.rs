@@ -376,11 +376,23 @@ impl AppUseCase {
                 "selected folder resolves outside its library root",
             ));
         }
+        // A title left recorded outside its library with no files cannot get
+        // any into a new folder, because imports refuse that record. It may
+        // take an empty folder, as long as nobody else's folder is involved.
+        let mut empty_folder_repair = false;
         if !title_owns_folder(&title, &selected_path) {
+            let empty_allowed = self
+                .title_may_take_an_empty_folder(&title, &library)
+                .await?;
             let patterns =
                 crate::library_discovery::episode_folder_patterns(self, &title.facet).await?;
-            crate::library_discovery::ensure_existing_title_boundary(&selected_path, &patterns)
-                .await?;
+            let holds_media = crate::library_discovery::ensure_title_boundary_holding_media_unless(
+                &selected_path,
+                &patterns,
+                empty_allowed,
+            )
+            .await?;
+            empty_folder_repair = !holds_media;
         }
         let candidates = self
             .services
@@ -400,6 +412,12 @@ impl AppUseCase {
                         && !crate::stored_paths::folder_paths_match(&selected_folder, &folder)
                         && checked.overlaps(&folder)?
                     {
+                        // An empty folder is only taken when it touches no
+                        // other title's folder; otherwise it is refused as
+                        // any empty folder is.
+                        if empty_folder_repair {
+                            return Err(crate::library_discovery::existing_title_boundary_refusal());
+                        }
                         return Err(AppError::validation_refused(
                             crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
                             "selected folder overlaps another title's folder; no ownership was changed",
@@ -422,6 +440,9 @@ impl AppUseCase {
         let owner =
             crate::folder_ownership::find_other_folder_owner(self, &title, &selected_folder)
                 .await?;
+        if empty_folder_repair && owner.is_some() {
+            return Err(crate::library_discovery::existing_title_boundary_refusal());
+        }
         let current_folder_spans_a_library_root =
             crate::folder_ownership::title_folder_spans_a_library_root(self, &title).await?;
 
@@ -434,6 +455,32 @@ impl AppUseCase {
             owner,
             current_folder_spans_a_library_root,
         })
+    }
+
+    /// Whether `title` may be given a selected folder that holds no media:
+    /// its recorded folder is outside every root of its library and it has no
+    /// tracked media files. The selected folder is already known to be inside
+    /// one of those roots.
+    async fn title_may_take_an_empty_folder(
+        &self,
+        title: &Title,
+        library: &Library,
+    ) -> AppResult<bool> {
+        let Some(current) = title_folder_path(title) else {
+            return Ok(false);
+        };
+        if !crate::folder_ownership::folder_is_outside_roots(
+            current,
+            library.roots.iter().map(|root| root.path.as_str()),
+        ) {
+            return Ok(false);
+        }
+        Ok(!self
+            .services
+            .library
+            .media_files
+            .title_has_media_files(&title.id)
+            .await?)
     }
 
     /// Describe what changing this title's folder match would do (FR-002).

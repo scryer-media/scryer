@@ -4158,6 +4158,15 @@ pub enum TitleHistoryEventType {
     /// The seeding obligation was discharged and the gate acted on the client
     /// entry. Closes the window opened by `SeedingStarted`.
     SeedingCompleted,
+    /// A subtitle was downloaded for one of the title's files, by the
+    /// automatic search or by hand.
+    SubtitleDownloaded,
+    /// An automatic subtitle download failed.
+    SubtitleFailed,
+    /// A subtitle file was deleted.
+    SubtitleDeleted,
+    /// A downloaded subtitle was deleted and its provider file blocklisted.
+    SubtitleBlocklisted,
 }
 
 impl TitleHistoryEventType {
@@ -4184,6 +4193,10 @@ impl TitleHistoryEventType {
             Self::Rematched => "rematched",
             Self::SeedingStarted => "seeding_started",
             Self::SeedingCompleted => "seeding_completed",
+            Self::SubtitleDownloaded => "subtitle_downloaded",
+            Self::SubtitleFailed => "subtitle_failed",
+            Self::SubtitleDeleted => "subtitle_deleted",
+            Self::SubtitleBlocklisted => "subtitle_blocklisted",
         }
     }
 
@@ -4210,6 +4223,10 @@ impl TitleHistoryEventType {
             "rematched" => Some(Self::Rematched),
             "seeding_started" => Some(Self::SeedingStarted),
             "seeding_completed" => Some(Self::SeedingCompleted),
+            "subtitle_downloaded" => Some(Self::SubtitleDownloaded),
+            "subtitle_failed" => Some(Self::SubtitleFailed),
+            "subtitle_deleted" => Some(Self::SubtitleDeleted),
+            "subtitle_blocklisted" => Some(Self::SubtitleBlocklisted),
             _ => None,
         }
     }
@@ -4236,6 +4253,10 @@ impl TitleHistoryEventType {
         Self::Rematched,
         Self::SeedingStarted,
         Self::SeedingCompleted,
+        Self::SubtitleDownloaded,
+        Self::SubtitleFailed,
+        Self::SubtitleDeleted,
+        Self::SubtitleBlocklisted,
     ];
 }
 
@@ -4487,6 +4508,8 @@ pub enum DomainEventType {
     PostProcessingCompleted,
     SubtitleDownloaded,
     SubtitleSearchFailed,
+    SubtitleDeleted,
+    SubtitleBlocklisted,
     LibraryScanStarted,
     LibraryScanTitleDiscovered,
     LibraryScanDeltaRecorded,
@@ -4553,6 +4576,8 @@ impl DomainEventType {
             Self::PostProcessingCompleted => "post_processing_completed",
             Self::SubtitleDownloaded => "subtitle_downloaded",
             Self::SubtitleSearchFailed => "subtitle_search_failed",
+            Self::SubtitleDeleted => "subtitle_deleted",
+            Self::SubtitleBlocklisted => "subtitle_blocklisted",
             Self::LibraryScanStarted => "library_scan_started",
             Self::LibraryScanTitleDiscovered => "library_scan_title_discovered",
             Self::LibraryScanDeltaRecorded => "library_scan_delta_recorded",
@@ -4619,6 +4644,8 @@ impl DomainEventType {
             "post_processing_completed" => Some(Self::PostProcessingCompleted),
             "subtitle_downloaded" => Some(Self::SubtitleDownloaded),
             "subtitle_search_failed" => Some(Self::SubtitleSearchFailed),
+            "subtitle_deleted" => Some(Self::SubtitleDeleted),
+            "subtitle_blocklisted" => Some(Self::SubtitleBlocklisted),
             "library_scan_started" => Some(Self::LibraryScanStarted),
             "library_scan_title_discovered" => Some(Self::LibraryScanTitleDiscovered),
             "library_scan_delta_recorded" => Some(Self::LibraryScanDeltaRecorded),
@@ -5308,12 +5335,44 @@ pub struct SubtitleDownloadedEventData {
     pub subtitle_path: Option<String>,
     pub language: Option<String>,
     pub provider: Option<String>,
+    /// The media file the subtitle belongs to. Events written before this
+    /// field existed read back as `None`.
+    #[serde(default)]
+    pub media_file_id: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+    /// Whether timing sync moved the subtitle. `None` when sync did not run
+    /// or failed.
+    #[serde(default)]
+    pub sync_applied: Option<bool>,
+    /// The offset sync applied, in milliseconds, when it applied one.
+    #[serde(default)]
+    pub sync_offset_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubtitleSearchFailedEventData {
     pub title: TitleContextSnapshot,
     pub language: Option<String>,
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub media_file_id: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+/// An external subtitle was deleted, or deleted and blocklisted.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubtitleRemovedEventData {
+    pub title: TitleContextSnapshot,
+    pub subtitle_path: String,
+    pub language: String,
+    pub provider: Option<String>,
+    pub media_file_id: String,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+    /// The operator's blocklist reason, when one was given.
+    #[serde(default)]
     pub reason: Option<String>,
 }
 
@@ -5590,6 +5649,8 @@ pub enum DomainEventPayload {
     PostProcessingCompleted(PostProcessingCompletedEventData),
     SubtitleDownloaded(SubtitleDownloadedEventData),
     SubtitleSearchFailed(SubtitleSearchFailedEventData),
+    SubtitleDeleted(SubtitleRemovedEventData),
+    SubtitleBlocklisted(SubtitleRemovedEventData),
     LibraryScanStarted(LibraryScanStartedEventData),
     LibraryScanTitleDiscovered(LibraryScanTitleDiscoveredEventData),
     LibraryScanDeltaRecorded(LibraryScanDeltaRecordedEventData),
@@ -5660,6 +5721,8 @@ impl DomainEventPayload {
             Self::PostProcessingCompleted(_) => DomainEventType::PostProcessingCompleted,
             Self::SubtitleDownloaded(_) => DomainEventType::SubtitleDownloaded,
             Self::SubtitleSearchFailed(_) => DomainEventType::SubtitleSearchFailed,
+            Self::SubtitleDeleted(_) => DomainEventType::SubtitleDeleted,
+            Self::SubtitleBlocklisted(_) => DomainEventType::SubtitleBlocklisted,
             Self::LibraryScanStarted(_) => DomainEventType::LibraryScanStarted,
             Self::LibraryScanTitleDiscovered(_) => DomainEventType::LibraryScanTitleDiscovered,
             Self::LibraryScanDeltaRecorded(_) => DomainEventType::LibraryScanDeltaRecorded,

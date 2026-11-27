@@ -53,6 +53,39 @@ impl CollectionMutations {
         Ok(from_episode(&app, episode))
     }
 
+    /// Set monitoring for several episodes and return them, in request order.
+    /// Checks and side effects are those of `setEpisodeMonitored`, done once
+    /// for the whole list; a repeated id is answered once. The request is
+    /// refused whole and nothing changes when it names more than 10000
+    /// distinct episodes (reason `CATALOG_EPISODE_MONITOR_BATCH_TOO_LARGE`,
+    /// with the `maxEpisodeIds` and `requestedEpisodeIds` extensions), when
+    /// any id matches no episode (reason
+    /// `CATALOG_EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES`, with those ids in the
+    /// `unknownEpisodeIds` extension), or when the actor cannot manage one of
+    /// the episodes' titles.
+    async fn set_episodes_monitored(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Episode identities and desired monitored state.")]
+        input: SetEpisodesMonitoredInput,
+    ) -> GqlResult<Vec<EpisodePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episode_ids = input
+            .episode_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let episodes = app
+            .set_episodes_monitored(&actor, &episode_ids, input.monitored)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(episodes
+            .into_iter()
+            .map(|episode| from_episode(&app, episode))
+            .collect())
+    }
+
     /// Set monitoring for a series-movie link and return the updated link.
     async fn set_series_movie_monitored(
         &self,

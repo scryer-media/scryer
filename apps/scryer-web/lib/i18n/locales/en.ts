@@ -9600,6 +9600,10 @@ const en: LocaleDictionary = {
   "history.rematched": "Rematched",
   "history.seedingStarted": "Seeding",
   "history.seedingCompleted": "Seeding done",
+  "history.subtitleDownloaded": "Subtitle downloaded",
+  "history.subtitleFailed": "Subtitle failed",
+  "history.subtitleDeleted": "Subtitle deleted",
+  "history.subtitleBlocklisted": "Subtitle blocklisted",
   "history.downloadIgnored": "Ignored",
   "history.downloadMissing": "Not visible in client",
   "history.facet": "Facet",
@@ -11955,6 +11959,8 @@ const en: LocaleDictionary = {
   "indexerSearch.skipReason.queryBudget": "Over its query budget",
   "indexerSearch.skipReason.queryBudgetUntil":
     "Over its query budget until {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Over its query budget, can be asked again in {{seconds}} s",
   "indexerSearch.queryBudget.partlySearched":
     "Searched in part: its query budget stopped the remaining requests. Results from the requests it sent are kept.",
   "indexerSearch.caps.fresh": "Capabilities from cached snapshot",
