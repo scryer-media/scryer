@@ -30,6 +30,7 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
 import { InfoHelp } from "@/components/common/info-help";
 import { SearchLanguagePicker } from "@/components/common/search-language-picker";
+import { TitleTagsPicker } from "@/components/common/title-tags-picker";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { PreferredAudioLanguageList } from "@/components/common/preferred-audio-language-list";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
@@ -47,6 +48,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import {
   formatAudioLanguageLabels,
@@ -388,6 +390,11 @@ export const MediaLibrarySettingsPanel = React.memo(
       React.useState(INHERIT_VALUE);
     const [draftDefaultMonitorType, setDraftDefaultMonitorType] =
       React.useState(INHERIT_VALUE);
+    const [draftDefaultTitleTags, setDraftDefaultTitleTags] = React.useState<
+      string[]
+    >([]);
+    const { definitions: tagDefinitions, loading: tagsLoading } =
+      useTitleTagDefinitions();
     const [draftRequestQualityProfileIds, setDraftRequestQualityProfileIds] =
       React.useState<string[]>([]);
     const [draftScoringPersona, setDraftScoringPersona] =
@@ -550,6 +557,7 @@ export const MediaLibrarySettingsPanel = React.memo(
         setDraftDefaultMonitorType(
           settings?.defaultMonitorTypeOverride ?? INHERIT_VALUE,
         );
+        setDraftDefaultTitleTags(settings?.defaultTitleTags ?? []);
         setDraftMovieAvailability(
           settings?.defaultMovieAvailabilityOverride ?? INHERIT_VALUE,
         );
@@ -805,6 +813,8 @@ export const MediaLibrarySettingsPanel = React.memo(
           draftDefaultMonitorType === INHERIT_VALUE
             ? null
             : draftDefaultMonitorType,
+        defaultTitleTags:
+          draftDefaultTitleTags.length > 0 ? draftDefaultTitleTags : null,
         searchLanguages: draftSearchLanguages,
         requiredAudioLanguages:
           draftRequiredAudioLanguages.length > 0
@@ -913,6 +923,7 @@ export const MediaLibrarySettingsPanel = React.memo(
       draftPlexmatchWriteOnImport,
       draftQualityProfileId,
       draftDefaultMonitorType,
+      draftDefaultTitleTags,
       draftRequestQualityProfileIds,
       draftRecapPolicy,
       draftRequiredAudioLanguages,
@@ -944,6 +955,8 @@ export const MediaLibrarySettingsPanel = React.memo(
             savedSettings.useSeasonFoldersOverride ||
           settingsDraft.defaultMonitorType !==
             (savedSettings.defaultMonitorTypeOverride ?? null) ||
+          draftDefaultTitleTags.join("\n") !==
+            (savedSettings.defaultTitleTags ?? []).join("\n") ||
           settingsDraft.qualityProfileId !==
             savedSettings.qualityProfileIdOverride ||
           (settingsDraft.requestQualityProfileIds ?? []).join("\n") !==
@@ -1982,6 +1995,22 @@ export const MediaLibrarySettingsPanel = React.memo(
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     {t("settings.defaultMonitorTypeHelp")}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="library-default-title-tags-add">
+                    {t("settings.libraryDefaultTitleTags")}
+                  </Label>
+                  <TitleTagsPicker
+                    idPrefix="library-default-title"
+                    value={draftDefaultTitleTags}
+                    onChange={setDraftDefaultTitleTags}
+                    definitions={tagDefinitions}
+                    loading={tagsLoading}
+                    disabled={settingsBusy}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.libraryDefaultTitleTagsHelp")}
                   </p>
                 </div>
                 <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">

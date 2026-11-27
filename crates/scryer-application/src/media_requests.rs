@@ -24,6 +24,9 @@ impl AppUseCase {
         request: NewTitle,
         library_id: String,
     ) -> AppResult<(Title, tokio::sync::OwnedMutexGuard<()>)> {
+        let mut request = request;
+        self.apply_library_default_title_tags(&mut request, &library_id)
+            .await?;
         let mut title = self
             .new_title_for_library(actor, request, library_id)
             .await?;

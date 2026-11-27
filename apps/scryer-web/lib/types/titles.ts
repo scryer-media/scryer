@@ -412,6 +412,7 @@ export type LibrarySettingsRecord = {
   useSeasonFoldersOverride: boolean | null;
   useSeasonFolders: boolean;
   defaultMonitorTypeOverride?: string | null;
+  defaultTitleTags?: string[] | null;
   qualityProfileIdOverride: string | null;
   qualityProfileId: string;
   requestQualityProfileIdsOverride: string[] | null;
@@ -455,6 +456,7 @@ export type LibrarySettingsRecord = {
 
 export type LibrarySettingsDraft = {
   defaultMonitorType?: string | null;
+  defaultTitleTags?: string[] | null;
   searchLanguages?: string[] | null;
   requiredAudioLanguages: string[] | null;
   preferredAudioLanguages: string[] | null;

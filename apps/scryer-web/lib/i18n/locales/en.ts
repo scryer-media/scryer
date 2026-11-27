@@ -4,6 +4,9 @@ const en: LocaleDictionary = {
   "settings.defaultMonitorType": "Default monitoring for new titles",
   "settings.defaultMonitorTypeHelp":
     "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
+  "settings.libraryDefaultTitleTags": "Tags for new titles",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Added to every title added to this library, by hand, from a list or by approving a request. Titles found by a library scan and titles already here are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":

@@ -11633,6 +11633,13 @@ input LibrarySettingsInput {
 	"""
 	defaultMonitorType: String
 	"""
+	Defined tag labels every title added to this library is given, by hand,
+	from a list or by approving a request; null or empty clears them. A
+	label the registry does not define is refused with
+	`CATALOG_NOT_DEFINED_TAG`.
+	"""
+	defaultTitleTags: [String!]
+	"""
 	Default quality profile identity.
 	"""
 	qualityProfileId: ID
@@ -11781,6 +11788,10 @@ type LibrarySettingsPayload {
 	Saved library choice; null uses the built-in facet default.
 	"""
 	defaultMonitorTypeOverride: String
+	"""
+	Tag labels every title added to this library is given; empty when none.
+	"""
+	defaultTitleTags: [String!]!
 	"""
 	Library override quality-profile ID; null means inherit.
 	"""

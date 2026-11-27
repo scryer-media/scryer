@@ -1011,6 +1011,8 @@ impl AppUseCase {
             .await?;
         self.apply_library_default_monitor_type(&mut request, &library_id)
             .await?;
+        self.apply_library_default_title_tags(&mut request, &library_id)
+            .await?;
         // Creation is the third door into `titles.tags`, alongside the tag patch
         // and the whole-bag `updateTitle(tags:)` write, and it is gated exactly
         // like them: a title may not be born carrying a label the registry does
@@ -1060,6 +1062,34 @@ impl AppUseCase {
         Ok(())
     }
 
+    /// Gives a new title the library's default tags. A label the registry no
+    /// longer defines is left out, so a default that went stale never blocks
+    /// an add. A title the add reuses keeps its own tags, as above.
+    pub(crate) async fn apply_library_default_title_tags(
+        &self,
+        request: &mut NewTitle,
+        library_id: &str,
+    ) -> AppResult<()> {
+        let labels = self.library_default_title_tags(library_id).await?;
+        if labels.is_empty() {
+            return Ok(());
+        }
+        let undefined = self.undefined_title_tag_labels(&labels).await?;
+        for label in labels {
+            if crate::is_reserved_title_tag(&label) || undefined.contains(&label) {
+                continue;
+            }
+            if !request
+                .tags
+                .iter()
+                .any(|tag| tag.trim().eq_ignore_ascii_case(&label))
+            {
+                request.tags.push(label);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn add_title_and_bind_pending_import_with_outcome_in_library(
         &self,
         actor: &User,
@@ -1068,6 +1098,8 @@ impl AppUseCase {
         pending_import_id: &str,
     ) -> AppResult<AddTitleOutcome> {
         self.apply_library_default_monitor_type(&mut request, &library_id)
+            .await?;
+        self.apply_library_default_title_tags(&mut request, &library_id)
             .await?;
         let created = self
             .create_title_without_hydration_and_bind_pending_import_in_library(

@@ -26,6 +26,7 @@ export function librarySettingsInput(
     metadataLanguage: settings.metadataLanguage,
     useSeasonFolders: settings.useSeasonFolders,
     defaultMonitorType: settings.defaultMonitorType ?? null,
+    defaultTitleTags: settings.defaultTitleTags ?? null,
     qualityProfileId: settings.qualityProfileId,
     requestQualityProfileIds: settings.requestQualityProfileIds,
     scoringPersona: settings.scoringPersona,
@@ -78,6 +79,10 @@ export function storedLibraryOverridesInput(
     metadataLanguage: saved.metadataLanguageOverride,
     useSeasonFolders: saved.useSeasonFoldersOverride,
     defaultMonitorType: saved.defaultMonitorTypeOverride ?? null,
+    defaultTitleTags:
+      saved.defaultTitleTags && saved.defaultTitleTags.length > 0
+        ? saved.defaultTitleTags
+        : null,
     qualityProfileId: saved.qualityProfileIdOverride,
     requestQualityProfileIds: saved.requestQualityProfileIdsOverride,
     scoringPersona: saved.scoringPersonaOverride,
