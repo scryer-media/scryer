@@ -633,21 +633,28 @@ fn has_library_permission_honours_manage_subtitles_shadowing() {
 }
 
 #[test]
-fn manage_titles_implies_view_and_storage_keeps_an_explicit_view() {
+fn manage_titles_implies_view_and_a_shadowed_grant_stores_unchanged() {
     let title_manager = LibraryPermissionMask::from_permissions([LibraryPermission::ManageTitles]);
     assert!(
         title_manager
             .with_request_shadowing()
             .contains(LibraryPermissionMask::VIEW)
     );
-    // View is never stripped: removing Manage Titles later leaves an explicit
-    // View where it was, and adds none where it was not.
+    // The API hands out shadowed masks; saving one back stores what was read.
+    assert_eq!(
+        title_manager
+            .with_request_shadowing()
+            .normalized_for_storage(),
+        title_manager
+    );
     let both = LibraryPermissionMask::from_permissions([
         LibraryPermission::View,
         LibraryPermission::ManageTitles,
     ]);
-    assert_eq!(both.normalized_for_storage(), both);
-    assert_eq!(title_manager.normalized_for_storage(), title_manager);
+    assert_eq!(both.normalized_for_storage(), title_manager);
+    // Without Manage Titles, View is the grant itself and stays.
+    let viewer = LibraryPermissionMask::from_permissions([LibraryPermission::View]);
+    assert_eq!(viewer.normalized_for_storage(), viewer);
 
     let authorization = UserAuthorization {
         libraries: std::collections::HashMap::from([
