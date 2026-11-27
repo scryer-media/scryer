@@ -1289,6 +1289,14 @@ impl IncompleteIndexerReason {
         self.code == Some(crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED)
     }
 
+    /// Whether an indexer that delivered rows still counts as answered with
+    /// this reason beside it: it stopped short at its budget, a rate limit or
+    /// the provider's result limit rather than failing. Which of several
+    /// such reasons wins never decides the indexer's status.
+    pub fn answered_when_rows_delivered(&self) -> bool {
+        self.kind != IncompleteIndexerKind::Failed
+    }
+
     /// Whether the indexer was never asked because its query budget had no
     /// slot within the wait an interactive search allows.
     pub fn is_not_searched_for_query_budget(&self) -> bool {

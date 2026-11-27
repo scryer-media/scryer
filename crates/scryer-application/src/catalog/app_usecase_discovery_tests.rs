@@ -1163,4 +1163,57 @@ fn an_indexer_reason_does_not_depend_on_which_query_finishes_first() {
             "{partial_reason:?}"
         );
     }
+
+    // One query its budget cut short and another that stopped at the
+    // provider's result limit or a rate limit, both with rows: whichever
+    // reason is kept, the indexer still reads as answered, in either order.
+    let cut_short = answer(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+        retry_after: Some(std::time::Duration::from_secs(40)),
+    });
+    for stopped_reason in [
+        IndexerSearchIncompleteReason::PageCeilingReached,
+        IndexerSearchIncompleteReason::SaturatedPartition,
+        IndexerSearchIncompleteReason::RateLimited,
+    ] {
+        let stopped = answer(IndexerSearchOutcome::Partial {
+            empty: false,
+            reason: Some(stopped_reason),
+            retry_after: None,
+        });
+        let settle = |first: &[IndexerQueryOutcome], second: &[IndexerQueryOutcome]| {
+            let mut reasons = HashMap::new();
+            let mut searched = HashSet::new();
+            record_query_indexer_outcomes(&mut reasons, &mut searched, first);
+            record_query_indexer_outcomes(&mut reasons, &mut searched, second);
+            settle_query_budget_reasons(&mut reasons, &searched);
+            let reason = reasons.remove("idx-a").expect("idx-a fell short");
+            (
+                searched.contains("idx-a"),
+                reason.answered_when_rows_delivered(),
+                reason.kind,
+                reason.code,
+                reason.message,
+            )
+        };
+
+        let budget_first = settle(&cut_short, &stopped);
+        let budget_last = settle(&stopped, &cut_short);
+        assert_eq!(budget_first, budget_last, "{stopped_reason:?}");
+        assert!(budget_first.0, "{stopped_reason:?}: rows mean it was asked");
+        assert!(
+            budget_first.1,
+            "{stopped_reason:?}: an indexer that delivered rows reads as answered"
+        );
+    }
+
+    // A failure stays a failure even beside rows.
+    let failed = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+        retry_after: None,
+    })
+    .expect("an upstream failure falls short");
+    assert!(!failed.answered_when_rows_delivered());
 }
