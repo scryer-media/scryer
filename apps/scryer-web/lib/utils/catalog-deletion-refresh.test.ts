@@ -2,8 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   catalogDeletionRefresh,
+  deletedTitleIdsOfSettledRuns,
   titleDeletionFailedTitleIds,
+  titleDeletionRunPending,
+  titleDeletionRunsSettled,
+  type TitleDeletionRuns,
   withPendingDeletedTitleIds,
+  withQueuedTitleDeletionRun,
+  withSettledTitleDeletionRun,
 } from "./catalog-deletion-refresh.ts";
 import {
   createReactiveRefreshEngine,
@@ -116,4 +122,45 @@ test("a failed deletion run that lists no titles leaves the outcome unknown", ()
       null,
     );
   }
+});
+
+test("one run's unreported outcome leaves another run's deletions in place", () => {
+  let runs: TitleDeletionRuns = new Map();
+  runs = withQueuedTitleDeletionRun(runs, "run-confirmed", ["title-alder"]);
+  runs = withQueuedTitleDeletionRun(runs, "run-unreported", ["title-birch"]);
+  const pending = new Set(["title-alder", "title-birch"]);
+
+  runs = withSettledTitleDeletionRun(runs, "run-confirmed", []);
+  assert.equal(titleDeletionRunPending(runs, "run-confirmed"), false);
+  assert.equal(titleDeletionRunPending(runs, "run-unreported"), true);
+  assert.equal(titleDeletionRunsSettled(runs), false);
+
+  runs = withSettledTitleDeletionRun(runs, "run-unreported", null);
+  assert.equal(titleDeletionRunsSettled(runs), true);
+  assert.deepEqual(
+    [...deletedTitleIdsOfSettledRuns(runs, pending)],
+    ["title-alder"],
+  );
+});
+
+test("a run's failures keep only that run's titles", () => {
+  let runs: TitleDeletionRuns = new Map();
+  runs = withQueuedTitleDeletionRun(runs, "run-partial", [
+    "title-cedar",
+    "title-dogwood",
+  ]);
+  runs = withQueuedTitleDeletionRun(runs, "run-complete", ["title-elm"]);
+  runs = withSettledTitleDeletionRun(runs, "run-complete", []);
+  runs = withSettledTitleDeletionRun(runs, "run-partial", ["title-dogwood"]);
+
+  assert.deepEqual(
+    [
+      ...deletedTitleIdsOfSettledRuns(
+        runs,
+        new Set(["title-cedar", "title-dogwood", "title-elm", "title-fir"]),
+      ),
+    ].sort(),
+    ["title-cedar", "title-elm", "title-fir"],
+  );
+  assert.equal(withSettledTitleDeletionRun(runs, "run-unknown", null), runs);
 });

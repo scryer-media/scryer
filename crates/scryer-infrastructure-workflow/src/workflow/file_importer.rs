@@ -930,13 +930,28 @@ impl LinkFallbackReport {
         }
     }
 
-    /// Writes the log line for a hard link that failed before its import
-    /// was copied. A destination that cannot hold a link, or a link that was
-    /// not proven, is the volume's nature and is logged where it is found,
-    /// not once per file here.
+    /// Writes the log line for a hard link that was not used before its
+    /// import was copied. A link that failed is a warning. A link the disk
+    /// refused as not possible here, such as across volumes or on a
+    /// filesystem that does not take one, is the volume's nature: an INFO
+    /// line with the disk's own error. A link that was not proven is logged
+    /// where it is found.
     fn log(&self, source: &Path, dest: &Path) {
-        if self.fallback.cause != ImportLinkFallbackCause::Failed {
-            return;
+        match self.fallback.cause {
+            ImportLinkFallbackCause::Failed => {}
+            ImportLinkFallbackCause::NotPossible => {
+                tracing::info!(
+                    source = %source.display(),
+                    dest = %dest.display(),
+                    reason = %self.fallback.reason,
+                    error_kind = %self.error_kind.as_deref().unwrap_or("unknown"),
+                    os_error_code = ?self.fallback.os_error_code,
+                    error = %self.words.as_deref().unwrap_or(""),
+                    "hard link is not possible here; handing import to copy lane"
+                );
+                return;
+            }
+            _ => return,
         }
         tracing::warn!(
             source = %source.display(),
@@ -1103,6 +1118,9 @@ enum LinkAnswer {
     /// The link call fails with this platform error number and makes
     /// nothing, as a filesystem that refuses a link for its own reasons does.
     Fails(i32),
+    /// The disk refuses the link as not possible here with this platform
+    /// error number, as a filesystem that does not take hard links does.
+    NotPossible(i32),
 }
 
 /// The answer a test made the disk service give, as the refusal's parts.
@@ -1123,6 +1141,15 @@ fn forced_link_answer(
             let error = io::Error::from_raw_os_error(code);
             return Some((
                 Refused::Failed,
+                error.to_string(),
+                None,
+                (error.kind(), Some(code)),
+            ));
+        }
+        LinkAnswer::NotPossible(code) => {
+            let error = io::Error::from_raw_os_error(code);
+            return Some((
+                Refused::CannotLink(disk::CannotLink::NotSupported),
                 error.to_string(),
                 None,
                 (error.kind(), Some(code)),
@@ -3300,8 +3327,9 @@ fn try_fast_import_placement_in(
             ImportLink::Occupied => {
                 return Err(import_destination_occupied(&prepared.dest));
             }
+            // Logged by the import that receives this lane's answer, as a
+            // failed link is.
             ImportLink::NotPossible(refusal) => {
-                tracing::debug!("hard link is ineligible; handing import to copy lane");
                 link_fallback = Some(refusal.report(ImportLinkFallbackCause::NotPossible));
             }
             // Logged by the import that receives this lane's answer: this
@@ -3964,12 +3992,9 @@ fn import_hardlink_or_copy_blocking(
                     );
                 }
                 ImportLink::NotPossible(refusal) => {
-                    tracing::info!(
-                        "hard link is not possible here, falling back to copy: {} -> {}",
-                        source.display(),
-                        dest.display()
-                    );
-                    link_fallback = Some(refusal.report(ImportLinkFallbackCause::NotPossible));
+                    let report = refusal.report(ImportLinkFallbackCause::NotPossible);
+                    report.log(&source, &dest);
+                    link_fallback = Some(report);
                 }
                 ImportLink::Failed(refusal) => {
                     let report = refusal.report(ImportLinkFallbackCause::Failed);
@@ -6125,6 +6150,53 @@ mod tests {
         assert!(warning.contains("DISK_OPERATION_FAILED"), "{warning}");
         assert!(warning.contains(&source.display().to_string()), "{warning}");
         assert!(warning.contains(&dest.display().to_string()), "{warning}");
+    }
+
+    /// `EINVAL` on Linux and macOS, which some filesystems give for a link
+    /// they do not take.
+    const LINK_INVALID_ARGUMENT: i32 = 22;
+
+    #[test]
+    fn a_hard_link_refused_as_invalid_is_copied_and_logged_once_at_info() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let options = ImportFileOptions {
+            link_answer: LinkAnswer::NotPossible(LINK_INVALID_ARGUMENT),
+            ..Default::default()
+        };
+
+        let ((result, mismatch), logs) = capture_logs(|| {
+            place_in_process(
+                &coordinator,
+                prepare_in_process(&source, &dest, options, false),
+                false,
+            )
+        });
+
+        assert!(mismatch.is_none());
+        assert_eq!(result.placement(), ImportPlacement::Copy);
+        assert_eq!(
+            result.link_fallback.as_ref().map(|fallback| fallback.cause),
+            Some(ImportLinkFallbackCause::NotPossible)
+        );
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+        let lines = logs
+            .lines()
+            .filter(|line| line.contains("hard link is not possible here"))
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1, "{logs}");
+        let line = lines[0];
+        assert!(line.contains("INFO"), "{line}");
+        assert!(
+            line.contains(&format!("os_error_code=Some({LINK_INVALID_ARGUMENT})")),
+            "{line}"
+        );
+        assert!(line.contains(&source.display().to_string()), "{line}");
+        assert!(line.contains(&dest.display().to_string()), "{line}");
+        assert!(!logs.contains("WARN"), "{logs}");
     }
 
     #[test]

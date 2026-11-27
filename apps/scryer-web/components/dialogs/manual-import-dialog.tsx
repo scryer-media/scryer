@@ -54,6 +54,16 @@ import { buildViewPath } from "@/lib/utils/routing";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  allRowsSelected,
+  invertedRowSelection,
+  rowsForBulkAction,
+  toggledRowSelection,
+  withRowTargets,
+  withRowsMatching,
+} from "@/lib/utils/manual-import-row-selection";
 
 const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_CODE =
   "ARCHIVE_EXTRACTION_PLUGIN_REQUIRED";
@@ -253,6 +263,11 @@ export function ManualImportDialog({
   >({});
   const [selectionId, setSelectionId] = React.useState<string | null>(null);
   const [importing, setImporting] = React.useState(false);
+  // Rows a bulk action works on. Queueing still follows each row's target.
+  const [selectedRows, setSelectedRows] = React.useState<Set<string>>(
+    () => new Set(),
+  );
+  const [rowFilterText, setRowFilterText] = React.useState("");
 
   const setImportError = React.useCallback(
     (err: unknown, fallback: string) => {
@@ -305,6 +320,7 @@ export function ManualImportDialog({
           }
           setMappings(initial);
           setDiscSelections({});
+          setSelectedRows(new Set());
         })
         .catch((err: unknown) => {
           setArchiveExtractionNeeded(false);
@@ -333,6 +349,8 @@ export function ManualImportDialog({
       setSeriesMovies([]);
       setMappings({});
       setDiscSelections({});
+      setSelectedRows(new Set());
+      setRowFilterText("");
       setSelectionId(null);
       setError(null);
       setArchivePluginRequired(false);
@@ -376,19 +394,51 @@ export function ManualImportDialog({
     [],
   );
 
-  // One click fills every file with what the preview resolved for it — the
-  // whole set for a file that holds several episodes. A disc the user already
-  // mapped keeps its own selection.
-  const applySuggestionsToAll = React.useCallback(() => {
-    setMappings((previous) => {
-      const next: Record<string, string> = { ...previous };
-      for (const file of files) {
-        if (discSelections[file.candidateId]) continue;
-        next[file.candidateId] = suggestedTargetValue(file);
-      }
+  // One click fills the selected files, or every file when none is selected,
+  // with what the preview resolved for it — the whole set for a file that
+  // holds several episodes. A disc the user already mapped keeps its own
+  // selection.
+  const applySuggestions = React.useCallback(() => {
+    setMappings((previous) =>
+      withRowTargets(
+        previous,
+        rowsForBulkAction(files, selectedRows),
+        (file) =>
+          discSelections[file.candidateId] ? null : suggestedTargetValue(file),
+      ),
+    );
+  }, [discSelections, files, selectedRows]);
+
+  const skipSelectedRows = React.useCallback(() => {
+    const rows = rowsForBulkAction(files, selectedRows);
+    setMappings((previous) => withRowTargets(previous, rows, () => UNASSIGNED));
+    setDiscSelections((previous) => {
+      if (!rows.some((row) => previous[row.candidateId])) return previous;
+      const next = { ...previous };
+      for (const row of rows) delete next[row.candidateId];
       return next;
     });
-  }, [discSelections, files]);
+  }, [files, selectedRows]);
+
+  // A disc's target comes from its own disc selection, so the shared target
+  // leaves disc rows as they are.
+  const assignTargetToSelectedRows = React.useCallback(
+    (target: string) => {
+      setMappings((previous) =>
+        withRowTargets(
+          previous,
+          rowsForBulkAction(files, selectedRows),
+          (file) =>
+            file.fileName.toLowerCase().endsWith(".iso") ? null : target,
+        ),
+      );
+    },
+    [files, selectedRows],
+  );
+
+  const toggleRow = React.useCallback((candidateId: string) => {
+    setSelectedRows((previous) => toggledRowSelection(previous, candidateId));
+  }, []);
 
   const assignedCount = React.useMemo(
     () => Object.values(mappings).filter((v) => v !== UNASSIGNED).length,
@@ -527,123 +577,275 @@ export function ManualImportDialog({
                 </p>
               )
             ) : (
-              <Table id="activity-manual-import-table" className="table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("move.transferFilePath")}</TableHead>
-                    <TableHead className="w-24 text-right">
-                      {t("title.table.size")}
-                    </TableHead>
-                    <TableHead className="w-24 text-center">
-                      {t("facetSettings.quality")}
-                    </TableHead>
-                    <TableHead className="w-[280px]">
-                      {t("system.auditTarget")}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {files.map((file) => (
-                    <TableRow
-                      key={file.candidateId}
-                      id={selectorId(
-                        "activity-manual-import-file-row",
-                        file.candidateId,
-                      )}
+              <>
+                <div
+                  id="activity-manual-import-selection-bar"
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <Button
+                    id="activity-manual-import-select-all"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedRows(allRowsSelected(files))}
+                  >
+                    {t("queue.manualImportSelectAll")}
+                  </Button>
+                  <Button
+                    id="activity-manual-import-select-none"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedRows(new Set())}
+                    disabled={selectedRows.size === 0}
+                  >
+                    {t("queue.manualImportSelectNone")}
+                  </Button>
+                  <Button
+                    id="activity-manual-import-select-invert"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setSelectedRows((previous) =>
+                        invertedRowSelection(files, previous),
+                      )
+                    }
+                  >
+                    {t("queue.manualImportSelectInvert")}
+                  </Button>
+                  <form
+                    className="flex items-center gap-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      setSelectedRows((previous) =>
+                        withRowsMatching(files, previous, rowFilterText),
+                      );
+                    }}
+                  >
+                    <Input
+                      id="activity-manual-import-select-matching-text"
+                      aria-label={t("queue.manualImportSelectMatchingLabel")}
+                      placeholder={t("queue.manualImportSelectMatchingLabel")}
+                      className="h-8 w-56"
+                      value={rowFilterText}
+                      onChange={(event) => setRowFilterText(event.target.value)}
+                    />
+                    <Button
+                      id="activity-manual-import-select-matching"
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      disabled={!rowFilterText.trim()}
                     >
-                      <TableCell>
-                        <div className="flex items-start gap-2">
-                          <FileVideo className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60" />
-                          <div className="min-w-0">
-                            <span className="block break-all font-[family-name:var(--font-code)] text-xs text-card-foreground">
-                              {file.fileName}
-                            </span>
-                            {file.videoFacts ? (
-                              <div className="mt-1">
-                                <MediaInfoBadges
-                                  file={mediaInfoFileForManualImport(
-                                    file.videoFacts,
-                                  )}
-                                  includeContainer
-                                />
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-[family-name:var(--font-code)] text-xs text-muted-foreground">
-                        {formatFileSize(file.sizeBytes)}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {file.quality ? (
-                          <Badge tone="info" className="px-1.5 text-[10px]">
-                            {file.quality}
-                          </Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground/60">
-                            —
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {file.fileName.toLowerCase().endsWith(".iso") ? (
-                          <ManualDiscSelectionControl
-                            disc={file.videoFacts?.disc ?? null}
-                            report={file.videoFacts?.report}
-                            isMovie={facet === "MOVIE"}
-                            episodes={episodes.map((episode) => ({
-                              id: episode.id,
-                              label: episodeTargetLabel(episode, t),
-                            }))}
-                            value={discSelections[file.candidateId] ?? null}
-                            onChange={(selection) => {
-                              setDiscSelections((previous) => {
-                                const next = { ...previous };
-                                if (selection)
-                                  next[file.candidateId] = selection;
-                                else delete next[file.candidateId];
-                                return next;
-                              });
-                              handleMappingChange(
-                                file.candidateId,
-                                selection ? "__disc__" : UNASSIGNED,
-                              );
-                            }}
-                          />
-                        ) : facet === "MOVIE" ? (
+                      {t("queue.manualImportSelectMatching")}
+                    </Button>
+                  </form>
+                  {selectedRows.size > 0 ? (
+                    <>
+                      <span className="text-xs text-muted-foreground">
+                        {t("queue.manualImportSelectedCount", {
+                          count: selectedRows.size,
+                        })}
+                      </span>
+                      <Button
+                        id="activity-manual-import-skip-selected"
+                        variant="outline"
+                        size="sm"
+                        onClick={skipSelectedRows}
+                      >
+                        {t("queue.manualImportSkipSelected")}
+                      </Button>
+                      <div className="w-[280px]">
+                        {facet === "MOVIE" ? (
                           <select
-                            aria-label={file.fileName}
-                            className="rounded border bg-background p-2 text-sm"
-                            value={mappings[file.candidateId] ?? UNASSIGNED}
+                            id="activity-manual-import-assign-selected"
+                            aria-label={t("queue.manualImportAssignSelected")}
+                            className="w-full rounded border bg-background p-2 text-sm"
+                            value=""
                             onChange={(event) =>
-                              handleMappingChange(
-                                file.candidateId,
-                                event.target.value,
-                              )
+                              assignTargetToSelectedRows(event.target.value)
                             }
                           >
-                            <option value={UNASSIGNED}>
-                              {t("mediaInfo.discSkip")}
+                            <option value="" disabled>
+                              {t("queue.manualImportAssignSelected")}
                             </option>
                             <option value="__movie__">
                               {t("mediaInfo.discImportMovie")}
                             </option>
                           </select>
                         ) : (
-                          <ManualImportTargetSelect
-                            candidateId={file.candidateId}
-                            value={mappings[file.candidateId] ?? UNASSIGNED}
+                          <EpisodeTargetSelect
+                            triggerId="activity-manual-import-assign-selected"
+                            idPrefix="activity-manual-import-bulk"
+                            labels={{
+                              ...MANUAL_IMPORT_TARGET_LABELS,
+                              selectPlaceholder: t(
+                                "queue.manualImportAssignSelected",
+                              ),
+                            }}
+                            value=""
                             groupedEpisodes={groupedEpisodes}
                             seriesMovies={seriesMovies}
                             targetLabels={targetLabels}
-                            onChange={handleMappingChange}
+                            onChange={assignTargetToSelectedRows}
                           />
                         )}
-                      </TableCell>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+                <Table
+                  id="activity-manual-import-table"
+                  className="table-fixed"
+                >
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          id="activity-manual-import-select-all-rows"
+                          size="table"
+                          aria-label={t("queue.manualImportSelectAll")}
+                          checked={
+                            selectedRows.size === 0
+                              ? false
+                              : selectedRows.size === files.length
+                                ? true
+                                : "indeterminate"
+                          }
+                          onCheckedChange={() =>
+                            setSelectedRows(
+                              selectedRows.size === files.length
+                                ? new Set()
+                                : allRowsSelected(files),
+                            )
+                          }
+                        />
+                      </TableHead>
+                      <TableHead>{t("move.transferFilePath")}</TableHead>
+                      <TableHead className="w-24 text-right">
+                        {t("title.table.size")}
+                      </TableHead>
+                      <TableHead className="w-24 text-center">
+                        {t("facetSettings.quality")}
+                      </TableHead>
+                      <TableHead className="w-[280px]">
+                        {t("system.auditTarget")}
+                      </TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {files.map((file) => (
+                      <TableRow
+                        key={file.candidateId}
+                        id={selectorId(
+                          "activity-manual-import-file-row",
+                          file.candidateId,
+                        )}
+                      >
+                        <TableCell>
+                          <Checkbox
+                            id={selectorId(
+                              "activity-manual-import-row-select",
+                              file.candidateId,
+                            )}
+                            size="table"
+                            aria-label={file.fileName}
+                            checked={selectedRows.has(file.candidateId)}
+                            onCheckedChange={() => toggleRow(file.candidateId)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-start gap-2">
+                            <FileVideo className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60" />
+                            <div className="min-w-0">
+                              <span className="block break-all font-[family-name:var(--font-code)] text-xs text-card-foreground">
+                                {file.fileName}
+                              </span>
+                              {file.videoFacts ? (
+                                <div className="mt-1">
+                                  <MediaInfoBadges
+                                    file={mediaInfoFileForManualImport(
+                                      file.videoFacts,
+                                    )}
+                                    includeContainer
+                                  />
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right font-[family-name:var(--font-code)] text-xs text-muted-foreground">
+                          {formatFileSize(file.sizeBytes)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {file.quality ? (
+                            <Badge tone="info" className="px-1.5 text-[10px]">
+                              {file.quality}
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground/60">
+                              —
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {file.fileName.toLowerCase().endsWith(".iso") ? (
+                            <ManualDiscSelectionControl
+                              disc={file.videoFacts?.disc ?? null}
+                              report={file.videoFacts?.report}
+                              isMovie={facet === "MOVIE"}
+                              episodes={episodes.map((episode) => ({
+                                id: episode.id,
+                                label: episodeTargetLabel(episode, t),
+                              }))}
+                              value={discSelections[file.candidateId] ?? null}
+                              onChange={(selection) => {
+                                setDiscSelections((previous) => {
+                                  const next = { ...previous };
+                                  if (selection)
+                                    next[file.candidateId] = selection;
+                                  else delete next[file.candidateId];
+                                  return next;
+                                });
+                                handleMappingChange(
+                                  file.candidateId,
+                                  selection ? "__disc__" : UNASSIGNED,
+                                );
+                              }}
+                            />
+                          ) : facet === "MOVIE" ? (
+                            <select
+                              aria-label={file.fileName}
+                              className="rounded border bg-background p-2 text-sm"
+                              value={mappings[file.candidateId] ?? UNASSIGNED}
+                              onChange={(event) =>
+                                handleMappingChange(
+                                  file.candidateId,
+                                  event.target.value,
+                                )
+                              }
+                            >
+                              <option value={UNASSIGNED}>
+                                {t("mediaInfo.discSkip")}
+                              </option>
+                              <option value="__movie__">
+                                {t("mediaInfo.discImportMovie")}
+                              </option>
+                            </select>
+                          ) : (
+                            <ManualImportTargetSelect
+                              candidateId={file.candidateId}
+                              value={mappings[file.candidateId] ?? UNASSIGNED}
+                              groupedEpisodes={groupedEpisodes}
+                              seriesMovies={seriesMovies}
+                              targetLabels={targetLabels}
+                              onChange={handleMappingChange}
+                            />
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
             )}
             {error && (
               <div
@@ -672,10 +874,12 @@ export function ManualImportDialog({
               id="activity-manual-import-apply-suggestions"
               variant="outline"
               className="mr-auto"
-              onClick={applySuggestionsToAll}
+              onClick={applySuggestions}
               disabled={importing || loading}
             >
-              {t("queue.manualImportApplySuggestions")}
+              {selectedRows.size > 0
+                ? t("queue.manualImportApplySuggestionsSelected")
+                : t("queue.manualImportApplySuggestions")}
             </Button>
           ) : null}
           <Button

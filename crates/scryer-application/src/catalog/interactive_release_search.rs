@@ -21,8 +21,8 @@ pub use raw::{
 };
 
 use super::release_search::{
-    IncompleteIndexerReason, QualityProfileLookup, compare_release_search_results,
-    dedupe_cross_indexer_release_results, incomplete_indexer_reason,
+    QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
+    incomplete_indexer_reason,
 };
 use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;

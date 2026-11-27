@@ -26,6 +26,9 @@ pub struct LibrarySettingsOverrideDraft {
     pub metadata_language: Option<String>,
     pub use_season_folders: Option<bool>,
     pub default_monitor_type: Option<String>,
+    /// Tag labels every new title in the library is given; `None` or an
+    /// empty list clears them.
+    pub default_title_tags: Option<Vec<String>>,
     pub quality_profile_id: Option<String>,
     pub request_quality_profile_ids: Option<Vec<String>>,
     pub scoring_persona: Option<ScoringPersona>,
@@ -88,6 +91,8 @@ pub struct LibrarySettings {
     pub use_season_folders: bool,
     pub default_monitor_type: String,
     pub default_monitor_type_override: Option<String>,
+    /// Tag labels every new title in the library is given.
+    pub default_title_tags: Vec<String>,
     pub quality_profile_id_override: Option<String>,
     pub quality_profile_id: String,
     pub request_quality_profile_ids_override: Option<Vec<String>>,

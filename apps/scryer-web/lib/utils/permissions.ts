@@ -323,15 +323,16 @@ export function libraryPermissionsWithRequestShadowing(
 }
 
 /**
- * Strip shadowed bits before writing, mirroring `normalized_for_storage`. View
- * is kept as ticked: it is the one implied bit that stands on its own, so
- * taking Manage Titles away later must not take an explicit View with it.
+ * Strip shadowed bits before writing, mirroring `normalized_for_storage`. The
+ * API sends shadowed grants, so a grant loaded and saved unchanged must come
+ * back as the mask it was read from.
  */
 export function normalizeLibraryPermissionsForStorage(
   values: string[],
 ): string[] {
   const next = new Set(values);
   if (next.has(LIBRARY_PERMISSIONS.manageTitles)) {
+    next.delete(LIBRARY_PERMISSIONS.view);
     next.delete(LIBRARY_PERMISSIONS.autoApproveRequests);
     next.delete(LIBRARY_PERMISSIONS.request);
     next.delete(LIBRARY_PERMISSIONS.manageSubtitles);

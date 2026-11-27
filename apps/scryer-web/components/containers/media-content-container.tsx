@@ -184,8 +184,14 @@ import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-cont
 import { useSearchContext } from "@/lib/context/search-context";
 import {
   catalogDeletionRefresh,
+  deletedTitleIdsOfSettledRuns,
   titleDeletionFailedTitleIds,
+  titleDeletionRunPending,
+  titleDeletionRunsSettled,
+  type TitleDeletionRuns,
   withPendingDeletedTitleIds,
+  withQueuedTitleDeletionRun,
+  withSettledTitleDeletionRun,
 } from "@/lib/utils/catalog-deletion-refresh";
 import {
   reactiveRefreshEpoch,
@@ -658,11 +664,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   React.useLayoutEffect(() => {
     pendingDeletedTitleIdsRef.current = pendingDeletedTitleIds;
   }, [pendingDeletedTitleIds]);
-  const deletionJobIdsRef = React.useRef(new Set<string>());
-  // Titles the tracked deletion runs reported as not deleted, and whether a
-  // run failed without saying which titles those were.
-  const deletionFailedTitleIdsRef = React.useRef(new Set<string>());
-  const deletionOutcomeUnknownRef = React.useRef(false);
+  // The deletion runs being followed, each with its own titles and outcome.
+  const deletionRunsRef = React.useRef<TitleDeletionRuns>(new Map());
   const deletionFallbackTimersRef = React.useRef<
     ReturnType<typeof setTimeout>[]
   >([]);
@@ -2405,37 +2408,27 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (
         !run ||
         run.jobKey !== "TITLE_DELETION" ||
-        !deletionJobIdsRef.current.has(run.id) ||
+        !titleDeletionRunPending(deletionRunsRef.current, run.id) ||
         !isTerminalJobRunStatus(run.status)
       ) {
         return false;
       }
 
-      deletionJobIdsRef.current.delete(run.id);
-      const failedTitleIds = titleDeletionFailedTitleIds(run);
-      if (failedTitleIds === null) {
-        deletionOutcomeUnknownRef.current = true;
-      } else {
-        for (const titleId of failedTitleIds) {
-          deletionFailedTitleIdsRef.current.add(titleId);
-        }
-      }
-      if (deletionJobIdsRef.current.size === 0) {
+      deletionRunsRef.current = withSettledTitleDeletionRun(
+        deletionRunsRef.current,
+        run.id,
+        titleDeletionFailedTitleIds(run),
+      );
+      if (titleDeletionRunsSettled(deletionRunsRef.current)) {
         clearDeletionFallbackTimers();
         // Only titles a run actually deleted leave the list. A title whose
-        // deletion failed, or whose outcome no run reported, shows again once
-        // the pending filter is dropped.
-        const keptTitleIds = deletionFailedTitleIdsRef.current;
-        const outcomeUnknown = deletionOutcomeUnknownRef.current;
-        deletionFailedTitleIdsRef.current = new Set();
-        deletionOutcomeUnknownRef.current = false;
-        const deletedIds = new Set(
-          outcomeUnknown
-            ? []
-            : [...pendingDeletedTitleIdsRef.current].filter(
-                (titleId) => !keptTitleIds.has(titleId),
-              ),
+        // deletion failed, or whose run did not report, shows again once the
+        // pending filter is dropped.
+        const deletedIds = deletedTitleIdsOfSettledRuns(
+          deletionRunsRef.current,
+          pendingDeletedTitleIdsRef.current,
         );
+        deletionRunsRef.current = new Map();
         // Physically remove the deleted titles from the context overlay before
         // dropping the pending-id render filter, or the union with
         // titleContextTitles resurrects their cards after the delete completes.
@@ -2467,7 +2460,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
 
   const refreshTrackedDeletionJobs = React.useCallback(async () => {
-    if (deletionJobIdsRef.current.size === 0) {
+    if (titleDeletionRunsSettled(deletionRunsRef.current)) {
       return;
     }
 
@@ -2516,7 +2509,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         recordCriticalCatalogMutation();
       }
       if (run) {
-        deletionJobIdsRef.current.add(run.id);
+        deletionRunsRef.current = withQueuedTitleDeletionRun(
+          deletionRunsRef.current,
+          run.id,
+          acceptedTitleIds,
+        );
         scheduleDeletionJobFallbackChecks();
       }
       setPendingDeletedTitleIds((current) =>
@@ -2533,7 +2530,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
   React.useEffect(() => {
     const refreshIfTrackingDeletion = () => {
-      if (deletionJobIdsRef.current.size > 0) {
+      if (!titleDeletionRunsSettled(deletionRunsRef.current)) {
         void refreshTrackedDeletionJobs();
       }
     };

@@ -819,10 +819,12 @@ pub struct SubtitleProviderConfigPayload {
 }
 
 #[derive(InputObject)]
-/// Filters for an interactive release search. Exactly one of `titleId` and
-/// `query` names the subject.
+/// Filters for a release search. `startInteractiveReleaseSearch` takes
+/// exactly one of `titleId` and `query` as the subject; `searchReleases`
+/// takes `titleId` and refuses `query`.
 pub struct SearchReleasesInput {
-    /// Title identity whose releases are searched; required unless `query` is given.
+    /// Title identity whose releases are searched. Required by
+    /// `searchReleases`; an interactive search needs it unless `query` is given.
     pub title_id: Option<ID>,
     /// Optional series/movie link identity for an episodic movie target.
     pub series_movie_link_id: Option<ID>,
@@ -833,15 +835,17 @@ pub struct SearchReleasesInput {
     /// Optional episode label or number to search; requires `season`.
     pub episode: Option<String>,
     /// Optional limit. A title search lists at most this many results
-    /// (default 50, max 200); a `query` search asks each indexer for this many
-    /// (default 100, 1 to 500); `aggregatePageSize` sets how many merged results
-    /// each page lists.
+    /// (default 50, max 200). An interactive `query` search asks each indexer
+    /// for this many (default 100, 1 to 500); `aggregatePageSize` sets how many
+    /// merged results each page lists.
     pub limit: Option<i32>,
     /// Results per page for a `query` search, after merging every indexer's
     /// results (default 100, 1 to 100). Later pages use the `first` argument
     /// of `continueInteractiveReleaseSearch`.
     pub aggregate_page_size: Option<i32>,
-    /// Raw operator query sent as typed to each indexer, without a catalog title.
+    /// Raw operator query sent as typed to each indexer, without a catalog
+    /// title. Interactive searches only: `searchReleases` refuses it with
+    /// `INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`.
     pub query: Option<String>,
     /// Optional indexer configuration identities to restrict the search to.
     pub indexer_ids: Option<Vec<ID>>,

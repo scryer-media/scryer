@@ -5838,10 +5838,43 @@ fn linked_episode_span_tokens(episodes: &[&Episode]) -> LinkedEpisodeSpanTokens 
     }
 }
 
+/// The collections `episodes` must be ordered by to match rename, by id.
+///
+/// Rename orders a file's episodes by their collections' narrative order
+/// first, which only tells episodes apart when they sit in different
+/// collections. This reads those collections in one statement, and reads
+/// nothing for one episode or episodes that share a collection.
+pub(crate) async fn multi_episode_rename_collections(
+    app: &AppUseCase,
+    episodes: &[Episode],
+) -> AppResult<HashMap<String, Collection>> {
+    let collection_ids = episodes
+        .iter()
+        .filter_map(|episode| episode.collection_id.clone())
+        .collect::<BTreeSet<_>>();
+    if episodes.len() < 2 || collection_ids.len() < 2 {
+        return Ok(HashMap::new());
+    }
+    let collection_ids = collection_ids.into_iter().collect::<Vec<_>>();
+    Ok(app
+        .services
+        .catalog
+        .shows
+        .get_collections_by_ids(&collection_ids)
+        .await?
+        .into_iter()
+        .map(|collection| (collection.id.clone(), collection))
+        .collect())
+}
+
 /// The span tokens rename gives a file linked to every one of `episodes`, for
-/// an import that places one file for several episodes. `None` for one
-/// episode or none: a single-episode file keeps the tokens of that episode.
-pub(crate) fn multi_episode_rename_tokens(episodes: &[Episode]) -> Option<LinkedEpisodeSpanTokens> {
+/// an import that places one file for several episodes, ordered by
+/// `collections_by_id` the way rename orders them. `None` for one episode or
+/// none: a single-episode file keeps the tokens of that episode.
+pub(crate) fn multi_episode_rename_tokens(
+    episodes: &[Episode],
+    collections_by_id: &HashMap<String, Collection>,
+) -> Option<LinkedEpisodeSpanTokens> {
     if episodes.len() < 2 {
         return None;
     }
@@ -5853,7 +5886,7 @@ pub(crate) fn multi_episode_rename_tokens(episodes: &[Episode]) -> Option<Linked
         .iter()
         .map(|episode| episode.id.clone())
         .collect::<Vec<_>>();
-    let sorted = select_sorted_episodes(&episode_ids, &episodes_by_id, &HashMap::new());
+    let sorted = select_sorted_episodes(&episode_ids, &episodes_by_id, collections_by_id);
     (sorted.len() > 1).then(|| linked_episode_span_tokens(&sorted))
 }
 

@@ -1722,13 +1722,14 @@ fn same_indexer_listing(first: &IndexerSearchResult, second: &IndexerSearchResul
 }
 
 /// A release name as two indexers may spell it differently: its letters and
-/// digits only, ASCII-lowercased, so `Show.S01E01.WEB-DL.H.264` and
-/// `Show S01E01 WEBDL H264` are one release.
+/// digits only, lowercased, so `Show.S01E01.WEB-DL.H.264` and
+/// `Show S01E01 WEBDL H264` are one release, and so are names that differ
+/// only in the case of a non-ASCII letter.
 fn release_name_identity(title: &str) -> String {
     title
         .chars()
         .filter(|ch| ch.is_alphanumeric())
-        .map(|ch| ch.to_ascii_lowercase())
+        .flat_map(char::to_lowercase)
         .collect()
 }
 

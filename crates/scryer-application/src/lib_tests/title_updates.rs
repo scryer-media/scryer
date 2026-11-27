@@ -4132,6 +4132,40 @@ async fn set_episodes_monitored_requires_title_management_on_every_title() {
 }
 
 #[tokio::test]
+async fn set_episodes_monitored_refuses_an_unknown_id_like_a_forbidden_one_without_access() {
+    let (app, user) = bootstrap();
+    let (_, _, episodes) = series_with_season_episodes(&app, &user, "Batch Hidden", 1, true).await;
+    let viewer = test_user_with_app_permissions("viewer", AppPermissionMask::default());
+
+    let forbidden = app
+        .set_episodes_monitored(&viewer, std::slice::from_ref(&episodes[0].id), false)
+        .await
+        .expect_err("an episode the actor cannot manage is refused");
+    let unknown = app
+        .set_episodes_monitored(&viewer, &["missing-episode-hidden".to_string()], false)
+        .await
+        .expect_err("an unknown episode is refused");
+    let mixed = app
+        .set_episodes_monitored(
+            &viewer,
+            &[episodes[0].id.clone(), "missing-episode-hidden".into()],
+            false,
+        )
+        .await
+        .expect_err("a mixed list is refused");
+
+    for error in [&forbidden, &unknown, &mixed] {
+        assert_eq!(
+            error.reason(),
+            Some(crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED),
+            "{error}"
+        );
+        assert_eq!(error.to_string(), forbidden.to_string());
+    }
+    assert!(stored_episode_monitored(&app, &episodes[0].id).await);
+}
+
+#[tokio::test]
 async fn set_episodes_monitored_refuses_a_title_under_a_location_operation() {
     let (app, user) = bootstrap();
     let (_, _, free) = series_with_season_episodes(&app, &user, "Batch Free", 1, true).await;

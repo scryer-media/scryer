@@ -64,6 +64,8 @@ pub struct LibrarySettingsPayload {
     pub default_monitor_type: String,
     /// Saved library choice; null uses the built-in facet default.
     pub default_monitor_type_override: Option<String>,
+    /// Tag labels every title added to this library is given; empty when none.
+    pub default_title_tags: Vec<String>,
     /// Library override quality-profile ID; null means inherit.
     pub quality_profile_id_override: Option<ID>,
     /// Effective quality-profile ID.
@@ -1465,6 +1467,11 @@ pub struct LibrarySettingsInput {
     pub use_season_folders: Option<bool>,
     /// Initial monitoring choice for new Add/Request dialogs; null restores the built-in default.
     pub default_monitor_type: Option<String>,
+    /// Defined tag labels every title added to this library is given, by hand,
+    /// from a list or by approving a request; null or empty clears them. A
+    /// label the registry does not define is refused with
+    /// `CATALOG_NOT_DEFINED_TAG`.
+    pub default_title_tags: Option<Vec<String>>,
     /// Default quality profile identity.
     pub quality_profile_id: Option<ID>,
     /// Quality profile identities allowed for requests.

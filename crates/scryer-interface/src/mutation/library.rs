@@ -61,6 +61,7 @@ fn library_settings_draft(
         metadata_language: input.metadata_language,
         use_season_folders: input.use_season_folders,
         default_monitor_type: input.default_monitor_type,
+        default_title_tags: input.default_title_tags,
         quality_profile_id: input.quality_profile_id.map(String::from),
         request_quality_profile_ids: input
             .request_quality_profile_ids
