@@ -1360,6 +1360,7 @@ const UI_SETTINGS_SELECT: &str =
     "SELECT user_id, theme, palette, date_time_format, highlight_color, secondary_color, high_contrast_mode,
             reduce_motion, hide_sponsor_button, discovery_grid_hide_owned,
             discovery_grid_hide_requested, density, sidebar_mode, default_landing_view,
+            hidden_facets,
             (SELECT locale FROM users WHERE users.id = user_ui_settings.user_id) AS language,
             created_at, updated_at
        FROM user_ui_settings
@@ -1426,6 +1427,28 @@ fn default_ui_settings(user_id: &str, language: Option<&SqlRow>) -> AppResult<Ui
     Ok(settings)
 }
 
+/// Hidden facets are stored as comma-separated facet ids, e.g. `anime`.
+fn encode_hidden_facets(facets: &[UiSettingsFacet]) -> String {
+    facets
+        .iter()
+        .map(|facet| facet.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Ids a later version no longer knows are dropped, so they cannot block a
+/// read; registry order, no duplicates.
+fn decode_hidden_facets(value: &str) -> Vec<UiSettingsFacet> {
+    let parsed: Vec<UiSettingsFacet> = value
+        .split(',')
+        .filter_map(UiSettingsFacet::parse)
+        .collect();
+    UiSettingsFacet::ALL
+        .into_iter()
+        .filter(|facet| parsed.contains(facet))
+        .collect()
+}
+
 async fn upsert_ui_settings_tx(
     tx: &mut SqlTx<'_>,
     user_id: &str,
@@ -1436,9 +1459,9 @@ async fn upsert_ui_settings_tx(
         "INSERT INTO user_ui_settings (
              user_id, theme, palette, date_time_format, highlight_color, secondary_color, high_contrast_mode, reduce_motion,
              hide_sponsor_button, discovery_grid_hide_owned, discovery_grid_hide_requested, density,
-             sidebar_mode, default_landing_view, created_at, updated_at
+             sidebar_mode, default_landing_view, hidden_facets, created_at, updated_at
          )
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
          ON CONFLICT(user_id) DO UPDATE SET
              theme = excluded.theme,
              palette = excluded.palette,
@@ -1453,6 +1476,7 @@ async fn upsert_ui_settings_tx(
              density = excluded.density,
              sidebar_mode = excluded.sidebar_mode,
              default_landing_view = excluded.default_landing_view,
+             hidden_facets = excluded.hidden_facets,
              updated_at = excluded.updated_at",
         &[
             SqlArg::Text(user_id.to_string()),
@@ -1469,6 +1493,7 @@ async fn upsert_ui_settings_tx(
             SqlArg::Text(settings.density.as_str().to_string()),
             SqlArg::Text(settings.sidebar_mode.as_str().to_string()),
             SqlArg::Text(settings.default_landing_view.as_str().to_string()),
+            SqlArg::Text(encode_hidden_facets(&settings.hidden_facets)),
             SqlArg::Timestamp(now),
             SqlArg::Timestamp(now),
         ],
@@ -1566,6 +1591,7 @@ fn row_to_ui_settings(row: &SqlRow) -> AppResult<UiSettings> {
         density: parse_ui_density(row.text("density")?)?,
         sidebar_mode: parse_ui_sidebar_mode(row.text("sidebar_mode")?)?,
         default_landing_view: parse_ui_default_landing_view(row.text("default_landing_view")?)?,
+        hidden_facets: decode_hidden_facets(&row.text("hidden_facets")?),
         language: row.opt_text("language")?,
         table_columns: Vec::new(),
         catalog_views: Vec::new(),
@@ -1927,6 +1953,29 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn hidden_facets_decode_in_registry_order_and_drop_unknown_ids() {
+        assert_eq!(decode_hidden_facets(""), Vec::<UiSettingsFacet>::new());
+        assert_eq!(
+            decode_hidden_facets("anime,cartoons,movies,anime"),
+            vec![UiSettingsFacet::Movies, UiSettingsFacet::Anime]
+        );
+        assert_eq!(
+            encode_hidden_facets(&[UiSettingsFacet::Series, UiSettingsFacet::Anime]),
+            "series,anime"
+        );
+    }
+
+    #[test]
+    fn hidden_facets_migration_is_the_same_on_both_engines() {
+        assert_eq!(
+            include_str!("../../../scryer/src/db/migrations/0367_user_ui_hidden_facets.sql"),
+            include_str!(
+                "../../../scryer/src/db/postgres/migrations/0367_user_ui_hidden_facets.sql"
+            ),
+        );
+    }
+
     #[tokio::test]
     async fn ui_settings_palette_migration_preserves_existing_preferences() {
         let sqlite = include_str!("../../../scryer/src/db/migrations/0309_user_ui_palette.sql");
@@ -2068,6 +2117,7 @@ mod tests {
                 density TEXT NOT NULL DEFAULT 'comfortable',
                 sidebar_mode TEXT NOT NULL DEFAULT 'expanded',
                 default_landing_view TEXT NOT NULL DEFAULT 'movies',
+                hidden_facets TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )",
@@ -2509,6 +2559,7 @@ mod tests {
                 density: UiDensity::Compact,
                 sidebar_mode: UiSidebarMode::Collapsed,
                 default_landing_view: UiDefaultLandingView::Calendar,
+                hidden_facets: vec![UiSettingsFacet::Anime],
                 language: Some(Some("fra".to_string())),
                 table_columns: Some(vec![
                     UiTableColumnSetting {
@@ -2539,6 +2590,7 @@ mod tests {
         assert!(stored.hide_sponsor_button);
         assert!(!stored.discovery_grid_hide_owned);
         assert!(stored.discovery_grid_hide_requested);
+        assert_eq!(stored.hidden_facets, vec![UiSettingsFacet::Anime]);
         assert_eq!(stored.table_columns.len(), 2);
         assert_eq!(stored.table_columns[0].column_id, "name");
         assert_eq!(stored.table_columns[1].column_id, "episodes");
@@ -2581,6 +2633,7 @@ mod tests {
                 density: UiDensity::Comfortable,
                 sidebar_mode: UiSidebarMode::Expanded,
                 default_landing_view: UiDefaultLandingView::Movies,
+                hidden_facets: Vec::new(),
                 language: None,
                 table_columns: Some(vec![UiTableColumnSetting {
                     device_class: UiDeviceClass::Desktop,
@@ -2742,6 +2795,7 @@ mod tests {
             density: loaded.density,
             sidebar_mode: loaded.sidebar_mode,
             default_landing_view: loaded.default_landing_view,
+            hidden_facets: loaded.hidden_facets.clone(),
             language: None,
             table_columns: None,
         };
@@ -3154,6 +3208,7 @@ mod tests {
             density: current.density,
             sidebar_mode: current.sidebar_mode,
             default_landing_view: current.default_landing_view,
+            hidden_facets: current.hidden_facets.clone(),
             language: None,
             table_columns: None,
         };

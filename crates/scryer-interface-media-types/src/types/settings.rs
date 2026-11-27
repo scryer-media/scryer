@@ -548,6 +548,8 @@ pub struct UiSettingsPayload {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area opened by default.
     pub default_landing_view: UiDefaultLandingViewValue,
+    /// Facets the caller hid from navigation, discovery and pickers; never every facet.
+    pub hidden_facets: Vec<UiSettingsFacetValue>,
     /// Interface language code saved on the caller's profile, or null to follow the browser.
     pub language: Option<String>,
     /// Persisted table-column settings.
@@ -692,6 +694,8 @@ pub struct SetMyUiSettingsInput {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area to open by default.
     pub default_landing_view: UiDefaultLandingViewValue,
+    /// Facets to hide from navigation, discovery and pickers; omitted or null preserves the saved list and an empty list shows every facet. At least one facet must stay visible.
+    pub hidden_facets: Option<Vec<UiSettingsFacetValue>>,
     /// Optional interface language code; null preserves the saved value and an empty string clears it.
     pub language: Option<String>,
     /// Optional complete table-column setting list; null preserves the saved columns and an empty list clears them.

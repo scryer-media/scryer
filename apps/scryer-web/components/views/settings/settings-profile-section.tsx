@@ -67,6 +67,13 @@ import {
   type ServerAccountOption,
 } from "@/lib/utils/external-account-link-gate";
 import { LoadingMark } from "@/components/common/loading-mark";
+// eslint-disable-next-line no-restricted-imports -- the hidden-facets switch lists every facet so a hidden one can be shown again
+import { FACET_REGISTRY } from "@/lib/facets/registry";
+import {
+  hiddenFacetsFromUiSettings,
+  hiddenFacetsToUiSettings,
+} from "@/lib/facets/visibility";
+import type { UiSettingsFacet } from "@/lib/types/settings";
 
 const TOTP_CODE_LENGTH = 6;
 
@@ -82,6 +89,9 @@ type Props = {
   hideSponsorButton: boolean;
   savingSponsorPreference: boolean;
   onHideSponsorButtonChange: (value: boolean) => void;
+  hiddenFacets: UiSettingsFacet[];
+  savingHiddenFacets: boolean;
+  onHiddenFacetsChange: (value: UiSettingsFacet[]) => void;
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
@@ -264,6 +274,9 @@ export function SettingsProfileSection({
   hideSponsorButton,
   savingSponsorPreference,
   onHideSponsorButtonChange,
+  hiddenFacets,
+  savingHiddenFacets,
+  onHiddenFacetsChange,
   currentPassword,
   newPassword,
   confirmPassword,
@@ -602,6 +615,11 @@ export function SettingsProfileSection({
             />
           </div>
         </div>
+        <ProfileFacetVisibility
+          hiddenFacets={hiddenFacets}
+          saving={savingHiddenFacets}
+          onChange={onHiddenFacetsChange}
+        />
       </div>
 
       {canChangePassword ? (
@@ -1502,6 +1520,69 @@ export function SettingsProfileSection({
         }}
         onCancel={() => setPendingPasskeyDeletionId(null)}
       />
+    </div>
+  );
+}
+
+/**
+ * The switch behind `useFacets()`: one toggle per facet. This is the one place
+ * that lists every facet, hidden or not, since it is where they are unhidden.
+ */
+function ProfileFacetVisibility({
+  hiddenFacets,
+  saving,
+  onChange,
+}: {
+  hiddenFacets: UiSettingsFacet[];
+  saving: boolean;
+  onChange: (value: UiSettingsFacet[]) => void;
+}) {
+  const t = useTranslate();
+  const hidden = hiddenFacetsFromUiSettings(hiddenFacets);
+  const visibleCount = FACET_REGISTRY.length - hidden.size;
+  return (
+    <div className={PROFILE_ROW_CARD_CLASS}>
+      <div className="space-y-1">
+        <div className="font-medium text-[var(--scry-ink2)]">
+          {t("profile.facetVisibility")}
+        </div>
+        <p className={`${PROFILE_MUTED_TEXT_CLASS} max-w-xs`}>
+          {t("profile.facetVisibilityDescription")}
+        </p>
+      </div>
+      <div className="flex flex-col items-end gap-2">
+        {FACET_REGISTRY.map((facet) => {
+          const visible = !hidden.has(facet.id);
+          const lastVisible = visible && visibleCount <= 1;
+          return (
+            <div
+              key={facet.id}
+              className="flex items-center gap-2"
+              title={
+                lastVisible
+                  ? t("profile.facetVisibilityLastVisible")
+                  : undefined
+              }
+            >
+              <span className="text-sm text-[var(--scry-body)]">
+                {t(facet.navLabelKey)}
+              </span>
+              <SettingsToggleSwitch
+                id={`settings-profile-facet-${facet.viewId}`}
+                checked={visible}
+                disabled={saving || lastVisible}
+                onChange={(show) => {
+                  const next = new Set(hidden);
+                  if (show) next.delete(facet.id);
+                  else next.add(facet.id);
+                  onChange(hiddenFacetsToUiSettings(next));
+                }}
+                ariaLabel={t(facet.navLabelKey)}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

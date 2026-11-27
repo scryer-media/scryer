@@ -1,3 +1,4 @@
+import { useFacets } from "@/lib/facets/use-facets";
 import * as React from "react";
 import { Eraser, Search, X } from "lucide-react";
 import type { OverviewTitleTarget, ViewId } from "@/components/root/types";
@@ -52,7 +53,7 @@ import type {
   MetadataCatalogAddOptions,
   MetadataCatalogRequestOptions,
 } from "@/lib/hooks/use-global-search";
-import { FACET_REGISTRY } from "@/lib/facets/registry";
+import { facetById } from "@/lib/facets/registry";
 import { sectionLabelForFacet, viewFromFacet } from "@/lib/facets/helpers";
 import { useSearchContext } from "@/lib/context/search-context";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
@@ -191,9 +192,10 @@ export function MobileSearchOverlay({
     [catalogSearchResults],
   );
 
+  const { hidden: hiddenFacets, facets: visibleFacetDefinitions } = useFacets();
   const metadataResultCounts = React.useMemo(
-    () => buildMetadataResultCounts(metadataSearchResults),
-    [metadataSearchResults],
+    () => buildMetadataResultCounts(metadataSearchResults, hiddenFacets),
+    [hiddenFacets, metadataSearchResults],
   );
 
   const metadataResultCount = React.useMemo(
@@ -222,8 +224,9 @@ export function MobileSearchOverlay({
         selectedFilters: activeFilters,
         metadataSearchLoading,
         metadataResultCounts,
+        hidden: hiddenFacets,
       }),
-    [activeFilters, metadataResultCounts, metadataSearchLoading],
+    [activeFilters, metadataResultCounts, metadataSearchLoading, hiddenFacets],
   );
 
   const visibleCatalogCount = React.useMemo(
@@ -259,6 +262,7 @@ export function MobileSearchOverlay({
     () =>
       buildGlobalSearchTabs({
         canViewCatalog,
+        facets: visibleFacetDefinitions,
         catalogSearchSections,
         metadataResultCount,
         metadataResultCounts,
@@ -267,6 +271,7 @@ export function MobileSearchOverlay({
         t,
       }),
     [
+      visibleFacetDefinitions,
       canViewCatalog,
       catalogSearchSections,
       metadataResultCount,
@@ -938,7 +943,7 @@ export function MobileSearchOverlay({
       items,
       visibleItems,
     );
-    const facetConfig = FACET_REGISTRY.find((f) => f.id === facet);
+    const facetConfig = facetById(facet);
     const facetLabel = facetConfig
       ? t(facetConfig.navLabelKey)
       : sectionLabelForFacet(t, facet);

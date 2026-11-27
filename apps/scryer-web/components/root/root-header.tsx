@@ -1,3 +1,4 @@
+import { useFacets } from "@/lib/facets/use-facets";
 import * as React from "react";
 import {
   ChevronsUpDown,
@@ -293,9 +294,10 @@ export const RootHeader = React.memo(function RootHeader({
     () => buildCatalogLibraryMembers(catalogSearchResults),
     [catalogSearchResults],
   );
+  const { hidden: hiddenFacets, facets: visibleFacetDefinitions } = useFacets();
   const metadataResultCounts = React.useMemo(
-    () => buildMetadataResultCounts(metadataSearchResults),
-    [metadataSearchResults],
+    () => buildMetadataResultCounts(metadataSearchResults, hiddenFacets),
+    [hiddenFacets, metadataSearchResults],
   );
   const metadataResultCount = React.useMemo(
     () => countMetadataResults(metadataResultCounts),
@@ -325,8 +327,14 @@ export const RootHeader = React.memo(function RootHeader({
         selectedFilters: desktopSearchFilters,
         metadataSearchLoading,
         metadataResultCounts,
+        hidden: hiddenFacets,
       }),
-    [desktopSearchFilters, metadataResultCounts, metadataSearchLoading],
+    [
+      desktopSearchFilters,
+      metadataResultCounts,
+      metadataSearchLoading,
+      hiddenFacets,
+    ],
   );
   const visibleCatalogCount = React.useMemo(
     () =>
@@ -372,6 +380,7 @@ export const RootHeader = React.memo(function RootHeader({
     () =>
       buildGlobalSearchTabs({
         canViewCatalog,
+        facets: visibleFacetDefinitions,
         catalogSearchSections,
         metadataResultCount,
         metadataResultCounts,
@@ -380,6 +389,7 @@ export const RootHeader = React.memo(function RootHeader({
         t,
       }),
     [
+      visibleFacetDefinitions,
       canViewCatalog,
       catalogSearchSections,
       metadataResultCount,

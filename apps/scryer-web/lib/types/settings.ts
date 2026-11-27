@@ -125,6 +125,9 @@ export type UiPalette =
   | "GRAPHITE"
   | "PAPYRUS";
 
+/** Facet spelling of the UI settings API (`UiSettingsFacetValue`). */
+export type UiSettingsFacet = "MOVIES" | "SERIES" | "ANIME";
+
 export type UiSettings = {
   palette: UiPalette;
   theme: "LIGHT" | "DARK" | "PRIDE" | "SYSTEM";
@@ -150,6 +153,11 @@ export type UiSettings = {
     | "HISTORY"
     | "SETTINGS"
     | "SYSTEM";
+  /**
+   * Facets hidden from navigation, discovery and pickers. Never every facet.
+   * Read it through `useFacets()`, not directly.
+   */
+  hiddenFacets: UiSettingsFacet[];
   /** Interface language saved on the profile; null follows the browser. */
   language: string | null;
   tableColumns: UiTableColumnSetting[];
@@ -220,8 +228,11 @@ export type SetMyUiSettingsInput = Omit<
   | "tours"
   | "discoveryGridHideOwned"
   | "discoveryGridHideRequested"
+  | "hiddenFacets"
 > & {
   language?: string;
+  /** Omitted keeps the saved value. */
+  hiddenFacets?: UiSettingsFacet[];
   /** Omitted keeps the saved value. */
   discoveryGridHideOwned?: boolean;
   /** Omitted keeps the saved value. */

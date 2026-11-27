@@ -288,6 +288,8 @@ const en: LocaleDictionary = {
   "error.fallback.failedToRestartProwlarrDiscovery":
     "Failed to restart Prowlarr discovery",
   "error.fallback.failedToSave": "Failed to save",
+  "error.fallback.failedToUpdateFacetVisibility":
+    "Failed to update which media types are shown.",
   "error.fallback.failedToUpdateSponsorPreference":
     "Failed to update Sponsor preference.",
   "error.fallback.importFailed": "Import failed",
@@ -3967,6 +3969,8 @@ const en: LocaleDictionary = {
     "Trusted certificate bundle must contain PEM-encoded X.509 certificates.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Trusted certificate bundle may only contain X.509 certificate PEM blocks.",
+  "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
+    "At least one media type must stay visible.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "A table's column settings list the same column more than once.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
@@ -8744,6 +8748,12 @@ const en: LocaleDictionary = {
 
   "profile.accountInfo": "Account",
   "profile.appearance": "Appearance",
+  "profile.facetVisibility": "Media types",
+  "profile.facetVisibilityDescription":
+    "Choose which media types appear in navigation, discovery, search and pickers. Titles you already have stay reachable.",
+  "profile.facetVisibilityLastVisible":
+    "At least one media type must stay visible.",
+  "profile.facetVisibilitySaved": "Media type preference saved.",
   "profile.appearanceDescription":
     "Personalize how Scryer looks for your account.",
   "profile.highlightColor": "Highlight color",

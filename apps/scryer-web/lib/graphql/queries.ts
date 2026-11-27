@@ -3298,6 +3298,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass

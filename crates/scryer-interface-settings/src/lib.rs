@@ -592,6 +592,11 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
         density: from_ui_density(settings.density),
         sidebar_mode: from_ui_sidebar_mode(settings.sidebar_mode),
         default_landing_view: from_ui_default_landing_view(settings.default_landing_view),
+        hidden_facets: settings
+            .hidden_facets
+            .into_iter()
+            .map(from_ui_settings_facet)
+            .collect(),
         language: settings.language,
         table_columns: settings
             .table_columns
@@ -733,6 +738,10 @@ pub(crate) fn ui_settings_update_from_input(
         density: to_app_ui_density(input.density),
         sidebar_mode: to_app_ui_sidebar_mode(input.sidebar_mode),
         default_landing_view: to_app_ui_default_landing_view(input.default_landing_view),
+        hidden_facets: input
+            .hidden_facets
+            .map(|facets| facets.into_iter().map(to_app_ui_settings_facet).collect())
+            .unwrap_or_else(|| current.hidden_facets.clone()),
         // An empty string clears the language; validation treats blank as cleared.
         language: input.language.map(Some),
         table_columns: input.table_columns.map(|columns| {

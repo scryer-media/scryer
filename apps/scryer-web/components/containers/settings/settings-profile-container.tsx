@@ -74,6 +74,7 @@ import type {
   TotpEnrollmentStart,
   TotpStatus,
   UiSettings,
+  UiSettingsFacet,
 } from "@/lib/types/settings";
 import type { UserAccountKind } from "@/lib/types/users";
 import {
@@ -202,6 +203,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     string | null
   >(null);
   const [savingSponsorPreference, setSavingSponsorPreference] = useState(false);
+  const [savingHiddenFacets, setSavingHiddenFacets] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -543,6 +545,59 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       }
     },
     [changeAppearance, setGlobalStatus, t],
+  );
+
+  const handleHiddenFacetsChange = useCallback(
+    async (hiddenFacets: UiSettingsFacet[]) => {
+      if (!uiSettingsLoaded || uiSettingsLoading || savingHiddenFacets) {
+        return;
+      }
+
+      const previous = uiSettings;
+      setSavingHiddenFacets(true);
+      setUiSettings({ ...uiSettings, hiddenFacets });
+      const failed = (error: unknown) => {
+        setUiSettings(previous);
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            error,
+            t("error.fallback.failedToUpdateFacetVisibility"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+      };
+      try {
+        // The shared input omits hiddenFacets so other saves keep it; this
+        // save is the one that sends it.
+        const result = await saveUiSettings((latest) => ({
+          ...uiSettingsInputFromSettings(latest),
+          hiddenFacets,
+        }));
+        if (result.error || !result.data?.setMyUiSettings) {
+          failed(result.error);
+          return;
+        }
+        setUiSettings(result.data.setMyUiSettings);
+        setGlobalStatus(t("profile.facetVisibilitySaved"), {
+          level: "SUCCESS",
+        });
+      } catch (error) {
+        failed(error);
+      } finally {
+        setSavingHiddenFacets(false);
+      }
+    },
+    [
+      saveUiSettings,
+      savingHiddenFacets,
+      setGlobalStatus,
+      setUiSettings,
+      uiSettings,
+      uiSettingsLoaded,
+      uiSettingsLoading,
+      t,
+    ],
   );
 
   const handleHideSponsorButtonChange = useCallback(
@@ -1694,6 +1749,9 @@ export function SettingsProfileContainer({ userId, username }: Props) {
         hideSponsorButton={uiSettings.hideSponsorButton}
         savingSponsorPreference={savingSponsorPreference}
         onHideSponsorButtonChange={handleHideSponsorButtonChange}
+        hiddenFacets={uiSettings.hiddenFacets}
+        savingHiddenFacets={savingHiddenFacets}
+        onHiddenFacetsChange={handleHiddenFacetsChange}
         currentPassword={currentPassword}
         newPassword={newPassword}
         confirmPassword={confirmPassword}

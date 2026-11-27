@@ -3,6 +3,7 @@ import { Checkbox as CheckboxPrimitive } from "radix-ui";
 
 import { useTranslate } from "@/lib/context/translate-context";
 import { facetById } from "@/lib/facets/registry";
+import { useFacets } from "@/lib/facets/use-facets";
 import { facetStyle } from "@/lib/facets/style";
 import {
   facetSelectOptions,
@@ -45,7 +46,14 @@ export function FacetSelect<T extends string>({
   className,
 }: FacetSelectProps<T>) {
   const t = useTranslate();
-  const options = React.useMemo(() => facetSelectOptions(values), [values]);
+  // A hidden facet is not offered, unless the saved value already selects it:
+  // that chip stays so the selection can be seen and cleared.
+  const { values: visibleFacetValues } = useFacets();
+  const offered = React.useMemo(
+    () => visibleFacetValues(values, selected),
+    [selected, values, visibleFacetValues],
+  );
+  const options = React.useMemo(() => facetSelectOptions(offered), [offered]);
 
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>

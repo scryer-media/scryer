@@ -13,6 +13,7 @@ import { localizedFacetLabel } from "@/components/views/overview-localization";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 
+// eslint-disable-next-line no-restricted-syntax -- orders the libraries the user has; a library is a record, not a facet choice
 const FACET_ORDER = ["MOVIE", "SERIES", "ANIME"];
 
 type LibraryOption = { id: string; name: string; facet: string };

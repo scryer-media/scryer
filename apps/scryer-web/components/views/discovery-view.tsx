@@ -44,6 +44,8 @@ import {
   usefulDiscoveryTitle,
 } from "@/lib/utils/discovery-display";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
+import { useDiscoveryItemFacet, useFacets } from "@/lib/facets/use-facets";
+import type { HiddenFacets } from "@/lib/facets/visibility";
 import {
   ANIME_EXCLUDING_PUBLIC_SECTION_TYPES,
   ANIME_ONLY_PUBLIC_SECTION_TYPES,
@@ -116,16 +118,6 @@ type DiscoveryViewProps = {
 
 type DiscoveryContentType = Facet;
 
-const DISCOVERY_CONTENT_TYPES: DiscoveryContentType[] = [
-  "MOVIE",
-  "SERIES",
-  "ANIME",
-];
-const DEFAULT_DISCOVERY_CONTENT_TYPES: DiscoveryContentType[] = [
-  "MOVIE",
-  "SERIES",
-  "ANIME",
-];
 const DISCOVERY_FACET_PILL_CLASS: Record<DiscoveryContentType, string> = {
   MOVIE:
     "bg-[linear-gradient(135deg,rgba(var(--scry-facet-movie-rgb),0.96),rgba(var(--scry-facet-movie-rgb),0.72))] text-white",
@@ -212,7 +204,10 @@ function itemMatchScore(item: DiscoveryHomeHero) {
 // identity is deliberately left intact - the display name is owned by
 // SECTION_DISPLAY_NAME_KEYS, so there is no need to rewrite the sectionType here.
 
-function normalizedPublicHomeSections(home: DiscoveryHomePayload | null) {
+function normalizedPublicHomeSections(
+  home: DiscoveryHomePayload | null,
+  hidden: HiddenFacets,
+) {
   const publicSections = home?.publicSections ?? [];
   return publicSections.flatMap((section) => {
     const sectionType = discoverySectionType(section);
@@ -225,8 +220,8 @@ function normalizedPublicHomeSections(home: DiscoveryHomePayload | null) {
     }
     const items = section.items.filter((item) =>
       keepsOnlyAnime
-        ? discoveryItemFacet(item) === "ANIME"
-        : discoveryItemFacet(item) !== "ANIME",
+        ? discoveryItemFacet(item, hidden) === "ANIME"
+        : discoveryItemFacet(item, hidden) !== "ANIME",
     );
     return items.length > 0
       ? [{ ...section, totalCount: items.length, items }]
@@ -318,7 +313,10 @@ function sectionIsCompleteCollection(section: DiscoveryHomeSection) {
   );
 }
 
-function orderedHomeSections(home: DiscoveryHomePayload | null) {
+function orderedHomeSections(
+  home: DiscoveryHomePayload | null,
+  hidden: HiddenFacets,
+) {
   if (!home) {
     return { sections: [], heroVisibilitySections: [] };
   }
@@ -326,7 +324,7 @@ function orderedHomeSections(home: DiscoveryHomePayload | null) {
   // PRE-floor list, so a rail hidden by the thin-rail floor can never blank a
   // hero whose item rendered nowhere else.
   return orderDiscoveryHomeSectionsDetailed<DiscoveryHomeSection>({
-    publicSections: normalizedPublicHomeSections(home),
+    publicSections: normalizedPublicHomeSections(home, hidden),
     personalizedSections: home.personalizedSections,
     completeCollection: home.completeCollection,
   });
@@ -371,28 +369,6 @@ function heroItemIsVisibleInSections(
   return sections.some((section) =>
     section.items.some((candidate) => itemIdentityKey(candidate) === itemKey),
   );
-}
-
-function normalizedDiscoveryContentType(
-  value: string | null | undefined,
-): DiscoveryContentType | null {
-  switch (value?.trim().toLowerCase()) {
-    case "anime":
-      return "ANIME";
-    case "series":
-      return "SERIES";
-    case "movie":
-      return "MOVIE";
-    default:
-      return null;
-  }
-}
-
-function itemContentType(item: DiscoveryHomeCard): DiscoveryContentType | null {
-  const contentType = item.contentType?.trim();
-  return contentType
-    ? normalizedDiscoveryContentType(contentType)
-    : normalizedDiscoveryContentType(item.targetKind);
 }
 
 function discoveryItemDisplayGenreLabels(item: DiscoveryHomeHero): string[] {
@@ -454,7 +430,8 @@ function DiscoveryRailCard({
   const owned = item.ownedInInput;
   const addable = !owned && canManageTitle;
   const requestable = !owned && !canManageTitle && canRequestMedia;
-  const facet = itemContentType(item);
+  const itemFacet = useDiscoveryItemFacet();
+  const facet = itemFacet(item);
   const subtitle = upcoming ? itemCalendarBadgeLabel(item) : item.year;
   const handleAction = React.useCallback(
     () => onAction(item),
@@ -513,6 +490,7 @@ function DiscoverySectionRail({
   fillHeight?: boolean;
   variant?: "default" | "upcoming";
 }) {
+  const itemFacet = useDiscoveryItemFacet();
   const t = useTranslate();
   const items = React.useMemo(
     () => uniqueDiscoveryItems(section.items),
@@ -564,7 +542,7 @@ function DiscoverySectionRail({
         scrollBackControlLabel={`${heading}: scroll left`}
       >
         {items.map((item) => {
-          const facet = discoveryItemFacet(item);
+          const facet = itemFacet(item);
           return (
             <DiscoveryRailCard
               key={itemStableKey(item)}
@@ -678,6 +656,7 @@ function DiscoverySectionGrid({
   onBack: () => void;
 }) {
   const t = useTranslate();
+  const itemFacet = useDiscoveryItemFacet();
   const heading = grid.section
     ? sectionDisplayTitle(grid.section, t)
     : t("discovery.section.recommended");
@@ -784,7 +763,7 @@ function DiscoverySectionGrid({
       {items.length > 0 ? (
         <div className="grid grid-cols-[repeat(auto-fill,152px)] justify-between gap-x-3.5 gap-y-5 max-sm:justify-around">
           {items.map((item) => {
-            const facet = discoveryItemFacet(item);
+            const facet = itemFacet(item);
             return (
               <DiscoveryRailCard
                 key={itemStableKey(item)}
@@ -834,7 +813,8 @@ function DiscoveryHero({
   const titleLabel = discoveryItemDisplayTitle(item);
   const match = itemMatchScore(item);
   const genres = discoveryItemDisplayGenreLabels(item).slice(0, 3);
-  const facet = itemContentType(item);
+  const itemFacet = useDiscoveryItemFacet();
+  const facet = itemFacet(item);
   const FacetIcon = discoveryFacetIcon(facet);
   const detailItems = [item.year ? String(item.year) : null].filter(
     (detail): detail is string => Boolean(detail),
@@ -1496,11 +1476,12 @@ function sectionsWithoutHiddenItems(
 function sectionsForDiscoveryFacets(
   sections: DiscoveryHomeSection[],
   allowedFacets: ReadonlySet<Facet>,
+  itemFacet: (item: DiscoveryHomeCard) => Facet | null,
 ) {
   return sections
     .map((section) => {
       const items = section.items.filter((item) => {
-        const facet = discoveryItemFacet(item);
+        const facet = itemFacet(item);
         return facet !== null && allowedFacets.has(facet);
       });
       const removedCount = section.items.length - items.length;
@@ -1551,6 +1532,8 @@ export function DiscoveryView({
 }: DiscoveryViewProps) {
   const t = useTranslate();
   const { personalizedDiscoveryEnabled } = useInstanceFeatures();
+  const { ids: visibleFacetIds, hidden: hiddenFacets } = useFacets();
+  const itemFacet = useDiscoveryItemFacet();
   const manageableFacetSet = React.useMemo(
     () => new Set(manageableFacets),
     [manageableFacets],
@@ -1561,19 +1544,18 @@ export function DiscoveryView({
   );
   const discoverableFacets = React.useMemo(
     () =>
-      DISCOVERY_CONTENT_TYPES.filter(
+      visibleFacetIds.filter(
         (facet) =>
           manageableFacetSet.has(facet) || requestableFacetSet.has(facet),
       ),
-    [manageableFacetSet, requestableFacetSet],
+    [manageableFacetSet, requestableFacetSet, visibleFacetIds],
   );
   const discoverableFacetSet = React.useMemo(
     () => new Set(discoverableFacets),
     [discoverableFacets],
   );
-  const [selectedContentTypes, setSelectedContentTypes] = React.useState<
-    DiscoveryContentType[]
-  >(DEFAULT_DISCOVERY_CONTENT_TYPES);
+  const [selectedContentTypes, setSelectedContentTypes] =
+    React.useState<DiscoveryContentType[]>(visibleFacetIds);
   React.useEffect(() => {
     setSelectedContentTypes((current) => {
       const visibleSelection = current.filter((contentType) =>
@@ -1604,11 +1586,19 @@ export function DiscoveryView({
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [filterRailCollapsed, setFilterRailCollapsed] = React.useState(false);
   const { hiddenKeys, hideItem, resetHidden } = useHiddenDiscoveryItems();
-  const orderedResult = React.useMemo(() => orderedHomeSections(home), [home]);
+  const orderedResult = React.useMemo(
+    () => orderedHomeSections(home, hiddenFacets),
+    [hiddenFacets, home],
+  );
   const orderedSections = orderedResult.sections;
   const capabilitySections = React.useMemo(
-    () => sectionsForDiscoveryFacets(orderedSections, discoverableFacetSet),
-    [discoverableFacetSet, orderedSections],
+    () =>
+      sectionsForDiscoveryFacets(
+        orderedSections,
+        discoverableFacetSet,
+        itemFacet,
+      ),
+    [discoverableFacetSet, itemFacet, orderedSections],
   );
   // Local-only "not interested" remains a presentation preference.
   const rawSections = React.useMemo(
@@ -1618,10 +1608,10 @@ export function DiscoveryView({
   const gridCapabilityItems = React.useMemo(
     () =>
       (sectionGrid?.items ?? []).filter((item) => {
-        const facet = discoveryItemFacet(item);
+        const facet = itemFacet(item);
         return facet !== null && discoverableFacetSet.has(facet);
       }),
-    [discoverableFacetSet, sectionGrid?.items],
+    [discoverableFacetSet, itemFacet, sectionGrid?.items],
   );
   const gridItems = React.useMemo(
     () =>
@@ -1760,14 +1750,20 @@ export function DiscoveryView({
         sectionsForDiscoveryFacets(
           orderedResult.heroVisibilitySections,
           discoverableFacetSet,
+          itemFacet,
         ),
         hiddenKeys,
       ).filter((section) => !sectionIsCompleteCollection(section)),
-    [discoverableFacetSet, hiddenKeys, orderedResult.heroVisibilitySections],
+    [
+      discoverableFacetSet,
+      hiddenKeys,
+      itemFacet,
+      orderedResult.heroVisibilitySections,
+    ],
   );
   const heroItem = React.useMemo(() => {
     const configuredHeroFacet = home?.heroItem
-      ? discoveryItemFacet(home.heroItem)
+      ? itemFacet(home.heroItem)
       : null;
     return home?.heroItem &&
       configuredHeroFacet !== null &&
@@ -1776,8 +1772,8 @@ export function DiscoveryView({
       heroItemIsVisibleInSections(home.heroItem, heroSections)
       ? home.heroItem
       : null;
-  }, [discoverableFacetSet, heroSections, home?.heroItem]);
-  const heroFacet = heroItem ? discoveryItemFacet(heroItem) : null;
+  }, [discoverableFacetSet, heroSections, home?.heroItem, itemFacet]);
+  const heroFacet = heroItem ? itemFacet(heroItem) : null;
   const heroRailSection = React.useMemo(
     () => findHeroRailSection(heroSections),
     [heroSections],
