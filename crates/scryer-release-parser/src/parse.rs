@@ -7792,6 +7792,25 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     }
 
     let token = tokens.get(index)?.normalized.as_str();
+    // `3rd Season S03` restates the ordinal's season, so the phrase is the
+    // pack's season exactly as `3rd Season S3E05` is the episode's. A marker
+    // naming another season leaves the phrase to the title.
+    if let Some(season) = parse_ordinal_season_token(token)
+        && tokens
+            .get(index + 1)
+            .is_some_and(|next| next.normalized == "SEASON")
+        && tokens
+            .get(index + 2)
+            .and_then(|marker| parse_season_token(marker.normalized.as_str()))
+            == Some(season)
+        && let Some(mut pack) = parse_season_pack_at(tokens, index + 2)
+        && pack.seasons == [season]
+    {
+        let mut consumed = vec![index, index + 1];
+        consumed.append(&mut pack.consumed);
+        pack.consumed = consumed;
+        return Some(pack);
+    }
     if token == "SEASON" {
         if season_scoped_range_after(tokens, index).is_some()
             || parse_parenthetical_season_range_at(tokens, index).is_some()
