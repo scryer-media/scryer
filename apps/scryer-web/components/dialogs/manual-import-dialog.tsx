@@ -53,6 +53,7 @@ import {
 import { manualImportVerdictsQuery } from "@/lib/graphql/queries";
 import {
   MANUAL_IMPORT_VERDICT_TONES,
+  chunkManualImportVerdictRequests,
   currentManualImportVerdict,
   manualImportVerdictKey,
   pendingManualImportVerdictRequests,
@@ -302,41 +303,45 @@ export function ManualImportDialog({
     for (const [candidateId, key] of keys) {
       requestedVerdicts.current[candidateId] = key;
     }
-    void client
-      .query(
-        manualImportVerdictsQuery,
-        { selectionId, files: requests },
-        { requestPolicy: "network-only" },
-      )
-      .toPromise()
-      .then(({ data, error: queryError }) => {
-        if (queryError || !data) {
-          // Let the next change ask again.
-          for (const [candidateId, key] of keys) {
-            if (requestedVerdicts.current[candidateId] === key) {
-              delete requestedVerdicts.current[candidateId];
+    for (const chunk of chunkManualImportVerdictRequests(requests)) {
+      void client
+        .query(
+          manualImportVerdictsQuery,
+          { selectionId, files: chunk },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise()
+        .then(({ data, error: queryError }) => {
+          if (queryError || !data) {
+            // Let the next change ask again about this batch's files.
+            for (const { candidateId } of chunk) {
+              if (
+                requestedVerdicts.current[candidateId] === keys.get(candidateId)
+              ) {
+                delete requestedVerdicts.current[candidateId];
+              }
             }
+            return;
           }
-          return;
-        }
-        setVerdicts((previous) => {
-          const next = { ...previous };
-          for (const row of data.manualImportVerdicts as {
-            candidateId: string;
-            episodeIds: string[];
-            verdict: ManualImportVerdict | null;
-          }[]) {
-            const key = keys.get(row.candidateId);
-            if (key === undefined) continue;
-            next[row.candidateId] = {
-              key,
-              verdict: row.verdict,
-              episodeCount: row.episodeIds.length,
-            };
-          }
-          return next;
+          setVerdicts((previous) => {
+            const next = { ...previous };
+            for (const row of data.manualImportVerdicts as {
+              candidateId: string;
+              episodeIds: string[];
+              verdict: ManualImportVerdict | null;
+            }[]) {
+              const key = keys.get(row.candidateId);
+              if (key === undefined) continue;
+              next[row.candidateId] = {
+                key,
+                verdict: row.verdict,
+                episodeCount: row.episodeIds.length,
+              };
+            }
+            return next;
+          });
         });
-      });
+    }
   }, [client, facet, mappings, selectionId]);
   // Rows a bulk action works on. Queueing still follows each row's target.
   const [selectedRows, setSelectedRows] = React.useState<Set<string>>(
