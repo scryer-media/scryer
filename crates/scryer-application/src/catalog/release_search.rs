@@ -658,7 +658,46 @@ pub(crate) struct ScoredSearchOutcome {
     /// can search the facet by and no usable text query. Nothing was sent.
     pub unsupported_indexer_ids: Vec<String>,
     pub incomplete_indexer_reasons: HashMap<String, IncompleteIndexerReason>,
+    /// Indexers that were sent at least one of the search's requests.
+    pub searched_indexer_ids: HashSet<String>,
     pub search_session_id: String,
+}
+
+/// Whether an outcome shows the indexer was sent the query.
+fn outcome_sent_request(outcome: IndexerSearchOutcome) -> bool {
+    match outcome {
+        IndexerSearchOutcome::Complete { .. } => true,
+        IndexerSearchOutcome::Partial { reason, .. } => matches!(
+            reason,
+            None | Some(
+                IndexerSearchIncompleteReason::QueryBudgetPartial
+                    | IndexerSearchIncompleteReason::PageCeilingReached
+                    | IndexerSearchIncompleteReason::SaturatedPartition
+                    | IndexerSearchIncompleteReason::Unattested
+            )
+        ),
+        _ => false,
+    }
+}
+
+/// An indexer one query never asked because of its query budget, while
+/// another query of the same search did reach it, was searched in part.
+fn settle_query_budget_reasons(
+    reasons: &mut HashMap<String, IncompleteIndexerReason>,
+    searched: &HashSet<String>,
+) {
+    for (indexer_id, reason) in reasons.iter_mut() {
+        if reason.is_not_searched_for_query_budget()
+            && searched.contains(indexer_id)
+            && let Some(partly) = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+                empty: false,
+                reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+                retry_after: reason.retry_after,
+            })
+        {
+            *reason = partly;
+        }
+    }
 }
 
 /// The release's cross-indexer content identity — THE fingerprint, singular.
@@ -1201,6 +1240,9 @@ pub(crate) struct IncompleteIndexerReason {
     /// Stable code for a condition the operator must act on, when the
     /// outcome names one.
     pub code: Option<&'static str>,
+    /// How long to wait before asking the indexer again, when the outcome
+    /// says. The message repeats it for people; code reads this field.
+    pub retry_after: Option<std::time::Duration>,
 }
 impl IncompleteIndexerReason {
     pub fn failed(message: String) -> Self {
@@ -1208,7 +1250,20 @@ impl IncompleteIndexerReason {
             kind: IncompleteIndexerKind::Failed,
             message,
             code: None,
+            retry_after: None,
         }
+    }
+
+    /// Whether the indexer answered part of the search before its query
+    /// budget stopped the rest; its results are kept.
+    pub fn is_partly_searched(&self) -> bool {
+        self.code == Some(crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED)
+    }
+
+    /// Whether the indexer was never asked because its query budget had no
+    /// slot within the wait an interactive search allows.
+    pub fn is_not_searched_for_query_budget(&self) -> bool {
+        self.code == Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED)
     }
 }
 impl std::ops::Deref for IncompleteIndexerReason {
@@ -1220,6 +1275,8 @@ impl std::ops::Deref for IncompleteIndexerReason {
 
 pub(crate) const RATE_LIMITED_INDEXER_REASON: &str = "indexer is cooling down after a rate limit";
 pub(crate) const QUERY_BUDGET_INDEXER_REASON: &str = "indexer is over its query budget";
+pub(crate) const QUERY_BUDGET_PARTIAL_INDEXER_REASON: &str =
+    "indexer was searched in part before it ran over its query budget";
 pub(crate) const CONTAINED_INDEXER_REASON: &str =
     "indexer search contained at the provider's result limit";
 
@@ -1239,7 +1296,11 @@ pub(crate) fn incomplete_indexer_reason(
             ..
         } => IncompleteIndexerKind::RateLimited,
         IndexerSearchOutcome::Partial {
-            reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+            reason:
+                Some(
+                    IndexerSearchIncompleteReason::QueryBudgetExhausted
+                    | IndexerSearchIncompleteReason::QueryBudgetPartial,
+                ),
             ..
         } => IncompleteIndexerKind::QueryBudget,
         IndexerSearchOutcome::Partial {
@@ -1264,6 +1325,11 @@ pub(crate) fn incomplete_indexer_reason(
             retry_after,
             ..
         } => (QUERY_BUDGET_INDEXER_REASON, retry_after),
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+            retry_after,
+            ..
+        } => (QUERY_BUDGET_PARTIAL_INDEXER_REASON, retry_after),
         // Unattested legacy responses are operationally successful; they only
         // withhold convergence coverage until the plugin declares semantics.
         IndexerSearchOutcome::Partial {
@@ -1305,6 +1371,14 @@ pub(crate) fn incomplete_indexer_reason(
     };
     let code = match outcome {
         IndexerSearchOutcome::ClientUnavailable { reason } => Some(reason),
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+            ..
+        } => Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED),
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+            ..
+        } => Some(crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED),
         _ => None,
     };
     Some(IncompleteIndexerReason {
@@ -1314,6 +1388,7 @@ pub(crate) fn incomplete_indexer_reason(
             None => reason.to_string(),
         },
         code,
+        retry_after,
     })
 }
 
@@ -2172,6 +2247,7 @@ impl AppUseCase {
                 complete_indexer_ids: Vec::new(),
                 unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
+                searched_indexer_ids: HashSet::new(),
                 search_session_id: Uuid::new_v4().to_string(),
             });
         }
@@ -2294,6 +2370,7 @@ impl AppUseCase {
                 complete_indexer_ids: Vec::new(),
                 unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
+                searched_indexer_ids: HashSet::new(),
                 search_session_id,
             });
         }
@@ -2335,6 +2412,7 @@ impl AppUseCase {
         // partial, missing, or failed query withholds coverage for that indexer.
         let mut coverage_by_indexer = HashMap::new();
         let mut incomplete_indexer_reasons = HashMap::new();
+        let mut searched_indexer_ids = HashSet::new();
 
         loop {
             if !page_source_open && !search_tasks_open {
@@ -2383,6 +2461,11 @@ impl AppUseCase {
                 Ok(Ok(response)) => {
                     successful_searches += 1;
                     for outcome in &response.indexer_outcomes {
+                        if outcome_sent_request(outcome.outcome)
+                            && !searched_indexer_ids.contains(&outcome.indexer_id)
+                        {
+                            searched_indexer_ids.insert(outcome.indexer_id.clone());
+                        }
                         if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
                             incomplete_indexer_reasons
                                 .entry(outcome.indexer_id.clone())
@@ -2460,6 +2543,7 @@ impl AppUseCase {
         }
         let unsupported_indexer_ids =
             unsupported_indexers(&coverage_by_indexer, required_query_count);
+        settle_query_budget_reasons(&mut incomplete_indexer_reasons, &searched_indexer_ids);
         Ok(ScoredSearchOutcome {
             results: scored_results,
             unroutable_by_indexer,
@@ -2470,6 +2554,7 @@ impl AppUseCase {
             ),
             unsupported_indexer_ids,
             incomplete_indexer_reasons,
+            searched_indexer_ids,
             search_session_id,
         })
     }
@@ -2828,6 +2913,13 @@ impl AppUseCase {
             outcome
                 .incomplete_indexer_reasons
                 .extend(next.incomplete_indexer_reasons);
+            outcome
+                .searched_indexer_ids
+                .extend(next.searched_indexer_ids);
+            settle_query_budget_reasons(
+                &mut outcome.incomplete_indexer_reasons,
+                &outcome.searched_indexer_ids,
+            );
             for (indexer_id, counts) in next.unroutable_by_indexer {
                 let merged = outcome.unroutable_by_indexer.entry(indexer_id).or_default();
                 for (reason, count) in counts {

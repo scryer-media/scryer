@@ -1485,6 +1485,7 @@ function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       rateLimited
       skipReason
       skippedUntil

@@ -4,6 +4,21 @@ import {
   type UnroutableResultsSummary,
 } from "./unroutable-results.ts";
 
+/** `failureReasonCode` of an indexer its query budget stopped part way through. */
+export const QUERY_BUDGET_PARTLY_SEARCHED = "INDEXER_QUERY_BUDGET_PARTLY_SEARCHED";
+
+/**
+ * Why an indexer's query budget cut a search short, as the server sends it in
+ * an indexer's `failureReasonCode`. A reason this client does not know shows
+ * the server's sentence.
+ */
+export const INDEXER_QUERY_BUDGET_REASON_KEYS: Readonly<
+  Record<string, string>
+> = {
+  INDEXER_QUERY_BUDGET_NOT_SEARCHED: "indexerSearch.skipReason.queryBudget",
+  [QUERY_BUDGET_PARTLY_SEARCHED]: "indexerSearch.queryBudget.partlySearched",
+};
+
 type InteractiveSearchPresentationInput = {
   hasSnapshot: boolean;
   loading: boolean;
@@ -24,6 +39,15 @@ export type InteractiveSearchPresentation = {
   failedIndexerNames: string[];
   /** Indexers the run never queried (routing/scope/capability), with the reason when known. */
   skippedIndexers: Array<{ name: string; reason: string | null }>;
+  /**
+   * Indexers that answered some requests before their query budget stopped
+   * the rest, with the seconds until they can be asked again when known.
+   * Their results are kept.
+   */
+  partlySearchedIndexers: Array<{
+    name: string;
+    retryAfterSeconds: number | null;
+  }>;
   /** Releases set aside because no enabled download client accepts them, per reason. */
   unroutableResults: UnroutableResultsSummary[];
 };
@@ -60,6 +84,16 @@ export function deriveInteractiveSearchPresentation({
       .map((indexer) => ({
         name: indexer.name,
         reason: indexer.failureReason,
+      })),
+    partlySearchedIndexers: indexers
+      .filter(
+        (indexer) =>
+          indexer.status === "COMPLETED" &&
+          indexer.failureReasonCode === QUERY_BUDGET_PARTLY_SEARCHED,
+      )
+      .map((indexer) => ({
+        name: indexer.name,
+        retryAfterSeconds: indexer.retryAfterSeconds ?? null,
       })),
     unroutableResults: summarizeUnroutableResults(indexers),
   };

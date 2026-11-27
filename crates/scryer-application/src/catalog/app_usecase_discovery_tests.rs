@@ -960,4 +960,57 @@ fn an_indexer_over_its_query_budget_reads_as_a_wait_with_its_next_slot() {
         reason.kind,
         IncompleteIndexerKind::RateLimited | IncompleteIndexerKind::QueryBudget
     ));
+    assert_eq!(
+        reason.code,
+        Some(crate::error_reasons::indexer_query_budget::NOT_SEARCHED)
+    );
+    assert_eq!(reason.retry_after, Some(std::time::Duration::from_secs(45)));
+    assert!(reason.is_not_searched_for_query_budget());
+    assert!(!reason.is_partly_searched());
+}
+
+#[test]
+fn an_indexer_its_query_budget_stopped_part_way_reads_as_searched_in_part() {
+    let reason = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::QueryBudgetPartial),
+        retry_after: Some(std::time::Duration::from_secs(52)),
+    })
+    .expect("a partly searched indexer is an incomplete outcome");
+
+    assert_eq!(
+        reason.code,
+        Some(crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED)
+    );
+    assert_eq!(reason.retry_after, Some(std::time::Duration::from_secs(52)));
+    assert!(reason_is_rate_limit(&reason));
+    assert!(reason.is_partly_searched());
+    assert!(!reason.is_not_searched_for_query_budget());
+}
+
+#[test]
+fn a_query_budget_skip_becomes_partial_only_for_an_indexer_another_query_reached() {
+    let not_searched = || {
+        incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+            empty: true,
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+            retry_after: Some(std::time::Duration::from_secs(40)),
+        })
+        .expect("over budget")
+    };
+    let mut reasons = HashMap::from([
+        ("idx-reached".to_string(), not_searched()),
+        ("idx-unasked".to_string(), not_searched()),
+    ]);
+    let searched = HashSet::from(["idx-reached".to_string()]);
+
+    settle_query_budget_reasons(&mut reasons, &searched);
+
+    let reached = &reasons["idx-reached"];
+    assert!(reached.is_partly_searched());
+    assert_eq!(
+        reached.retry_after,
+        Some(std::time::Duration::from_secs(40))
+    );
+    assert!(reasons["idx-unasked"].is_not_searched_for_query_budget());
 }

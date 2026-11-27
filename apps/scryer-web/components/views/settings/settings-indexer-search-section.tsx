@@ -46,6 +46,7 @@ import type { Release } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { indexerCapsDiagnostic } from "@/lib/utils/indexer-caps-diagnostic";
+import { INDEXER_QUERY_BUDGET_REASON_KEYS } from "@/lib/utils/interactive-search-presentation";
 import {
   indexerSearchResultDownloadId,
   indexerSearchResultExpandId,
@@ -586,7 +587,10 @@ function QueryCard({
   );
 }
 
-/** Hover text for an indexer chip: the localized skip reason, else the raw failure text. */
+/**
+ * Hover text for an indexer chip: the localized skip reason, else the
+ * localized query-budget reason, else the raw failure text.
+ */
 function indexerChipTitle(
   entry: InteractiveSearchIndexerProgress,
   t: ReturnType<typeof useTranslate>,
@@ -610,14 +614,22 @@ function indexerChipTitle(
         : t("indexerSearch.skipReason.backedOff");
     case "NO_TEXT_SEARCH":
       return t("indexerSearch.skipReason.noTextSearch");
+    case "QUERY_BUDGET":
+      return until
+        ? t("indexerSearch.skipReason.queryBudgetUntil", { time: until })
+        : t("indexerSearch.skipReason.queryBudget");
     case "MONTHLY_LIMIT": {
       const code = entry.failureReasonCode;
       return code && Object.hasOwn(ERROR_REASON_KEYS, code)
         ? t(ERROR_REASON_KEYS[code]!)
         : (entry.failureReason ?? undefined);
     }
-    default:
-      return entry.failureReason ?? undefined;
+    default: {
+      const code = entry.failureReasonCode;
+      return code && Object.hasOwn(INDEXER_QUERY_BUDGET_REASON_KEYS, code)
+        ? t(INDEXER_QUERY_BUDGET_REASON_KEYS[code]!)
+        : (entry.failureReason ?? undefined);
+    }
   }
 }
 

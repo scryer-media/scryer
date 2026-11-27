@@ -4406,6 +4406,35 @@ pub mod indexer_caps {
     }
 }
 
+/// Why an interactive search did not wait for an indexer's query budget.
+pub mod indexer_query_budget {
+    /// The indexer's next request slot lay beyond the longest wait an
+    /// interactive search allows, so nothing was sent to it.
+    pub const NOT_SEARCHED: &str = "INDEXER_QUERY_BUDGET_NOT_SEARCHED";
+    /// Some of the indexer's requests were sent; the next slot for the rest
+    /// lay beyond the longest wait an interactive search allows.
+    pub const PARTLY_SEARCHED: &str = "INDEXER_QUERY_BUDGET_PARTLY_SEARCHED";
+    /// Every reason owned by interactive query-budget pacing.
+    pub const ALL: &[&str] = &[NOT_SEARCHED, PARTLY_SEARCHED];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("INDEXER_QUERY_BUDGET_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
 pub mod indexer_monthly_quota {
     /// The configured local monthly request limit has been reached.
     pub const REQUEST_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED";

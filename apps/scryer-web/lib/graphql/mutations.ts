@@ -2017,6 +2017,7 @@ function startInteractiveReleaseSearchMutationWith(
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       skipReason
       skippedUntil
       rateLimited
@@ -2067,6 +2068,7 @@ function continueInteractiveReleaseSearchMutationWith(
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       skipReason
       skippedUntil
       rateLimited

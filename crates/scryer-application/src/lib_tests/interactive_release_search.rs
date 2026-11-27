@@ -30,7 +30,8 @@ struct RecordedSearchCall {
 struct ScriptedIndexerClient {
     calls: Arc<Mutex<Vec<RecordedSearchCall>>>,
     releases: Arc<Mutex<HashMap<String, Vec<IndexerSearchResult>>>>,
-    /// Indexers that report this outcome instead of answering.
+    /// Indexers that report this outcome, beside any releases scripted for
+    /// them.
     outcomes: Arc<Mutex<HashMap<String, crate::IndexerSearchOutcome>>>,
     failed_query_prefix: Option<String>,
 }
@@ -66,22 +67,21 @@ impl ScriptedIndexerClient {
             return Err(AppError::Repository("no indexer routed".to_string()));
         };
         let outcome = self.outcomes.lock().await.get(&indexer_id).copied();
-        let results = if outcome.is_some() {
-            Vec::new()
-        } else {
-            self.releases
-                .lock()
-                .await
-                .get(&indexer_id)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|mut result| {
-                    result.indexer_id = Some(indexer_id.clone());
-                    result
-                })
-                .collect()
-        };
+        // An indexer scripted with both answers with its releases and
+        // reports the outcome beside them, as a partly searched indexer does.
+        let results = self
+            .releases
+            .lock()
+            .await
+            .get(&indexer_id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut result| {
+                result.indexer_id = Some(indexer_id.clone());
+                result
+            })
+            .collect();
         Ok(IndexerSearchResponse {
             next_cursor: None,
             results,
@@ -934,6 +934,198 @@ async fn requested_indexer_ids_restrict_a_title_subject_fan_out() {
             .all(|call| call.enabled_indexers == vec!["idx-b".to_string()]),
         "the title subject dispatches only the requested indexer: {calls:?}"
     );
+}
+
+// ── Query budget ────────────────────────────────────────────────────────────
+
+/// A movie title the query-budget tests search for.
+async fn budget_movie(app: &AppUseCase, user: &User) -> Title {
+    app.add_title(
+        user,
+        NewTitle {
+            name: "Quarry Lantern".into(),
+            facet: MediaFacet::Movie,
+            monitored: true,
+            year: Some(2019),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create title")
+}
+
+/// A release the query-budget tests list. No download client is configured,
+/// so it announces no source kind that would be dropped as unroutable.
+fn budget_release(title: &str, guid: &str) -> IndexerSearchResult {
+    let mut release = nzb_release(title, guid);
+    release.source_kind = None;
+    release
+}
+
+#[tokio::test]
+async fn a_title_search_keeps_the_results_of_an_indexer_its_query_budget_stopped_part_way() {
+    use crate::error_reasons::indexer_query_budget::PARTLY_SEARCHED;
+
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-budget",
+            vec![budget_release(
+                "Quarry.Lantern.2019.1080p.WEB-DL-QUILLFOX",
+                "q1",
+            )],
+        )
+        .await
+        .with_outcome(
+            "idx-budget",
+            crate::IndexerSearchOutcome::Partial {
+                empty: false,
+                reason: Some(crate::IndexerSearchIncompleteReason::QueryBudgetPartial),
+                retry_after: Some(Duration::from_secs(45)),
+            },
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-budget", "newznab")],
+    );
+    let title = budget_movie(&app, &user).await;
+
+    let start = app
+        .start_interactive_release_search(&user, title_request(&title.id))
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    assert!(
+        done.results
+            .iter()
+            .any(|result| result.title == "Quarry.Lantern.2019.1080p.WEB-DL-QUILLFOX"),
+        "the results of the requests that were sent stay listed: {done:?}"
+    );
+    let view = indexer_view(&done, "idx-budget");
+    assert_eq!(
+        view.status,
+        InteractiveReleaseSearchIndexerStatus::Completed
+    );
+    assert_eq!(view.skip_reason, None);
+    assert_eq!(view.failure_reason_code, Some(PARTLY_SEARCHED));
+    assert_eq!(view.retry_after, Some(Duration::from_secs(45)));
+    assert!(view.rate_limited, "a query budget reads as a cooldown");
+}
+
+#[tokio::test]
+async fn a_title_search_shows_an_indexer_over_its_query_budget_before_any_request_as_skipped() {
+    use crate::InteractiveIndexerSkipReason;
+    use crate::error_reasons::indexer_query_budget::NOT_SEARCHED;
+
+    let client = ScriptedIndexerClient::default()
+        .with_outcome(
+            "idx-budget",
+            crate::IndexerSearchOutcome::Partial {
+                empty: true,
+                reason: Some(crate::IndexerSearchIncompleteReason::QueryBudgetExhausted),
+                retry_after: Some(Duration::from_secs(50)),
+            },
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-budget", "newznab")],
+    );
+    let title = budget_movie(&app, &user).await;
+
+    let before = Utc::now();
+    let start = app
+        .start_interactive_release_search(&user, title_request(&title.id))
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    let view = indexer_view(&done, "idx-budget");
+    assert_eq!(
+        view.status,
+        InteractiveReleaseSearchIndexerStatus::Skipped,
+        "{view:?}"
+    );
+    assert_eq!(
+        view.skip_reason,
+        Some(InteractiveIndexerSkipReason::QueryBudget)
+    );
+    assert_eq!(view.failure_reason_code, Some(NOT_SEARCHED));
+    assert_eq!(view.retry_after, Some(Duration::from_secs(50)));
+    assert!(view.rate_limited, "a query budget reads as a cooldown");
+    let until = view.skipped_until.expect("the next slot is known");
+    assert!(
+        until >= before + chrono::Duration::seconds(50),
+        "{until} {before}"
+    );
+}
+
+#[tokio::test]
+async fn a_raw_query_keeps_the_pages_an_indexer_answered_before_its_query_budget_ran_out() {
+    use crate::InteractiveIndexerSkipReason;
+    use crate::error_reasons::indexer_query_budget::{NOT_SEARCHED, PARTLY_SEARCHED};
+
+    let over_budget = crate::IndexerSearchOutcome::Partial {
+        empty: true,
+        reason: Some(crate::IndexerSearchIncompleteReason::QueryBudgetExhausted),
+        retry_after: Some(Duration::from_secs(40)),
+    };
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-partial",
+            vec![budget_release(
+                "Quarry.Lantern.2019.720p.WEB-DL-QUILLFOX",
+                "r1",
+            )],
+        )
+        .await
+        .with_outcome("idx-partial", over_budget)
+        .await
+        .with_outcome("idx-unasked", over_budget)
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![
+            synthetic_direct_nab_indexer_config("idx-partial", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-unasked", "newznab"),
+        ],
+    );
+
+    let start = app
+        .start_interactive_release_search(&user, query_request("quarry lantern"))
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    assert_eq!(done.results.len(), 1, "{done:?}");
+    let partial = indexer_view(&done, "idx-partial");
+    assert_eq!(
+        partial.status,
+        InteractiveReleaseSearchIndexerStatus::Completed,
+        "{partial:?}"
+    );
+    assert_eq!(partial.result_count, 1);
+    assert_eq!(partial.failure_reason_code, Some(PARTLY_SEARCHED));
+    assert_eq!(partial.retry_after, Some(Duration::from_secs(40)));
+    assert!(partial.rate_limited);
+
+    let unasked = indexer_view(&done, "idx-unasked");
+    assert_eq!(
+        unasked.status,
+        InteractiveReleaseSearchIndexerStatus::Skipped,
+        "{unasked:?}"
+    );
+    assert_eq!(
+        unasked.skip_reason,
+        Some(InteractiveIndexerSkipReason::QueryBudget)
+    );
+    assert_eq!(unasked.failure_reason_code, Some(NOT_SEARCHED));
+    assert_eq!(unasked.retry_after, Some(Duration::from_secs(40)));
+    assert!(unasked.rate_limited);
 }
 
 // ── Title subject: a whole season ──────────────────────────────────────────

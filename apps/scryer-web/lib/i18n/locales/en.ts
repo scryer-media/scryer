@@ -6799,6 +6799,10 @@ const en: LocaleDictionary = {
     "{{count}} indexer(s) failed: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) skipped: {{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} indexer(s) searched in part, over their query budget: {{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: can be asked again in {{seconds}} s",
   "title.contextReleaseSearchUnroutable.noUsenetClient":
     "{{count}} Usenet release(s) hidden, no enabled Usenet download client: {{names}}",
   "title.contextReleaseSearchUnroutable.noTorrentClient":
@@ -11938,6 +11942,11 @@ const en: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "In backoff after recent failures",
   "indexerSearch.skipReason.backedOffUntil": "In backoff until {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Does not support text search",
+  "indexerSearch.skipReason.queryBudget": "Over its query budget",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Over its query budget until {{time}}",
+  "indexerSearch.queryBudget.partlySearched":
+    "Searched in part: its query budget stopped the remaining requests. Results from the requests it sent are kept.",
   "indexerSearch.caps.fresh": "Capabilities from cached snapshot",
   "indexerSearch.caps.managed": "Capabilities from managed indexer",
   "indexerSearch.caps.refreshed": "Capabilities refreshed",

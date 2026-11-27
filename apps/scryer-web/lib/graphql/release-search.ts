@@ -27,6 +27,11 @@ export type InteractiveSearchIndexerProgress = {
    */
   failureReasonCode?: string | null;
   /**
+   * Seconds until the indexer can be asked again, when its query budget or a
+   * rate limit stopped the search and the delay is known.
+   */
+  retryAfterSeconds?: number | null;
+  /**
    * The indexer asked Scryer to slow down rather than failing. It resumes on
    * its own, so the row reads as a cooldown rather than an error.
    */
@@ -71,7 +76,9 @@ export type InteractiveSearchSkipReason =
   | "BACKED_OFF"
   | "NO_TEXT_SEARCH"
   /** A local monthly limit refused the search; `failureReasonCode` says which. */
-  | "MONTHLY_LIMIT";
+  | "MONTHLY_LIMIT"
+  /** The indexer's next query slot is beyond what the search waits for; `retryAfterSeconds` says how far. */
+  | "QUERY_BUDGET";
 
 export type InteractiveSearchProgress = {
   /**
