@@ -946,6 +946,9 @@ pub struct MediaFileCutoffSummary {
     pub episode_id: Option<String>,
     pub series_movie_link_ids: Vec<String>,
     pub quality_label: Option<String>,
+    /// The scanned resolution, which stands for the quality when the file
+    /// has no quality label.
+    pub resolution: Option<String>,
     pub created_at: String,
 }
 
@@ -960,6 +963,7 @@ impl From<&TitleMediaFile> for MediaFileCutoffSummary {
             episode_id: file.episode_id.clone(),
             series_movie_link_ids: file.series_movie_link_ids.clone(),
             quality_label: file.quality_label.clone(),
+            resolution: file.resolution.clone(),
             created_at: file.created_at.clone(),
         }
     }
@@ -4406,11 +4410,19 @@ pub fn derive_primary_quality_label(
         }
         None => {}
     }
+    stored_quality_label(quality_label, resolution).map(ToOwned::to_owned)
+}
+
+/// A stored file's quality from its stored labels alone: its quality label,
+/// or its scanned resolution when it has none.
+pub(crate) fn stored_quality_label<'a>(
+    quality_label: Option<&'a str>,
+    resolution: Option<&'a str>,
+) -> Option<&'a str> {
     quality_label
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .or_else(|| resolution.map(str::trim).filter(|label| !label.is_empty()))
-        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]

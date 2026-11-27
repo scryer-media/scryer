@@ -1504,7 +1504,7 @@ impl MediaFileRepository for MediaFileStore {
         let sql = format!(
             "SELECT mf.id, mf.file_path, mf.original_file_path, mf.scene_name,
                     mf.grabbed_release_title, fem.episode_id, {} AS series_movie_link_ids_json,
-                    mf.quality_id, mf.created_at
+                    mf.quality_id, mf.resolution, mf.created_at
              FROM media_files mf
              LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
              WHERE mf.title_id = {{}} AND {}
@@ -1534,6 +1534,7 @@ impl MediaFileRepository for MediaFileStore {
                     "media_files.series_movie_link_ids_json",
                 ),
                 quality_label: row.opt_text("quality_id")?,
+                resolution: row.opt_text("resolution")?,
                 created_at: row.timestamp_text("created_at")?,
             })
         })
@@ -4977,6 +4978,7 @@ mod tests {
                     file_path: path.into(),
                     role,
                     quality_label: Some("1080p".into()),
+                    resolution: Some("720p".into()),
                     scoring_log: Some("large unused scoring payload".repeat(4096)),
                     ..Default::default()
                 })
@@ -5015,6 +5017,12 @@ mod tests {
         expected.sort_by(|a, b| (&a.id, &a.episode_id).cmp(&(&b.id, &b.episode_id)));
         compact.sort_by(|a, b| (&a.id, &a.episode_id).cmp(&(&b.id, &b.episode_id)));
         assert_eq!(compact, expected);
+        assert!(
+            compact
+                .iter()
+                .all(|row| row.resolution.as_deref() == Some("720p")),
+            "the compact read carries the scanned resolution"
+        );
         assert_eq!(
             compact.len(),
             2,
