@@ -23,6 +23,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
+  TableActionsCell,
+  TableActionsHead,
   TableBody,
   TableCell,
   TableHead,
@@ -237,14 +239,15 @@ export function SettingsUsersSection({
                     >
                       {t("settings.temporaryPassword")}
                     </TableHead>
-                    <TableHead
+                    <TableActionsHead
+                      data-ui="settings-user-actions-head"
                       className={cn(
                         "w-44 text-right",
                         USERS_TABLE_HEADER_CELL_CLASS,
                       )}
                     >
                       {t("label.actions")}
-                    </TableHead>
+                    </TableActionsHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -468,7 +471,10 @@ export function SettingsUsersSection({
                               </span>
                             )}
                           </TableCell>
-                          <TableCell className="align-middle text-right">
+                          <TableActionsCell
+                            data-ui="settings-user-actions-cell"
+                            className="w-44 align-middle text-right"
+                          >
                             <div className="flex justify-end gap-2">
                               {!isOwnUser &&
                               (user.hasMfa || user.hasPasskey) ? (
@@ -530,7 +536,7 @@ export function SettingsUsersSection({
                                 </IconButton>
                               ) : null}
                             </div>
-                          </TableCell>
+                          </TableActionsCell>
                         </TableRow>
                       );
                     })
