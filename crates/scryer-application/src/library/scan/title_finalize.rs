@@ -72,61 +72,6 @@ struct PersistedScannedMediaFile {
     db_elapsed: Duration,
 }
 
-async fn scanned_file_matches_confirmed_bad_content(
-    app: &AppUseCase,
-    library_id: &str,
-    path: &std::path::Path,
-    existing_file_id: Option<&str>,
-) -> AppResult<bool> {
-    if let Some(size) = crate::disk::Disk::process().follow(path).await.size()
-        && !app
-            .services
-            .workflow
-            .blocklist_repo
-            .has_content_block_size(library_id, i64::try_from(size).unwrap_or(i64::MAX))
-            .await?
-    {
-        if let Some(file_id) = existing_file_id {
-            app.services
-                .workflow
-                .blocklist_repo
-                .clear_scanned_content_block(file_id)
-                .await?;
-        }
-        return Ok(false);
-    }
-    let proof = crate::fs_integrity::import_content_proof_async(path).await?;
-    let matched = app
-        .services
-        .workflow
-        .blocklist_repo
-        .is_content_blocked(
-            library_id,
-            &proof,
-            crate::fs_integrity::IMPORT_CONTENT_PROOF_SCHEME,
-        )
-        .await?;
-    if matched && let Some(file_id) = existing_file_id {
-        app.services
-            .workflow
-            .blocklist_repo
-            .note_scanned_content_block(
-                library_id,
-                file_id,
-                &proof,
-                crate::fs_integrity::IMPORT_CONTENT_PROOF_SCHEME,
-            )
-            .await?;
-    } else if let Some(file_id) = existing_file_id {
-        app.services
-            .workflow
-            .blocklist_repo
-            .clear_scanned_content_block(file_id)
-            .await?;
-    }
-    Ok(matched)
-}
-
 /// The role a movie or series movie file found on disk is recorded with when
 /// a scan inserts it. A file whose name marks it as an alternate cut is
 /// recorded Additional, so the scan's election never makes it Primary; every
@@ -204,36 +149,6 @@ async fn persist_or_reuse_scanned_media_file(
     update_error_message: &'static str,
     insert_error_message: &'static str,
 ) -> Option<PersistedScannedMediaFile> {
-    match scanned_file_matches_confirmed_bad_content(
-        app,
-        &title.library_id,
-        &stored_path_to_path_buf(&file.path),
-        existing.as_ref().map(|file| file.file_id),
-    )
-    .await
-    {
-        Ok(true) => {
-            warn!(
-                title_id = %title.id,
-                file_path = %file.path,
-                "library scan ignored a file matching a confirmed bad-media block"
-            );
-            summary.skipped += 1;
-            return None;
-        }
-        Ok(false) => {}
-        Err(error) => {
-            warn!(
-                title_id = %title.id,
-                file_path = %file.path,
-                error = %error,
-                "library scan skipped a file because bad-media block lookup failed"
-            );
-            summary.skipped += 1;
-            return None;
-        }
-    }
-
     let source_signature_scheme = snapshot
         .signature
         .as_ref()

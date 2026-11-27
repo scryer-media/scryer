@@ -2194,10 +2194,6 @@ async fn bootstrap_application(
         tracing::warn!(%error, "failed to resume confirmed media issue recycle jobs");
     }
 
-    if let Err(error) = app_use_case.resume_interrupted_media_issue_recycles().await {
-        tracing::warn!(%error, "failed to resume confirmed media issue recycle jobs");
-    }
-
     // After root reconciliation, so it reads the roots the library really has.
     application_migrator
         .spawn_empty_duplicate_title_folder_cleanup(&app_use_case, previous_version)

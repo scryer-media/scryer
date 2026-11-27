@@ -12707,6 +12707,7 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
                 validation,
                 None,
                 None,
+                &crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id),
             )
             .await;
             if manual {

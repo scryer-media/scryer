@@ -1861,6 +1861,7 @@ async fn import_additional_movie_download(
         crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
         disc_selection,
         release_evidence.release_listing_json(),
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await
     {
@@ -2363,6 +2364,7 @@ async fn import_movie_download(
         runtime_sample_validation,
         largest.disc_selection.as_ref(),
         release_evidence.release_listing_json(),
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await
     {
@@ -3371,6 +3373,7 @@ async fn import_series_movie_download(
         false,
         runtime_sample_validation,
         release_evidence.release_listing_json(),
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await
     {

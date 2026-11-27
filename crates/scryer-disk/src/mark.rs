@@ -452,6 +452,12 @@ impl Mark {
         self.facts.is_some_and(|facts| facts.links == Some(1))
     }
 
+    /// Whether the read said the file has exactly two names. An unknown
+    /// link count is not two.
+    pub fn has_two_names(&self) -> bool {
+        self.facts.is_some_and(|facts| facts.links == Some(2))
+    }
+
     /// The original version spelling used by persisted location and review rows.
     #[cfg(unix)]
     pub fn legacy_unix_version(&self) -> Option<String> {

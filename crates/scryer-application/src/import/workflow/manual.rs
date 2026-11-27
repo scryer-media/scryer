@@ -3179,6 +3179,7 @@ async fn execute_manual_series_movie_import(
         crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
         mapping.disc_selection.as_ref(),
         release_evidence.release_listing_json(),
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await
     {
@@ -3865,6 +3866,7 @@ async fn execute_manual_import_with_release_evidence_inner(
     let mut self_notified_results: HashSet<usize> = HashSet::new();
     let placed_files =
         DownloadPlacedFiles::load_for_manual_import(app, import_id, completed).await?;
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
@@ -4194,6 +4196,7 @@ async fn execute_manual_import_with_release_evidence_inner(
             false,
             mapping.disc_selection.as_ref(),
             &placed_files,
+            &bad_files,
         )
         .await
         {

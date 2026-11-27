@@ -143,6 +143,7 @@ async fn import_series_download(
     // written once after the loop. See [`DownloadBlocklistLedger`].
     let mut blocklist_ledger = DownloadBlocklistLedger::for_download(release_evidence);
     let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
     // Whether some video of a multi-video download names its own episode. An
     // unparseable video is an extra beside such a video; when none names one,
     // every video is unidentified and the download waits for manual import.
@@ -176,6 +177,7 @@ async fn import_series_download(
             a_video_names_an_episode,
             &mut blocklist_ledger,
             &placed_files,
+            &bad_files,
         )
         .await
         {
@@ -1542,6 +1544,7 @@ async fn import_single_episode_file(
     a_video_names_an_episode: bool,
     blocklist_ledger: &mut DownloadBlocklistLedger,
     placed_files: &DownloadPlacedFiles,
+    bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<EpisodeImportOutcome> {
     // The physical path is what every transfer, artifact and cleanup call sees.
     // `parse_video` differs from it only when srrdb recovered the original
@@ -1999,6 +2002,7 @@ async fn import_single_episode_file(
         additional_import,
         None,
         placed_files,
+        bad_files,
     )
     .await?;
 

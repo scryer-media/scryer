@@ -100,6 +100,8 @@ async fn execute_resolved_episode_import(
     // Library files earlier passes of this same download placed; never
     // replaced by this pass.
     placed_files: &DownloadPlacedFiles,
+    // The title's bad files, read once for the whole download.
+    bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<EpisodeImportOutcome> {
     let use_season_folders = app.resolve_use_season_folders(title).await?;
     let source_size = import_source_size(source_video).await?;
@@ -115,10 +117,7 @@ async fn execute_resolved_episode_import(
             .collect();
         let targets: std::collections::BTreeSet<_> = target_episode_ids.iter().collect();
         if mapped.is_empty() || mapped != targets {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::import::DISC_IMPORT_TARGETS_INVALID,
-                "disc import targets must exactly match its explicit episode mappings",
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::DISC_IMPORT_TARGETS_INVALID, "disc import targets must exactly match its explicit episode mappings"));
         }
     }
     let is_filler = target_episodes.iter().any(|episode| episode.is_filler);
@@ -172,6 +171,7 @@ async fn execute_resolved_episode_import(
                 ),
                 disc_selection,
                 release_listing_json,
+                bad_files,
             )
             .await
             {
@@ -517,6 +517,7 @@ async fn execute_resolved_episode_import(
         runtime_sample_validation,
         disc_selection,
         release_listing_json,
+        bad_files,
     )
     .await
     {
@@ -1136,54 +1137,7 @@ pub(crate) async fn mark_wanted_completed(
         .complete_acquisition_scope_for_title(title_id, episode_id, Some(&now), landed_import)
         .await
     {
-        Ok(true) => {
-            let mut completed_issue_ids = Vec::new();
-            if let Ok(issues) = app
-                .services
-                .workflow
-                .blocklist_repo
-                .list_media_issues_for_title(
-                    title_id,
-                    Some(scryer_domain::MediaIssueStatus::Approved),
-                    100,
-                )
-                .await
-            {
-                for issue in issues {
-                    let affected = match episode_id {
-                        None => !issue.affected_episode_ids.is_empty()
-                            || !issue.affected_series_movie_link_ids.is_empty()
-                            || title_id == issue.title_id,
-                        Some(episode_id) => issue
-                            .affected_episode_ids
-                            .iter()
-                            .any(|id| id == episode_id),
-                    };
-                    let still_searching = matches!(
-                        issue.execution_status,
-                        scryer_domain::MediaIssueExecutionStatus::Searching
-                            | scryer_domain::MediaIssueExecutionStatus::DownloadQueued
-                    );
-                    if affected
-                        && still_searching
-                        && issue.authorized_remediation
-                            == Some(scryer_domain::MediaIssueRemediation::RecycleAndSearch)
-                    {
-                        completed_issue_ids.push(issue.id);
-                    }
-                }
-            }
-            let _ = app
-                .services
-                .workflow
-                .blocklist_repo
-                .set_media_issue_execution_statuses(
-                    &completed_issue_ids,
-                    scryer_domain::MediaIssueExecutionStatus::ReplacementImported,
-                    None,
-                )
-                .await;
-        }
+        Ok(true) => {}
         Ok(false) => {}
         Err(err) => {
             tracing::warn!(error = %err, title_id = %title_id, "failed to mark wanted item completed");

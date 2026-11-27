@@ -76,7 +76,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().expect("fixture tempdir");
+        // Recovery refuses symlinked ancestors, so the fixture lives under
+        // the temp folder's real path (macOS links `/var` to `/private/var`).
+        let base = std::fs::canonicalize(std::env::temp_dir()).expect("temp dir");
+        let temp = tempfile::tempdir_in(base).expect("fixture tempdir");
         for dir in ["library-a", "library-b"] {
             std::fs::create_dir_all(temp.path().join(dir)).expect("create library root");
         }
@@ -2197,4 +2200,718 @@ async fn a_deleted_titles_entry_stays_listed_and_restorable_until_housekeeping()
 
     assert_eq!(app.purge_recycle_bins_for_housekeeping().await, 0);
     assert!(recorded_recycle_purges(&app).await.is_empty());
+}
+
+/// A recycled copy of a file marked bad for its title is not restored by
+/// default. Confirming restores it and clears the title's bad-file entry.
+#[tokio::test]
+async fn restoring_a_file_marked_bad_needs_confirmation_and_clears_the_mark() {
+    let fixture = TitleDeleteFixture::new().await;
+    let root_a = fixture.fixture.root_a();
+    let bin = root_a.join(".scryer-recycle");
+    // The recycled file sits in the kept title's own folder, so the restore
+    // passes the folder-ownership check and reaches the bad-file check.
+    let original = root_a
+        .join("Synthetic Other Feature (2002)")
+        .join("synthetic-other-feature.mkv");
+    std::fs::write(&original, "synthetic-other-feature content").unwrap();
+    let mut manifest = removal_manifest(&original);
+    manifest.title_id = Some(fixture.kept.id.clone());
+    let recycled = crate::recycle_bin::recycle_file(
+        &crate::recycle_bin::RecycleBinConfig {
+            enabled: true,
+            base_path: bin.clone(),
+            retention_days: 7,
+            cleanup_enabled: true,
+            validation_error: None,
+            source_roots: vec![root_a.clone()],
+        },
+        &original,
+        manifest,
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .unwrap()
+    .expect("file recycled");
+    let mut app = fixture.with_bin_setting(None);
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    app.services.workflow.blocklist_repo = blocklist.clone();
+    let entry_id = recycled
+        .recycled_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .unwrap()
+        .to_string();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let same_bytes = scratch.path().join("same-bytes.mkv");
+    std::fs::write(&same_bytes, "synthetic-other-feature content").unwrap();
+    let proof = crate::fs_integrity::import_content_proof_async(&same_bytes)
+        .await
+        .unwrap();
+    blocklist.entries.lock().await.push(BlocklistEntry {
+        id: "bad-file-entry".to_string(),
+        title_id: fixture.kept.id.clone(),
+        release_name: String::new(),
+        normalized_release_name: String::new(),
+        indexer_id: String::new(),
+        info_hash: None,
+        reason: None,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        content: Some(crate::media_issues::content_identity(&proof)),
+    });
+
+    let preview = app
+        .preview_restore_recycled_items(&fixture.user, vec![entry_id.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.items[0].bad_file_entry_id.as_deref(),
+        Some("bad-file-entry")
+    );
+
+    let refusal = app
+        .restore_recycled_item(&fixture.user, &entry_id)
+        .await
+        .expect_err("a bad file is not restored without confirmation");
+    let AppError::ValidationRefused { reason, facts, .. } = &refusal else {
+        panic!("expected a coded refusal, got {refusal:?}");
+    };
+    assert_eq!(
+        *reason,
+        crate::error_reasons::media::RESTORE_MATCHES_BAD_FILE
+    );
+    assert_eq!(
+        facts,
+        &vec![crate::RefusalFact::new(
+            crate::media_issues::BAD_FILE_ENTRY_ID_FACT,
+            "bad-file-entry"
+        )]
+    );
+    assert!(!original.exists());
+    assert_eq!(blocklist.entries.lock().await.len(), 1);
+
+    assert!(
+        app.restore_recycled_item_clearing_bad_file(&fixture.user, &entry_id, true)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&original).unwrap(),
+        "synthetic-other-feature content"
+    );
+    assert!(blocklist.entries.lock().await.is_empty());
+}
+
+/// A reported file's library path, its copy left in the download folder it
+/// was imported from, and unrelated files beside each.
+struct DownloadCopyFixture {
+    title: TitleDeleteFixture,
+    library_file: PathBuf,
+    library_neighbour: PathBuf,
+    download_dir: PathBuf,
+    copy: PathBuf,
+    download_neighbours: Vec<PathBuf>,
+    issue: scryer_domain::MediaIssue,
+    artifacts: Arc<RecordingImportArtifactRepo>,
+    imports: Arc<TrackingImportRepo>,
+    blocklist: Arc<MockBlocklistRepo>,
+}
+
+impl DownloadCopyFixture {
+    async fn new() -> Self {
+        let title = TitleDeleteFixture::new().await;
+        let folder = title
+            .fixture
+            .root_a()
+            .join("Synthetic Other Feature (2002)");
+        let library_file = folder.join("Synthetic Other Feature (2002).mkv");
+        let library_neighbour = folder.join("Synthetic Other Feature (2002).nfo");
+        std::fs::write(&library_file, "synthetic reported content").unwrap();
+        std::fs::write(&library_neighbour, "synthetic library neighbour").unwrap();
+        let download_dir = title
+            .fixture
+            .temp
+            .path()
+            .join("downloads")
+            .join("Synthetic.Other.Feature.2002");
+        std::fs::create_dir_all(download_dir.join("extras")).unwrap();
+        let copy = download_dir.join("Synthetic.Other.Feature.2002.mkv");
+        std::fs::write(&copy, "synthetic reported content").unwrap();
+        let download_neighbours = vec![
+            download_dir.join("Synthetic.Other.Feature.2002.nfo"),
+            download_dir.join("extras").join("synthetic-sample.mkv"),
+        ];
+        std::fs::write(&download_neighbours[0], "synthetic download neighbour").unwrap();
+        std::fs::write(&download_neighbours[1], "synthetic other content").unwrap();
+        let proof = crate::fs_integrity::import_content_proof_async(&library_file)
+            .await
+            .unwrap();
+        let (version, _) = crate::location::resolution::regular_file_snapshot(&library_file)
+            .await
+            .unwrap();
+        let now = Utc::now();
+        let issue = scryer_domain::MediaIssue {
+            id: "synthetic-report".to_string(),
+            library_id: title.kept.library_id.clone(),
+            title_id: title.kept.id.clone(),
+            media_file_id: "synthetic-media-file".to_string(),
+            file_path_snapshot: library_file.to_string_lossy().to_string(),
+            file_version: version,
+            content: crate::media_issues::content_identity(&proof),
+            reporter_user_id: title.user.id.clone(),
+            reason: scryer_domain::MediaIssueReason::Corrupted,
+            details: None,
+            remediation: scryer_domain::MediaIssueRemediation::RecycleAndSearch,
+            authorized_remediation: Some(scryer_domain::MediaIssueRemediation::RecycleAndSearch),
+            status: scryer_domain::MediaIssueStatus::Approved,
+            affected_episode_ids: Vec::new(),
+            affected_series_movie_link_ids: Vec::new(),
+            rule_decision_id: None,
+            blocklist_id: None,
+            reviewed_by_user_id: Some(title.user.id.clone()),
+            reviewed_at: Some(now.to_rfc3339()),
+            execution_status: scryer_domain::MediaIssueExecutionStatus::Recycling,
+            execution_error_code: None,
+            created_at: now.to_rfc3339(),
+            updated_at: now.to_rfc3339(),
+        };
+        let artifacts = Arc::new(RecordingImportArtifactRepo::default());
+        artifacts
+            .artifacts
+            .lock()
+            .await
+            .push(crate::ImportArtifact {
+                id: "synthetic-artifact".to_string(),
+                source_client_id: None,
+                source_system: "synthetic-client".to_string(),
+                source_ref: "synthetic-item".to_string(),
+                import_id: Some("synthetic-import".to_string()),
+                relative_path: Some("Synthetic.Other.Feature.2002.mkv".to_string()),
+                workspace_relative_path: None,
+                normalized_file_name: "synthetic.other.feature.2002.mkv".to_string(),
+                media_kind: "movie".to_string(),
+                title_id: Some(title.kept.id.clone()),
+                episode_id: None,
+                season_number: None,
+                episode_number: None,
+                result: "imported".to_string(),
+                reason_code: None,
+                imported_media_file_id: Some(issue.media_file_id.clone()),
+                created_at: now,
+            });
+        let completed = scryer_domain::CompletedDownload {
+            subtitle_paths: Vec::new(),
+            client_type: "synthetic-client".to_string(),
+            client_id: String::new(),
+            download_client_item_id: "synthetic-item".to_string(),
+            download_id: None,
+            name: "Synthetic.Other.Feature.2002".to_string(),
+            release_name: None,
+            dest_dir: download_dir.to_string_lossy().to_string(),
+            category: None,
+            size_bytes: None,
+            completed_at: None,
+            parameters: vec![],
+            posted_file_names: Vec::new(),
+        };
+        let imports = Arc::new(TrackingImportRepo::default());
+        imports.records.lock().await.push(ImportRecord {
+            id: "synthetic-import".to_string(),
+            source_client_id: None,
+            source_system: "synthetic-client".to_string(),
+            source_ref: "synthetic-item".to_string(),
+            import_type: scryer_domain::ImportType::MovieDownload,
+            status: scryer_domain::ImportStatus::Completed,
+            payload_json: serde_json::to_string(&completed).unwrap(),
+            result_json: None,
+            download_id: None,
+            import_transfer_phase: None,
+            import_transfer_bytes: None,
+            import_transfer_total_bytes: None,
+            import_transfer_started_at: None,
+            import_transfer_updated_at: None,
+            started_at: None,
+            finished_at: None,
+            created_at: now.to_rfc3339(),
+            updated_at: now.to_rfc3339(),
+        });
+        Self {
+            title,
+            library_file,
+            library_neighbour,
+            download_dir,
+            copy,
+            download_neighbours,
+            issue,
+            artifacts,
+            imports,
+            blocklist: Arc::new(MockBlocklistRepo::default()),
+        }
+    }
+
+    fn app(&self, bin: Option<&Path>) -> AppUseCase {
+        let mut app = self.title.with_bin_setting(bin);
+        app.services.workflow.import_artifacts = self.artifacts.clone();
+        app.services.workflow.imports = self.imports.clone();
+        app.services.workflow.blocklist_repo = self.blocklist.clone();
+        app
+    }
+
+    fn assert_neighbours_kept(&self) {
+        assert_eq!(
+            std::fs::read_to_string(&self.library_neighbour).unwrap(),
+            "synthetic library neighbour"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&self.download_neighbours[0]).unwrap(),
+            "synthetic download neighbour"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&self.download_neighbours[1]).unwrap(),
+            "synthetic other content"
+        );
+    }
+
+    /// Make the download copy the library file's second name, and return
+    /// the report as it would be filed against the linked file.
+    #[cfg(unix)]
+    async fn link_copy(&self) -> scryer_domain::MediaIssue {
+        std::fs::remove_file(&self.copy).unwrap();
+        std::fs::hard_link(&self.library_file, &self.copy).unwrap();
+        let (version, _) = crate::location::resolution::regular_file_snapshot(&self.library_file)
+            .await
+            .unwrap();
+        let mut issue = self.issue.clone();
+        issue.file_version = version;
+        issue
+    }
+
+    fn bin(&self) -> PathBuf {
+        self.title.fixture.root_a().join(".scryer-recycle")
+    }
+
+    /// How many files in the bin hold the reported content.
+    fn recycled_copies(&self) -> usize {
+        snapshot_tree(&self.bin())
+            .into_iter()
+            .filter(|(path, bytes)| {
+                bytes.as_deref() == Some(b"synthetic reported content".as_slice())
+                    && path.extension().is_some_and(|ext| ext == "mkv")
+            })
+            .count()
+    }
+}
+
+/// The receipt of a reported file's recycle when only a separate copy
+/// follows it; the separate copy's step does not read it.
+fn separate_copy_receipt(
+    issue: &scryer_domain::MediaIssue,
+) -> crate::recycle_bin::MediaIssueRecycleReceipt {
+    crate::recycle_bin::MediaIssueRecycleReceipt {
+        file: crate::recycle_bin::PreparedRecycleFile {
+            entry_id: "synthetic-entry".to_string(),
+            original_path: issue.file_path_snapshot.clone(),
+            recycled_path: issue.file_path_snapshot.clone(),
+            source_operation_id: issue.id.clone(),
+        },
+        linked_copy: None,
+    }
+}
+
+/// Run the reported file's own step of a confirmed recycle: reserve its
+/// entry, save the receipt and move it, allowing `linked_copy` as its other
+/// name.
+async fn recycle_reported_name(
+    app: &AppUseCase,
+    issue: &scryer_domain::MediaIssue,
+    linked_copy: Option<&Path>,
+) -> AppResult<crate::recycle_bin::MediaIssueRecycleReceipt> {
+    let (config, root) = app.media_issue_bin_config(issue).await?;
+    let path = PathBuf::from(&issue.file_path_snapshot);
+    let mut manifest = crate::recycle_bin::RecycleManifest::pending_upgrade(
+        issue.file_path_snapshot.clone(),
+        issue.media_file_id.clone(),
+        issue.content.size_bytes,
+        issue.title_id.clone(),
+        Some(root.to_string_lossy().to_string()),
+    );
+    manifest.source_operation_id = Some(issue.id.clone());
+    let prepared = crate::recycle_bin::prepare_conflict_recycle(&config, &path, manifest).await?;
+    let receipt = crate::recycle_bin::MediaIssueRecycleReceipt {
+        file: prepared,
+        linked_copy: None,
+    };
+    crate::recycle_bin::execute_new_conflict_recycle(
+        &config,
+        &path,
+        &receipt.file,
+        &issue.file_version,
+        linked_copy,
+    )
+    .await?;
+    Ok(receipt)
+}
+
+fn separate(version: &str) -> crate::media_issues::ConfirmedDownloadCopy<'_> {
+    crate::media_issues::ConfirmedDownloadCopy {
+        version,
+        linked: false,
+    }
+}
+
+fn linked(version: &str) -> crate::media_issues::ConfirmedDownloadCopy<'_> {
+    crate::media_issues::ConfirmedDownloadCopy {
+        version,
+        linked: true,
+    }
+}
+
+/// The download copy is found only at the path the import recorded, with the
+/// reported content, and the confirmed recycle moves exactly that file into
+/// the reported file's bin.
+#[tokio::test]
+async fn a_confirmed_recycle_moves_the_download_copy_and_keeps_its_neighbours() {
+    let fixture = DownloadCopyFixture::new().await;
+    let app = fixture.app(None);
+
+    let copy = app
+        .media_issue_download_copy(&fixture.issue, None)
+        .await
+        .unwrap()
+        .expect("the copy in the download folder is found");
+    assert_eq!(copy.path, fixture.copy);
+    assert_eq!(copy.download_dir, fixture.download_dir);
+    assert!(!copy.linked);
+
+    app.recycle_media_issue_download_copy(
+        &fixture.issue,
+        separate(&copy.version),
+        &separate_copy_receipt(&fixture.issue),
+    )
+    .await
+    .unwrap();
+
+    assert!(!fixture.copy.exists());
+    assert_eq!(
+        std::fs::read_to_string(&fixture.library_file).unwrap(),
+        "synthetic reported content"
+    );
+    fixture.assert_neighbours_kept();
+    assert_eq!(fixture.recycled_copies(), 1);
+}
+
+/// A copy that changed after the preview, or whose content is not the
+/// reported content, is left where it is.
+#[tokio::test]
+async fn a_changed_or_different_download_copy_is_left_in_place() {
+    let fixture = DownloadCopyFixture::new().await;
+    let app = fixture.app(None);
+
+    app.recycle_media_issue_download_copy(
+        &fixture.issue,
+        separate("synthetic-stale-version"),
+        &separate_copy_receipt(&fixture.issue),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&fixture.copy).unwrap(),
+        "synthetic reported content"
+    );
+
+    std::fs::write(&fixture.copy, "synthetic replaced content").unwrap();
+    assert!(
+        app.media_issue_download_copy(&fixture.issue, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    fixture.assert_neighbours_kept();
+}
+
+/// A recorded relative path that climbs out of the download folder names
+/// nothing, even when a file with the reported content sits there.
+#[tokio::test]
+async fn a_recorded_path_outside_the_download_folder_names_no_copy() {
+    let fixture = DownloadCopyFixture::new().await;
+    let outside = fixture.download_dir.parent().unwrap().join("outside.mkv");
+    std::fs::write(&outside, "synthetic reported content").unwrap();
+    fixture.artifacts.artifacts.lock().await[0].relative_path = Some("../outside.mkv".to_string());
+    let app = fixture.app(None);
+
+    assert!(
+        app.media_issue_download_copy(&fixture.issue, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(outside.exists());
+}
+
+/// When the bin refuses the copy, the recycle fails and the copy stays.
+#[tokio::test]
+async fn a_refused_download_copy_recycle_fails_and_keeps_the_copy() {
+    let fixture = DownloadCopyFixture::new().await;
+    // A custom bin inside a library root is refused.
+    let unsafe_bin = fixture.title.fixture.root_b().join("synthetic-bin");
+    let app = fixture.app(Some(&unsafe_bin));
+    let copy = app
+        .media_issue_download_copy(&fixture.issue, None)
+        .await
+        .unwrap()
+        .expect("copy found");
+
+    app.recycle_media_issue_download_copy(
+        &fixture.issue,
+        separate(&copy.version),
+        &separate_copy_receipt(&fixture.issue),
+    )
+    .await
+    .expect_err("an unsafe bin refuses the copy");
+
+    assert_eq!(
+        std::fs::read_to_string(&fixture.copy).unwrap(),
+        "synthetic reported content"
+    );
+    assert!(!unsafe_bin.exists());
+    fixture.assert_neighbours_kept();
+}
+
+/// A download copy hard-linked to the reported file counts only as that
+/// file's one other name, proven by its file number; with a third name it
+/// counts as nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hard_linked_download_copy_counts_only_as_the_reported_files_other_name() {
+    let fixture = DownloadCopyFixture::new().await;
+    let issue = fixture.link_copy().await;
+    let app = fixture.app(None);
+    let (_, library_mark) =
+        crate::location::resolution::regular_file_snapshot(&fixture.library_file)
+            .await
+            .unwrap();
+
+    assert!(
+        app.media_issue_download_copy(&issue, None)
+            .await
+            .unwrap()
+            .is_none(),
+        "a second name is never a separate copy"
+    );
+    let copy = app
+        .media_issue_download_copy(&issue, Some(&library_mark))
+        .await
+        .unwrap()
+        .expect("the linked copy is the reported file's other name");
+    assert!(copy.linked);
+    assert_eq!(copy.path, fixture.copy);
+
+    // An unrelated file with the same content is not the other name.
+    let unrelated = fixture.download_dir.join("synthetic-unrelated.mkv");
+    std::fs::write(&unrelated, "synthetic reported content").unwrap();
+    let (_, unrelated_mark) = crate::location::resolution::regular_file_snapshot(&unrelated)
+        .await
+        .unwrap();
+    assert!(
+        app.media_issue_download_copy(&issue, Some(&unrelated_mark))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let third = fixture.download_dir.join("synthetic-third-name.mkv");
+    std::fs::hard_link(&fixture.library_file, &third).unwrap();
+    let (_, library_mark) =
+        crate::location::resolution::regular_file_snapshot(&fixture.library_file)
+            .await
+            .unwrap();
+    assert!(
+        app.media_issue_download_copy(&issue, Some(&library_mark))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(fixture.copy.exists() && third.exists() && fixture.library_file.exists());
+    fixture.assert_neighbours_kept();
+}
+
+/// With both names confirmed, the reported file and its linked download copy
+/// each go to the bin, and nothing beside them moves.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_confirmed_linked_pair_recycles_both_names_and_keeps_neighbours() {
+    let fixture = DownloadCopyFixture::new().await;
+    let issue = fixture.link_copy().await;
+    let app = fixture.app(None);
+    let (_, library_mark) =
+        crate::location::resolution::regular_file_snapshot(&fixture.library_file)
+            .await
+            .unwrap();
+    let copy = app
+        .media_issue_download_copy(&issue, Some(&library_mark))
+        .await
+        .unwrap()
+        .expect("linked copy");
+
+    let receipt = recycle_reported_name(&app, &issue, Some(&fixture.copy))
+        .await
+        .unwrap();
+    assert!(!fixture.library_file.exists());
+    assert!(
+        fixture.copy.exists(),
+        "the reported file's step moves one name"
+    );
+
+    app.recycle_media_issue_download_copy(&issue, linked(&copy.version), &receipt)
+        .await
+        .unwrap();
+
+    assert!(!fixture.copy.exists());
+    assert_eq!(fixture.recycled_copies(), 2);
+    fixture.assert_neighbours_kept();
+    let saved: crate::recycle_bin::MediaIssueRecycleReceipt = serde_json::from_str(
+        &fixture
+            .blocklist
+            .get_media_issue_recycle_receipt(&issue.id)
+            .await
+            .unwrap()
+            .expect("receipt saved"),
+    )
+    .unwrap();
+    assert!(
+        saved.linked_copy.is_some(),
+        "the copy's entry was reserved first"
+    );
+}
+
+/// Without a proven linked copy, a reported file with a second name is
+/// moved back and both names stay: a third name, or no linked copy named.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reported_file_with_an_unconfirmed_or_third_name_is_not_recycled() {
+    let fixture = DownloadCopyFixture::new().await;
+    let issue = fixture.link_copy().await;
+    let app = fixture.app(None);
+
+    recycle_reported_name(&app, &issue, None)
+        .await
+        .expect_err("a second name needs the confirmed linked copy");
+    assert!(fixture.library_file.exists() && fixture.copy.exists());
+
+    let third = fixture.download_dir.join("synthetic-third-name.mkv");
+    std::fs::hard_link(&fixture.library_file, &third).unwrap();
+    let (version, _) = crate::location::resolution::regular_file_snapshot(&fixture.library_file)
+        .await
+        .unwrap();
+    let mut issue = issue;
+    issue.file_version = version;
+    recycle_reported_name(&app, &issue, Some(&fixture.copy))
+        .await
+        .expect_err("a third name is refused even with the linked copy named");
+    assert!(fixture.library_file.exists() && fixture.copy.exists() && third.exists());
+    assert_eq!(fixture.recycled_copies(), 0);
+    fixture.assert_neighbours_kept();
+}
+
+/// A linked copy that changed after its preview, or gained another name, is
+/// left in place.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_copy_that_changed_after_its_preview_is_left_in_place() {
+    let fixture = DownloadCopyFixture::new().await;
+    let issue = fixture.link_copy().await;
+    let app = fixture.app(None);
+    let (_, library_mark) =
+        crate::location::resolution::regular_file_snapshot(&fixture.library_file)
+            .await
+            .unwrap();
+    let copy = app
+        .media_issue_download_copy(&issue, Some(&library_mark))
+        .await
+        .unwrap()
+        .expect("linked copy");
+    let receipt = recycle_reported_name(&app, &issue, Some(&fixture.copy))
+        .await
+        .unwrap();
+
+    app.recycle_media_issue_download_copy(&issue, linked("0:0:0:0:0:0:0"), &receipt)
+        .await
+        .unwrap();
+    assert!(fixture.copy.exists(), "a stale version leaves the copy");
+
+    let third = fixture.download_dir.join("synthetic-third-name.mkv");
+    std::fs::hard_link(&fixture.copy, &third).unwrap();
+    app.recycle_media_issue_download_copy(&issue, linked(&copy.version), &receipt)
+        .await
+        .unwrap();
+    assert!(fixture.copy.exists() && third.exists());
+    assert_eq!(fixture.recycled_copies(), 1);
+    fixture.assert_neighbours_kept();
+}
+
+/// When the copy's step fails after the reported file was recycled, the
+/// reported file waits in the bin under its receipt and the copy stays; the
+/// retry recovers the reported file from the receipt and then moves the copy.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_linked_copy_step_leaves_a_state_the_retry_finishes() {
+    let fixture = DownloadCopyFixture::new().await;
+    let issue = fixture.link_copy().await;
+    let app = fixture.app(None);
+    let (_, library_mark) =
+        crate::location::resolution::regular_file_snapshot(&fixture.library_file)
+            .await
+            .unwrap();
+    let copy = app
+        .media_issue_download_copy(&issue, Some(&library_mark))
+        .await
+        .unwrap()
+        .expect("linked copy");
+    let receipt = recycle_reported_name(&app, &issue, Some(&fixture.copy))
+        .await
+        .unwrap();
+    fixture
+        .blocklist
+        .save_media_issue_recycle_receipt(&issue.id, &serde_json::to_string(&receipt).unwrap())
+        .await
+        .unwrap();
+
+    fixture
+        .blocklist
+        .fail_writes
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    app.recycle_media_issue_download_copy(&issue, linked(&copy.version), &receipt)
+        .await
+        .expect_err("the copy's receipt could not be saved, so it does not move");
+    assert!(fixture.copy.exists());
+    assert_eq!(fixture.recycled_copies(), 1);
+    fixture
+        .blocklist
+        .fail_writes
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // The retry: the reported file is recovered from its receipt with the
+    // linked copy as its proven other name, then the copy moves.
+    let saved: crate::recycle_bin::MediaIssueRecycleReceipt = serde_json::from_str(
+        &fixture
+            .blocklist
+            .get_media_issue_recycle_receipt(&issue.id)
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        app.finish_recovered_media_issue_recycle(&issue, &saved, Some(linked(&copy.version)))
+            .await
+            .unwrap()
+    );
+    app.recycle_media_issue_download_copy(&issue, linked(&copy.version), &saved)
+        .await
+        .unwrap();
+    assert!(!fixture.copy.exists() && !fixture.library_file.exists());
+    assert_eq!(fixture.recycled_copies(), 2);
+    fixture.assert_neighbours_kept();
 }

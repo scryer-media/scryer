@@ -66,6 +66,60 @@ pub(crate) struct PostDownloadAcquisitionDecision {
     pub scoring_log: Option<String>,
 }
 
+/// The title's bad-file content identities for one import unit of work.
+///
+/// Read at most once, by the first file the gate prepares, so a season pack
+/// costs one indexed read rather than one per episode. A failed read is not
+/// kept: that file is held, and the next file tries again.
+pub(crate) struct TitleBadFiles {
+    title_id: String,
+    identities: tokio::sync::OnceCell<Vec<scryer_domain::BlocklistContentIdentity>>,
+}
+
+impl TitleBadFiles {
+    pub(crate) fn for_title(title_id: &str) -> Self {
+        Self {
+            title_id: title_id.to_string(),
+            identities: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Whether the proven content matches one of the title's bad files.
+    async fn matches(
+        &self,
+        app: &AppUseCase,
+        title_id: &str,
+        proof: &scryer_domain::ImportContentProof,
+    ) -> crate::AppResult<bool> {
+        if title_id != self.title_id {
+            // A caller handed another title's set; never judge one title's
+            // file by another's entries.
+            let identity = crate::media_issues::content_identity(proof);
+            return Ok(app
+                .services
+                .workflow
+                .blocklist_repo
+                .find_content_block(title_id, &identity)
+                .await?
+                .is_some());
+        }
+        let identities = self
+            .identities
+            .get_or_try_init(|| async {
+                app.services
+                    .workflow
+                    .blocklist_repo
+                    .list_content_identities_for_title(&self.title_id)
+                    .await
+                    .map(|rows| rows.into_iter().map(|(_, identity)| identity).collect())
+            })
+            .await?;
+        Ok(identities
+            .iter()
+            .any(|identity| crate::media_issues::content_matches_proof(identity, proof)))
+    }
+}
+
 #[derive(Debug)]
 pub struct ImportedFileRejection {
     pub message: String,
@@ -90,12 +144,12 @@ impl ImportedFileRejection {
                 | DISC_REVIEW_REQUIRED_CODE
                 | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
                 | POST_DOWNLOAD_RULE_ERROR_CODE
+                | crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
                 | crate::error_reasons::media::UNVERIFIED_REPLACEMENT
                 | crate::error_reasons::media::REFERENCES_REQUIRE_REVIEW
                 | crate::error_reasons::media::PROBE_IO_FAILED
                 | crate::error_reasons::media::PROBE_MALFORMED
                 | crate::error_reasons::media::PROBE_ENCRYPTED
-                | crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
         ) || self
             .blocking_rule_codes
             .iter()
@@ -172,11 +226,14 @@ fn import_source_snapshot_unavailable_rejection(
     }
 }
 
+/// The file is a copy of one the operator confirmed bad. The import is refused
+/// and the file left where it is; the release is blocklisted when its name is
+/// known.
 fn content_block_rejection(path: &Path) -> ImportedFileRejection {
     use crate::error_reasons::media;
     ImportedFileRejection {
         message: format!(
-            "import content matches a confirmed bad-media block: {}",
+            "import content matches a file confirmed bad for this title: {}",
             path.display()
         ),
         recycle_reason: media::CONTENT_BLOCK_MATCHED,
@@ -185,6 +242,8 @@ fn content_block_rejection(path: &Path) -> ImportedFileRejection {
     }
 }
 
+/// The bad-file entries could not be read, so the import is held rather than
+/// let through unchecked.
 fn content_block_lookup_rejection(
     path: &Path,
     detail: impl std::fmt::Display,
@@ -192,7 +251,7 @@ fn content_block_lookup_rejection(
     use crate::error_reasons::media;
     ImportedFileRejection {
         message: format!(
-            "could not verify bad-media content block for {}: {detail}",
+            "could not check {} against the title's bad files: {detail}",
             path.display()
         ),
         recycle_reason: media::CONTENT_BLOCK_LOOKUP_FAILED,
@@ -1530,6 +1589,7 @@ pub(crate) async fn prepare_import_candidate(
     is_filler: bool,
     runtime_sample_validation: RuntimeSampleValidation,
     release_listing_json: Option<&str>,
+    bad_files: &TitleBadFiles,
 ) -> Result<PreparedImportCandidate, ImportedFileRejection> {
     prepare_import_candidate_with_disc_selection(
         app,
@@ -1544,6 +1604,7 @@ pub(crate) async fn prepare_import_candidate(
         runtime_sample_validation,
         None,
         release_listing_json,
+        bad_files,
     )
     .await
 }
@@ -1565,6 +1626,7 @@ pub(crate) async fn prepare_import_candidate_with_disc_selection(
     runtime_sample_validation: RuntimeSampleValidation,
     disc_selection: Option<&scryer_media_types::DiscSelection>,
     release_listing_json: Option<&str>,
+    bad_files: &TitleBadFiles,
 ) -> Result<PreparedImportCandidate, ImportedFileRejection> {
     if disc_selection.is_some() && !scryer_domain::is_disc_image(path) {
         return Err(disc_review_rejection(
@@ -1643,19 +1705,10 @@ pub(crate) async fn prepare_import_candidate_with_disc_selection(
             ));
         }
         let accepted = accepted?;
-
-        let proof = crate::fs_integrity::import_content_proof_async(path)
-            .await
-            .map_err(|error| content_block_lookup_rejection(path, error))?;
-        match app
-            .services
-            .workflow
-            .blocklist_repo
-            .is_content_blocked(
-                &title.library_id,
-                &proof,
-                crate::fs_integrity::IMPORT_CONTENT_PROOF_SCHEME,
-            )
+        // The proof is the stable snapshot's own sample; no extra read of the
+        // file. The entries are read once per unit of work.
+        match bad_files
+            .matches(app, &title.id, &source_snapshot_after.proof)
             .await
         {
             Ok(true) => return Err(content_block_rejection(path)),
