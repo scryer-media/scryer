@@ -621,12 +621,26 @@ pub(crate) async fn title_folder_is_outside_its_library(
             })
             .unwrap_or_default()
     };
-    if library_roots.is_empty() {
-        return Ok(false);
+    Ok(folder_is_outside_roots(
+        folder_path,
+        library_roots.iter().map(String::as_str),
+    ))
+}
+
+/// Whether `folder_path` lies strictly inside none of `roots`. With no roots
+/// there is nothing to hold the folder against, so it is not outside.
+pub(crate) fn folder_is_outside_roots<'a>(
+    folder_path: &str,
+    roots: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    let mut any_root = false;
+    for root in roots {
+        if crate::title_folder_rules::path_is_strictly_within(folder_path, root) {
+            return false;
+        }
+        any_root = true;
     }
-    Ok(!library_roots
-        .iter()
-        .any(|root| crate::title_folder_rules::path_is_strictly_within(folder_path, root)))
+    any_root
 }
 
 /// Whether a title's recorded folder is a library root or holds one.
