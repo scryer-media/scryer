@@ -760,6 +760,7 @@ async fn graphql_title_history_filters_skipped_import_by_episode_id() {
                 reason: Some("duplicate file already exists".to_string()),
                 skip_reason: Some(scryer_domain::ImportSkipReason::DuplicateFile),
                 episode_ids: vec![episode.id.clone()],
+                reason_code: None,
             }),
         })
         .await

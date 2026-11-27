@@ -860,6 +860,26 @@ async fn execute_resolved_episode_import(
                 });
             }
         }
+        // The upgrade itself holds over a marked primary incumbent; the
+        // other files it supersedes are checked here, before anything moves.
+        if let Some(rejection) = bad_files
+            .upgrade_refusal(
+                app,
+                &additional_superseded
+                    .iter()
+                    .map(|incumbent| &incumbent.media_file)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+        {
+            return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
+                rejection,
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: None,
+                episode_ids: target_episode_ids.clone(),
+            });
+        }
         let replacement_media_root = title_folder_path
             .parent()
             .and_then(|path| path.to_str())
@@ -897,6 +917,7 @@ async fn execute_resolved_episode_import(
             import_mode,
             announced_size_bytes,
             completed,
+            bad_files,
         )
         .await
         {

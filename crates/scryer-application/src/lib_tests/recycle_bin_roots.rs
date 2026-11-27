@@ -2304,6 +2304,79 @@ async fn restoring_a_file_marked_bad_needs_confirmation_and_clears_the_mark() {
     assert!(blocklist.entries.lock().await.is_empty());
 }
 
+/// A confirmed restore of a file marked bad that then fails to move leaves
+/// the file in the bin and the mark in place.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_confirmed_restore_keeps_the_bad_file_mark() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = TitleDeleteFixture::new().await;
+    let root_a = fixture.fixture.root_a();
+    let bin = root_a.join(".scryer-recycle");
+    let folder = root_a.join("Synthetic Other Feature (2002)");
+    let original = folder.join("synthetic-other-feature.mkv");
+    std::fs::write(&original, "synthetic-other-feature content").unwrap();
+    let proof = crate::fs_integrity::import_content_proof_async(&original)
+        .await
+        .unwrap();
+    let mut manifest = removal_manifest(&original);
+    manifest.title_id = Some(fixture.kept.id.clone());
+    let recycled = crate::recycle_bin::recycle_file(
+        &crate::recycle_bin::RecycleBinConfig {
+            enabled: true,
+            base_path: bin.clone(),
+            retention_days: 7,
+            cleanup_enabled: true,
+            validation_error: None,
+            source_roots: vec![root_a.clone()],
+        },
+        &original,
+        manifest,
+        crate::location::model::VerificationDepth::Full,
+    )
+    .await
+    .unwrap()
+    .expect("file recycled");
+    let mut app = fixture.with_bin_setting(None);
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    app.services.workflow.blocklist_repo = blocklist.clone();
+    blocklist.entries.lock().await.push(BlocklistEntry {
+        id: "bad-file-entry".to_string(),
+        title_id: fixture.kept.id.clone(),
+        release_name: String::new(),
+        normalized_release_name: String::new(),
+        indexer_id: String::new(),
+        info_hash: None,
+        reason: None,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        content: Some(crate::media_issues::content_identity(&proof)),
+    });
+    let entry_id = recycled
+        .recycled_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .unwrap()
+        .to_string();
+
+    // The title folder refuses new files, so the move back fails.
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = app
+        .restore_recycled_item_clearing_bad_file(&fixture.user, &entry_id, true)
+        .await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "the restore cannot write into the folder");
+    assert!(!original.exists());
+    assert!(recycled.recycled_path.exists(), "the file stays in the bin");
+    assert_eq!(
+        blocklist.entries.lock().await.len(),
+        1,
+        "the mark stays until the file is back"
+    );
+}
+
 /// A reported file's library path, its copy left in the download folder it
 /// was imported from, and unrelated files beside each.
 struct DownloadCopyFixture {

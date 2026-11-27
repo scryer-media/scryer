@@ -38,7 +38,7 @@ async fn media_issue_graphql_permissions_and_stale_identity() {
         "mutation($input: SubmitMediaIssueInput!) {
             submitMediaIssue(input: $input) { id status affectedEpisodeIds authorizedRemediation }
         }",
-        json!({"input": {"mediaFileId": file_id, "reasonCode": "bad_media", "remediation": "MARK_BAD"}}),
+        json!({"input": {"mediaFileId": file_id, "reasonCode": "corrupted", "remediation": "MARK_BAD"}}),
         requester.clone(),
     ).await;
     let report = serde_json::to_value(report).unwrap();
@@ -65,6 +65,145 @@ async fn media_issue_graphql_permissions_and_stale_identity() {
         "{stale}"
     );
     assert_eq!(std::fs::read(path).unwrap(), vec![b'x'; len]);
+}
+
+/// A file marked bad stays the scope's file: the wanted pass does not count
+/// the scope as missing, and an upgrade import for the scope is held rather
+/// than recycling the marked file.
+#[tokio::test]
+async fn a_file_marked_bad_survives_the_wanted_pass_and_an_upgrade_import() {
+    use scryer_application::media_issues::SubmitMediaIssueInput;
+    use scryer_application::testing::{UpgradeForTestInput, execute_upgrade_for_test};
+    use scryer_application::upgrade::UpgradeResult;
+    use scryer_infrastructure_library::media::libraries::state_store::BlocklistStore;
+
+    let ctx = TestContext::new().await;
+    let fixture = reassign_fixture(&ctx, "Marked Bad Fixture", "97109").await;
+    let episode = &fixture.episodes[0];
+    let (file_id, path) = seed_primary_file(&ctx, &fixture, "synthetic.mkv", episode).await;
+    let store = std::sync::Arc::new(BlocklistStore::new(ctx.db.datastore()));
+    let app = ctx.app.with_test_overrides(|builder| {
+        builder
+            .with_blocklist_repo(store.clone())
+            .with_media_files(std::sync::Arc::new(ctx.media_files.clone()))
+            .with_file_importer(std::sync::Arc::new(
+                scryer_infrastructure_workflow::workflow::file_importer::FsFileImporter::new(),
+            ))
+    });
+    let operator = app.find_or_create_default_user().await.expect("operator");
+    let with_library_permissions = |permissions: &[LibraryPermission]| {
+        let mut actor = operator.clone();
+        actor.authorization = scryer_domain::UserAuthorization {
+            libraries: std::collections::HashMap::from([(
+                fixture.title.library_id.clone(),
+                scryer_domain::LibraryPermissionMask::from_permissions(permissions.iter().copied()),
+            )]),
+            loaded: true,
+            ..Default::default()
+        };
+        actor
+    };
+    let requester =
+        with_library_permissions(&[LibraryPermission::View, LibraryPermission::Request]);
+    let admin =
+        with_library_permissions(&[LibraryPermission::View, LibraryPermission::ManageTitles]);
+    let issue = app
+        .submit_media_issue(
+            &requester,
+            SubmitMediaIssueInput {
+                media_file_id: file_id.clone(),
+                reason: scryer_domain::MediaIssueReason::Corrupted,
+                details: None,
+                remediation: scryer_domain::MediaIssueRemediation::MarkBad,
+            },
+        )
+        .await
+        .expect("submit report");
+    if issue.status == scryer_domain::MediaIssueStatus::Pending {
+        app.approve_media_issue(&admin, &issue.id)
+            .await
+            .expect("approve report");
+    }
+    let marked = scryer_application::BlocklistRepository::marked_bad_file_ids(
+        store.as_ref(),
+        std::slice::from_ref(&file_id),
+    )
+    .await
+    .expect("read marked files");
+    assert!(marked.contains(&file_id), "the file is marked bad");
+
+    let missing = ctx
+        .media_files
+        .list_missing_scope_candidates_for_title(Some(&fixture.title.id))
+        .await
+        .expect("wanted pass candidates");
+    let missing_episodes: Vec<&str> = missing
+        .episodes
+        .iter()
+        .map(|candidate| candidate.episode_id.as_str())
+        .collect();
+    assert!(
+        missing_episodes.contains(&fixture.episodes[1].id.as_str()),
+        "an episode without a file is missing: {missing_episodes:?}"
+    );
+    assert!(
+        !missing_episodes.contains(&episode.id.as_str()),
+        "the marked file still covers its episode"
+    );
+
+    let existing = ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .expect("list files")
+        .into_iter()
+        .find(|file| file.id == file_id)
+        .expect("marked file row");
+    let source_dir = tempfile::tempdir().expect("source dir");
+    let source = source_dir.path().join("synthetic.upgrade.mkv");
+    std::fs::write(&source, b"synthetic upgrade content").expect("write source");
+    let recycle_dir = tempfile::tempdir().expect("recycle dir");
+    let media_root = fixture._media_root.path().to_string_lossy().into_owned();
+    let recycle_config = scryer_application::recycle_bin::RecycleBinConfig {
+        enabled: true,
+        base_path: recycle_dir.path().to_path_buf(),
+        retention_days: 7,
+        cleanup_enabled: true,
+        validation_error: None,
+        source_roots: vec![fixture._media_root.path().to_path_buf()],
+    };
+    let result = execute_upgrade_for_test(
+        &app,
+        UpgradeForTestInput {
+            actor: &admin,
+            title: &fixture.title,
+            existing_file: &existing,
+            source_path: &source,
+            dest_path: &fixture.season_dir.join("synthetic.upgrade.mkv"),
+            parsed: scryer_application::parse_release_metadata("Synthetic.S01E01.2160p.WEB-DL"),
+            final_score: 900,
+            target_episode_ids: std::slice::from_ref(&episode.id),
+            media_root: Some(&media_root),
+            recycle_config: &recycle_config,
+        },
+    )
+    .await
+    .expect("upgrade attempt");
+    let UpgradeResult::Rejected(rejection) = result else {
+        panic!("an upgrade over a marked file is held");
+    };
+    assert_eq!(rejection.recycle_reason, "MEDIA_UPGRADE_REPLACES_BAD_FILE");
+    assert!(path.exists(), "the marked file stays on disk");
+    assert!(source.exists(), "the upgrade source is left in place");
+    assert!(
+        ctx.media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .expect("list files")
+            .iter()
+            .any(|file| file.id == file_id),
+        "the marked file stays in the catalog"
+    );
 }
 
 /// One synthetic series with three episodes in season one, a recorded title

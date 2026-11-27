@@ -107,10 +107,16 @@ function parseDataJson(raw: unknown): Record<string, unknown> | null {
 type HistoryEventDetailEntry = {
   key: string;
   value: string;
+  /** Stable code beside the reason; the reason text is the fallback. */
+  code?: string | null;
 };
 
 const DOWNLOAD_REASON_KEYS: Readonly<Record<string, string>> = {
   DOWNLOAD_CLIENT_ITEM_MISSING: "history.downloadMissing",
+};
+
+const REASON_CODE_KEYS: Readonly<Record<string, string>> = {
+  MEDIA_IMPORT_MATCHES_BAD_FILE: "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE",
 };
 
 export function buildHistoryEventDetail(event: TitleHistoryEvent): {
@@ -140,7 +146,13 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
     event.skipReason ? { key: "skip_reason", value: event.skipReason } : null,
     event.sourcePath ? { key: "source_path", value: event.sourcePath } : null,
     event.destPath ? { key: "dest_path", value: event.destPath } : null,
-    event.failureReason ? { key: "reason", value: event.failureReason } : null,
+    event.failureReason
+      ? {
+          key: "reason",
+          value: event.failureReason,
+          code: event.failureReasonCode,
+        }
+      : null,
     event.blocklistReason
       ? { key: "blocklist_reason", value: event.blocklistReason }
       : null,
@@ -238,7 +250,7 @@ export function HistoryEventDetailContent({
           ) : null}
         </div>
       ) : null}
-      {structuredDetails.map(({ key, value }) => (
+      {structuredDetails.map(({ key, value, code }) => (
         <div
           key={key}
           className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]"
@@ -250,7 +262,9 @@ export function HistoryEventDetailContent({
               key.endsWith("_path") && "font-[family-name:var(--font-code)]",
             )}
           >
-            {key === "reason" && DOWNLOAD_REASON_KEYS[value]
+            {key === "reason" && code && REASON_CODE_KEYS[code]
+              ? t(REASON_CODE_KEYS[code])
+              : key === "reason" && DOWNLOAD_REASON_KEYS[value]
               ? t(DOWNLOAD_REASON_KEYS[value])
               : key === "skip_reason" && importSkipReasonLabelKey(String(value))
                 ? t(importSkipReasonLabelKey(String(value))!)

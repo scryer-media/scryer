@@ -100,6 +100,7 @@ async fn notification_broadcast_wakes_once_for_notification_batches() {
                     reason: Some("not parsable".to_string()),
                     skip_reason: None,
                     episode_ids: Vec::new(),
+                    reason_code: None,
                 }),
             ),
             crate::domain_events::new_global_domain_event(

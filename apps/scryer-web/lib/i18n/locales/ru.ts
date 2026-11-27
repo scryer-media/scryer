@@ -61,9 +61,9 @@ const ru: LocaleDictionary = {
     "Структура медиафайла повреждена. Проверьте исходный файл перед импортом.",
   "error.reason.MEDIA_PROBE_ENCRYPTED":
     "Медиафайл зашифрован, и его не удалось проверить.",
-  "error.reason.MEDIA_CONTENT_BLOCK_MATCHED":
+  "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE":
     "Этот файл помечен плохим для тайтла, поэтому он не импортирован.",
-  "error.reason.MEDIA_CONTENT_BLOCK_LOOKUP_FAILED":
+  "error.reason.MEDIA_BAD_FILE_LOOKUP_FAILED":
     "Не удалось проверить плохие файлы тайтла, поэтому импорт ждёт проверки.",
   "error.reason.MEDIA_REMEDIATION_NOT_AVAILABLE":
     "Этот отчёт не подходит для выбранного действия.",

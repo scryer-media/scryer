@@ -191,7 +191,7 @@ async fn bad_file_reports_upgrade_sqlite() {
         ),
     ] {
         let rows: Vec<(i64, i64, i64, String)> =
-            sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
                 .fetch_all(&mut *transaction)
                 .await
                 .unwrap();

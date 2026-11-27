@@ -6349,9 +6349,11 @@ pub mod services {
 
 pub mod media {
     /// The file's content matches one of the title's bad-file blocklist entries.
-    pub const CONTENT_BLOCK_MATCHED: &str = "MEDIA_CONTENT_BLOCK_MATCHED";
+    pub const IMPORT_MATCHES_BAD_FILE: &str = "MEDIA_IMPORT_MATCHES_BAD_FILE";
     /// The title's bad-file entries could not be read, so the import waits for review.
-    pub const CONTENT_BLOCK_LOOKUP_FAILED: &str = "MEDIA_CONTENT_BLOCK_LOOKUP_FAILED";
+    pub const BAD_FILE_LOOKUP_FAILED: &str = "MEDIA_BAD_FILE_LOOKUP_FAILED";
+    /// An upgrade would replace a file marked bad, so it waits for review.
+    pub const UPGRADE_REPLACES_BAD_FILE: &str = "MEDIA_UPGRADE_REPLACES_BAD_FILE";
     /// The report did not ask for this remediation, or its authorization is gone.
     pub const REMEDIATION_NOT_AVAILABLE: &str = "MEDIA_REMEDIATION_NOT_AVAILABLE";
     /// A confirmed recycle stopped before it finished.
@@ -6453,8 +6455,9 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
-        CONTENT_BLOCK_MATCHED,
-        CONTENT_BLOCK_LOOKUP_FAILED,
+        IMPORT_MATCHES_BAD_FILE,
+        BAD_FILE_LOOKUP_FAILED,
+        UPGRADE_REPLACES_BAD_FILE,
         REMEDIATION_NOT_AVAILABLE,
         RECYCLE_FAILED,
         DETAILS_TOO_LONG,

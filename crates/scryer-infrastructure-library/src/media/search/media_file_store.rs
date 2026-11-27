@@ -962,7 +962,6 @@ impl MediaFileStore {
                    AND {}
                    AND media_files.role IN ('primary', 'additional')
                    AND media_files.scan_status <> 'review_required'
-                   AND media_files.bad_file_blocklist_id IS NULL
                    AND {normalized_quality} IS NOT NULL
              ) ranked
              WHERE quality_row = 1
@@ -1018,7 +1017,6 @@ impl MediaFileStore {
                    AND titles.facet = 'movie'
                    AND {}
                    AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
-                   AND media_files.bad_file_blocklist_id IS NULL
              ) ranked
              WHERE media_row = 1",
             live_media_file_predicate(dialect, "media_files")
@@ -1062,7 +1060,7 @@ impl MediaFileStore {
              FROM episodes e
              INNER JOIN collections c ON c.id = e.collection_id
              LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required' AND mf.bad_file_blocklist_id IS NULL
+             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
              WHERE e.title_id IN ({placeholders})
                AND c.collection_type <> 'specials'
                AND c.collection_index <> '0'
@@ -1884,7 +1882,6 @@ impl MediaFileRepository for MediaFileStore {
                      WHERE media_files.title_id IN ({placeholders})
                        AND {}
                        AND media_files.role = 'primary'
-                       AND media_files.bad_file_blocklist_id IS NULL
                        AND {normalized_quality} IS NOT NULL
                        AND (fem.episode_id IS NULL OR {})
                  ) ranked
@@ -1935,12 +1932,7 @@ impl MediaFileRepository for MediaFileStore {
         // missing, and it is searched only as an upgrade below cutoff. Leaving
         // it out made every review-held scope look missing, so each search
         // grabbed a release that import then refused against that same file.
-        // A file confirmed bad leaves the scope missing. A grab still has to
-        // beat it, so only a better release is fetched.
-        let live_file = format!(
-            "{} AND mf.bad_file_blocklist_id IS NULL",
-            live_media_file_predicate(dialect, "mf")
-        );
+        let live_file = live_media_file_predicate(dialect, "mf");
         let title_filter = if title_id.is_some() {
             "AND t.id = {}"
         } else {
@@ -2151,7 +2143,7 @@ impl MediaFileRepository for MediaFileStore {
                         COUNT(DISTINCT CASE WHEN {countable} AND mf.id IS NOT NULL THEN e.id END) AS owned_episodes
                  FROM episodes e
                  LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-                 LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required' AND mf.bad_file_blocklist_id IS NULL
+                 LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
                  WHERE e.title_id IN ({placeholders})
                    AND e.collection_id IS NOT NULL
                  GROUP BY e.collection_id",
@@ -3365,7 +3357,6 @@ async fn list_episode_media_availability_query(
             INNER JOIN requested_episodes e ON e.id = fem.episode_id
             INNER JOIN media_files mf ON mf.id = fem.file_id
             WHERE {} AND fem.role IN ('primary', 'additional')
-              AND mf.bad_file_blocklist_id IS NULL
          )
          SELECT e.title_id,
                 e.id AS episode_id,

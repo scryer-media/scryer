@@ -111,9 +111,9 @@ const en: LocaleDictionary = {
     "The media structure is malformed. Review the source file before importing.",
   "error.reason.MEDIA_PROBE_ENCRYPTED":
     "The media is encrypted and could not be verified.",
-  "error.reason.MEDIA_CONTENT_BLOCK_MATCHED":
+  "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE":
     "This file is marked bad for the title, so it was not imported.",
-  "error.reason.MEDIA_CONTENT_BLOCK_LOOKUP_FAILED":
+  "error.reason.MEDIA_BAD_FILE_LOOKUP_FAILED":
     "The title’s bad files could not be checked, so the import waits for review.",
   "error.reason.MEDIA_REMEDIATION_NOT_AVAILABLE":
     "This report is not eligible for the selected action.",

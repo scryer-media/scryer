@@ -103,7 +103,18 @@ impl TitleBadFiles {
                 .await?
                 .is_some());
         }
-        let identities = self
+        Ok(self
+            .identities(app)
+            .await?
+            .iter()
+            .any(|identity| crate::media_issues::content_matches_proof(identity, proof)))
+    }
+
+    async fn identities<'a>(
+        &'a self,
+        app: &AppUseCase,
+    ) -> crate::AppResult<&'a [scryer_domain::BlocklistContentIdentity]> {
+        Ok(self
             .identities
             .get_or_try_init(|| async {
                 app.services
@@ -113,10 +124,47 @@ impl TitleBadFiles {
                     .await
                     .map(|rows| rows.into_iter().map(|(_, identity)| identity).collect())
             })
-            .await?;
-        Ok(identities
-            .iter()
-            .any(|identity| crate::media_issues::content_matches_proof(identity, proof)))
+            .await?
+            .as_slice())
+    }
+
+    /// Hold an upgrade that would replace a file marked bad.
+    ///
+    /// `incumbents` are the files the upgrade would retire. A title with no
+    /// bad-file entries has no marked files, so this costs nothing beyond the
+    /// read the gate already made. A failed read holds the upgrade.
+    pub(crate) async fn upgrade_refusal(
+        &self,
+        app: &AppUseCase,
+        incumbents: &[&crate::TitleMediaFile],
+    ) -> Option<ImportedFileRejection> {
+        let Some(first) = incumbents.first() else {
+            return None;
+        };
+        let first_path = crate::stored_paths::stored_path_to_path_buf(&first.file_path);
+        match self.identities(app).await {
+            Ok(identities) if identities.is_empty() => return None,
+            Ok(_) => {}
+            Err(error) => return Some(content_block_lookup_rejection(&first_path, error)),
+        }
+        let ids: Vec<String> = incumbents.iter().map(|file| file.id.clone()).collect();
+        match app
+            .services
+            .workflow
+            .blocklist_repo
+            .marked_bad_file_ids(&ids)
+            .await
+        {
+            Ok(marked) => incumbents
+                .iter()
+                .find(|file| marked.contains(&file.id))
+                .map(|file| {
+                    bad_incumbent_rejection(&crate::stored_paths::stored_path_to_path_buf(
+                        &file.file_path,
+                    ))
+                }),
+            Err(error) => Some(content_block_lookup_rejection(&first_path, error)),
+        }
     }
 }
 
@@ -144,7 +192,8 @@ impl ImportedFileRejection {
                 | DISC_REVIEW_REQUIRED_CODE
                 | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
                 | POST_DOWNLOAD_RULE_ERROR_CODE
-                | crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
+                | crate::error_reasons::media::BAD_FILE_LOOKUP_FAILED
+                | crate::error_reasons::media::UPGRADE_REPLACES_BAD_FILE
                 | crate::error_reasons::media::UNVERIFIED_REPLACEMENT
                 | crate::error_reasons::media::REFERENCES_REQUIRE_REVIEW
                 | crate::error_reasons::media::PROBE_IO_FAILED
@@ -179,7 +228,7 @@ pub(crate) fn review_hold_skip_reason_for_code(code: &str) -> ImportSkipReason {
         ImportSkipReason::SourceChanged
     } else if matches!(
         code,
-        SOURCE_SNAPSHOT_UNAVAILABLE_CODE | crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
+        SOURCE_SNAPSHOT_UNAVAILABLE_CODE | crate::error_reasons::media::BAD_FILE_LOOKUP_FAILED
     ) {
         ImportSkipReason::SourceUnavailable
     } else {
@@ -236,9 +285,9 @@ fn content_block_rejection(path: &Path) -> ImportedFileRejection {
             "import content matches a file confirmed bad for this title: {}",
             path.display()
         ),
-        recycle_reason: media::CONTENT_BLOCK_MATCHED,
+        recycle_reason: media::IMPORT_MATCHES_BAD_FILE,
         skip_reason: Some(ImportSkipReason::PolicyMismatch),
-        blocking_rule_codes: vec![media::CONTENT_BLOCK_MATCHED.to_string()],
+        blocking_rule_codes: vec![media::IMPORT_MATCHES_BAD_FILE.to_string()],
     }
 }
 
@@ -254,9 +303,25 @@ fn content_block_lookup_rejection(
             "could not check {} against the title's bad files: {detail}",
             path.display()
         ),
-        recycle_reason: media::CONTENT_BLOCK_LOOKUP_FAILED,
+        recycle_reason: media::BAD_FILE_LOOKUP_FAILED,
         skip_reason: Some(ImportSkipReason::SourceUnavailable),
-        blocking_rule_codes: vec![media::CONTENT_BLOCK_LOOKUP_FAILED.to_string()],
+        blocking_rule_codes: vec![media::BAD_FILE_LOOKUP_FAILED.to_string()],
+    }
+}
+
+/// The upgrade would replace a file marked bad. A marked file leaves the
+/// library only through the operator's confirmed recycle, so the upgrade is
+/// held and both files stay where they are.
+fn bad_incumbent_rejection(path: &Path) -> ImportedFileRejection {
+    use crate::error_reasons::media;
+    ImportedFileRejection {
+        message: format!(
+            "the upgrade would replace a file marked bad for this title: {}",
+            path.display()
+        ),
+        recycle_reason: media::UPGRADE_REPLACES_BAD_FILE,
+        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        blocking_rule_codes: vec![media::UPGRADE_REPLACES_BAD_FILE.to_string()],
     }
 }
 
@@ -2491,6 +2556,16 @@ async fn finalize_import_rejection(
         }
         None => reset_scopes_for_retry(app, &title.id, attribution, &coverage).await,
     }
+    // A download that matched a file marked bad carries its code in its own
+    // field, and its reason is the explanation alone.
+    let reason_code = (rejection.recycle_reason
+        == crate::error_reasons::media::IMPORT_MATCHES_BAD_FILE)
+        .then(|| rejection.recycle_reason.to_string());
+    let reason = if reason_code.is_some() {
+        Some(rejection.message.clone())
+    } else {
+        reason
+    };
     let _ = app
         .append_domain_event(new_title_domain_event(
             actor,
@@ -2511,6 +2586,7 @@ async fn finalize_import_rejection(
                 // load-bearing for whoever reads the event.
                 skip_reason: rejection.skip_reason.clone(),
                 episode_ids: episode_ids.to_vec(),
+                reason_code,
             }),
         ))
         .await;

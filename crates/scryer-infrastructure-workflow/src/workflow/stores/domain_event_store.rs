@@ -807,6 +807,7 @@ mod title_history_filter_tests {
                         reason: Some(format!("synthetic reason {index}")),
                         skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
                         episode_ids: Vec::new(),
+                        reason_code: None,
                     }),
                     2 => DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
                         title: title_snapshot(),
@@ -1200,6 +1201,7 @@ mod title_history_filter_tests {
                         reason: None,
                         skip_reason: None,
                         episode_ids: Vec::new(),
+                        reason_code: None,
                     }),
                 ),
                 event_with_payload(
@@ -1277,6 +1279,7 @@ mod title_history_filter_tests {
                 reason: None,
                 skip_reason,
                 episode_ids: Vec::new(),
+                reason_code: None,
             })
         };
         let deleted = |reason| {
@@ -1491,6 +1494,7 @@ mod title_history_filter_tests {
                     reason: None,
                     skip_reason,
                     episode_ids: Vec::new(),
+                    reason_code: None,
                 }),
             )
         };

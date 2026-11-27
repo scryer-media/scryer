@@ -11595,6 +11595,14 @@ pub trait BlocklistRepository: Send + Sync {
         Ok(None)
     }
 
+    /// Which of these files are marked bad.
+    async fn marked_bad_file_ids(
+        &self,
+        _file_ids: &[String],
+    ) -> AppResult<std::collections::HashSet<String>> {
+        Ok(std::collections::HashSet::new())
+    }
+
     /// Delete one entry, clear the bad-file stamp from the files it marked
     /// and name the reports it confirmed, in one transaction.
     async fn remove_and_unmark(&self, _id: &str) -> AppResult<Vec<crate::UnmarkedMediaIssue>> {
@@ -11603,15 +11611,19 @@ pub trait BlocklistRepository: Send + Sync {
         ))
     }
 
+    /// Record a report. A reporter sending the same report again gets the
+    /// first one back, with `false` because no row was written.
     async fn submit_media_issue(
         &self,
         _issue: &crate::NewMediaIssue,
-    ) -> AppResult<scryer_domain::MediaIssue> {
+    ) -> AppResult<(scryer_domain::MediaIssue, bool)> {
         Err(AppError::Repository(
             "media issues are not supported by this repository".into(),
         ))
     }
 
+    /// One report, read with the same `ReplacementImported` rule as
+    /// [`BlocklistRepository::list_media_issues`].
     async fn get_media_issue(&self, _id: &str) -> AppResult<Option<scryer_domain::MediaIssue>> {
         Ok(None)
     }
@@ -11686,6 +11698,11 @@ pub trait BlocklistRepository: Send + Sync {
     }
 
     async fn get_media_issue_recycle_receipt(&self, _id: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    /// The preview fingerprint the operator confirmed for the report's recycle.
+    async fn get_media_issue_recycle_fingerprint(&self, _id: &str) -> AppResult<Option<String>> {
         Ok(None)
     }
 }

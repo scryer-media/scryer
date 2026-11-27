@@ -123,6 +123,7 @@ pub async fn execute_upgrade_for_test_with_import_mode(
         import_mode,
         None,
         None,
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await?;
     if let crate::upgrade::UpgradeResult::Upgraded(outcome) = &result {

@@ -827,6 +827,7 @@ async fn activity_stream_sends_viewers_a_bare_catalog_refresh_signal() {
                 reason: Some("Policy mismatch".to_string()),
                 skip_reason: None,
                 episode_ids: vec![EPISODE_ID.to_string()],
+                reason_code: None,
             }),
         ))
         .await

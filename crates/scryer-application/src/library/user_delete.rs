@@ -1057,8 +1057,8 @@ impl AppUseCase {
     /// file itself was recycled under `receipt`. A copy that is gone, no
     /// longer holds the reported content, or changed since the preview is
     /// left in place. A linked copy must still be the other name of the
-    /// reported file's payload; its bin entry is reserved and saved on the
-    /// receipt before it moves, so a retry finishes the same entry.
+    /// reported file's payload. Either copy's bin entry is reserved and saved
+    /// on the receipt before it moves, so a retry finishes the same entry.
     pub(crate) async fn recycle_media_issue_download_copy(
         &self,
         issue: &scryer_domain::MediaIssue,
@@ -1087,8 +1087,8 @@ impl AppUseCase {
                 return Ok(());
             }
             None => {
-                // A linked copy whose reserved move already ran is committed.
-                if let Some(reserved) = receipt.linked_copy.as_ref().filter(|_| confirmed.linked) {
+                // A copy whose reserved move already ran is committed.
+                if let Some(reserved) = receipt.linked_copy.as_ref() {
                     let payload = stored_path_to_path_buf(&reserved.recycled_path);
                     if Disk::process().uncached(&payload).await.exists() == Some(true) {
                         let (config, _) = self.media_issue_bin_config(issue).await?;
@@ -1122,10 +1122,10 @@ impl AppUseCase {
         manifest.source_operation_id = Some(issue.id.clone());
         manifest.reason = crate::media_issues::MEDIA_ISSUE_DOWNLOAD_COPY_RECYCLE_REASON.to_string();
         let depth = self.resolve_verification_depth().await;
-        if !copy.linked {
-            crate::recycle_bin::recycle_file(&config, &copy.path, manifest, depth).await?;
-            return Ok(());
-        }
+        // The copy's entry is reserved and saved on the receipt before it
+        // moves, and the move rechecks the confirmed version, so a copy that
+        // changed since the preview stays in place and a retry finishes the
+        // same entry.
         let reserved = match &receipt.linked_copy {
             Some(reserved) => reserved.clone(),
             None => {

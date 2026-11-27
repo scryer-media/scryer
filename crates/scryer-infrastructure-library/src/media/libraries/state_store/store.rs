@@ -3725,6 +3725,13 @@ impl BlocklistRepository for BlocklistStore {
         super::bad_file_store::list_content_identities_for_title(&self.datastore, title_id).await
     }
 
+    async fn marked_bad_file_ids(
+        &self,
+        file_ids: &[String],
+    ) -> AppResult<std::collections::HashSet<String>> {
+        super::bad_file_store::marked_bad_file_ids(&self.datastore, file_ids).await
+    }
+
     async fn find_content_block(
         &self,
         title_id: &str,
@@ -3748,7 +3755,7 @@ impl BlocklistRepository for BlocklistStore {
         super::bad_file_store::remove_and_unmark(&self.datastore, id).await
     }
 
-    async fn submit_media_issue(&self, issue: &NewMediaIssue) -> AppResult<MediaIssue> {
+    async fn submit_media_issue(&self, issue: &NewMediaIssue) -> AppResult<(MediaIssue, bool)> {
         super::bad_file_store::submit_media_issue(&self.datastore, issue).await
     }
 
@@ -3816,6 +3823,10 @@ impl BlocklistRepository for BlocklistStore {
 
     async fn get_media_issue_recycle_receipt(&self, id: &str) -> AppResult<Option<String>> {
         super::bad_file_store::get_media_issue_recycle_receipt(&self.datastore, id).await
+    }
+
+    async fn get_media_issue_recycle_fingerprint(&self, id: &str) -> AppResult<Option<String>> {
+        super::bad_file_store::get_media_issue_recycle_fingerprint(&self.datastore, id).await
     }
 }
 

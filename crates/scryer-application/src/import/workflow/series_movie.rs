@@ -2351,6 +2351,7 @@ async fn import_movie_download(
             .map(|runtime_minutes| runtime_minutes.saturating_mul(60)),
         manual_replacement,
     );
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
     let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
@@ -2364,7 +2365,7 @@ async fn import_movie_download(
         runtime_sample_validation,
         largest.disc_selection.as_ref(),
         release_evidence.release_listing_json(),
-        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
+        &bad_files,
     )
     .await
     {
@@ -2792,6 +2793,7 @@ async fn import_movie_download(
             import_mode,
             release_evidence.announced_size_bytes(),
             Some(completed),
+            &bad_files,
         )
         .await
         {
@@ -3361,6 +3363,7 @@ async fn import_series_movie_download(
             .map(|runtime_minutes| runtime_minutes.saturating_mul(60)),
         manual_replacement,
     );
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
     let prepared = match crate::post_download_gate::prepare_import_candidate(
         app,
         title,
@@ -3373,7 +3376,7 @@ async fn import_series_movie_download(
         false,
         runtime_sample_validation,
         release_evidence.release_listing_json(),
-        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
+        &bad_files,
     )
     .await
     {
@@ -3707,6 +3710,7 @@ async fn import_series_movie_download(
                 import_mode,
                 release_evidence.announced_size_bytes(),
                 Some(completed),
+                &bad_files,
             )
             .await
             {

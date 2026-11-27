@@ -6598,6 +6598,8 @@ const zh_HK: LocaleDictionary = {
   "ruleOutput.lifecycle.notify.placeholder": "通知內容",
   "ruleOutput.request.approve": "批准",
   "ruleOutput.request.deny": "拒絕",
+  "ruleOutput.request.mark_bad": "將檔案標記為損壞",
+  "ruleOutput.request.reject_report": "駁回報告",
   "ruleOutput.request.manual": "留待審批",
   "ruleOutput.request.set_quality_profile": "質素設定檔",
   "ruleOutput.request.set_lease_days": "保留期",

@@ -482,7 +482,7 @@ impl AppUseCase {
             .await?;
         let (file_version, proof) = self.inspect_media_issue_file(&file).await?;
         let provenance = media_issue_provenance(&file);
-        let issue = self
+        let (issue, inserted) = self
             .services
             .workflow
             .blocklist_repo
@@ -501,8 +501,9 @@ impl AppUseCase {
                 affected_series_movie_link_ids: file.series_movie_link_ids.clone(),
             })
             .await?;
-        if issue.status != MediaIssueStatus::Pending || issue.rule_decision_id.is_some() {
-            // A duplicate report returns the one already recorded.
+        if !inserted {
+            // A duplicate report returns the one already recorded; its rules
+            // ran and its event was recorded when it was first submitted.
             return Ok(issue);
         }
         let event = crate::domain_events::new_global_domain_event(
@@ -1090,7 +1091,22 @@ impl AppUseCase {
                 .get_media_issue_recycle_receipt(issue_id)
                 .await?
                 .is_some();
-        if !moved {
+        if moved {
+            // The move ran under the fingerprint confirmed then; a retry
+            // finishes only that confirmation.
+            let confirmed = self
+                .services
+                .workflow
+                .blocklist_repo
+                .get_media_issue_recycle_fingerprint(issue_id)
+                .await?;
+            if confirmed.as_deref() != Some(preview_fingerprint) {
+                return Err(AppError::validation_refused(
+                    crate::delete_refusal::PREVIEW_STALE,
+                    "the recycle preview changed before confirmation",
+                ));
+            }
+        } else {
             let preview = self.preview_media_issue_recycle(actor, issue_id).await?;
             if preview_fingerprint != preview.preview.fingerprint {
                 return Err(AppError::validation_refused(

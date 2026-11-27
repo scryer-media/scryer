@@ -130,6 +130,31 @@ pub(super) async fn list_content_identities_for_title(
     Ok(identities)
 }
 
+/// Which of these files carry a bad-file mark. Reads by primary key.
+pub(super) async fn marked_bad_file_ids(
+    datastore: &StoreDatastore,
+    file_ids: &[String],
+) -> AppResult<HashSet<String>> {
+    let mut marked = HashSet::new();
+    if file_ids.is_empty() {
+        return Ok(marked);
+    }
+    let exec = datastore.read_exec();
+    let (file_ids, per_statement) = id_list_statements(file_ids, 1, 0, max_binds(&exec), ID_CHUNK);
+    for chunk in file_ids.chunks(per_statement) {
+        let sql = format!(
+            "SELECT id FROM media_files
+              WHERE id IN ({}) AND bad_file_blocklist_id IS NOT NULL",
+            placeholders(chunk.len())
+        );
+        let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+        for row in SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await? {
+            marked.insert(row.text("id")?);
+        }
+    }
+    Ok(marked)
+}
+
 fn identity_args(title_id: &str, identity: &BlocklistContentIdentity) -> Vec<SqlArg> {
     vec![
         SqlArg::Text(title_id.to_string()),
@@ -207,7 +232,7 @@ pub(super) async fn remove_and_unmark(
 pub(super) async fn submit_media_issue(
     datastore: &StoreDatastore,
     issue: &NewMediaIssue,
-) -> AppResult<MediaIssue> {
+) -> AppResult<(MediaIssue, bool)> {
     let id = Id::new().0;
     let now = datastore.timestamp_text_arg(&Utc::now().to_rfc3339())?;
     let identity = [
@@ -265,9 +290,10 @@ pub(super) async fn submit_media_issue(
     } else {
         id
     };
-    get_media_issue(datastore, &id)
+    let issue = get_media_issue(datastore, &id)
         .await?
-        .ok_or_else(|| AppError::Repository("inserted media issue could not be reloaded".into()))
+        .ok_or_else(|| AppError::Repository("inserted media issue could not be reloaded".into()))?;
+    Ok((issue, inserted > 0))
 }
 
 pub(super) async fn get_media_issue(
@@ -280,7 +306,13 @@ pub(super) async fn get_media_issue(
         &[SqlArg::Text(id.to_string())],
     )
     .await?;
-    row.as_ref().map(media_issue_row).transpose()
+    let Some(issue) = row.as_ref().map(media_issue_row).transpose()? else {
+        return Ok(None);
+    };
+    let mut issues = [issue];
+    mark_replacements_imported(datastore, &mut issues).await?;
+    let [issue] = issues;
+    Ok(Some(issue))
 }
 
 pub(super) async fn set_media_issue_rule_decision(
@@ -571,14 +603,15 @@ pub(super) async fn confirm_media_issue(
                                     (Some(name), normalized, indexer, hash)
                                 })
                                 .unwrap_or((None, String::new(), String::new(), None));
-                            SqlRuntime::execute(
+                            let inserted = SqlRuntime::execute(
                                 SqlExec::Tx(tx),
                                 "INSERT INTO blocklist
                                      (id, title_id, release_name, normalized_release_name,
                                       indexer_id, info_hash, reason, created_at, content_scheme,
                                       content_size_bytes, content_sample_bytes,
                                       content_sample_blake3)
-                                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                                 ON CONFLICT DO NOTHING",
                                 &[
                                     SqlArg::Text(id.clone()),
                                     SqlArg::Text(title_id.clone()),
@@ -595,7 +628,30 @@ pub(super) async fn confirm_media_issue(
                                 ],
                             )
                             .await?;
-                            id
+                            if inserted > 0 {
+                                id
+                            } else {
+                                // A concurrent mark wrote this entry first;
+                                // use the row it wrote.
+                                SqlRuntime::fetch_optional(
+                                    SqlExec::Tx(tx),
+                                    &format!(
+                                        "SELECT id FROM blocklist \
+                                          WHERE {CONTENT_IDENTITY_PREDICATE}"
+                                    ),
+                                    &lookup,
+                                )
+                                .await?
+                                .map(|row| row.text("id"))
+                                .transpose()?
+                                .ok_or_else(|| {
+                                    AppError::Repository(
+                                        "the title's blocklist changed while the file was \
+                                         being marked bad; retry"
+                                            .into(),
+                                    )
+                                })?
+                            }
                         }
                     }
                 }
@@ -762,5 +818,20 @@ pub(super) async fn get_media_issue_recycle_receipt(
     )
     .await?
     .map(|row| row.text("recycle_receipt_json"))
+    .transpose()?)
+}
+
+pub(super) async fn get_media_issue_recycle_fingerprint(
+    datastore: &StoreDatastore,
+    id: &str,
+) -> AppResult<Option<String>> {
+    Ok(SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT recycle_preview_fingerprint FROM media_issues
+          WHERE id = {} AND recycle_preview_fingerprint IS NOT NULL",
+        &[SqlArg::Text(id.to_string())],
+    )
+    .await?
+    .map(|row| row.text("recycle_preview_fingerprint"))
     .transpose()?)
 }

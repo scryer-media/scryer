@@ -5206,6 +5206,9 @@ pub struct ImportRejectedEventData {
     pub skip_reason: Option<ImportSkipReason>,
     #[serde(default)]
     pub episode_ids: Vec<String>,
+    /// Stable condition beside `reason`, for a refusal a client translates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

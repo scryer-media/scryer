@@ -816,8 +816,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // External rule imports report through `externalRuleImportStatus`:
     // 204->205.
     assert!(query_field_names.contains(&"externalRuleImportStatus"));
-    // Bad-media review adds the report queue and library content-block list.
-    assert!(query_field_names.contains(&"libraryContentBlocks"));
+    // Bad-media review adds the report queue and the recycle preview of a
+    // report: 205->207.
+    assert!(query_field_names.contains(&"mediaIssueRecyclePreview"));
     assert!(query_field_names.contains(&"mediaIssues"));
     assert_eq!(
         query_field_count, 207,
@@ -953,12 +954,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Staging a request subject's metadata adds `stageMyRequestMetadata`:
     // 300->301.
     assert!(mutation_field_names.contains(&"stageMyRequestMetadata"));
+    // Bad-media reports are submitted, approved, approved for recycle and
+    // rejected: 301->305.
     for name in [
         "submitMediaIssue",
         "approveMediaIssue",
         "approveMediaIssueRecycleSearch",
         "rejectMediaIssue",
-        "clearLibraryContentBlock",
     ] {
         assert!(
             mutation_field_names.contains(&name),
@@ -966,7 +968,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         );
     }
     assert_eq!(
-        mutation_field_count, 306,
+        mutation_field_count, 305,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1608,7 +1610,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         1071,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 581);
+    // Bad-media reports add MediaIssuePayload and
+    // MediaIssueRecyclePreviewPayload: OBJECT 578->580.
+    assert_eq!(kind_count("OBJECT"), 580);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
@@ -1617,7 +1621,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert_eq!(kind_count("INPUT_OBJECT"), 255);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 223);
+    // Bad-media reports add three report enums and the two report rule
+    // outcome enums: ENUM 219->224.
+    assert_eq!(kind_count("ENUM"), 224);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

@@ -8115,6 +8115,8 @@ const cs: LocaleDictionary = {
   "ruleOutput.lifecycle.notify.placeholder": "Text oznámení",
   "ruleOutput.request.approve": "Schválit",
   "ruleOutput.request.deny": "Zamítnout",
+  "ruleOutput.request.mark_bad": "Označit soubor jako vadný",
+  "ruleOutput.request.reject_report": "Zamítnout hlášení",
   "ruleOutput.request.manual": "Ponechat k posouzení",
   "ruleOutput.request.set_quality_profile": "Profil kvality",
   "ruleOutput.request.set_lease_days": "Výpůjčka",

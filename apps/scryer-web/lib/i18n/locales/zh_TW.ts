@@ -6607,6 +6607,8 @@ const zh_TW: LocaleDictionary = {
   "ruleOutput.lifecycle.notify.placeholder": "通知內容",
   "ruleOutput.request.approve": "核准",
   "ruleOutput.request.deny": "拒絕",
+  "ruleOutput.request.mark_bad": "將檔案標記為損壞",
+  "ruleOutput.request.reject_report": "駁回回報",
   "ruleOutput.request.manual": "保留審核",
   "ruleOutput.request.set_quality_profile": "品質設定檔",
   "ruleOutput.request.set_lease_days": "保留期",

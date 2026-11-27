@@ -2102,9 +2102,11 @@ async fn restore_from_recycle_inner(
     Ok(original_path.to_path_buf())
 }
 
+/// Refuse a recycled payload that is missing, a symlink or not a regular
+/// file. Returns the payload's size when the reading carries it.
 pub(crate) async fn ensure_recycled_restore_source_is_regular(
     recycled_path: &Path,
-) -> AppResult<()> {
+) -> AppResult<Option<u64>> {
     let reading = Disk::process().uncached(recycled_path).await;
     match reading.exists() {
         Some(true) => {}
@@ -2134,7 +2136,7 @@ pub(crate) async fn ensure_recycled_restore_source_is_regular(
             ),
         ));
     }
-    Ok(())
+    Ok(reading.size())
 }
 
 pub async fn commit_recycle_entry(

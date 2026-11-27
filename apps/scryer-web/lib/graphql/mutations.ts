@@ -2326,8 +2326,8 @@ export const installUploadedPluginMutation = `mutation InstallUploadedPlugin($in
 
 // ── Recycle Bin ─────────────────────────────────────────────────────────
 
-export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: ID!) {
-  restoreRecycledItem(id: $id) {
+export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: ID!, $clearBadFile: Boolean) {
+  restoreRecycledItem(id: $id, clearBadFile: $clearBadFile) {
     id
     jobRun {
       id

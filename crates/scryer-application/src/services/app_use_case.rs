@@ -452,6 +452,7 @@ impl AppUseCase {
                             reason,
                             skip_reason: result.skip_reason.clone(),
                             episode_ids: result.episode_ids.clone(),
+                            reason_code: None,
                         },
                     ),
                 }
@@ -472,6 +473,7 @@ impl AppUseCase {
                             reason,
                             skip_reason: result.skip_reason.clone(),
                             episode_ids: result.episode_ids.clone(),
+                            reason_code: None,
                         },
                     ),
                 )

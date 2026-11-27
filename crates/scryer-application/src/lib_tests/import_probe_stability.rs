@@ -663,7 +663,7 @@ async fn an_import_matching_a_bad_file_is_refused_and_left_in_place() {
     };
     assert_eq!(
         rejection.recycle_reason,
-        crate::error_reasons::media::CONTENT_BLOCK_MATCHED
+        crate::error_reasons::media::IMPORT_MATCHES_BAD_FILE
     );
     // Not a review hold: the release is refused like any other rejection.
     assert!(!rejection.requires_review());
@@ -686,7 +686,7 @@ async fn a_failed_bad_file_lookup_holds_the_import() {
     };
     assert_eq!(
         rejection.recycle_reason,
-        crate::error_reasons::media::CONTENT_BLOCK_LOOKUP_FAILED
+        crate::error_reasons::media::BAD_FILE_LOOKUP_FAILED
     );
     assert!(rejection.requires_review());
     assert_eq!(
