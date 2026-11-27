@@ -99,6 +99,7 @@ import type {
 } from "@/lib/utils/dashboard-layout";
 import { buildOverviewDetailPath, buildViewPath } from "@/lib/utils/routing";
 import { episodeTitleOrTba } from "@/lib/utils/episode-title";
+import { useFacets } from "@/lib/facets/use-facets";
 
 /** List panels scroll inside whatever height their grid cell gives them. */
 const PREVIEW_PANE_CLASS = "overflow-y-auto";
@@ -463,6 +464,7 @@ export function StatsPanel({
   breakpoint: DashboardBreakpoint;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
   const activity = overview?.activity;
   const grabbedDelta = activity
     ? activity.current.grabbed - activity.previous.grabbed
@@ -482,30 +484,33 @@ export function StatsPanel({
     >
       <StatTile
         label={t("dashboard.statLibrary")}
-        metrics={[
-          {
-            key: "movies",
-            value: overview?.library.movies ?? 0,
-            label: t("dashboard.metricMovies", {
-              count: overview?.library.movies ?? 0,
-            }),
-            facet: "MOVIE",
-          },
-          {
-            key: "series",
-            value: overview?.library.series ?? 0,
-            label: t("dashboard.metricSeries", {
-              count: overview?.library.series ?? 0,
-            }),
-            facet: "SERIES",
-          },
-          {
-            key: "anime",
-            value: overview?.library.anime ?? 0,
-            label: t("dashboard.metricAnime"),
-            facet: "ANIME",
-          },
-        ]}
+        metrics={visibleFacetItems(
+          [
+            {
+              key: "movies",
+              value: overview?.library.movies ?? 0,
+              label: t("dashboard.metricMovies", {
+                count: overview?.library.movies ?? 0,
+              }),
+              facet: "MOVIE",
+            },
+            {
+              key: "series",
+              value: overview?.library.series ?? 0,
+              label: t("dashboard.metricSeries", {
+                count: overview?.library.series ?? 0,
+              }),
+              facet: "SERIES",
+            },
+            {
+              key: "anime",
+              value: overview?.library.anime ?? 0,
+              label: t("dashboard.metricAnime"),
+              facet: "ANIME",
+            },
+          ],
+          (metric) => metric.facet,
+        )}
       />
       <StatTile
         label={t("dashboard.statWindow")}
@@ -1615,13 +1620,18 @@ export function DownloadClientsPanel({
 // ── Storage ─────────────────────────────────────────────────────────────────
 
 export function StoragePanel({
-  roots,
+  roots: allRoots,
   tier,
 }: {
   roots: DashboardStorageRoot[];
   tier: DashboardTier;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
+  const roots = React.useMemo(
+    () => visibleFacetItems(allRoots, (root) => root.facet),
+    [allRoots, visibleFacetItems],
+  );
   const groups = React.useMemo(
     () => groupStorageRootsByLibrary(roots),
     [roots],

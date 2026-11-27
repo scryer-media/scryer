@@ -105,3 +105,36 @@ test("the final summary counts indexers that searched, not sources that returned
     { name: "Cooling", reason: "temporarily disabled" },
   ]);
 });
+
+test("an indexer its query budget stopped part way is listed as searched in part", () => {
+  const partial: InteractiveSearchIndexerProgress = {
+    ...indexer("Budgeted", "COMPLETED"),
+    resultCount: 2,
+    failureReasonCode: "INDEXER_QUERY_BUDGET_PARTLY_SEARCHED",
+    retryAfterSeconds: 45,
+    rateLimited: true,
+  };
+  const skipped: InteractiveSearchIndexerProgress = {
+    ...indexer("Unasked", "SKIPPED"),
+    failureReasonCode: "INDEXER_QUERY_BUDGET_NOT_SEARCHED",
+    skipReason: "QUERY_BUDGET",
+    retryAfterSeconds: 50,
+    rateLimited: true,
+  };
+  const presentation = deriveInteractiveSearchPresentation({
+    hasSnapshot: true,
+    loading: false,
+    resultCount: 2,
+    indexers: [partial, skipped, indexer("Plain", "COMPLETED")],
+  });
+
+  assert.deepEqual(presentation.partlySearchedIndexers, [
+    { name: "Budgeted", retryAfterSeconds: 45 },
+  ]);
+  assert.equal(presentation.searchedIndexerCount, 2);
+  assert.deepEqual(
+    presentation.skippedIndexers.map((entry) => entry.name),
+    ["Unasked"],
+  );
+  assert.deepEqual(presentation.failedIndexerNames, []);
+});

@@ -1869,12 +1869,22 @@ impl AppUseCase {
         // The scopes that hold monitored titles, as one grouped read. This
         // used to be every title row in the catalog, kept for the whole cycle
         // so a bank could be indexed over it.
-        let library_scopes = self
+        let mut library_scopes = self
             .services
             .catalog
             .titles
             .monitored_library_scopes()
             .await?;
+        // A facet turned off for the instance is frozen: its scopes take no
+        // part in the cycle, so none of its titles can match a feed item.
+        let disabled_facets = self.disabled_facets().await?;
+        if !disabled_facets.is_empty() {
+            library_scopes.retain(|(_, scope)| {
+                !disabled_facets
+                    .iter()
+                    .any(|facet| facet.as_str() == scope.as_str())
+            });
+        }
 
         // Union each monitored library's effective routing. Its overrides have
         // already replaced facet defaults and must not be re-enabled by them.

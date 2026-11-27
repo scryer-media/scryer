@@ -98,6 +98,30 @@ export function ReleaseSearchSummary({
           })}
         </p>
       ) : null}
+      {presentation.showFinalSummary &&
+      presentation.partlySearchedIndexers.length > 0 ? (
+        <p
+          className="mt-0.5 truncate text-[11.5px] text-[var(--scry-faint)]"
+          data-ui={`${dataUi}-partly-searched`}
+          title={presentation.partlySearchedIndexers
+            .map((indexer) =>
+              indexer.retryAfterSeconds !== null
+                ? t("title.contextReleaseSearchIndexerRetryAfter", {
+                    name: indexer.name,
+                    seconds: indexer.retryAfterSeconds,
+                  })
+                : indexer.name,
+            )
+            .join("\n")}
+        >
+          {t("title.contextReleaseSearchIndexerPartlySearched", {
+            count: presentation.partlySearchedIndexers.length,
+            names: presentation.partlySearchedIndexers
+              .map((indexer) => indexer.name)
+              .join(", "),
+          })}
+        </p>
+      ) : null}
       {presentation.showFinalSummary
         ? presentation.unroutableResults.map((summary) => (
             <p

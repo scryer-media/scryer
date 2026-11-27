@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   catalogDeletionRefresh,
+  titleDeletionFailedTitleIds,
   withPendingDeletedTitleIds,
 } from "./catalog-deletion-refresh.ts";
 import {
@@ -78,4 +79,41 @@ test("a queued deletion hides its titles until the deletion settles", () => {
   // Nothing new to hide keeps the same set, so the list does not re-render.
   assert.equal(withPendingDeletedTitleIds(next, ["title-queued"]), next);
   assert.equal(withPendingDeletedTitleIds(next, []), next);
+});
+
+test("a finished deletion run names the titles it left in place", () => {
+  assert.deepEqual(
+    titleDeletionFailedTitleIds({ status: "COMPLETED", summaryJson: null }),
+    [],
+  );
+  const summary = {
+    succeededTitleIds: ["title-1"],
+    failures: [{ titleId: "title-2", error: "refused" }],
+  };
+  assert.deepEqual(
+    titleDeletionFailedTitleIds({ status: "WARNING", summaryJson: summary }),
+    ["title-2"],
+  );
+  assert.deepEqual(
+    titleDeletionFailedTitleIds({
+      status: "FAILED",
+      summaryJson: JSON.stringify(summary),
+    }),
+    ["title-2"],
+  );
+});
+
+test("a failed deletion run that lists no titles leaves the outcome unknown", () => {
+  for (const summaryJson of [
+    null,
+    "not json",
+    {},
+    { failures: [] },
+    { failures: [{ error: "refused" }] },
+  ]) {
+    assert.equal(
+      titleDeletionFailedTitleIds({ status: "FAILED", summaryJson }),
+      null,
+    );
+  }
 });

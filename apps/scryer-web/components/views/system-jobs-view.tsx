@@ -3,6 +3,7 @@ import {
   jobDisplayName,
   jobScheduleDescription,
 } from "@/lib/i18n/native-jobs";
+import { useFacets } from "@/lib/facets/use-facets";
 import { ArrowDown, ArrowUp, Edit, Plus, Power, Trash2 } from "lucide-react";
 import {
   useCallback,
@@ -783,9 +784,17 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     [activeRunsByJob, getActiveSession, lastRunsByJob, triggeringKeys],
   );
 
+  // A hidden facet's library scan and refresh jobs are not listed.
+  const { isVisible: isFacetVisible } = useFacets();
   const jobRows = useMemo<JobTableRow[]>(
-    () => jobs.map(buildJobRow),
-    [buildJobRow, jobs],
+    () =>
+      jobs
+        .filter((job) => {
+          const facet = libraryFacetForJob(job.key);
+          return facet === null || isFacetVisible(facet);
+        })
+        .map(buildJobRow),
+    [buildJobRow, isFacetVisible, jobs],
   );
   const customJobRows = useMemo(
     () =>

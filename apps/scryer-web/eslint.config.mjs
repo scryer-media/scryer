@@ -34,4 +34,44 @@ export default tseslint.config(
       "react-hooks/incompatible-library": "off",
     },
   },
+  {
+    // Facets a user hides must vanish everywhere at once, so components learn
+    // which facets to offer from `useFacets()` (see AGENTS.md, "Facet
+    // visibility"). A data-only list, such as a settings key map, disables the
+    // rule on its line and says why.
+    files: ["components/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "ArrayExpression > Literal[value=/^(MOVIE|SERIES|ANIME|movie|series|anime)$/] ~ Literal[value=/^(MOVIE|SERIES|ANIME|movie|series|anime)$/]",
+          message:
+            "Do not list facets by hand. Enumerate useFacets().facets or filter with useFacets().values so hidden facets are left out.",
+        },
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@/lib/facets/registry",
+              importNames: ["FACET_REGISTRY", "FACET_IDS", "MEDIA_VIEW_IDS"],
+              message:
+                "Enumerate useFacets().facets so hidden facets are left out. Look up one facet with facetById or facetForView.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["**/lib/facets/registry", "**/lib/facets/registry.ts"],
+              importNames: ["FACET_REGISTRY", "FACET_IDS", "MEDIA_VIEW_IDS"],
+              message:
+                "Enumerate useFacets().facets so hidden facets are left out. Look up one facet with facetById or facetForView.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

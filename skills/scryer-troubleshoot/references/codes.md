@@ -181,6 +181,16 @@ on an interactive search:
 - `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE`: usage could not be checked,
   so request refused; retried on the next pass
 
+An interactive search waits at most 30 s for an indexer's next
+`maxQueriesPerMinute` slot. Past that it stops asking that indexer, a
+cooldown, not a failure. `retryAfterSeconds` on the indexer row gives the
+delay to the next slot:
+
+- `INDEXER_QUERY_BUDGET_NOT_SEARCHED`: no request sent; `skipReason:
+  QUERY_BUDGET`, status SKIPPED
+- `INDEXER_QUERY_BUDGET_PARTLY_SEARCHED`: some requests sent, the rest not;
+  status COMPLETED, its results kept
+
 ## Health checks
 
 From `HealthChecks.graphql`: `summaryJson.checks[] = {source, status, message, reason?, facts?}`.

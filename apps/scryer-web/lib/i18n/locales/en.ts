@@ -288,6 +288,8 @@ const en: LocaleDictionary = {
   "error.fallback.failedToRestartProwlarrDiscovery":
     "Failed to restart Prowlarr discovery",
   "error.fallback.failedToSave": "Failed to save",
+  "error.fallback.failedToUpdateFacetVisibility":
+    "Failed to update which media types are shown.",
   "error.fallback.failedToUpdateSponsorPreference":
     "Failed to update Sponsor preference.",
   "error.fallback.importFailed": "Import failed",
@@ -3967,6 +3969,12 @@ const en: LocaleDictionary = {
     "Trusted certificate bundle must contain PEM-encoded X.509 certificates.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Trusted certificate bundle may only contain X.509 certificate PEM blocks.",
+  "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
+    "At least one media type must stay visible.",
+  "error.reason.SETTINGS_ALL_FACETS_DISABLED":
+    "At least one media type must stay on.",
+  "error.reason.SETTINGS_FACET_DISABLED":
+    "This media type is turned off for this instance.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "A table's column settings list the same column more than once.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
@@ -6138,6 +6146,10 @@ const en: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Folder template contains an illegal filesystem character: {{character}}",
   "settings.renameTemplateLabel": "Rename template",
+  "settings.renameTemplateNoExtensionTitle": "Save without {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "This rename template has no {ext} token. Scryer will add each file's extension to the end of the name.",
+  "settings.renameTemplateNoExtensionConfirm": "Save anyway",
   "settings.renameTemplatePlaceholder": "Placeholder",
   "settings.renameTemplateRequired": "Rename template is required.",
   "settings.renameCollisionPolicyLabel": "Collision policy",
@@ -6270,6 +6282,10 @@ const en: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Personalized discovery",
   "settings.personalizedDiscoveryHelp":
     "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
+  "settings.disabledFacetsLabel": "Media types",
+  "settings.disabledFacetsHelp":
+    "Turn a media type off for everyone. It leaves navigation, discovery, search and pickers, and its searches, scans and refreshes stop. Titles you already have stay reachable.",
+  "settings.disabledFacetsLastEnabled": "At least one media type must stay on.",
   "settings.srrdbFilenameRecoveryLabel":
     "Recover obfuscated filenames from srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
@@ -6786,6 +6802,10 @@ const en: LocaleDictionary = {
     "{{count}} indexer(s) failed: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) skipped: {{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} indexer(s) searched in part, over their query budget: {{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: can be asked again in {{seconds}} s",
   "title.contextReleaseSearchUnroutable.noUsenetClient":
     "{{count}} Usenet release(s) hidden, no enabled Usenet download client: {{names}}",
   "title.contextReleaseSearchUnroutable.noTorrentClient":
@@ -8751,6 +8771,14 @@ const en: LocaleDictionary = {
 
   "profile.accountInfo": "Account",
   "profile.appearance": "Appearance",
+  "profile.facetVisibility": "Media types",
+  "profile.facetVisibilityDescription":
+    "Choose which media types appear in navigation, discovery, search and pickers. Titles you already have stay reachable.",
+  "profile.facetVisibilityLastVisible":
+    "At least one media type must stay visible.",
+  "profile.facetVisibilityDisabledByAdmin":
+    "An administrator turned this media type off for everyone.",
+  "profile.facetVisibilitySaved": "Media type preference saved.",
   "profile.appearanceDescription":
     "Personalize how Scryer looks for your account.",
   "profile.highlightColor": "Highlight color",
@@ -11917,6 +11945,11 @@ const en: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "In backoff after recent failures",
   "indexerSearch.skipReason.backedOffUntil": "In backoff until {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Does not support text search",
+  "indexerSearch.skipReason.queryBudget": "Over its query budget",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Over its query budget until {{time}}",
+  "indexerSearch.queryBudget.partlySearched":
+    "Searched in part: its query budget stopped the remaining requests. Results from the requests it sent are kept.",
   "indexerSearch.caps.fresh": "Capabilities from cached snapshot",
   "indexerSearch.caps.managed": "Capabilities from managed indexer",
   "indexerSearch.caps.refreshed": "Capabilities refreshed",

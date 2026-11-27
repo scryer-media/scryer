@@ -1529,6 +1529,10 @@ const cs: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Šablona složky obsahuje nepovolený znak souborového systému: {{character}}",
   "settings.renameTemplateLabel": "Šablona přejmenování",
+  "settings.renameTemplateNoExtensionTitle": "Uložit bez {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "Tato šablona přejmenování neobsahuje token {ext}. Scryer přidá příponu každého souboru na konec názvu.",
+  "settings.renameTemplateNoExtensionConfirm": "Přesto uložit",
   "settings.renameTemplatePlaceholder": "Zástupný symbol",
   "settings.renameTemplateRequired": "Šablona přejmenování je povinná.",
   "settings.renameCollisionPolicyLabel": "Zásada kolizí",

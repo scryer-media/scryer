@@ -6,9 +6,11 @@ import {
 } from "@/components/ui/multi-select-dropdown";
 import { localizedFacetLabel } from "@/components/views/overview-localization";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useFacets } from "@/lib/facets/use-facets";
 import type { LibraryRecord } from "@/lib/types";
 import { normalizeLibraryFilterSelection } from "@/lib/utils/library-filter";
 
+// eslint-disable-next-line no-restricted-syntax -- orders the libraries the user has; a library is a record, not a facet choice
 const FACET_ORDER: LibraryRecord["facet"][] = ["MOVIE", "SERIES", "ANIME"];
 const MAX_INLINE_LIBRARY_LABELS = 2;
 
@@ -46,9 +48,19 @@ export function LibraryMultiSelect({
     () => normalizeLibraryFilterSelection(selectedLibraryIds, libraries),
     [libraries, selectedLibraryIds],
   );
+  // A hidden facet's libraries are not offered, unless one is already
+  // selected: it stays so the selection can be seen and cleared.
+  const { isVisible } = useFacets();
   const groupedLibraries = React.useMemo(
-    () => groupLibrariesByFacet(libraries),
-    [libraries],
+    () =>
+      groupLibrariesByFacet(
+        libraries.filter(
+          (library) =>
+            isVisible(library.facet) ||
+            normalizedSelectedLibraryIds.includes(library.id),
+        ),
+      ),
+    [isVisible, libraries, normalizedSelectedLibraryIds],
   );
   const showFacetGroups = groupedLibraries.length > 1;
   const libraryById = React.useMemo(

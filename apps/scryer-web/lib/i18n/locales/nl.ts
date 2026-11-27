@@ -1262,6 +1262,10 @@ const nl: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Maptemplate bevat een ongeldig teken: {{character}}",
   "settings.renameTemplateLabel": "Template voor hernoemen",
+  "settings.renameTemplateNoExtensionTitle": "Opslaan zonder {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "Deze template voor hernoemen bevat geen {ext}-token. Scryer voegt de extensie van elk bestand toe aan het einde van de naam.",
+  "settings.renameTemplateNoExtensionConfirm": "Toch opslaan",
   "settings.renameTemplatePlaceholder": "Voorbeeld",
   "settings.renameTemplateRequired": "Template voor hernoemen is verplicht.",
   "settings.renameCollisionPolicyLabel": "Conflictbeleid",

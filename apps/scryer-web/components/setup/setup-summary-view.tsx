@@ -53,6 +53,7 @@ function formatFacetPrefs(
     SERIES: t("setup.facetSeries"),
     ANIME: t("setup.facetAnime"),
   };
+  // eslint-disable-next-line no-restricted-syntax -- setup creates libraries for every facet before any user preference exists
   return (["MOVIE", "SERIES", "ANIME"] as ViewCategoryId[])
     .map((facet) => {
       const p = facetPrefs[facet];

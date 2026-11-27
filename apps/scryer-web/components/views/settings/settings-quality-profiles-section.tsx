@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useFacets } from "@/lib/facets/use-facets";
 import {
   ArrowDown,
   ArrowUp,
@@ -550,6 +551,7 @@ export function SettingsQualityProfilesSection({
   deleteQualityProfile,
 }: SettingsQualityProfilesSectionProps) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
   const [globalQualityProfileDraft, setGlobalQualityProfileDraft] =
     React.useState(globalQualityProfileId);
   const [globalScoringPersonaDraft, setGlobalScoringPersonaDraft] =
@@ -2025,7 +2027,10 @@ export function SettingsQualityProfilesSection({
                   {t("qualityProfile.scoringPersona")}
                 </span>
               </div>
-              {Object.keys(qualityCategoryLabels).map((scopeKey) => {
+              {visibleFacetItems(
+                Object.keys(qualityCategoryLabels),
+                (scopeKey) => scopeKey,
+              ).map((scopeKey) => {
                 const scopeId = scopeKey as ViewCategoryId;
                 const overridePersona = categoryPersonaDrafts[scopeId];
                 return (

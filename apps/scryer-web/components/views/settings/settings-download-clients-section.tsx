@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useFacets } from "@/lib/facets/use-facets";
 import {
   ChevronDown,
   ChevronRight,
@@ -243,6 +244,7 @@ function DownloadClientRoutingDisclosure({
   ) => Promise<void> | void;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
   const { options: seedingProfileOptions } = useSeedingProfileOptions();
   const supportsSeedingProfile = supportsDownloadClientRoutingSeedingProfile(
     downloadClient.clientType,
@@ -283,7 +285,10 @@ function DownloadClientRoutingDisclosure({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {DOWNLOAD_CLIENT_ROUTING_FACETS.map(({ scope, labelKey }) => {
+        {visibleFacetItems(
+          DOWNLOAD_CLIENT_ROUTING_FACETS,
+          (item) => item.scope,
+        ).map(({ scope, labelKey }) => {
           const routing =
             routingByScope[scope]?.[downloadClient.id] ??
             DOWNLOAD_CLIENT_ROUTING_EMPTY;

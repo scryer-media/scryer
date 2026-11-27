@@ -3024,6 +3024,10 @@ pub enum IndexerSearchIncompleteReason {
     /// An interactive search skipped the indexer instead of waiting out its
     /// query budget. Nothing was sent and none of the budget was spent.
     QueryBudgetExhausted,
+    /// An interactive search sent some of the indexer's requests, then
+    /// stopped instead of waiting out its query budget for the rest. The
+    /// results of the requests that were sent are kept.
+    QueryBudgetPartial,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4910,6 +4914,9 @@ pub enum UiSettingsFacet {
 }
 
 impl UiSettingsFacet {
+    /// Every facet, in registry order.
+    pub const ALL: [Self; 3] = [Self::Movies, Self::Series, Self::Anime];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Movies => "movies",
@@ -5205,6 +5212,9 @@ pub struct UiSettings {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
+    /// Facets the user hid from navigation, discovery and pickers. Never all
+    /// of them; registry order, no duplicates.
+    pub hidden_facets: Vec<UiSettingsFacet>,
     /// Interface language code chosen by the user; `None` follows the browser.
     pub language: Option<String>,
     pub table_columns: Vec<UiTableColumnSetting>,
@@ -5234,6 +5244,8 @@ pub struct UiSettingsUpdate {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
+    /// Facets hidden from navigation, discovery and pickers.
+    pub hidden_facets: Vec<UiSettingsFacet>,
     /// `None` keeps the stored language; `Some(None)` clears it.
     pub language: Option<Option<String>>,
     /// `None` keeps the stored columns; a list replaces all of them.
@@ -5257,6 +5269,7 @@ impl UiSettings {
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),
+            hidden_facets: Vec::new(),
             language: None,
             table_columns: Vec::new(),
             catalog_views: Vec::new(),

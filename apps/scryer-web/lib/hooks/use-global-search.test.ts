@@ -326,3 +326,88 @@ test("a monitoring-only settings event refreshes catalog defaults without unrela
     "a monitoring-only change must reload the selected library defaults",
   );
 });
+
+test("an audio-language settings event refreshes catalog defaults", () => {
+  for (const key of ["audio.required_languages", "audio.preferred_languages"]) {
+    let onSettingsChanged: ((keys: string[]) => void) | undefined;
+    let configQueries = 0;
+    const { useGlobalSearch: renderSearch } = loadGlobalSearch({
+      react: {
+        useState: (initial: unknown) => [
+          typeof initial === "function" ? initial() : initial,
+          () => {},
+        ],
+        useRef: (current: unknown) => ({ current }),
+        useEffect: () => {},
+        useMemo: (compute: () => unknown) => compute(),
+        useCallback: (callback: unknown) => callback,
+      },
+      urql: {
+        useClient: () => ({
+          query: () => {
+            configQueries += 1;
+            return { toPromise: () => new Promise(() => {}) };
+          },
+        }),
+      },
+      "@/lib/hooks/use-settings-subscription": {
+        useSettingsSubscription: (callback: (keys: string[]) => void) => {
+          onSettingsChanged = callback;
+        },
+      },
+    });
+    renderSearch({
+      authenticatedUser: {
+        id: "audio-user",
+        username: "audio-user",
+        appPermissions: [],
+        libraryPermissions: [
+          { libraryId: "library-1", permissions: ["VIEW", "MANAGE_TITLES"] },
+        ],
+      },
+      queueFacet: "SERIES",
+      uiLanguage: "eng",
+    });
+    assert.ok(onSettingsChanged);
+    onSettingsChanged([key]);
+    assert.equal(configQueries, 1, `${key} must reload library defaults`);
+  }
+});
+
+test("a library whose inherited audio languages changed is not treated as unchanged", () => {
+  const { sameLibrariesByFacet } = loadGlobalSearch();
+  const library = {
+    id: "library-1",
+    facet: "SERIES",
+    name: "Series",
+    slug: "series",
+    isDefault: true,
+    defaultMonitorType: "FUTURE_EPISODES",
+    roots: [],
+    inheritedRequiredAudioLanguages: [] as string[],
+    inheritedPreferredAudioLanguages: [] as string[],
+  };
+  const byFacet = (entry: typeof library) =>
+    ({ MOVIE: [], SERIES: [entry], ANIME: [] }) as unknown as Parameters<
+      typeof sameLibrariesByFacet
+    >[0];
+
+  assert.equal(
+    sameLibrariesByFacet(byFacet(library), byFacet({ ...library })),
+    true,
+  );
+  assert.equal(
+    sameLibrariesByFacet(
+      byFacet(library),
+      byFacet({ ...library, inheritedPreferredAudioLanguages: ["eng"] }),
+    ),
+    false,
+  );
+  assert.equal(
+    sameLibrariesByFacet(
+      byFacet(library),
+      byFacet({ ...library, inheritedRequiredAudioLanguages: ["jpn"] }),
+    ),
+    false,
+  );
+});

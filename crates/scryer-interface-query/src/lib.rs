@@ -731,6 +731,9 @@ pub fn from_interactive_release_search_snapshot(
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
             failure_reason_code: indexer.failure_reason_code.map(str::to_owned),
+            retry_after_seconds: indexer
+                .retry_after
+                .map(|delay| delay.as_secs().min(i32::MAX as u64) as i32),
             caps_source: indexer.caps.map(|caps| {
                 use scryer_application::IndexerCapsSource as Source;
                 match caps.source {
@@ -762,6 +765,7 @@ pub fn from_interactive_release_search_snapshot(
                     Reason::MonthlyLimit { .. } => {
                         InteractiveReleaseSearchSkipReasonValue::MonthlyLimit
                     }
+                    Reason::QueryBudget => InteractiveReleaseSearchSkipReasonValue::QueryBudget,
                 }
             }),
             skipped_until: indexer.skipped_until,
@@ -3730,6 +3734,11 @@ impl SystemQueries {
             api_explorer_enabled: features.api_explorer_enabled,
             experimental_features_enabled: features.experimental_features_enabled,
             personalized_discovery_enabled: features.personalized_discovery_enabled,
+            disabled_facets: features
+                .disabled_facets
+                .into_iter()
+                .map(MediaFacetValue::from_domain)
+                .collect(),
         })
     }
 

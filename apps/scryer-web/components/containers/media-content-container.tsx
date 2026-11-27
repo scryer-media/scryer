@@ -88,10 +88,8 @@ import type {
   ViewId,
 } from "@/components/root/types";
 import { toProfileOptions } from "@/lib/utils/quality-profiles";
-import {
-  discoveryItemFacet,
-  metadataResultForDiscoveryItem,
-} from "@/lib/utils/discovery-actions";
+import { metadataResultForDiscoveryItem } from "@/lib/utils/discovery-actions";
+import { useDiscoveryItemFacet, useFacets } from "@/lib/facets/use-facets";
 import {
   normalizeLibraryFilterSelection,
   singleSelectedLibraryId,
@@ -186,6 +184,7 @@ import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-cont
 import { useSearchContext } from "@/lib/context/search-context";
 import {
   catalogDeletionRefresh,
+  titleDeletionFailedTitleIds,
   withPendingDeletedTitleIds,
 } from "@/lib/utils/catalog-deletion-refresh";
 import {
@@ -372,7 +371,6 @@ const defaultTitleCatalogSortState: TitleCatalogSortState = {
 
 const CATALOG_DISCOVERY_LIMIT_PER_GROUP = 12;
 const CATALOG_DISCOVERY_MAX_GROUPS = 6;
-const DISCOVERY_FACETS: Facet[] = ["MOVIE", "SERIES", "ANIME"];
 
 function mergeCatalogTitlesPreservingImages(
   currentTitles: TitleRecord[],
@@ -616,6 +614,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   onCloseOverview,
 }: MediaContentContainerProps) {
   const searchState = useSearchContext();
+  const { ids: visibleFacetIds } = useFacets();
+  const itemFacet = useDiscoveryItemFacet();
   const {
     addMetadataSearchResultToCatalog,
     catalogConfigLoading,
@@ -658,6 +658,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     pendingDeletedTitleIdsRef.current = pendingDeletedTitleIds;
   }, [pendingDeletedTitleIds]);
   const deletionJobIdsRef = React.useRef(new Set<string>());
+  // Titles the tracked deletion runs reported as not deleted, and whether a
+  // run failed without saying which titles those were.
+  const deletionFailedTitleIdsRef = React.useRef(new Set<string>());
+  const deletionOutcomeUnknownRef = React.useRef(false);
   const deletionFallbackTimersRef = React.useRef<
     ReturnType<typeof setTimeout>[]
   >([]);
@@ -691,17 +695,17 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     (requestableLibrariesByFacet[activeFacet] ?? []).length > 0;
   const manageableDiscoveryFacets = React.useMemo(
     () =>
-      DISCOVERY_FACETS.filter(
+      visibleFacetIds.filter(
         (facet) => (librariesByFacet[facet] ?? []).length > 0,
       ),
-    [librariesByFacet],
+    [librariesByFacet, visibleFacetIds],
   );
   const requestableDiscoveryFacets = React.useMemo(
     () =>
-      DISCOVERY_FACETS.filter(
+      visibleFacetIds.filter(
         (facet) => (requestableLibrariesByFacet[facet] ?? []).length > 0,
       ),
-    [requestableLibrariesByFacet],
+    [requestableLibrariesByFacet, visibleFacetIds],
   );
   const {
     selectedLibraryIds,
@@ -2166,7 +2170,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (item.ownedInInput) {
         return;
       }
-      const facet = discoveryItemFacet(item);
+      const facet = itemFacet(item);
       if (!facet) {
         setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
@@ -2208,7 +2212,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         const detailItem =
           (data?.discoveryItemDetail as
             CatalogDiscoveryItem | null | undefined) ?? item;
-        const detailFacet = discoveryItemFacet(detailItem);
+        const detailFacet = itemFacet(detailItem);
         if (!detailFacet || detailFacet !== facet) {
           throw new Error(t("status.permissionDenied"));
         }
@@ -2239,6 +2243,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       authorizationSignature,
       client,
       ensureCatalogConfigReady,
+      itemFacet,
       librariesByFacet,
       requestableLibrariesByFacet,
       setGlobalStatus,
@@ -2401,17 +2406,36 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
 
       deletionJobIdsRef.current.delete(run.id);
+      const failedTitleIds = titleDeletionFailedTitleIds(run);
+      if (failedTitleIds === null) {
+        deletionOutcomeUnknownRef.current = true;
+      } else {
+        for (const titleId of failedTitleIds) {
+          deletionFailedTitleIdsRef.current.add(titleId);
+        }
+      }
       if (deletionJobIdsRef.current.size === 0) {
         clearDeletionFallbackTimers();
+        // Only titles a run actually deleted leave the list. A title whose
+        // deletion failed, or whose outcome no run reported, shows again once
+        // the pending filter is dropped.
+        const keptTitleIds = deletionFailedTitleIdsRef.current;
+        const outcomeUnknown = deletionOutcomeUnknownRef.current;
+        deletionFailedTitleIdsRef.current = new Set();
+        deletionOutcomeUnknownRef.current = false;
+        const deletedIds = new Set(
+          outcomeUnknown
+            ? []
+            : [...pendingDeletedTitleIdsRef.current].filter(
+                (titleId) => !keptTitleIds.has(titleId),
+              ),
+        );
         // Physically remove the deleted titles from the context overlay before
         // dropping the pending-id render filter, or the union with
         // titleContextTitles resurrects their cards after the delete completes.
         setTitleContextTitles((current) =>
-          current.filter(
-            (title) => !pendingDeletedTitleIdsRef.current.has(title.id),
-          ),
+          current.filter((title) => !deletedIds.has(title.id)),
         );
-        const deletedIds = new Set(pendingDeletedTitleIdsRef.current);
         setMonitoredTitles((current) =>
           current.filter((title) => !deletedIds.has(title.id)),
         );
@@ -3235,7 +3259,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
     return catalogDiscoveryGroups.flatMap((group) => {
       const items = group.items.filter(
-        (item) => discoveryItemFacet(item) === activeFacet,
+        (item) => itemFacet(item) === activeFacet,
       );
       if (items.length === 0) {
         return [];
@@ -3256,6 +3280,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     canManageCatalogDiscovery,
     canRequestCatalogDiscovery,
     catalogDiscoveryGroups,
+    itemFacet,
   ]);
 
   const loadSelectedOverviewExternalSubtitles = React.useCallback(

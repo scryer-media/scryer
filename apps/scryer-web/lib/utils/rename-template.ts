@@ -441,6 +441,43 @@ export function applyRenameTemplatePreview(
   return result;
 }
 
+// Whether the template writes the given token anywhere, including inside an
+// optional group. An escaped "{{token}}" is literal text, and an optional
+// group's guard alone ("{?token: ...}") writes nothing.
+export function renameTemplateWritesToken(
+  template: string,
+  tokenName: string,
+): boolean {
+  const wanted = tokenName.toLowerCase();
+  let cursor = 0;
+  while (cursor < template.length) {
+    if (template.startsWith("{{", cursor)) {
+      cursor += 2;
+      continue;
+    }
+    if (template[cursor] !== "{") {
+      cursor++;
+      continue;
+    }
+    const closeIndex = template.indexOf("}", cursor + 1);
+    if (closeIndex === -1) {
+      return false;
+    }
+    const inner = template.slice(cursor + 1, closeIndex);
+    if (inner.startsWith("?") || inner.includes("{")) {
+      // Step inside an optional group; its body is scanned like any text.
+      cursor++;
+      continue;
+    }
+    const parsed = parseRenameTemplateTokenSpec(inner);
+    if (parsed.ok && parsed.spec.lookupName === wanted) {
+      return true;
+    }
+    cursor = closeIndex + 1;
+  }
+  return false;
+}
+
 export function splitRenameTemplateSegments(
   template: string,
   validTokens: ReadonlySet<string>,

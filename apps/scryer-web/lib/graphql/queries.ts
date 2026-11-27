@@ -1487,6 +1487,7 @@ function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       rateLimited
       skipReason
       skippedUntil
@@ -3280,6 +3281,7 @@ export const libraryDefaultMovieAvailabilityQuery = `query LibraryDefaultMovieAv
 
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    disabledFacets
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
@@ -3313,6 +3315,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -3936,6 +3939,7 @@ export const instanceFeaturesQuery = `query InstanceFeatures {
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    disabledFacets
   }
 }`;
 
