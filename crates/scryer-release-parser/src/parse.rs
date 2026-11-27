@@ -6806,6 +6806,17 @@ fn parse_season_keyword_episode_at(
         if tokens.get(index + 1)?.normalized != "SEASON" {
             return None;
         }
+        // `3rd Season S3E05` restates the ordinal's season, so the phrase is
+        // season information exactly as it is before `- 05`. A marker naming
+        // another season leaves the phrase to the title.
+        if let Some((Some(marker_season), episodes, last)) =
+            parse_hyphenated_standard_episode_range_at(tokens, index + 2, false)
+            && marker_season == season
+        {
+            let mut consumed = vec![index, index + 1];
+            consumed.extend(index + 2..=last);
+            return Some((Some(season), episodes, consumed));
+        }
         (season, index + 2, vec![index, index + 1])
     };
     if let Some((episodes, last)) = episode_marker_at(tokens, episode_index) {

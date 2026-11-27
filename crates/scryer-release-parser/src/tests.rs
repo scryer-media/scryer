@@ -5886,3 +5886,62 @@ fn hyphenated_video_codec_number_is_not_an_episode() {
         }
     }
 }
+
+#[test]
+fn ordinal_season_before_agreeing_episode_marker_is_not_title() {
+    let mut aliased = context(ContextFacetHint::Anime, "Show A");
+    aliased.aliases.push(ContextAlias {
+        name: "Romaji A".to_string(),
+    });
+    for target in [
+        aliased,
+        context(ContextFacetHint::Anime, "Show A"),
+        context(ContextFacetHint::Series, "Show A"),
+    ] {
+        // The dashed form already reads the ordinal as season information.
+        let dashed = crate::best_parse_for_target(
+            "[GRP] Romaji A 3rd Season - 05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+            &target,
+        );
+        assert!(
+            !dashed.normalized_title.contains("SEASON"),
+            "{:?}",
+            dashed.normalized_title
+        );
+        for (raw, season) in [
+            (
+                "[GRP] Romaji A 3rd Season S3E05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+                3,
+            ),
+            (
+                "[GRP] Romaji A 3rd Season S3E05-2026 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+                3,
+            ),
+            (
+                "[GRP] Romaji A 2nd Season S2E05-2026 [1080p WEBRip HEVC AAC][MultiSub][ABCD1234]",
+                2,
+            ),
+            (
+                "[GRP] Romaji A 4th Season S04E05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]",
+                4,
+            ),
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            assert_eq!(parsed.normalized_title, dashed.normalized_title, "{raw}");
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(season), "{raw}: {episode:?}");
+            assert_eq!(episode.episode_numbers, vec![5], "{raw}: {episode:?}");
+        }
+    }
+}
+
+#[test]
+fn ordinal_season_before_disagreeing_episode_marker_stays_title() {
+    let target = context(ContextFacetHint::Anime, "Show A");
+    let raw = "[GRP] Romaji A 3rd Season S2E05 [1080p WEB-DL AVC AAC][MultiSub][ABCD1234]";
+    let parsed = crate::best_parse_for_target(raw, &target);
+    assert_eq!(parsed.normalized_title, "ROMAJI A 3RD SEASON", "{raw}");
+    let episode = parsed.episode.expect(raw);
+    assert_eq!(episode.season, Some(2), "{raw}: {episode:?}");
+    assert_eq!(episode.episode_numbers, vec![5], "{raw}: {episode:?}");
+}
