@@ -77,7 +77,14 @@ not run them.
    import actions in the web UI.
 4. Logs: `log-search.sh $B 'import' WARN`.
 5. Hardlinks: `same_filesystem_pairs` empty while operator expects hardlinks
-   = download and library roots on different filesystems.
+   = download and library roots on different filesystems. For files already
+   imported, `TitleHistory.graphql` with `eventTypes: ["IMPORTED"]` shows
+   `filePlacements` per file. `placement` `COPY` with `linkFallback.cause`
+   `FAILED` = the hard link call failed and the file was copied; `reason` and
+   `osErrorCode` carry the error, and the log has a WARN
+   `hard link failed; handing import to copy lane` for it. `NOT_POSSIBLE` =
+   the destination cannot hold a link (another volume or filesystem).
+   Imports recorded before placements were kept have no `filePlacements`.
 
 ## Wrong release chosen
 

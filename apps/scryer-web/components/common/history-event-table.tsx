@@ -2,7 +2,7 @@ import { isArchivePasswordFailure } from "@/lib/utils/archive-password-reason";
 import * as React from "react";
 import { Link } from "react-router";
 import { useQuery } from "urql";
-import { RotateCcw } from "lucide-react";
+import { Link2Off, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
 import {
@@ -42,6 +42,7 @@ import {
   type HistoryHoverDetails,
 } from "@/lib/utils/history-hover";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { failedLinkPlacements } from "@/lib/utils/history-placements";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
 import type { ViewId } from "@/components/root/types";
 import { HistoryEventIcon } from "./history-event-icon";
@@ -588,6 +589,19 @@ export function HistoryEventTable({
                         {getTitleHistoryEventLabel(event.eventType, t)}
                       </span>
                     </span>
+                    {failedLinkPlacements(event.filePlacements).length > 0 ? (
+                      <ActionTooltip
+                        content={t("history.linkFallbackFailed")}
+                        wrapperClassName="ml-1.5 inline-flex align-middle"
+                        wrapperTabIndex={0}
+                      >
+                        <Link2Off
+                          id={selectorId("history-event-link-failed", event.id)}
+                          aria-label={t("history.linkFallbackFailed")}
+                          className="h-3.5 w-3.5 text-[var(--scry-warning-text)]"
+                        />
+                      </ActionTooltip>
+                    ) : null}
                   </TableCell>
                   {showTitle ? (
                     <TableCell className="align-middle @max-[64rem]/history:col-span-2 @max-[64rem]/history:[&_a]:whitespace-normal @max-[64rem]/history:[&_span]:whitespace-normal">

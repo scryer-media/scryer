@@ -2655,6 +2655,7 @@ mod tests {
                     episode_ids: vec!["episode-1".to_string()],
                     size_bytes: Some(3_221_225_472),
                     upgrade: false,
+                    file_placements: Vec::new(),
                 }),
             },
             DomainEvent {

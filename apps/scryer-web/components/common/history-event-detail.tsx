@@ -9,6 +9,10 @@ import { cn } from "@/lib/utils";
 import { titleMoveHistoryDetails } from "@/lib/utils/history-moves";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DecidedByBadge } from "@/components/common/decided-by-badge";
+import {
+  importLinkFallbackLabelKey,
+  importPlacementLabelKey,
+} from "@/lib/utils/history-placements";
 
 const friendlyKeys: Record<string, string> = {
   import_id: "Import ID",
@@ -54,6 +58,7 @@ const structuredDataKeys = new Set([
   "dest_path",
   "reason",
   "blocklist_reason",
+  "file_placements",
 ]);
 
 function formatKey(key: string): string {
@@ -150,6 +155,7 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
   );
   const hasDetail =
     Boolean(event.scoring) ||
+    (event.filePlacements?.length ?? 0) > 0 ||
     structuredDetails.length > 0 ||
     rawDetails.length > 0;
 
@@ -236,6 +242,57 @@ export function HistoryEventDetailContent({
               ))}
             </ul>
           ) : null}
+        </div>
+      ) : null}
+      {event.filePlacements?.length ? (
+        <div
+          id={selectorId("history-event-placements", event.id)}
+          className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]"
+        >
+          <span className="text-muted-foreground">{t("history.placement")}</span>
+          <ul className="min-w-0 space-y-0.5">
+            {event.filePlacements.map((placement) => {
+              const placementKey = importPlacementLabelKey(placement.placement);
+              const fallback = placement.linkFallback;
+              const fallbackKey = fallback
+                ? importLinkFallbackLabelKey(fallback.cause)
+                : null;
+              return (
+                <li key={placement.path} className="min-w-0">
+                  <span
+                    className={cn(
+                      "text-foreground",
+                      fallback?.cause === "FAILED" &&
+                        "text-[var(--scry-warning-text)]",
+                    )}
+                  >
+                    {fallback
+                      ? fallbackKey
+                        ? t(fallbackKey)
+                        : fallback.cause
+                      : placementKey
+                        ? t(placementKey)
+                        : placement.placement}
+                  </span>
+                  {fallback ? (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      ({fallback.reason}
+                      {fallback.osErrorCode != null
+                        ? `, ${t("history.linkFallbackError", { code: fallback.osErrorCode })}`
+                        : ""}
+                      )
+                    </span>
+                  ) : null}
+                  {event.filePlacements!.length > 1 ? (
+                    <div className="font-[family-name:var(--font-code)] text-muted-foreground">
+                      {formatValue(placement.path, "dest_path")}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
       {structuredDetails.map(({ key, value }) => (

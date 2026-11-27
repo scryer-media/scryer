@@ -3603,6 +3603,7 @@ mod move_import_source_cleanup_gate_tests {
             source_cleanup,
             verification: None,
             library_file_unsettled: false,
+            link_fallback: None,
         }
     }
 

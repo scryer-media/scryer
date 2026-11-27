@@ -11,10 +11,10 @@ use scryer_application::{
     location::verify::persisted_hashes,
 };
 use scryer_domain::{
-    ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportMode,
-    ImportSourceCleanupGuard, ImportSourceDisposition, ImportSourceIdentity,
-    ImportSourceIdentityKind, ImportSourceSnapshot, ImportStrategy, ImportTransferPhase,
-    ImportVerification, VerificationDepth,
+    ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportLinkFallback,
+    ImportLinkFallbackCause, ImportMode, ImportPlacement, ImportSourceCleanupGuard,
+    ImportSourceDisposition, ImportSourceIdentity, ImportSourceIdentityKind, ImportSourceSnapshot,
+    ImportStrategy, ImportTransferPhase, ImportVerification, VerificationDepth,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -865,9 +865,9 @@ enum ImportLink {
     /// Linked, and the new name proved to be the source at its length.
     Proven,
     /// This destination cannot hold a hard link to the source.
-    NotPossible,
-    /// The link was not made, in the disk's own words.
-    Failed(String),
+    NotPossible(LinkRefusal),
+    /// The link was not made, for a reason that does not say it cannot be.
+    Failed(LinkRefusal),
     /// Linked but not proven. The disk service removed the link again.
     Unproven(LinkDoubt),
     /// Linked but not proven, and the new name was already gone when the
@@ -876,6 +876,92 @@ enum ImportLink {
     /// Linked but not proven, and another writer's regular file now holds
     /// the name, which the disk service left alone.
     Occupied,
+}
+
+/// Why the disk refused a hard link, as its typed parts.
+struct LinkRefusal {
+    /// The disk service's stable reason code.
+    reason: &'static str,
+    error_kind: io::ErrorKind,
+    os_error_code: Option<i32>,
+    /// The disk's own words, for the log.
+    words: String,
+}
+
+impl LinkRefusal {
+    fn report(&self, cause: ImportLinkFallbackCause) -> LinkFallbackReport {
+        LinkFallbackReport {
+            fallback: ImportLinkFallback {
+                cause,
+                reason: self.reason.to_string(),
+                os_error_code: self.os_error_code,
+            },
+            error_kind: Some(format!("{:?}", self.error_kind)),
+            words: Some(self.words.clone()),
+        }
+    }
+}
+
+/// A hard link the fast lane tried and did not use, carried from the lane,
+/// which may run in a worker process with no log of its own, to the import
+/// that records it and writes its log line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LinkFallbackReport {
+    fallback: ImportLinkFallback,
+    /// The failure's `io::ErrorKind`, for the log line only.
+    #[serde(default)]
+    error_kind: Option<String>,
+    /// The disk's own words for the failure, for the log line only.
+    #[serde(default)]
+    words: Option<String>,
+}
+
+impl LinkFallbackReport {
+    /// A link that was not used because it could not be proven.
+    fn unverifiable() -> Self {
+        Self {
+            fallback: ImportLinkFallback {
+                cause: ImportLinkFallbackCause::Unverifiable,
+                reason: disk::reason::DISK_LINK_UNVERIFIABLE.to_string(),
+                os_error_code: None,
+            },
+            error_kind: None,
+            words: None,
+        }
+    }
+
+    /// Writes the log line for a hard link that failed before its import
+    /// was copied. A destination that cannot hold a link, or a link that was
+    /// not proven, is the volume's nature and is logged where it is found,
+    /// not once per file here.
+    fn log(&self, source: &Path, dest: &Path) {
+        if self.fallback.cause != ImportLinkFallbackCause::Failed {
+            return;
+        }
+        tracing::warn!(
+            source = %source.display(),
+            dest = %dest.display(),
+            reason = %self.fallback.reason,
+            error_kind = %self.error_kind.as_deref().unwrap_or("unknown"),
+            os_error_code = ?self.fallback.os_error_code,
+            error = %self.words.as_deref().unwrap_or(""),
+            "hard link failed; handing import to copy lane"
+        );
+    }
+}
+
+/// `result` with the hard link the fast lane tried and did not use, when the
+/// file was copied.
+fn with_link_fallback(
+    mut result: ImportFileResult,
+    report: Option<&LinkFallbackReport>,
+) -> ImportFileResult {
+    if let Some(report) = report
+        && result.placement() == ImportPlacement::Copy
+    {
+        result.link_fallback = Some(report.fallback.clone());
+    }
+    result
 }
 
 /// Why a hard link that was made is not trusted.
@@ -1014,6 +1100,9 @@ enum LinkAnswer {
     /// The source is unchanged, and the name holds another writer's regular
     /// file, which the service left alone.
     LeftAlone,
+    /// The link call fails with this platform error number and makes
+    /// nothing, as a filesystem that refuses a link for its own reasons does.
+    Fails(i32),
 }
 
 /// The answer a test made the disk service give, as the refusal's parts.
@@ -1022,9 +1111,23 @@ fn forced_link_answer(
     answer: LinkAnswer,
     source: &Path,
     dest: &Path,
-) -> Option<(Refused, String, Option<Unproven>)> {
+) -> Option<(
+    Refused,
+    String,
+    Option<Unproven>,
+    (io::ErrorKind, Option<i32>),
+)> {
     let after = match answer {
         LinkAnswer::Real => return None,
+        LinkAnswer::Fails(code) => {
+            let error = io::Error::from_raw_os_error(code);
+            return Some((
+                Refused::Failed,
+                error.to_string(),
+                None,
+                (error.kind(), Some(code)),
+            ));
+        }
         LinkAnswer::AlreadyGone => LinkAfter::AlreadyGone,
         LinkAnswer::LeftAloneAfterSourceSwap => {
             let swapped = source.with_file_name("swapped-in.mkv");
@@ -1049,6 +1152,7 @@ fn forced_link_answer(
             doubt: Doubt::OtherFile { linked },
             after,
         }),
+        (io::ErrorKind::Other, None),
     ))
 }
 
@@ -1121,7 +1225,7 @@ fn hard_link_import_source(
     let forced = forced_link_answer(options.link_answer, source, dest);
     #[cfg(not(test))]
     let forced = None;
-    let (refused, words, unproven) = match forced {
+    let (refused, words, unproven, (error_kind, os_error_code)) = match forced {
         Some(answer) => answer,
         None => {
             let policy = disk::placement::proven_link();
@@ -1139,7 +1243,8 @@ fn hard_link_import_source(
                 }
                 Err(refusal) => {
                     let words = refusal.to_string();
-                    (refusal.refused, words, refusal.unproven)
+                    let error = (refusal.error_kind(), refusal.raw_os_error());
+                    (refusal.refused, words, refusal.unproven, error)
                 }
             }
         }
@@ -1152,9 +1257,15 @@ fn hard_link_import_source(
         import_io_error(&error, said)
     };
     let Some(Unproven { doubt, after, .. }) = unproven else {
+        let refusal = LinkRefusal {
+            reason: refused.reason(),
+            error_kind,
+            os_error_code,
+            words,
+        };
         return Ok(match refused {
-            Refused::CannotLink(_) => ImportLink::NotPossible,
-            _ => ImportLink::Failed(words),
+            Refused::CannotLink(_) => ImportLink::NotPossible(refusal),
+            _ => ImportLink::Failed(refusal),
         });
     };
     match (doubt, after) {
@@ -2936,6 +3047,8 @@ enum FastPlacementResult {
     CopyRequired {
         prepared: PreparedImportPlacement,
         hard_link_identity_mismatch: Option<HardLinkIdentityMismatch>,
+        /// The hard link this lane tried and did not use.
+        link_fallback: Option<LinkFallbackReport>,
     },
 }
 
@@ -3030,6 +3143,7 @@ fn finish_prepared_import(
         // there is nothing to verify and nothing to hash.
         verification: None,
         library_file_unsettled: false,
+        link_fallback: None,
     })
 }
 
@@ -3046,6 +3160,7 @@ fn finish_renamed_archive_output(prepared: PreparedImportPlacement) -> ImportFil
         source_cleanup: None,
         verification: None,
         library_file_unsettled: false,
+        link_fallback: None,
     }
 }
 
@@ -3102,7 +3217,9 @@ fn try_fast_import_placement_in(
     }
 
     let mut hard_link_identity_mismatch = None;
+    let mut link_fallback = None;
     if prepared.hard_link_identity_unverifiable {
+        link_fallback = Some(LinkFallbackReport::unverifiable());
         tracing::debug!(
             volume_key = %opaque_lane_key(&prepared.volume_key),
             "hard link identity is unverifiable on this volume; handing import to copy lane"
@@ -3159,18 +3276,22 @@ fn try_fast_import_placement_in(
             }
             ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => {
                 hard_link_identity_mismatch = Some(mismatch);
+                link_fallback = Some(LinkFallbackReport::unverifiable());
             }
-            ImportLink::Unproven(LinkDoubt::Length(linked)) => match linked.size() {
-                Some(destination_size) => tracing::warn!(
-                    source_size = prepared.size,
-                    destination_size,
-                    "hard link size mismatch; handing import to copy lane"
-                ),
-                None => tracing::warn!(
-                    error = linked.describe_absence(),
-                    "hard link destination stat failed; handing import to copy lane"
-                ),
-            },
+            ImportLink::Unproven(LinkDoubt::Length(linked)) => {
+                link_fallback = Some(LinkFallbackReport::unverifiable());
+                match linked.size() {
+                    Some(destination_size) => tracing::warn!(
+                        source_size = prepared.size,
+                        destination_size,
+                        "hard link size mismatch; handing import to copy lane"
+                    ),
+                    None => tracing::warn!(
+                        error = linked.describe_absence(),
+                        "hard link destination stat failed; handing import to copy lane"
+                    ),
+                }
+            }
             // Nothing is read or written for this one before it is refused.
             ImportLink::UnprovenGone(words) => {
                 return Err(link_not_removed(&prepared.dest, &words));
@@ -3179,11 +3300,14 @@ fn try_fast_import_placement_in(
             ImportLink::Occupied => {
                 return Err(import_destination_occupied(&prepared.dest));
             }
-            ImportLink::NotPossible => {
+            ImportLink::NotPossible(refusal) => {
                 tracing::debug!("hard link is ineligible; handing import to copy lane");
+                link_fallback = Some(refusal.report(ImportLinkFallbackCause::NotPossible));
             }
-            ImportLink::Failed(error) => {
-                tracing::warn!(error = %error, "hard link failed; handing import to copy lane");
+            // Logged by the import that receives this lane's answer: this
+            // lane may run in a worker process that has no log.
+            ImportLink::Failed(refusal) => {
+                link_fallback = Some(refusal.report(ImportLinkFallbackCause::Failed));
             }
         }
     }
@@ -3193,6 +3317,7 @@ fn try_fast_import_placement_in(
     Ok(FastPlacementResult::CopyRequired {
         prepared,
         hard_link_identity_mismatch,
+        link_fallback,
     })
 }
 
@@ -3539,6 +3664,7 @@ fn reconcile_existing_destination(
         // proved equal to the source by the sampled proof above.
         verification: None,
         library_file_unsettled,
+        link_fallback: None,
     }))
 }
 
@@ -3594,6 +3720,7 @@ fn library_file_result(
         // the one file both names reach.
         verification: None,
         library_file_unsettled: false,
+        link_fallback: None,
     })
 }
 
@@ -3717,6 +3844,7 @@ fn import_hardlink_or_copy_blocking(
                 source_cleanup,
                 verification: None,
                 library_file_unsettled: false,
+                link_fallback: None,
             });
         }
 
@@ -3729,6 +3857,7 @@ fn import_hardlink_or_copy_blocking(
             );
         }
 
+        let mut link_fallback = None;
         if !force_cross_device_move(&options) && hardlink_uid_safe {
             let linked = hard_link_import_source(
                 &source,
@@ -3748,7 +3877,7 @@ fn import_hardlink_or_copy_blocking(
             let proven = matches!(linked, ImportLink::Proven);
             if !matches!(
                 linked,
-                ImportLink::NotPossible | ImportLink::Failed(_) | ImportLink::Occupied
+                ImportLink::NotPossible(_) | ImportLink::Failed(_) | ImportLink::Occupied
             ) && let Err(error) = ensure_same_source(&source, &source_fingerprint)
             {
                 if proven {
@@ -3796,48 +3925,56 @@ fn import_hardlink_or_copy_blocking(
                         source_cleanup,
                         verification: None,
                         library_file_unsettled: false,
+                        link_fallback: None,
                     });
                 }
-                ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => tracing::warn!(
-                    dest = %dest.display(),
-                    source_identity = %mark_label(&mismatch.source),
-                    linked_identity = %mark_label(&mismatch.linked),
-                    "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
-                ),
-                ImportLink::Unproven(LinkDoubt::Length(linked)) => match linked.size() {
-                    Some(dest_len) => tracing::warn!(
-                        "hard link size mismatch: source={} dest={}, falling back to copy",
-                        size,
-                        dest_len
-                    ),
-                    None => tracing::warn!(
-                        "hard link created but dest stat failed: {}, falling back to copy",
-                        linked.describe_absence()
-                    ),
-                },
+                ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => {
+                    link_fallback = Some(LinkFallbackReport::unverifiable());
+                    tracing::warn!(
+                        dest = %dest.display(),
+                        source_identity = %mark_label(&mismatch.source),
+                        linked_identity = %mark_label(&mismatch.linked),
+                        "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
+                    );
+                }
+                ImportLink::Unproven(LinkDoubt::Length(linked)) => {
+                    link_fallback = Some(LinkFallbackReport::unverifiable());
+                    match linked.size() {
+                        Some(dest_len) => tracing::warn!(
+                            "hard link size mismatch: source={} dest={}, falling back to copy",
+                            size,
+                            dest_len
+                        ),
+                        None => tracing::warn!(
+                            "hard link created but dest stat failed: {}, falling back to copy",
+                            linked.describe_absence()
+                        ),
+                    }
+                }
                 // Another writer's file holds the name; nothing is copied over
                 // it, as a copy would only be refused when it lands.
                 ImportLink::Occupied => return Err(import_destination_occupied(&dest)),
-                ImportLink::UnprovenGone(words) => tracing::warn!(
-                    "hard link did not prove and was already gone: {}, falling back to copy: {} -> {}",
-                    words,
-                    source.display(),
-                    dest.display()
-                ),
-                ImportLink::NotPossible => {
+                ImportLink::UnprovenGone(words) => {
+                    link_fallback = Some(LinkFallbackReport::unverifiable());
+                    tracing::warn!(
+                        "hard link did not prove and was already gone: {}, falling back to copy: {} -> {}",
+                        words,
+                        source.display(),
+                        dest.display()
+                    );
+                }
+                ImportLink::NotPossible(refusal) => {
                     tracing::info!(
                         "hard link is not possible here, falling back to copy: {} -> {}",
                         source.display(),
                         dest.display()
                     );
+                    link_fallback = Some(refusal.report(ImportLinkFallbackCause::NotPossible));
                 }
-                ImportLink::Failed(e) => {
-                    tracing::warn!(
-                        "hard link failed: {}, falling back to copy: {} -> {}",
-                        e,
-                        source.display(),
-                        dest.display()
-                    );
+                ImportLink::Failed(refusal) => {
+                    let report = refusal.report(ImportLinkFallbackCause::Failed);
+                    report.log(&source, &dest);
+                    link_fallback = Some(report);
                 }
             }
         }
@@ -3893,6 +4030,7 @@ fn import_hardlink_or_copy_blocking(
             source_cleanup,
             verification: Some(verification),
             library_file_unsettled: false,
+            link_fallback: link_fallback.map(|report| report.fallback),
         })
     })();
     pruned_on_failure(&created, placed)
@@ -4028,6 +4166,9 @@ enum ImportFileWorkerEvent {
         /// The source's mark the fast lane read, stored, for the copy lane.
         #[serde(default)]
         source_mark: Option<String>,
+        /// The hard link the fast lane tried and did not use.
+        #[serde(default)]
+        link_fallback: Option<LinkFallbackReport>,
     },
     Progress {
         nonce: u64,
@@ -4428,6 +4569,7 @@ pub fn run_import_file_worker() -> i32 {
                     FastPlacementResult::CopyRequired {
                         prepared,
                         hard_link_identity_mismatch,
+                        link_fallback,
                     } => write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::CopyRequired {
@@ -4435,6 +4577,7 @@ pub fn run_import_file_worker() -> i32 {
                             volume_key: prepared.volume_key,
                             hard_link_identity_mismatch,
                             source_mark: prepared.source_mark,
+                            link_fallback,
                         },
                     )
                     .map_err(ImportFileWorkerError::from),
@@ -5190,6 +5333,7 @@ impl FsFileImporter {
             let mut session = spawn_import_file_worker(executable, &fast_request).await?;
             let mut copy_permit = None;
             let mut copy_finalizing = false;
+            let mut link_fallback = None;
             loop {
                 match next_import_worker_event_or_cancel(
                     &mut session,
@@ -5227,6 +5371,7 @@ impl FsFileImporter {
                         volume_key: reported_volume_key,
                         hard_link_identity_mismatch,
                         source_mark,
+                        link_fallback: reported_link_fallback,
                         ..
                     } => {
                         if reported_volume_key != volume_key {
@@ -5242,6 +5387,10 @@ impl FsFileImporter {
                                 mismatch,
                             );
                         }
+                        if let Some(report) = &reported_link_fallback {
+                            report.log(source, dest);
+                        }
+                        link_fallback = reported_link_fallback;
                         wait_for_import_worker_exit(&mut session, "after requesting copy").await?;
                         drop(fast_permit.take());
                         tracing::debug!(
@@ -5273,7 +5422,7 @@ impl FsFileImporter {
                     }
                     ImportFileWorkerEvent::ImportFinished { result, .. } => {
                         drop(copy_permit);
-                        return Ok(result);
+                        return Ok(with_link_fallback(result, link_fallback.as_ref()));
                     }
                     ImportFileWorkerEvent::Error { error, .. } => {
                         return Err(error.into());
@@ -5337,6 +5486,7 @@ impl FsFileImporter {
             FastPlacementResult::CopyRequired {
                 mut prepared,
                 hard_link_identity_mismatch,
+                link_fallback,
             } => {
                 let volume_key = prepared.volume_key.clone();
                 if let Some(mismatch) = &hard_link_identity_mismatch {
@@ -5345,6 +5495,9 @@ impl FsFileImporter {
                         &prepared.dest,
                         mismatch,
                     );
+                }
+                if let Some(report) = &link_fallback {
+                    report.log(&prepared.source, &prepared.dest);
                 }
                 drop(fast_permit);
                 tracing::debug!(
@@ -5372,7 +5525,7 @@ impl FsFileImporter {
                 prepared.progress = Some(sender);
                 let mut task =
                     tokio::task::spawn_blocking(move || copy_prepared_import_blocking(prepared));
-                loop {
+                let copied = loop {
                     tokio::select! {
                         result = &mut task => break result.map_err(|error| AppError::Repository(format!("copy import task panicked: {error}")))?,
                         Some(update) = receiver.recv() => {
@@ -5385,7 +5538,8 @@ impl FsFileImporter {
                             if let Some(sender) = &forward { let _ = sender.send(update); }
                         }
                     }
-                }
+                };
+                copied.map(|result| with_link_fallback(result, link_fallback.as_ref()))
             }
         }
     }
@@ -5843,6 +5997,7 @@ mod tests {
             FastPlacementResult::CopyRequired {
                 prepared,
                 hard_link_identity_mismatch,
+                link_fallback,
             } => {
                 assert!(
                     !prepared.dest.exists(),
@@ -5855,7 +6010,11 @@ mod tests {
                         mismatch,
                     );
                 }
+                if let Some(report) = &link_fallback {
+                    report.log(&prepared.source, &prepared.dest);
+                }
                 let result = copy_prepared_import_blocking(prepared).expect("copy lane");
+                let result = with_link_fallback(result, link_fallback.as_ref());
                 (result, hard_link_identity_mismatch)
             }
         }
@@ -5903,6 +6062,115 @@ mod tests {
         );
         #[cfg(unix)]
         assert_no_stray_link(&source);
+        assert_eq!(result.placement(), ImportPlacement::Copy);
+        assert_eq!(
+            result.link_fallback.as_ref().map(|fallback| fallback.cause),
+            Some(ImportLinkFallbackCause::Unverifiable)
+        );
+    }
+
+    /// A platform error number that says nothing about whether a link can be
+    /// made, as a filesystem that refuses a link for its own reasons gives.
+    const EINVAL: i32 = 22;
+
+    #[test]
+    fn a_failed_hard_link_is_copied_recorded_and_logged_once() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let options = ImportFileOptions {
+            link_answer: LinkAnswer::Fails(EINVAL),
+            ..Default::default()
+        };
+
+        let ((result, mismatch), logs) = capture_logs(|| {
+            place_in_process(
+                &coordinator,
+                prepare_in_process(&source, &dest, options, false),
+                false,
+            )
+        });
+
+        assert!(mismatch.is_none());
+        assert_eq!(result.placement(), ImportPlacement::Copy);
+        assert!(result.verification.is_some());
+        assert_eq!(
+            result.link_fallback,
+            Some(ImportLinkFallback {
+                cause: ImportLinkFallbackCause::Failed,
+                reason: disk::reason::DISK_OPERATION_FAILED.to_string(),
+                os_error_code: Some(EINVAL),
+            })
+        );
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+        assert_eq!(
+            std::fs::read(&source).expect("read source"),
+            SYNTHETIC_PAYLOAD
+        );
+        let warnings = logs
+            .lines()
+            .filter(|line| line.contains("hard link failed; handing import to copy lane"))
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1, "{logs}");
+        let warning = warnings[0];
+        assert!(warning.contains("WARN"), "{warning}");
+        assert!(warning.contains("os_error_code=Some(22)"), "{warning}");
+        assert!(warning.contains("error_kind=InvalidInput"), "{warning}");
+        assert!(warning.contains("DISK_OPERATION_FAILED"), "{warning}");
+        assert!(warning.contains(&source.display().to_string()), "{warning}");
+        assert!(warning.contains(&dest.display().to_string()), "{warning}");
+    }
+
+    #[test]
+    fn a_failed_hard_link_reaches_the_parent_over_the_worker_protocol() {
+        let report = LinkRefusal {
+            reason: disk::reason::DISK_OPERATION_FAILED,
+            error_kind: io::ErrorKind::InvalidInput,
+            os_error_code: Some(EINVAL),
+            words: "Invalid argument".to_string(),
+        }
+        .report(ImportLinkFallbackCause::Failed);
+        let event = ImportFileWorkerEvent::CopyRequired {
+            nonce: 7,
+            volume_key: "unknown-volume".to_string(),
+            hard_link_identity_mismatch: None,
+            source_mark: None,
+            link_fallback: Some(report.clone()),
+        };
+
+        let line = serde_json::to_string(&event).expect("encode event");
+        match serde_json::from_str::<ImportFileWorkerEvent>(&line).expect("decode event") {
+            ImportFileWorkerEvent::CopyRequired { link_fallback, .. } => {
+                assert_eq!(link_fallback, Some(report));
+            }
+            _ => panic!("the event must decode as a copy hand-off"),
+        }
+    }
+
+    #[test]
+    fn a_proven_hard_link_is_recorded_as_hard_linked() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        if !hard_links_supported(temp.path()) {
+            return;
+        }
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+
+        let ((result, _), logs) = capture_logs(|| {
+            place_in_process(
+                &coordinator,
+                prepare_in_process(&source, &dest, ImportFileOptions::default(), false),
+                false,
+            )
+        });
+
+        assert_eq!(result.placement(), ImportPlacement::HardLink);
+        assert_eq!(result.link_fallback, None);
+        assert!(!logs.contains("WARN"), "{logs}");
     }
 
     #[test]

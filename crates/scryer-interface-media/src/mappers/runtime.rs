@@ -673,6 +673,7 @@ pub fn from_title_history_record(
         blocklist_reason: record.blocklist_reason,
         source_path: record.source_path,
         dest_path: record.dest_path,
+        file_placements: record.file_placements,
         data_json: record.data_json.map(json_string_to_value),
         occurred_at: parse_datetime(&record.occurred_at, "title history occurred_at")
             .map_err(scryer_application::AppError::Repository)?,

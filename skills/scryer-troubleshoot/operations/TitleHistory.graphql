@@ -15,6 +15,10 @@ query TitleHistory($titleIds: [ID!], $eventTypes: [TitleHistoryEventTypeValue!],
       failureReasonCode
       failureReason
       blocklistReason
+      filePlacements {
+        placement
+        linkFallback { cause reason osErrorCode }
+      }
     }
   }
 }

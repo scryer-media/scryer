@@ -9571,6 +9571,16 @@ const en: LocaleDictionary = {
   "history.noMore": "No more events",
   "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Load more",
+  "history.placement": "Placement",
+  "history.placementHardLink": "Hard linked",
+  "history.placementCopy": "Copied",
+  "history.placementSymlink": "Symlinked",
+  "history.placementRenamed": "Moved into place",
+  "history.placementAlreadyPresent": "Already in the library",
+  "history.linkFallbackFailed": "Copied because the hard link failed",
+  "history.linkFallbackNotPossible": "Copied because a hard link is not possible here",
+  "history.linkFallbackUnverifiable": "Copied because the hard link could not be verified",
+  "history.linkFallbackError": "error {{code}}",
 
   // Indexer error diagnostics
   "indexerErrors.title": "Indexer error history",

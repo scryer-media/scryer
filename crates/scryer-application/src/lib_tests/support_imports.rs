@@ -150,6 +150,7 @@ impl FileImporter for CopyingFileImporter {
             source_cleanup: None,
             verification: None,
             library_file_unsettled: false,
+            link_fallback: None,
         })
     }
 

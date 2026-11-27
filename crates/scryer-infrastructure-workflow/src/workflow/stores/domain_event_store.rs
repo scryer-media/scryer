@@ -553,6 +553,7 @@ mod title_history_filter_tests {
                     episode_ids: vec![],
                     size_bytes: None,
                     upgrade: false,
+                    file_placements: Vec::new(),
                 })
             };
             let mut event = event_with_payload(id, payload);
@@ -728,6 +729,7 @@ mod title_history_filter_tests {
                 episode_ids: vec![],
                 size_bytes: None,
                 upgrade: true,
+                file_placements: Vec::new(),
             }),
         );
         completed.stream = DomainEventStream::JobRun {

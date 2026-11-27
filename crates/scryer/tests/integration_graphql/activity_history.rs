@@ -589,6 +589,7 @@ async fn graphql_title_history_filters_by_episode_id() {
                 episode_ids: vec![episode_one.id.clone(), episode_two.id.clone()],
                 size_bytes: None,
                 upgrade: false,
+                file_placements: Vec::new(),
             }),
         })
         .await
@@ -932,6 +933,7 @@ async fn graphql_episode_history_omits_ambiguous_source_path_for_multi_file_even
                 episode_ids: vec![episode_one.id.clone(), episode_two.id.clone()],
                 size_bytes: None,
                 upgrade: false,
+                file_placements: Vec::new(),
             }),
         })
         .await

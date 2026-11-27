@@ -8957,6 +8957,62 @@ enum ImportErrorCodeValue {
 }
 
 """
+How one imported file was placed.
+"""
+type ImportFilePlacementPayload {
+	"""
+	Library path the file was placed at.
+	"""
+	path: String!
+	"""
+	How the file was placed.
+	"""
+	placement: ImportPlacementValue!
+	"""
+	Set when the file was copied after a hard link was tried.
+	"""
+	linkFallback: ImportLinkFallbackPayload
+}
+
+"""
+Why a file was copied where a hard link was tried.
+"""
+enum ImportLinkFallbackCauseValue {
+	"""
+	The hard link call failed with an error that does not say the
+	destination cannot hold a link.
+	"""
+	FAILED
+	"""
+	The destination cannot hold a hard link to the source.
+	"""
+	NOT_POSSIBLE
+	"""
+	A link could not be proven to be the source, so it was not used.
+	"""
+	UNVERIFIABLE
+}
+
+"""
+A hard link that was tried and not used, so the file was copied.
+"""
+type ImportLinkFallbackPayload {
+	"""
+	Why the link was not used.
+	"""
+	cause: ImportLinkFallbackCauseValue!
+	"""
+	Stable disk reason code for the refusal.
+	"""
+	reason: String!
+	"""
+	The platform's error number for the failure, or null when the system
+	gave none.
+	"""
+	osErrorCode: Int
+}
+
+"""
 File operation used during import.
 """
 enum ImportModeValue {
@@ -8968,6 +9024,32 @@ enum ImportModeValue {
 	Move the source file.
 	"""
 	MOVE
+}
+
+"""
+How an import put a file at its library path.
+"""
+enum ImportPlacementValue {
+	"""
+	A hard link to the download's file: both names are one file.
+	"""
+	HARD_LINK
+	"""
+	A copy of the download's file, proven before the import went on.
+	"""
+	COPY
+	"""
+	A symbolic link, made because the download's file is itself one.
+	"""
+	SYMLINK
+	"""
+	The download's file was renamed into place.
+	"""
+	RENAMED
+	"""
+	The library already held the file; nothing was placed.
+	"""
+	ALREADY_PRESENT
 }
 
 """
@@ -33654,6 +33736,11 @@ type TitleHistoryEventPayload {
 	Time the event record was created in UTC.
 	"""
 	createdAt: DateTime!
+	"""
+	How each file of an import was placed in the library. Null for other
+	event types and for imports recorded before placements were.
+	"""
+	filePlacements: [ImportFilePlacementPayload!]
 }
 
 """
