@@ -62,6 +62,8 @@ import { buildViewPath } from "@/lib/utils/routing";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { watchSyncReasonText } from "@/lib/utils/watch-sync-reason";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { notificationEventLabel } from "@/lib/notification-capabilities";
+import type { MediaServerRefreshOffer } from "@/lib/utils/media-server-refresh-offer";
 
 type SettingsMediaServersSectionProps = {
   connections: MediaServerConnection[];
@@ -97,6 +99,10 @@ type SettingsMediaServersSectionProps = {
   discoverEmbyConnectServers: () => Promise<void> | void;
   testSavedEmbyConnect: () => Promise<void> | void;
   editorError: string | null;
+  /** The library-refresh offer of the create form; null hides it. */
+  refreshOffer: MediaServerRefreshOffer | null;
+  subscribeRefreshes: boolean;
+  setSubscribeRefreshes: (subscribe: boolean) => void;
 };
 
 const PROVIDERS: Array<{ value: VisibleMediaServerProvider; label: string }> = [
@@ -294,6 +300,9 @@ export function SettingsMediaServersSection({
   discoverEmbyConnectServers,
   testSavedEmbyConnect,
   editorError,
+  refreshOffer,
+  subscribeRefreshes,
+  setSubscribeRefreshes,
 }: SettingsMediaServersSectionProps) {
   const t = useTranslate();
   const isEditing = editorMode === "edit";
@@ -1330,6 +1339,46 @@ export function SettingsMediaServersSection({
                       </div>
                     ) : null}
                   </div>
+                ) : null}
+
+                {!isEditing && refreshOffer?.kind === "available" ? (
+                  <div className="space-y-1 rounded border border-border bg-background/40 p-3">
+                    <label className="flex items-center gap-3">
+                      <Checkbox
+                        id="settings-media-server-subscribe-refreshes"
+                        size="large"
+                        checked={subscribeRefreshes}
+                        onCheckedChange={(checked) =>
+                          setSubscribeRefreshes(checked === true)
+                        }
+                      />
+                      <span>{t("settings.mediaServerRefreshOffer")}</span>
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.mediaServerRefreshOfferHelp", {
+                        events: refreshOffer.eventTypes
+                          .map((eventType) =>
+                            notificationEventLabel(eventType, t),
+                          )
+                          .join(", "),
+                      })}
+                    </p>
+                  </div>
+                ) : null}
+
+                {!isEditing && refreshOffer?.kind === "plugin_missing" ? (
+                  <p
+                    id="settings-media-server-refresh-plugin-missing"
+                    className="rounded border border-border bg-background/40 p-3 text-xs text-muted-foreground"
+                  >
+                    {t("settings.mediaServerRefreshPluginMissing")}{" "}
+                    <Link
+                      to="/settings/plugins"
+                      className="font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      {t("settings.plugins")}
+                    </Link>
+                  </p>
                 ) : null}
 
                 {editorError ? (

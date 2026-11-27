@@ -4745,6 +4745,14 @@ export const notificationProviderTypesQuery = `query NotificationProviderTypes {
   }
 }`;
 
+/** Installed notification providers and their events, for the media-server refresh offer. */
+export const mediaServerRefreshProvidersQuery = `query MediaServerRefreshProviders {
+  notificationProviderTypes {
+    providerType
+    supportedEvents
+  }
+}`;
+
 export const notificationEventTypesQuery = `query NotificationEventTypes {
   notificationEventTypes
 }`;

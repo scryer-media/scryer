@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsMediaServersSection } from "@/components/views/settings/settings-media-servers-section";
 import {
   createMediaServerConnectionMutation,
+  createNotificationSubscriptionMutation,
   deleteMediaServerConnectionMutation,
   discoverEmbyConnectServersMutation,
   discoverPlexMediaServersMutation,
@@ -21,6 +22,7 @@ import {
   authRuntimeStateQuery,
   librariesQuery,
   mediaServerConnectionsQuery,
+  mediaServerRefreshProvidersQuery,
 } from "@/lib/graphql/queries";
 import { useClient } from "urql";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -53,6 +55,12 @@ import {
 } from "@/lib/utils/local-path-style";
 import { nonEmptySecret } from "@/lib/utils/secret-input";
 import { normalizeMediaServerConnectionDraft } from "@/lib/utils/media-server-input";
+import {
+  mediaServerRefreshOffer,
+  subscribeMediaServerRefreshes,
+  type MediaServerRefreshProvider,
+} from "@/lib/utils/media-server-refresh-offer";
+import { notificationEventLabel } from "@/lib/notification-capabilities";
 
 type SettingsMediaServersSectionProps = ComponentProps<
   typeof SettingsMediaServersSection
@@ -361,6 +369,16 @@ export function SettingsMediaServersContainer() {
   const [pathMappingsValid, setPathMappingsValid] = useState(true);
   const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] =
     useState(false);
+  // Installed notification providers, read when the create form opens; null
+  // while unknown or when they cannot be read, which hides the refresh offer.
+  const [refreshProviders, setRefreshProviders] = useState<
+    MediaServerRefreshProvider[] | null
+  >(null);
+  const [subscribeRefreshes, setSubscribeRefreshes] = useState(true);
+  const refreshOffer =
+    editorMode === "create" && refreshProviders
+      ? mediaServerRefreshOffer(draft.provider, refreshProviders)
+      : null;
 
   const isDraftDirty = JSON.stringify(draft) !== JSON.stringify(draftBaseline);
 
@@ -453,6 +471,20 @@ export function SettingsMediaServersContainer() {
     setPathMappingsValid(true);
   }, []);
 
+  const loadRefreshProviders = useCallback(async () => {
+    setRefreshProviders(null);
+    const { data, error } = await client
+      .query<{ notificationProviderTypes?: MediaServerRefreshProvider[] }>(
+        mediaServerRefreshProvidersQuery,
+        {},
+        { requestPolicy: "network-only" },
+      )
+      .toPromise();
+    if (!error) {
+      setRefreshProviders(data?.notificationProviderTypes ?? []);
+    }
+  }, [client]);
+
   const openCreateEditor = useCallback(() => {
     const nextDraft = cloneDraft(DEFAULT_MEDIA_SERVER_DRAFT);
     setEditingConnectionId(null);
@@ -464,7 +496,9 @@ export function SettingsMediaServersContainer() {
     setPathMappingsValid(true);
     setEditorMode("create");
     setIsEditorOpen(true);
-  }, []);
+    setSubscribeRefreshes(true);
+    void loadRefreshProviders();
+  }, [loadRefreshProviders]);
 
   const openEditEditor = useCallback(
     (connection: MediaServerConnection) => {
@@ -725,17 +759,55 @@ export function SettingsMediaServersContainer() {
         if (error) throw error;
         setGlobalStatus(t("status.mediaServerUpdated"), { level: "SUCCESS" });
       } else {
-        const { error } = await client
-          .mutation(createMediaServerConnectionMutation, {
-            input: buildCreateInput(
-              submitted,
-              plexDiscoveryToken,
-              effectiveFormLoginEnabled,
-            ),
-          })
+        const { data, error } = await client
+          .mutation<{ createMediaServerConnection?: { id: string } }>(
+            createMediaServerConnectionMutation,
+            {
+              input: buildCreateInput(
+                submitted,
+                plexDiscoveryToken,
+                effectiveFormLoginEnabled,
+              ),
+            },
+          )
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.mediaServerCreated"), { level: "SUCCESS" });
+        const connectionId = data?.createMediaServerConnection?.id;
+        const offer = refreshProviders
+          ? mediaServerRefreshOffer(submitted.provider, refreshProviders)
+          : null;
+        const failures =
+          connectionId && subscribeRefreshes && offer?.kind === "available"
+            ? await subscribeMediaServerRefreshes(
+                connectionId,
+                offer.eventTypes,
+                async (input) => {
+                  const result = await client
+                    .mutation(createNotificationSubscriptionMutation, { input })
+                    .toPromise();
+                  if (result.error) throw result.error;
+                },
+              )
+            : [];
+        if (failures.length > 0) {
+          setGlobalStatus(
+            t("status.mediaServerRefreshSubscriptionFailed", {
+              events: failures
+                .map((failure) => notificationEventLabel(failure.eventType, t))
+                .join(", "),
+              reason: userFacingGraphQlErrorMessage(
+                failures[0].error,
+                t("status.failedToUpdate"),
+                t,
+              ),
+            }),
+            { level: "WARNING" },
+          );
+        } else {
+          setGlobalStatus(t("status.mediaServerCreated"), {
+            level: "SUCCESS",
+          });
+        }
       }
 
       resetDraft();
@@ -912,6 +984,9 @@ export function SettingsMediaServersContainer() {
         discoverEmbyConnectServers={discoverEmbyConnectServers}
         testSavedEmbyConnect={testSavedEmbyConnect}
         editorError={editorError}
+        refreshOffer={refreshOffer}
+        subscribeRefreshes={subscribeRefreshes}
+        setSubscribeRefreshes={setSubscribeRefreshes}
       />
       <ConfirmDialog
         open={pendingEditorAction !== null}

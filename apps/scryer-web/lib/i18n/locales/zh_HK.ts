@@ -1121,6 +1121,12 @@ const zh_HK: LocaleDictionary = {
   "settings.mediaServerEnabled": "已啟用媒體伺服器",
   "settings.mediaServerAuthCapabilities": "驗證功能",
   "settings.mediaServerAutoAddEnabled": "自動新增已啟用",
+  "settings.mediaServerRefreshOffer":
+    "當 Scryer 匯入、重新命名、刪除或移動媒體時，重新整理此伺服器的媒體庫",
+  "settings.mediaServerRefreshOfferHelp":
+    "在「通知」中為此連線訂閱：{{events}}。你可以在那裡更改或移除。",
+  "settings.mediaServerRefreshPluginMissing":
+    "匯入後重新整理媒體庫需要此伺服器的通知外掛程式，但尚未安裝。如要安裝，請開啟",
   "settings.mediaServerPathMappings": "路徑對應",
   "settings.mediaServerPathMappingsHelp":
     "若媒體伺服器對媒體資料夾的檢視路徑與 Scryer 不同，請在此設定路徑對應。",
@@ -3327,6 +3333,8 @@ const zh_HK: LocaleDictionary = {
   "status.editingRule": "正在編輯規則 {{name}}",
   "status.deletingRule": "刪除規則 {{name}}？",
   "status.mediaServerCreated": "媒體伺服器連線已儲存。",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "媒體伺服器連線已儲存，但以下媒體庫重新整理訂閱未能建立：{{events}}。{{reason}}",
   "status.mediaServerUpdated": "媒體伺服器連線已更新。",
   "status.mediaServerDeleted": "已刪除媒體伺服器 {{name}}。",
   "status.plexServersDiscovered": "已載入 Plex 伺服器。",
