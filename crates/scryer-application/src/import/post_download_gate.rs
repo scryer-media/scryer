@@ -2567,6 +2567,7 @@ async fn reopen_series_movie_link_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scryer_domain::Episode;
 
     #[cfg(feature = "runtime-media-analysis")]
     #[tokio::test]
@@ -3744,6 +3745,190 @@ mod tests {
             rejection.message,
             "video file could not be read to verify its duration; it may be incomplete or corrupted. Download it again and retry the import"
         );
+    }
+
+    fn runtime_episode(id: &str, season: &str, duration_seconds: Option<i64>) -> Episode {
+        Episode {
+            id: id.into(),
+            title_id: "title-short-form".into(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some(id.trim_start_matches("episode-").into()),
+            season_number: Some(season.into()),
+            episode_label: None,
+            title: None,
+            air_date: None,
+            duration_seconds,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    async fn short_form_series(runtime_minutes: Option<i32>) -> Title {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                crate::NewTitle {
+                    name: "Pocket Lantern Tales".into(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        Title {
+            runtime_minutes,
+            ..title
+        }
+    }
+
+    /// The runtime check for a file mapped to `episodes`, the way an automatic
+    /// episode import runs it.
+    fn mapped_file_rejection(
+        title: &Title,
+        episodes: &[Episode],
+        probed_seconds: i32,
+    ) -> Option<ImportedFileRejection> {
+        let expected =
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(title, episodes);
+        let parsed = crate::release_parser::parse_release_metadata(
+            "Pocket.Lantern.Tales.S01E01E02.1080p.WEB-DL.H264-GRP",
+        );
+        sample_rejection(
+            automatic(expected),
+            &MediaFacet::Series,
+            &parsed,
+            // Well above any bitrate floor, so only the runtime decides.
+            2_000_000_000,
+            Some(probed_seconds),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_file_mapped_to_several_episodes_is_held_to_their_summed_runtime() {
+        let title = short_form_series(Some(5)).await;
+        let two = [
+            runtime_episode("episode-1", "1", Some(300)),
+            runtime_episode("episode-2", "1", Some(310)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &two),
+            Some(610)
+        );
+        // Two five-minute episodes in one 10:09 file pass; against one of them
+        // alone the same file is too long.
+        assert!(mapped_file_rejection(&title, &two, 609).is_none());
+        let one = mapped_file_rejection(&title, &two[..1], 609)
+            .expect("a 10:09 file is too long for one five-minute episode");
+        assert_eq!(one.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+
+        // Outside the band around the sum still rejects, both ways.
+        let long = mapped_file_rejection(&title, &two, 1221).expect("past twice the sum");
+        assert_eq!(long.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+        let short = mapped_file_rejection(&title, &two, 304).expect("under half the sum");
+        assert_eq!(short.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+        // Band endpoints pass.
+        assert!(mapped_file_rejection(&title, &two, 1220).is_none());
+        assert!(mapped_file_rejection(&title, &two, 305).is_none());
+
+        let three = [
+            runtime_episode("episode-1", "1", Some(300)),
+            runtime_episode("episode-2", "1", Some(300)),
+            runtime_episode("episode-3", "1", Some(300)),
+        ];
+        assert!(mapped_file_rejection(&title, &three, 15 * 60 + 2).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_mapped_file_without_every_episode_runtime_uses_the_series_runtime_per_episode() {
+        let title = short_form_series(Some(5)).await;
+        let partly_known = [
+            runtime_episode("episode-1", "1", Some(900)),
+            runtime_episode("episode-2", "1", None),
+        ];
+        // One missing duration falls back to the series runtime times the
+        // number of mapped episodes, never to the one known duration.
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(
+                &title,
+                &partly_known
+            ),
+            Some(600)
+        );
+        assert!(mapped_file_rejection(&title, &partly_known, 609).is_none());
+        let long = mapped_file_rejection(&title, &partly_known, 1201)
+            .expect("past twice two series runtimes");
+        assert_eq!(long.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+
+        let zero = [
+            runtime_episode("episode-1", "1", Some(0)),
+            runtime_episode("episode-2", "1", Some(0)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &zero),
+            Some(600)
+        );
+
+        // Without a series runtime either, nothing is expected and the file
+        // only has to clear the unknown-runtime sample floor.
+        let unknown = short_form_series(None).await;
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(
+                &unknown,
+                &partly_known
+            ),
+            None
+        );
+        assert!(mapped_file_rejection(&unknown, &partly_known, 609).is_none());
+    }
+
+    #[tokio::test]
+    async fn specials_use_their_own_runtimes_and_never_the_series_runtime() {
+        let title = short_form_series(Some(5)).await;
+        let specials = [
+            runtime_episode("episode-1", "0", Some(1500)),
+            runtime_episode("episode-2", "0", Some(1500)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &specials),
+            Some(3000)
+        );
+        assert!(mapped_file_rejection(&title, &specials, 3000).is_none());
+        let long = mapped_file_rejection(&title, &specials, 6001).expect("past twice the sum");
+        assert_eq!(long.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+
+        // A special without its own runtime is not held to the series runtime,
+        // alone or mapped together with a regular episode.
+        let unknown_special = [runtime_episode("episode-1", "0", None)];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(
+                &title,
+                &unknown_special
+            ),
+            None
+        );
+        assert!(mapped_file_rejection(&title, &unknown_special, 45 * 60).is_none());
+        let mixed = [
+            runtime_episode("episode-1", "0", None),
+            runtime_episode("episode-2", "1", Some(300)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &mixed),
+            None
+        );
+        assert!(mapped_file_rejection(&title, &mixed, 45 * 60).is_none());
     }
 
     #[test]
