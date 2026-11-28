@@ -166,6 +166,18 @@ pub struct PreparedRecycleFile {
     pub source_operation_id: String,
 }
 
+/// The receipt of an operator-confirmed recycle of a reported file: the
+/// reported file's reserved entry, and the entry reserved for its
+/// hard-linked download copy once the copy's move is about to run. Saved
+/// before each move, so a retry knows both payload paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssueRecycleReceipt {
+    #[serde(flatten)]
+    pub file: PreparedRecycleFile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_copy: Option<PreparedRecycleFile>,
+}
+
 pub(crate) struct ReplacedMediaRecycleMetadata<'a> {
     pub original_path: &'a str,
     pub original_file_id: &'a str,
@@ -879,6 +891,185 @@ pub(crate) async fn execute_conflict_recycle(
         None => return Err(unreadable(&payload, reading)),
     }
     finish_conflict_recycle(config, prepared).await
+}
+
+/// Move a reviewed file into its reserved recycle entry and commit it. The
+/// moved file must have one name, or, with `linked_copy`, exactly one other
+/// name: that path, proven to be the same file.
+pub(crate) async fn execute_new_conflict_recycle(
+    config: &RecycleBinConfig,
+    source: &Path,
+    prepared: &PreparedRecycleFile,
+    expected_source_version: &str,
+    linked_copy: Option<&Path>,
+) -> AppResult<()> {
+    let (_, payload, _) = pending_conflict_recycle(config, source, prepared).await?;
+    let (version, _) = crate::location::resolution::regular_file_snapshot(source).await?;
+    if version != expected_source_version {
+        return Err(AppError::validation_refused(
+            crate::delete_refusal::PREVIEW_STALE,
+            "the reviewed source changed",
+        ));
+    }
+    let before = crate::fs_integrity::import_content_proof_async(source)
+        .await
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::media::RECYCLE_FAILED,
+                format!("could not verify the reviewed source before recycling: {error}"),
+            )
+        })?;
+    // Do not use the ordinary recycle path's copy-then-unlink fallback. It
+    // cannot condition the final unlink on the reviewed source identity.
+    let disk = Disk::process();
+    match disk.move_onto_free_name(source, &payload).await {
+        Ok(FreeNameMove::Moved) => {}
+        Err(error) if error.reason() == crate::disk::reason::DISK_MOVE_NEEDS_COPY => {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::RECYCLE_FAILED,
+                "cross-device recycling is unavailable; the reviewed source was preserved",
+            ));
+        }
+        Err(error) => {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::RECYCLE_FAILED,
+                format!(
+                    "the reviewed file could not be moved without overwriting: {}",
+                    error.words()
+                ),
+            ));
+        }
+        Ok(FreeNameMove::NotOffered) => {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::RECYCLE_FAILED,
+                "this filesystem does not support exclusive recycling",
+            ));
+        }
+    }
+    match (
+        reviewed_recycle_identity_matches(&payload, expected_source_version, linked_copy).await,
+        crate::fs_integrity::import_content_proof_async(&payload).await,
+    ) {
+        (Ok(true), Ok(after)) if after == before => {}
+        (identity, proof) => {
+            let rollback = disk.move_onto_free_name(&payload, source).await;
+            let detail = match (identity, proof) {
+                (Ok(false), _) => "the source changed during the recycle move".to_string(),
+                (_, Err(error)) => format!("the recycled payload could not be verified: {error}"),
+                _ => "the recycled payload changed identity".to_string(),
+            };
+            let rollback_message = match rollback {
+                Ok(FreeNameMove::Moved) => "the source was restored".to_string(),
+                Err(error) => {
+                    format!(
+                        "rollback failed: {}; the payload is preserved in the recycle bin",
+                        error.words()
+                    )
+                }
+                Ok(FreeNameMove::NotOffered) => {
+                    "rollback was unavailable; the payload is preserved in the recycle bin"
+                        .to_string()
+                }
+            };
+            return Err(AppError::validation_refused(
+                crate::delete_refusal::PREVIEW_STALE,
+                format!("{detail}; {rollback_message}"),
+            ));
+        }
+    }
+    if let Err(error) = finish_conflict_recycle(config, prepared).await {
+        let rollback = disk.move_onto_free_name(&payload, source).await;
+        let detail = match rollback {
+            Ok(FreeNameMove::Moved) => {
+                "the source was restored after the recycle receipt could not be committed"
+                    .to_string()
+            }
+            Err(error) => {
+                format!(
+                    "rollback failed: {}; the payload is preserved in the recycle bin",
+                    error.words()
+                )
+            }
+            Ok(FreeNameMove::NotOffered) => {
+                "rollback was unavailable; the payload is preserved in the recycle bin".to_string()
+            }
+        };
+        return Err(AppError::Repository(format!(
+            "could not commit the recycle receipt: {error}; {detail}"
+        )));
+    }
+    Ok(())
+}
+
+async fn reviewed_recycle_identity_matches(
+    path: &Path,
+    expected_version: &str,
+    linked_copy: Option<&Path>,
+) -> AppResult<bool> {
+    let (version, mark) = crate::location::resolution::regular_file_snapshot(path).await?;
+    // Rename changes Unix ctime, but not the device, inode, length or mtime.
+    let same_content = crate::disk::StoredVersion::new(&version)
+        .same_content(crate::disk::StoredVersion::new(expected_version))
+        == crate::disk::Sameness::Same;
+    if !cfg!(unix) || !same_content {
+        return Ok(false);
+    }
+    if mark.has_one_name() {
+        return Ok(true);
+    }
+    // The only other name allowed is the confirmed linked copy, read once.
+    let Some(copy) = linked_copy.filter(|_| mark.has_two_names()) else {
+        return Ok(false);
+    };
+    Ok(match Disk::process().fingerprint(copy).await {
+        Ok(copy_mark) => {
+            copy_mark.has_two_names() && copy_mark.same_file(&mark) == crate::disk::Sameness::Same
+        }
+        Err(_) => false,
+    })
+}
+
+/// Finish a reviewed recycle whose move already ran. The payload must have
+/// one name, or, with `linked_copy`, exactly one other name: that path,
+/// proven to be the same file.
+pub(crate) async fn recover_reviewed_recycle(
+    config: &RecycleBinConfig,
+    issue: &scryer_domain::MediaIssue,
+    receipt: &PreparedRecycleFile,
+    linked_copy: Option<&Path>,
+) -> AppResult<()> {
+    let payload = crate::stored_paths::stored_path_to_path_buf(&receipt.recycled_path);
+    let entry = config.base_path.join(&receipt.entry_id);
+    let original = crate::stored_paths::stored_path_to_path_buf(&issue.file_path_snapshot);
+    if receipt.source_operation_id != issue.id
+        || receipt.original_path != issue.file_path_snapshot
+        || !prepared_payload_location(&entry, &original, &payload)
+        || !matches!(
+            Path::new(&receipt.entry_id).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || Path::new(&receipt.entry_id).components().count() != 1
+    {
+        return Err(AppError::validation_refused(
+            crate::delete_refusal::PREVIEW_STALE,
+            "the recycle receipt no longer matches the reviewed file",
+        ));
+    }
+    crate::location::title_folder_recovery::inspect_path(&payload, false).await?;
+    if !reviewed_recycle_identity_matches(&payload, &issue.file_version, linked_copy).await? {
+        return Err(AppError::validation_refused(
+            crate::delete_refusal::PREVIEW_STALE,
+            "the recycle payload no longer matches the reviewed file",
+        ));
+    }
+    let proof = crate::fs_integrity::import_content_proof_async(&payload).await?;
+    if !crate::media_issues::content_matches_proof(&issue.content, &proof) {
+        return Err(AppError::validation_refused(
+            crate::delete_refusal::PREVIEW_STALE,
+            "the recycle payload no longer matches the reviewed content",
+        ));
+    }
+    finish_conflict_recycle(config, receipt).await
 }
 
 #[cfg(all(test, unix))]
@@ -1911,9 +2102,11 @@ async fn restore_from_recycle_inner(
     Ok(original_path.to_path_buf())
 }
 
+/// Refuse a recycled payload that is missing, a symlink or not a regular
+/// file. Returns the payload's size when the reading carries it.
 pub(crate) async fn ensure_recycled_restore_source_is_regular(
     recycled_path: &Path,
-) -> AppResult<()> {
+) -> AppResult<Option<u64>> {
     let reading = Disk::process().uncached(recycled_path).await;
     match reading.exists() {
         Some(true) => {}
@@ -1943,7 +2136,7 @@ pub(crate) async fn ensure_recycled_restore_source_is_regular(
             ),
         ));
     }
-    Ok(())
+    Ok(reading.size())
 }
 
 pub async fn commit_recycle_entry(
@@ -3976,6 +4169,222 @@ mod tests {
                 .as_deref(),
             Some(RECYCLE_STATUS_CONFLICT_PENDING)
         );
+    }
+
+    #[tokio::test]
+    async fn media_issue_recycle_refuses_a_replaced_source_and_preserves_both_files() {
+        let temp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source = root.join("reported.mkv");
+        let original = root.join("original.mkv");
+        std::fs::write(&source, b"first file").unwrap();
+        let config = test_config(&root.join("bin"));
+        let mut manifest = test_manifest();
+        manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+        manifest.source_operation_id = Some("synthetic-media-issue".to_owned());
+        let version = crate::location::resolution::file_version(&source)
+            .await
+            .unwrap();
+        let receipt = prepare_conflict_recycle(&config, &source, manifest)
+            .await
+            .unwrap();
+        std::fs::rename(&source, &original).unwrap();
+        std::fs::write(&source, b"first file").unwrap();
+        let refusal = execute_new_conflict_recycle(&config, &source, &receipt, &version, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal.validation_reason(),
+            Some(crate::delete_refusal::PREVIEW_STALE)
+        );
+        assert_eq!(std::fs::read(source).unwrap(), b"first file");
+        assert_eq!(std::fs::read(original).unwrap(), b"first file");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn media_issue_recycle_accepts_a_legacy_version_and_preserves_unrelated_files() {
+        let temp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source = root.join("reported.mkv");
+        let unrelated = root.join("unrelated.mkv");
+        std::fs::write(&source, b"reviewed bytes").unwrap();
+        std::fs::write(&unrelated, b"unrelated bytes").unwrap();
+        std::fs::File::open(&source)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_millis(1500))
+            .unwrap();
+        let config = test_config(&root.join("bin"));
+        let mut manifest = test_manifest();
+        manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+        manifest.source_operation_id = Some("synthetic-media-issue".to_owned());
+        let version = crate::location::resolution::file_version(&source)
+            .await
+            .unwrap();
+        let receipt = prepare_conflict_recycle(&config, &source, manifest)
+            .await
+            .unwrap();
+
+        execute_new_conflict_recycle(&config, &source, &receipt, &version, None)
+            .await
+            .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(crate::stored_paths::stored_path_to_path_buf(
+                &receipt.recycled_path
+            ))
+            .unwrap(),
+            b"reviewed bytes"
+        );
+        assert_eq!(std::fs::read(unrelated).unwrap(), b"unrelated bytes");
+    }
+
+    /// A recycle that stopped after its move, before the entry was committed,
+    /// finishes from the saved receipt. The reported path is already empty,
+    /// so revalidating it first would refuse a move that only needs finishing.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn media_issue_recycle_interrupted_after_the_move_finishes_from_its_receipt() {
+        let temp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source = root.join("reported.mkv");
+        let unrelated = root.join("unrelated.mkv");
+        std::fs::write(&source, b"reviewed bytes").unwrap();
+        std::fs::write(&unrelated, b"unrelated bytes").unwrap();
+        let config = test_config(&root.join("bin"));
+        let mut manifest = test_manifest();
+        manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+        manifest.source_operation_id = Some("synthetic-media-issue".to_owned());
+        let version = crate::location::resolution::file_version(&source)
+            .await
+            .unwrap();
+        let proof = crate::fs_integrity::import_content_proof_async(&source)
+            .await
+            .unwrap();
+        let receipt = prepare_conflict_recycle(&config, &source, manifest)
+            .await
+            .unwrap();
+
+        // The move runs, then the recycle fails before committing the entry.
+        let payload = crate::stored_paths::stored_path_to_path_buf(&receipt.recycled_path);
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::rename(&source, &payload).unwrap();
+
+        let issue = scryer_domain::MediaIssue {
+            id: "synthetic-media-issue".to_string(),
+            library_id: "library-fixture".to_string(),
+            title_id: "title-fixture".to_string(),
+            media_file_id: "media-file-fixture".to_string(),
+            file_path_snapshot: crate::stored_paths::path_to_stored_string(&source),
+            file_version: version,
+            content: scryer_domain::BlocklistContentIdentity {
+                scheme: crate::fs_integrity::IMPORT_CONTENT_PROOF_SCHEME.to_string(),
+                size_bytes: proof.size_bytes,
+                sample_bytes: proof.sample_bytes,
+                sample_blake3: proof.sample_blake3.clone(),
+            },
+            reporter_user_id: "user-fixture".to_string(),
+            reason: scryer_domain::MediaIssueReason::Corrupted,
+            details: None,
+            remediation: scryer_domain::MediaIssueRemediation::RecycleAndSearch,
+            authorized_remediation: Some(scryer_domain::MediaIssueRemediation::RecycleAndSearch),
+            status: scryer_domain::MediaIssueStatus::Approved,
+            affected_episode_ids: Vec::new(),
+            affected_series_movie_link_ids: Vec::new(),
+            rule_decision_id: None,
+            blocklist_id: None,
+            reviewed_by_user_id: None,
+            reviewed_at: None,
+            execution_status: scryer_domain::MediaIssueExecutionStatus::Recycling,
+            execution_error_code: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        recover_reviewed_recycle(&config, &issue, &receipt, None)
+            .await
+            .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&payload).unwrap(), b"reviewed bytes");
+        assert_eq!(std::fs::read(unrelated).unwrap(), b"unrelated bytes");
+
+        // A receipt that no longer matches the report is refused and moves
+        // nothing back or further.
+        let mut other = issue.clone();
+        other.id = "another-media-issue".to_string();
+        let refusal = recover_reviewed_recycle(&config, &other, &receipt, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal.validation_reason(),
+            Some(crate::delete_refusal::PREVIEW_STALE)
+        );
+        assert_eq!(std::fs::read(&payload).unwrap(), b"reviewed bytes");
+    }
+
+    /// A receipt saved before linked copies existed reads back unchanged, and
+    /// one without a linked copy is written exactly as before.
+    #[test]
+    fn a_media_issue_receipt_without_a_linked_copy_keeps_its_saved_form() {
+        let file = PreparedRecycleFile {
+            entry_id: "synthetic-entry".to_string(),
+            original_path: "/synthetic/reported.mkv".to_string(),
+            recycled_path: "/synthetic/bin/synthetic-entry/reported.mkv".to_string(),
+            source_operation_id: "synthetic-media-issue".to_string(),
+        };
+        let saved = serde_json::to_string(&file).unwrap();
+        let read: MediaIssueRecycleReceipt = serde_json::from_str(&saved).unwrap();
+        assert_eq!(read.file, file);
+        assert_eq!(read.linked_copy, None);
+        assert_eq!(serde_json::to_string(&read).unwrap(), saved);
+    }
+
+    /// A reported file whose other name is a proven linked copy moves into
+    /// its entry and keeps that copy; with a third name it is moved back.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn media_issue_recycle_moves_one_name_of_a_proven_linked_pair_only() {
+        for third_name in [false, true] {
+            let temp = TempDir::new().unwrap();
+            let root = std::fs::canonicalize(temp.path()).unwrap();
+            let source = root.join("reported.mkv");
+            let copy = root.join("download-copy.mkv");
+            let unrelated = root.join("unrelated.mkv");
+            std::fs::write(&source, b"reviewed bytes").unwrap();
+            std::fs::hard_link(&source, &copy).unwrap();
+            if third_name {
+                std::fs::hard_link(&source, root.join("third-name.mkv")).unwrap();
+            }
+            std::fs::write(&unrelated, b"unrelated bytes").unwrap();
+            let config = test_config(&root.join("bin"));
+            let mut manifest = test_manifest();
+            manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+            manifest.source_operation_id = Some("synthetic-media-issue".to_owned());
+            let version = crate::location::resolution::file_version(&source)
+                .await
+                .unwrap();
+            let receipt = prepare_conflict_recycle(&config, &source, manifest)
+                .await
+                .unwrap();
+
+            let result =
+                execute_new_conflict_recycle(&config, &source, &receipt, &version, Some(&copy))
+                    .await;
+
+            let payload = crate::stored_paths::stored_path_to_path_buf(&receipt.recycled_path);
+            if third_name {
+                assert!(result.is_err());
+                assert_eq!(std::fs::read(&source).unwrap(), b"reviewed bytes");
+                assert!(!payload.exists());
+            } else {
+                result.unwrap();
+                assert!(!source.exists());
+                assert_eq!(std::fs::read(&payload).unwrap(), b"reviewed bytes");
+            }
+            assert_eq!(std::fs::read(&copy).unwrap(), b"reviewed bytes");
+            assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated bytes");
+        }
     }
 
     #[tokio::test]

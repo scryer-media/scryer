@@ -1,7 +1,9 @@
 import * as React from "react";
 import { FileScoreSummary } from "@/components/common/score-breakdown";
 import { RefreshScoresButton } from "@/components/common/refresh-scores-button";
+import { ReportMediaIssueDialog } from "@/components/common/report-media-issue-dialog";
 import {
+  Ban,
   File as FileIcon,
   HardDrive,
   ListOrdered,
@@ -23,12 +25,15 @@ import { MediaInfoButton } from "@/components/common/media-info-dialog";
 import {
   audioStreamsForFile,
   formatMediaFileSize,
+  mediaFileBaseName,
 } from "@/lib/utils/media-info-format";
 import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { useAuth } from "@/lib/hooks/use-auth";
 import {
   canManageLibrarySubtitles,
+  canReportMediaIssue,
   hasLibraryPermission,
+  hasPrivilegedLibraryAccess,
   LIBRARY_PERMISSIONS,
 } from "@/lib/utils/permissions";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -141,6 +146,12 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const { user } = useAuth();
+  const canReport = canReportMediaIssue(user, libraryId);
+  const canViewPaths = hasPrivilegedLibraryAccess(user, libraryId);
+  const [reportedFile, setReportedFile] = React.useState<{
+    id: string;
+    label: string;
+  } | null>(null);
   const canRefreshScores = hasLibraryPermission(
     user,
     libraryId,
@@ -201,7 +212,26 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
         <div
           className={cn(selectedTitlePresentation ? "space-y-4" : "space-y-2")}
         >
-          {orderedMediaFiles.map((file, fileIndex) => {
+          {orderedMediaFiles.map((entry, fileIndex) => {
+            const reportLabel =
+              mediaFileBaseName(entry.filePath) ??
+              t("mediaFile.numberedVersion", { number: fileIndex + 1 });
+            const file = canViewPaths
+              ? entry
+              : { ...entry, filePath: reportLabel };
+            const reportAction = canReport ? (
+              <TextActionButton
+                size="sm"
+                className={fileActionClassName}
+                aria-label={t("mediaFile.markBadFile", { file: reportLabel })}
+                onClick={() =>
+                  setReportedFile({ id: file.id, label: reportLabel })
+                }
+                leadingIcon={<Ban className="h-4 w-4" />}
+              >
+                {t("mediaFile.markBad")}
+              </TextActionButton>
+            ) : null;
             const downloads = subtitleDownloadsByMediaFile[file.id] ?? [];
             const role = file.role?.toLowerCase() ?? "";
             const isAdditionalFile = role === "additional";
@@ -303,7 +333,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             ? selectorId(filePathIdPrefix, file.id)
                             : undefined
                         }
-                        title={file.filePath}
+                        title={file.filePath || reportLabel}
                         className={cn(
                           "min-w-0 leading-5",
                           selectedTitlePresentation
@@ -311,7 +341,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             : "break-all font-[family-name:var(--font-code)] text-sm text-muted-foreground",
                         )}
                       >
-                        {file.filePath}
+                        {file.filePath || reportLabel}
                       </p>
                     </div>
                     <div
@@ -456,6 +486,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                     onMakePrimaryFile ||
                     onAssignFileToEpisode ||
                     onDeleteFile ||
+                    reportAction ||
                     discAnalysis ? (
                       <div className="flex w-full flex-col items-stretch gap-2">
                         <div className="flex w-full flex-col items-stretch gap-2">
@@ -550,6 +581,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             }}
                           />
                         ) : null}
+                        {reportAction}
                         {onDeleteFile ? (
                           <TextActionButton
                             size="sm"
@@ -592,6 +624,15 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
           {emptyAction}
         </div>
       )}
+      {canReport &&
+      reportedFile &&
+      mediaFiles.some((file) => file.id === reportedFile.id) ? (
+        <ReportMediaIssueDialog
+          key={reportedFile.id}
+          file={reportedFile}
+          onClose={() => setReportedFile(null)}
+        />
+      ) : null}
       {subtitleSearchTarget && onRefreshSubtitles ? (
         <SubtitleSearchModal
           open={true}

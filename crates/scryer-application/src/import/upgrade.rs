@@ -293,7 +293,13 @@ pub(crate) async fn execute_upgrade(
     import_mode: ImportMode,
     announced_size_bytes: Option<i64>,
     completed: Option<&scryer_domain::CompletedDownload>,
+    bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<UpgradeResult> {
+    // A file marked bad leaves the library only through the operator's
+    // confirmed recycle, never as an upgrade's incumbent.
+    if let Some(rejection) = bad_files.upgrade_refusal(app, &[existing_file]).await {
+        return Ok(UpgradeResult::Rejected(rejection));
+    }
     let audit_actor = DomainEventActor::from(actor);
 
     let old_path = stored_path_to_path_buf(&existing_file.file_path);

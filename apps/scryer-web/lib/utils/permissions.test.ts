@@ -7,6 +7,7 @@ import {
   canManageCatalogSettingsPages,
   canManageLibrarySettingsPage,
   canManageLibrarySubtitles,
+  canReportMediaIssue,
   hasAnyLibraryPermission,
   hasAnyPrivilegedLibraryAccess,
   hasAppPermission,
@@ -586,4 +587,26 @@ test("a facet's settings pages follow Manage Catalog Settings, not System Settin
   );
   assert.equal(canManageCatalogSettingsPages(libraryManager), false);
   assert.equal(canManageLibrarySettingsPage(libraryManager), true);
+});
+
+test("a title manager can report a file wherever a requester can", () => {
+  const member = (permissions: string[]) =>
+    normalizeJwtPermissionClaims(
+      [],
+      [{ libraryId: "library-primary", permissions }],
+    );
+
+  assert.equal(
+    canReportMediaIssue(member(["view", "request"]), "library-primary"),
+    true,
+  );
+  assert.equal(
+    canReportMediaIssue(member(["view", "manageTitles"]), "library-primary"),
+    true,
+  );
+  assert.equal(canReportMediaIssue(member(["view"]), "library-primary"), false);
+  assert.equal(
+    canReportMediaIssue(member(["view", "manageTitles"]), "library-other"),
+    false,
+  );
 });

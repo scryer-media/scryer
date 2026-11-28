@@ -1503,6 +1503,30 @@ impl crate::ImportArtifactRepository for RecordingImportArtifactRepo {
             .filter(|artifact| artifact.result == result)
             .count() as u64)
     }
+
+    async fn imported_source_for_media_file(
+        &self,
+        media_file_id: &str,
+    ) -> AppResult<Option<crate::ImportedMediaFileSource>> {
+        Ok(self
+            .artifacts
+            .lock()
+            .await
+            .iter()
+            .filter(|artifact| {
+                artifact.imported_media_file_id.as_deref() == Some(media_file_id)
+                    && artifact.result == "imported"
+                    && artifact.import_id.is_some()
+                    && artifact.relative_path.is_some()
+            })
+            .max_by_key(|artifact| artifact.created_at)
+            .and_then(|artifact| {
+                Some(crate::ImportedMediaFileSource {
+                    import_id: artifact.import_id.clone()?,
+                    relative_path: artifact.relative_path.clone()?,
+                })
+            }))
+    }
 }
 
 #[derive(Default, Clone)]

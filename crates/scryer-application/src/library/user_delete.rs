@@ -847,6 +847,343 @@ impl AppUseCase {
         .map(|_| ())
     }
 
+    /// Move the one reported file into the recycle bin after the operator
+    /// confirmed its preview, and return its receipt. Nothing else is moved
+    /// here. The receipt is saved before the move so a retry can finish from
+    /// it. A file with another name is moved only when the confirmation
+    /// chose to recycle both names of a linked pair and that other name is
+    /// still the download copy the preview showed.
+    pub(crate) async fn recycle_reviewed_media_file(
+        &self,
+        issue: &scryer_domain::MediaIssue,
+        file: &crate::TitleMediaFile,
+        confirmation: &crate::DeleteExecutionConfirmation,
+        saved_receipt: Option<crate::recycle_bin::PreparedRecycleFile>,
+    ) -> AppResult<crate::recycle_bin::PreparedRecycleFile> {
+        let (file_fingerprint, confirmed_copy) =
+            crate::media_issues::split_media_issue_recycle_fingerprint(
+                &confirmation.preview_fingerprint,
+            );
+        let context = self
+            .resolve_media_file_delete_context(&file.id, MediaFileDeleteOrigin::User, None)
+            .await?;
+        let manifest = self
+            .validate_delete_context(
+                context.clone(),
+                file_fingerprint,
+                DeleteConfirmationAuthority::Human {
+                    typed_confirmation: confirmation.typed_confirmation.as_deref(),
+                },
+            )
+            .await?;
+        let UserDeleteContext::MediaFile(context) = context else {
+            unreachable!("media file resolver returned another context");
+        };
+        let path = normalize_absolute_path(&stored_path_to_path_buf(&file.file_path))?;
+        let changed = || {
+            AppError::validation_refused(
+                crate::delete_refusal::PREVIEW_STALE,
+                "the reviewed primary file changed; nothing was recycled",
+            )
+        };
+        if context.title_id != issue.title_id
+            || context.file_path != file.file_path
+            || !manifest.entries.iter().any(|entry| {
+                entry.path == path && matches!(entry.delete_kind, DeletePathKind::File)
+            })
+        {
+            return Err(changed());
+        }
+        let roots = normalize_root_folders(context.root_folders, context.facet)?;
+        let root = crate::fs_safety::containing_root_for_path(&path, &roots)?;
+        let config = self
+            .recycle_bin_config_for_media_root_path(Some(&root))
+            .await;
+        let (version, mark) = crate::location::resolution::regular_file_snapshot(&path).await?;
+        if !cfg!(unix) {
+            // The persisted non-Unix version does not identify a file after a move.
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::RECYCLE_UNSUPPORTED_PLATFORM,
+                "recycling a reported file is not available on this platform",
+            ));
+        }
+        // A second name is allowed only as the confirmed linked download copy,
+        // proven again here by one volume and one file number.
+        let linked_copy = if mark.has_one_name() {
+            None
+        } else {
+            let copy = match confirmed_copy {
+                Some(confirmed) if confirmed.linked => self
+                    .media_issue_download_copy(issue, Some(&mark))
+                    .await?
+                    .filter(|copy| confirmed.still_names(copy)),
+                _ => None,
+            };
+            match copy {
+                Some(copy) => Some(copy.path),
+                None => return Err(Self::hardlinked_file_refusal()),
+            }
+        };
+        if version != issue.file_version {
+            return Err(changed());
+        }
+        crate::location::title_folder_recovery::inspect_path(&path, false).await?;
+        let prepared = match saved_receipt {
+            Some(prepared) => prepared,
+            None => {
+                let mut receipt = crate::recycle_bin::RecycleManifest::pending_upgrade(
+                    file.file_path.clone(),
+                    file.id.clone(),
+                    issue.content.size_bytes,
+                    file.title_id.clone(),
+                    Some(path_to_stored_string(&root)),
+                );
+                receipt.source_operation_id = Some(issue.id.clone());
+                receipt.reason = "media_issue".to_string();
+                receipt.media_row =
+                    Some(crate::recycle_bin::RecycledMediaRowSnapshot::from_media_file(file));
+                let prepared =
+                    crate::recycle_bin::prepare_conflict_recycle(&config, &path, receipt).await?;
+                self.store_media_issue_recycle_receipt(
+                    &issue.id,
+                    &crate::recycle_bin::MediaIssueRecycleReceipt {
+                        file: prepared.clone(),
+                        linked_copy: None,
+                    },
+                )
+                .await?;
+                prepared
+            }
+        };
+        crate::recycle_bin::execute_new_conflict_recycle(
+            &config,
+            &path,
+            &prepared,
+            &version,
+            linked_copy.as_deref(),
+        )
+        .await?;
+        Ok(prepared)
+    }
+
+    async fn store_media_issue_recycle_receipt(
+        &self,
+        issue_id: &str,
+        receipt: &crate::recycle_bin::MediaIssueRecycleReceipt,
+    ) -> AppResult<()> {
+        let json = serde_json::to_string(receipt).map_err(|error| {
+            AppError::Repository(format!("could not encode the recycle receipt: {error}"))
+        })?;
+        self.services
+            .workflow
+            .blocklist_repo
+            .save_media_issue_recycle_receipt(issue_id, &json)
+            .await
+    }
+
+    /// Finish a recycle whose move already ran, from its receipt. Returns
+    /// whether it did; `false` when the reported file is still in place.
+    pub(crate) async fn finish_recovered_media_issue_recycle(
+        &self,
+        issue: &scryer_domain::MediaIssue,
+        saved: &crate::recycle_bin::MediaIssueRecycleReceipt,
+        confirmed_copy: Option<crate::media_issues::ConfirmedDownloadCopy<'_>>,
+    ) -> AppResult<bool> {
+        let receipt = &saved.file;
+        let path = stored_path_to_path_buf(&issue.file_path_snapshot);
+        let reading = Disk::process().uncached(&path).await;
+        match reading.exists() {
+            Some(true) => return Ok(false),
+            Some(false) => {}
+            None => return Err(AppError::Repository(reading.absence().to_string())),
+        }
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&issue.title_id)
+            .await?
+            .filter(|title| title.library_id == issue.library_id)
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::delete_refusal::PREVIEW_STALE,
+                    "the reviewed file ownership could not be revalidated",
+                )
+            })?;
+        let roots = normalize_root_folders(
+            self.root_folders_for_library(&title.library_id, &title.facet)
+                .await?,
+            title.facet,
+        )?;
+        let root = crate::fs_safety::containing_root_for_path(&path, &roots)?;
+        let config = self
+            .recycle_bin_config_for_media_root_path(Some(&root))
+            .await;
+        // The payload may keep one other name, and only for a confirmed linked
+        // pair: the download copy while it is still in place, or the entry
+        // reserved for it once its move ran. Either is proven the same file
+        // by the identity check.
+        let linked_copy = match confirmed_copy {
+            Some(confirmed) if confirmed.linked => {
+                let payload = stored_path_to_path_buf(&receipt.recycled_path);
+                let in_place = match Disk::process().fingerprint(&payload).await {
+                    Ok(payload_mark) => self
+                        .media_issue_download_copy(issue, Some(&payload_mark))
+                        .await?
+                        .filter(|copy| confirmed.still_names(copy))
+                        .map(|copy| copy.path),
+                    Err(_) => None,
+                };
+                in_place.or_else(|| {
+                    saved
+                        .linked_copy
+                        .as_ref()
+                        .map(|reserved| stored_path_to_path_buf(&reserved.recycled_path))
+                })
+            }
+            _ => None,
+        };
+        crate::recycle_bin::recover_reviewed_recycle(
+            &config,
+            issue,
+            receipt,
+            linked_copy.as_deref(),
+        )
+        .await?;
+        Ok(true)
+    }
+
+    /// Recycle the download copy the operator confirmed, after the reported
+    /// file itself was recycled under `receipt`. A copy that is gone, no
+    /// longer holds the reported content, or changed since the preview is
+    /// left in place. A linked copy must still be the other name of the
+    /// reported file's payload. Either copy's bin entry is reserved and saved
+    /// on the receipt before it moves, so a retry finishes the same entry.
+    pub(crate) async fn recycle_media_issue_download_copy(
+        &self,
+        issue: &scryer_domain::MediaIssue,
+        confirmed: crate::media_issues::ConfirmedDownloadCopy<'_>,
+        receipt: &crate::recycle_bin::MediaIssueRecycleReceipt,
+    ) -> AppResult<()> {
+        let payload_mark = if confirmed.linked {
+            Disk::process()
+                .fingerprint(&stored_path_to_path_buf(&receipt.file.recycled_path))
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let found = self
+            .media_issue_download_copy(issue, payload_mark.as_ref())
+            .await?;
+        let copy = match found {
+            Some(copy) if confirmed.still_names(&copy) => copy,
+            Some(copy) => {
+                tracing::warn!(
+                    issue_id = %issue.id,
+                    path = %copy.path.display(),
+                    "the download copy changed after the recycle preview; it was left in place"
+                );
+                return Ok(());
+            }
+            None => {
+                // A copy whose reserved move already ran is committed.
+                if let Some(reserved) = receipt.linked_copy.as_ref() {
+                    let payload = stored_path_to_path_buf(&reserved.recycled_path);
+                    if Disk::process().uncached(&payload).await.exists() == Some(true) {
+                        let (config, _) = self.media_issue_bin_config(issue).await?;
+                        crate::recycle_bin::finish_conflict_recycle(&config, reserved).await?;
+                    }
+                }
+                return Ok(());
+            }
+        };
+        let (mut config, root) = self.media_issue_bin_config(issue).await?;
+        // The copy goes to the reported file's bin. The only folder that bin
+        // accepts it from is the download folder the import recorded.
+        config.source_roots = vec![copy.download_dir.clone()];
+        // A disabled bin would delete the copy outright; the copy only ever
+        // goes to the bin.
+        if !config.enabled || !config.cleanup_enabled {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RECYCLE_BIN_PATH_UNSAFE,
+                "the recycle bin is unavailable; the download copy was preserved",
+            ));
+        }
+        let mut manifest = crate::recycle_bin::RecycleManifest::pending_upgrade(
+            path_to_stored_string(&copy.path),
+            String::new(),
+            issue.content.size_bytes,
+            issue.title_id.clone(),
+            Some(path_to_stored_string(&root)),
+        );
+        // The copy never had a library row; a restore must not recreate one.
+        manifest.original_file_id = None;
+        manifest.source_operation_id = Some(issue.id.clone());
+        manifest.reason = crate::media_issues::MEDIA_ISSUE_DOWNLOAD_COPY_RECYCLE_REASON.to_string();
+        let depth = self.resolve_verification_depth().await;
+        // The copy's entry is reserved and saved on the receipt before it
+        // moves, and the move rechecks the confirmed version, so a copy that
+        // changed since the preview stays in place and a retry finishes the
+        // same entry.
+        let reserved = match &receipt.linked_copy {
+            Some(reserved) => reserved.clone(),
+            None => {
+                let reserved =
+                    crate::recycle_bin::prepare_conflict_recycle(&config, &copy.path, manifest)
+                        .await?;
+                self.store_media_issue_recycle_receipt(
+                    &issue.id,
+                    &crate::recycle_bin::MediaIssueRecycleReceipt {
+                        file: receipt.file.clone(),
+                        linked_copy: Some(reserved.clone()),
+                    },
+                )
+                .await?;
+                reserved
+            }
+        };
+        crate::recycle_bin::execute_conflict_recycle(
+            &config,
+            &copy.path,
+            &reserved,
+            &copy.version,
+            depth,
+        )
+        .await
+    }
+
+    /// The bin of the root that holds the reported file.
+    pub(crate) async fn media_issue_bin_config(
+        &self,
+        issue: &scryer_domain::MediaIssue,
+    ) -> AppResult<(crate::recycle_bin::RecycleBinConfig, PathBuf)> {
+        let library_path = stored_path_to_path_buf(&issue.file_path_snapshot);
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&issue.title_id)
+            .await?
+            .filter(|title| title.library_id == issue.library_id)
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::delete_refusal::PREVIEW_STALE,
+                    "the reviewed file ownership could not be revalidated",
+                )
+            })?;
+        let roots = normalize_root_folders(
+            self.root_folders_for_library(&title.library_id, &title.facet)
+                .await?,
+            title.facet,
+        )?;
+        let root = crate::fs_safety::containing_root_for_path(&library_path, &roots)?;
+        let config = self
+            .recycle_bin_config_for_media_root_path(Some(&root))
+            .await;
+        Ok((config, root))
+    }
+
     pub async fn delete_external_subtitle(
         &self,
         actor: &User,

@@ -164,6 +164,28 @@ pub(crate) const LIST_EXCLUSION_FACT_NAMES: &[&str] = &["list_excluded"];
 /// How many titles the requester already has in the target library.
 pub(crate) const REQUESTER_TITLES_FACT_NAMES: &[&str] = &["requester_titles_in_library_count"];
 
+/// The one fact a bad-file report carries: whether the reporter asked for the
+/// reported media.
+pub(crate) const REPORT_REQUESTER_RELATIONSHIP_FACT_NAMES: &[&str] =
+    &["report.reporter_requested_media"];
+
+/// Whether any of the report rules `policies` may read
+/// [`REPORT_REQUESTER_RELATIONSHIP_FACT_NAMES`], each rule parsed once.
+pub(crate) fn report_rules_read_requester_relationship<'a>(
+    policies: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> bool {
+    policies.into_iter().any(|(rego_source, rule_set_id)| {
+        scryer_rules::validation::request_rule_may_read_fact_families(
+            rego_source,
+            rule_set_id,
+            &[REPORT_REQUESTER_RELATIONSHIP_FACT_NAMES],
+        )
+        .first()
+        .copied()
+        .unwrap_or(true)
+    })
+}
+
 /// Which fact families an evaluation reads. A family left unread costs no
 /// read, and its facts read unknown as not yet collected; it is left unread
 /// only when no loaded rule can read any of its facts.
@@ -422,7 +444,8 @@ pub fn build_request_input(context: RequestInputContext) -> RequestInput {
         now: RequestClockDoc::at(context.evaluation_time),
         requester: context.requester,
         library: context.library,
-        request: context.request,
+        request: Some(context.request),
+        report: None,
         facts,
     }
 }
@@ -1434,7 +1457,7 @@ impl AppUseCase {
     /// uses, so a rule saying `"manage_titles" in input.requester.library_permissions`
     /// reads the vocabulary an operator already knows from the permissions
     /// screen.
-    async fn request_requester_doc(
+    pub(crate) async fn request_requester_doc(
         &self,
         actor: &User,
         library_id: &str,

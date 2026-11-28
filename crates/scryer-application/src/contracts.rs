@@ -1494,6 +1494,60 @@ pub struct NewBlocklistEntry {
     pub reason: Option<String>,
 }
 
+/// A bad-file report to record.
+#[derive(Clone, Debug)]
+pub struct NewMediaIssue {
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub file_path_snapshot: String,
+    pub file_version: String,
+    pub content: scryer_domain::BlocklistContentIdentity,
+    pub reporter_user_id: String,
+    pub reason: scryer_domain::MediaIssueReason,
+    pub details: Option<String>,
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+}
+
+/// Mark a reported file bad.
+pub struct ConfirmMediaIssue<'a> {
+    pub issue_id: &'a str,
+    /// `None` when a rule confirmed the report.
+    pub reviewer_user_id: Option<&'a str>,
+    /// What the confirmation authorizes.
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub title_id: &'a str,
+    pub content: &'a scryer_domain::BlocklistContentIdentity,
+    /// The grab the file came from, when known. Its entry gains the content
+    /// identity instead of a second entry being written.
+    pub release: Option<&'a NewBlocklistEntry>,
+    pub reason: &'a str,
+    /// Whether the import gate refuses this content for the title. False for
+    /// a wrong-content report, whose content may be right elsewhere.
+    pub blocks_imports: bool,
+    pub recycle_fingerprint: Option<&'a str>,
+    /// The title's files whose content matches. Each is stamped.
+    pub matching_media_file_ids: &'a [String],
+}
+
+/// A report whose bad-file mark was taken off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnmarkedMediaIssue {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+}
+
+/// An operator-confirmed recycle to resume after a restart.
+#[derive(Clone, Debug)]
+pub struct MediaIssueRecycleIntent {
+    pub issue_id: String,
+    pub actor_id: String,
+    pub preview_fingerprint: String,
+}
+
 /// The key of one blocklist row, as a search-time exclusion reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlocklistMatch {

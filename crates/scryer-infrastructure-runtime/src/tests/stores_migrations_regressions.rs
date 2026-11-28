@@ -1904,3 +1904,112 @@ async fn a_begun_release_attempt_is_settled_in_place() {
 
     let _ = std::fs::remove_file(db);
 }
+
+/// Blocks are kept forever. A retention run with every history window long
+/// past leaves release blocks and bad-file blocks alone, while it still prunes
+/// ordinary history of the same age.
+#[tokio::test]
+async fn housekeeping_retention_keeps_blocklist_rows_and_still_prunes_history() {
+    let (services, db) = temp_services("scryer_housekeeping_blocklist_kept").await;
+    title_store(&services)
+        .create(make_test_title("title-kept-blocks", None))
+        .await
+        .expect("seed title");
+
+    let ancient = (Utc::now() - chrono::Duration::days(3_650)).to_rfc3339();
+    for (id, info_hash, content_hash) in [
+        ("block-release", None, None),
+        (
+            "block-torrent",
+            Some("0123456789abcdef0123456789abcdef01234567"),
+            None,
+        ),
+        ("block-bad-file", None, Some("synthetic-sample-hash")),
+    ] {
+        sqlx::query(
+            "INSERT INTO blocklist
+                 (id, title_id, release_name, normalized_release_name, indexer_id,
+                  info_hash, reason, created_at, content_scheme, content_size_bytes,
+                  content_sample_bytes, content_sample_blake3, content_blocks_imports)
+             VALUES (?, 'title-kept-blocks', ?, ?, 'indexer-1', ?, 'synthetic', ?,
+                     ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(format!("Lantern.Cove.S01E01.{id}"))
+        .bind(format!("lantern.cove.s01e01.{id}"))
+        .bind(info_hash)
+        .bind(&ancient)
+        .bind(content_hash.map(|_| "blake3-sample-v1"))
+        .bind(content_hash.map(|_| 4_096_i64))
+        .bind(content_hash.map(|_| 1_024_i64))
+        .bind(content_hash)
+        .bind(content_hash.is_some())
+        .execute(services.pool())
+        .await
+        .expect("seed blocklist row");
+    }
+    seed_history_events(services.pool(), 4, 2).await;
+
+    let store = housekeeping_store(&services);
+    store
+        .delete_stale_workflow_operations(1, 1)
+        .await
+        .expect("workflow prune");
+    store
+        .delete_release_decisions_older_than(1)
+        .await
+        .expect("decision prune");
+    store
+        .delete_release_attempts_older_than(1)
+        .await
+        .expect("attempt prune");
+    let history_deleted = store
+        .delete_history_events_older_than(30)
+        .await
+        .expect("history prune");
+    store
+        .delete_title_history_older_than(1)
+        .await
+        .expect("title history prune");
+    store
+        .delete_download_import_artifacts_older_than(1)
+        .await
+        .expect("artifact prune");
+    store
+        .delete_terminal_imports_older_than(1)
+        .await
+        .expect("import prune");
+    store
+        .delete_terminal_download_queue_commands_older_than(1)
+        .await
+        .expect("queue command prune");
+    store
+        .delete_rule_set_history_older_than(1)
+        .await
+        .expect("rule history prune");
+    store
+        .delete_lifecycle_evaluation_runs_older_than(1)
+        .await
+        .expect("evaluation run prune");
+    store
+        .delete_held_lifecycle_action_runs_older_than(1)
+        .await
+        .expect("held run prune");
+
+    assert_eq!(history_deleted, 4);
+    assert_eq!(history_event_ids(services.pool()).await.len(), 2);
+    let blocks: Vec<String> = sqlx::query_scalar("SELECT id FROM blocklist ORDER BY id")
+        .fetch_all(services.pool())
+        .await
+        .expect("list blocklist");
+    assert_eq!(
+        blocks,
+        vec![
+            "block-bad-file".to_string(),
+            "block-release".to_string(),
+            "block-torrent".to_string(),
+        ]
+    );
+
+    let _ = std::fs::remove_file(db);
+}

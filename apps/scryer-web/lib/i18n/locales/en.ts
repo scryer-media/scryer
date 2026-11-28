@@ -114,6 +114,26 @@ const en: LocaleDictionary = {
     "The media structure is malformed. Review the source file before importing.",
   "error.reason.MEDIA_PROBE_ENCRYPTED":
     "The media is encrypted and could not be verified.",
+  "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE":
+    "This file is marked bad for the title, so it was not imported.",
+  "error.reason.MEDIA_BAD_FILE_LOOKUP_FAILED":
+    "The title’s bad files could not be checked, so the import waits for review.",
+  "error.reason.MEDIA_REMEDIATION_NOT_AVAILABLE":
+    "This report is not eligible for the selected action.",
+  "error.reason.MEDIA_RECYCLE_FAILED": "The file could not be recycled.",
+  "error.reason.MEDIA_DETAILS_TOO_LONG":
+    "The details are too long. Use at most 4096 characters.",
+  "error.reason.MEDIA_REASON_REQUIRES_DETAILS":
+    "Describe the problem when the reason is Something else.",
+  "error.reason.MEDIA_REASON_UNKNOWN": "That report reason is not recognized.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_FILE":
+    "This file has other hard links, so recycling it would not free it. Mark it bad instead.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY":
+    "This file is hard-linked to its download copy. Recycle both names, or cancel.",
+  "error.reason.MEDIA_RECYCLE_UNSUPPORTED_PLATFORM":
+    "Recycling a reported file is not supported on this platform. Mark it bad instead.",
+  "error.reason.MEDIA_RESTORE_MATCHES_BAD_FILE":
+    "This item is a file marked bad for its title. Confirm to restore it and unmark it.",
 
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
@@ -6052,6 +6072,8 @@ const en: LocaleDictionary = {
   "settings.downloadClientPriority": "Priority",
   "settings.downloadClientRemoveCompleted": "Remove Completed",
   "settings.downloadClientRemoveFailed": "Remove Failed",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "Remove Failed covers downloads that failed in the client. A torrent whose import Scryer refused is always cleaned up like an imported one: it seeds to its goal, then the client removes it.",
   "settings.downloadClientUseSslInfo":
     "Use SSL/TLS when connecting to this download client.",
   "settings.downloadClientEnabledInfo":
@@ -6698,6 +6720,11 @@ const en: LocaleDictionary = {
   "title.clearBlockedRelease": "Remove {{releaseName}} from the blocklist",
   "title.clearBlockedReleaseHint":
     "Remove this release from the blocklist so it can be grabbed again",
+  "title.markedBadFile": "Marked bad",
+  "title.badFileEntry": "Bad file ({{size}})",
+  "title.unmarkBadFile": "Unmark bad file {{releaseName}}",
+  "title.unmarkBadFileHint":
+    "Unmark this file so the same content can be imported again. The report stays approved.",
   "title.contextAdded": "Added",
   "title.columns": "Columns",
   "title.toggleColumns": "Toggle columns",
@@ -8493,6 +8520,90 @@ const en: LocaleDictionary = {
     "Some ranges or warnings were omitted because the report limit was reached.",
   "mediaFile.subtitleCount": "{{count}} Subs",
   "mediaFile.delete": "Delete file",
+  "mediaFile.markBad": "Mark bad",
+  "mediaFile.markBadFile": "Mark bad: {{file}}",
+  "mediaFile.numberedVersion": "File version {{number}}",
+  "mediaFile.markBadDescription":
+    "Report {{file}} as bad. Report rules or an operator decide what happens next.",
+  "mediaFile.markBadOnly": "Mark bad only",
+  "mediaFile.markBadOnlyHint":
+    "Keep the file on disk and mark it bad, so the same file is not imported again for this title.",
+  "mediaFile.markBadRecycleSearch": "Mark bad, recycle, and search",
+  "mediaFile.markBadRecycleSearchHint":
+    "Also ask an operator to recycle the file and search for a replacement. Rules can mark a file bad but never recycle it.",
+  "mediaFile.markBadReason": "What’s wrong with this file?",
+  "mediaIssue.reasonLabel": "Reason",
+  "mediaIssue.reason.corrupted": "Does not play, or plays damaged",
+  "mediaIssue.reason.wrongContent": "Wrong movie or episode",
+  "mediaIssue.reason.wrongLanguage": "Wrong audio language",
+  "mediaIssue.reason.audioOutOfSync": "Audio out of sync",
+  "mediaIssue.reason.poorQuality": "Far worse than its quality suggests",
+  "mediaIssue.reason.other": "Something else",
+  "mediaFile.submitBadReport": "Submit report",
+  "mediaFile.markBadSubmitted": "Bad-media report submitted",
+  "mediaFile.markBadSubmitFailed":
+    "The report could not be submitted. Check that this version is still available and try again.",
+  "mediaIssue.reviewTitle": "Bad-media review",
+  "mediaIssue.reviewHint":
+    "Review reported files for each library. A file marked bad appears in its title’s blocked releases; removing it there unmarks the file.",
+  "mediaIssue.unmarkHint":
+    "Approving marks the file bad on its title’s blocklist. To unmark it later, remove the entry from the title’s blocked releases.",
+  "mediaIssue.library": "Library",
+  "mediaIssue.reports": "Reports",
+  "mediaIssue.reviewStatus": "Review status",
+  "mediaIssue.pending": "Pending review",
+  "mediaIssue.approved": "Approved",
+  "mediaIssue.rejected": "Rejected",
+  "mediaIssue.canceled": "Canceled",
+  "mediaIssue.allReports": "All reports",
+  "mediaIssue.noPending": "No reports are waiting for review in this library.",
+  "mediaIssue.noReports": "No bad-media reports in this library.",
+  "mediaIssue.reportsFailed":
+    "Could not load the reports. Refresh to try again.",
+  "mediaIssue.previousPage": "Previous page",
+  "mediaIssue.nextPage": "Next page",
+  "mediaIssue.viewReport": "View report",
+  "mediaIssue.hideReport": "Hide report",
+  "mediaIssue.titleId": "Title: {{id}}",
+  "mediaIssue.file": "Affected file",
+  "mediaIssue.episodes": "Affected episodes and linked movies",
+  "mediaIssue.noEpisodeAssociations": "No episode or linked movie associations",
+  "mediaIssue.requestedAction": "Requested action",
+  "mediaIssue.approvedAction": "Approved action",
+  "mediaIssue.executionError": "Execution error",
+  "mediaIssue.notStarted": "No action started",
+  "mediaIssue.blocked": "Marked bad",
+  "mediaIssue.recycling": "Recycling",
+  "mediaIssue.recycleFailed": "Recycle failed",
+  "mediaIssue.noEligibleRelease": "No eligible replacement release",
+  "mediaIssue.downloadQueued": "Replacement download queued",
+  "mediaIssue.replacementImported": "Replacement imported",
+  "mediaIssue.searching": "Replacement search",
+  "mediaIssue.approveMarkOnly": "Approve mark bad only",
+  "mediaIssue.approveMarkOnlyHint":
+    "Mark the file bad on its title’s blocklist and leave it on disk. The same file is not imported again for this title.",
+  "mediaIssue.reviewRecycle": "Review recycle and search",
+  "mediaIssue.approveRecycle": "Approve recycle and search",
+  "mediaIssue.approveRecycleHint":
+    "Review the files below. Approval marks the file bad, moves it to the recycle bin with any copy of it left in its download folder, and searches for a replacement.",
+  "mediaIssue.hardLinkedPair":
+    "This file is hard-linked to its copy in the download folder, so both names point to the same data. Recycling frees the space only if both names go to the recycle bin. Recycle both names, or cancel.",
+  "mediaIssue.recycleBothNames": "Recycle both names",
+  "mediaIssue.previewFingerprint": "Reviewed file fingerprint",
+  "mediaIssue.typeConfirmation": "Type DELETE to approve recycling.",
+  "mediaIssue.unexpectedPreviewScope":
+    "The preview does not identify exactly one media file. This report cannot be approved for recycling.",
+  "mediaIssue.reviewSaved":
+    "Review saved. Switch to All reports to see its execution status.",
+  "mediaIssue.recycleUnavailable":
+    "The recycle bin is disabled or unavailable. You can still approve mark bad only.",
+  "mediaIssue.remediationUnavailable":
+    "This report is not eligible for the selected action.",
+  "mediaIssue.reportedFileChanged":
+    "The reported file no longer matches the report. Ask for a new report on the current file.",
+  "mediaIssue.reject": "Reject report",
+  "mediaIssue.rejectHint":
+    "Reject this report without marking the file bad or changing files.",
   "subtitle.batchProgress":
     "Searching subtitles: {{completed}} of {{total}} processed.",
   "subtitle.batchCompleted":
@@ -9861,6 +9972,12 @@ const en: LocaleDictionary = {
     "Restore {{count}} selected file to its original path.",
   "settings.recycleBinRestoreDescriptionOther":
     "Restore {{count}} selected files to their original paths.",
+  "settings.recycleBinRestoreBadFileOne":
+    "1 item is a file marked bad for its title.",
+  "settings.recycleBinRestoreBadFileOther":
+    "{{count}} items are files marked bad for their titles.",
+  "settings.recycleBinRestoreClearBadFiles":
+    "Restore them anyway and unmark them. This needs permission to manage those titles.",
   "settings.recycleBinDeleteSelectedConfirmOne":
     "Permanently delete {{count}} selected recycle-bin file. This cannot be undone.",
   "settings.recycleBinDeleteSelectedConfirmOther":
@@ -11094,6 +11211,38 @@ const en: LocaleDictionary = {
     "Rules set different values for the same thing, so a person decides.",
   "requests.fallbackShapingInvalid":
     "Rules would approve, but a value they set cannot apply to this request, so a person decides.",
+  "requests.fallbackReportConflict":
+    "Report rules disagree about this report, so a person decides.",
+  "settings.refReqSectionReport":
+    "— The bad-file report a report rule decides; absent for a media request",
+  "settings.refReqReportReason":
+    "corrupted, wrong_content, wrong_language, audio_out_of_sync, poor_quality or other",
+  "settings.refReqReportRemediation":
+    "What the reporter asked for: mark_bad or recycle_and_search",
+  "settings.refReqReportProvenance":
+    "grabbed when the file came from a known grab, otherwise unknown",
+  "settings.refReqReportHasDetails":
+    "Whether the reporter described the problem",
+  "settings.refReqReportTitleId": "The reported file’s title",
+  "settings.refReqReportMediaFileId":
+    "The reported file; paths are not exposed",
+  "settings.refReqReportAffectedEpisodeIds": "Episodes the reported file holds",
+  "settings.refReqReportAffectedSeriesMovieLinkIds":
+    "Series-to-movie links the reported file serves",
+  "settings.refReqSectionReportFacts":
+    "— What Scryer knows about the reporter and the media",
+  "settings.refReqSectionReportObservations":
+    "— Whether each report fact is known",
+  "settings.refReqReportFactsReporterRequestedMedia":
+    "True when an approved request of the reporter’s created the title and covered the reported media",
+  "settings.refReqReportFactsReporterRequestedMediaValue":
+    "The fact’s value when known",
+  "settings.requestPreviewReportReview":
+    "Submitting this sample report would leave it for review.",
+  "settings.requestPreviewReportReject":
+    "Submitting this sample report would reject it.",
+  "settings.requestPreviewReportMarkBad":
+    "Submitting this sample report would mark the file bad. A requested recycle and search would still wait for an operator.",
   "requests.preflightReason": "Reason: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer could not read everything about this title, so a person will decide.",
@@ -12961,6 +13110,8 @@ const en: LocaleDictionary = {
     "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
   "error.ruleActionHeadFunction":
     "An action cannot be written as a function. Write it as a rule instead.",
+  "error.ruleMixesReportAndRequestHeads":
+    "A rule decides media requests or bad-file reports, not both. Move the report heads (mark_bad, reject_report) into a rule of their own.",
   "error.ruleForeignDataReference":
     "This rule reads data outside its own package. Use input instead.",
   "error.ruleWithTargetNotAllowed":
@@ -13698,6 +13849,8 @@ const en: LocaleDictionary = {
     "Preferred audio languages",
   "ruleOutput.request.add_tags": "Add tags",
   "ruleOutput.request.notify": "Notify",
+  "ruleOutput.request.mark_bad": "Mark file bad",
+  "ruleOutput.request.reject_report": "Reject report",
   "ruleOutput.request.notify.placeholder": "Notification text",
   "ruleOutput.request.reasons": "Reason codes",
   "ruleOutput.request.reasons.placeholder": "One reason code per line",

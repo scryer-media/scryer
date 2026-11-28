@@ -2332,8 +2332,8 @@ export const installUploadedPluginMutation = `mutation InstallUploadedPlugin($in
 
 // ── Recycle Bin ─────────────────────────────────────────────────────────
 
-export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: ID!) {
-  restoreRecycledItem(id: $id) {
+export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: ID!, $clearBadFile: Boolean) {
+  restoreRecycledItem(id: $id, clearBadFile: $clearBadFile) {
     id
     jobRun {
       id
@@ -2910,6 +2910,8 @@ export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: P
     metadataPartial
     undefinedTags
     inputDocument
+    reportVote
+    reportOutcome
     decision {${REQUEST_RULE_DECISION_FIELDS}
       shaping {${REQUEST_SHAPING_FIELDS}
       }
@@ -3265,6 +3267,42 @@ export const blocklistExternalSubtitleMutation = `mutation BlocklistExternalSubt
   blocklistExternalSubtitle(input: $input) {
     id
     blocklisted
+  }
+}`;
+
+export const submitMediaIssueMutation = `mutation SubmitMediaIssue($input: SubmitMediaIssueInput!) {
+  submitMediaIssue(input: $input) {
+    id
+  }
+}`;
+
+export const approveMediaIssueMutation = `mutation ApproveMediaIssue($issueId: ID!) {
+  approveMediaIssue(issueId: $issueId) {
+    id
+    status
+    authorizedRemediation
+    executionStatus
+  }
+}`;
+
+export const approveMediaIssueRecycleSearchMutation = `mutation ApproveMediaIssueRecycleSearch($issueId: ID!, $previewFingerprint: String!, $typedConfirmation: String!, $recycleBothNames: Boolean) {
+  approveMediaIssueRecycleSearch(
+    issueId: $issueId
+    previewFingerprint: $previewFingerprint
+    typedConfirmation: $typedConfirmation
+    recycleBothNames: $recycleBothNames
+  ) {
+    id
+    status
+    authorizedRemediation
+    executionStatus
+  }
+}`;
+
+export const rejectMediaIssueMutation = `mutation RejectMediaIssue($issueId: ID!) {
+  rejectMediaIssue(issueId: $issueId) {
+    id
+    status
   }
 }`;
 

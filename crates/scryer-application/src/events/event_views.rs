@@ -1129,6 +1129,10 @@ pub(crate) fn title_history_record_from_domain_event(
                 )
                 .map(|failure| failure.reason_code().to_string())
             }),
+            DomainEventPayload::ImportRejected(data) => data
+                .reason_code
+                .clone()
+                .or_else(|| legacy_import_rejected_reason_code(data.reason.as_deref())),
             _ => None,
         },
         blocklist_reason,
@@ -1140,6 +1144,15 @@ pub(crate) fn title_history_record_from_domain_event(
         occurred_at: event.occurred_at.to_rfc3339(),
         created_at: event.occurred_at.to_rfc3339(),
     })
+}
+
+/// The code of a bad-file match recorded before the event carried it in its
+/// own field, when the code was appended to the reason as ` [CODE]`.
+fn legacy_import_rejected_reason_code(reason: Option<&str>) -> Option<String> {
+    const LEGACY_BAD_FILE_MATCH: &str = " [MEDIA_CONTENT_BLOCK_MATCHED]";
+    reason
+        .filter(|reason| reason.ends_with(LEGACY_BAD_FILE_MATCH))
+        .map(|_| crate::error_reasons::media::IMPORT_MATCHES_BAD_FILE.to_string())
 }
 
 /// Bytes to report for a history row.
@@ -2262,6 +2275,7 @@ mod tests {
                 reason: Some("Policy mismatch".to_string()),
                 skip_reason: None,
                 episode_ids: vec!["ep-1".to_string()],
+                reason_code: None,
             }),
         ))
         .expect("import rejected should project to activity");
@@ -2291,6 +2305,7 @@ mod tests {
                     reason: Some("post-download score -100 rejected import: no-hdr".to_string()),
                     skip_reason,
                     episode_ids: Vec::new(),
+                    reason_code: None,
                 }),
             )
         };

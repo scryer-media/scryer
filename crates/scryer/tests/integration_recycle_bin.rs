@@ -1948,7 +1948,7 @@ async fn restoring_conflict_scans_title_and_tracks_restored_file_as_additional()
     .await;
     let accepted = ctx
         .app
-        .start_restore_recycled_item_job(&manager, &entry_id)
+        .start_restore_recycled_item_job(&manager, &entry_id, false)
         .await
         .expect("start recycle restore job");
     assert_eq!(accepted.job_run.job_key, JobKey::RecycleBinRestore);
@@ -2077,7 +2077,7 @@ async fn restoring_recreates_row_with_snapshotted_score_and_emits_one_restore_ev
     .await;
     let accepted = ctx
         .app
-        .start_restore_recycled_item_job(&manager, &recycle_result.entry_id)
+        .start_restore_recycled_item_job(&manager, &recycle_result.entry_id, false)
         .await
         .expect("start recycle restore job");
     let terminal = wait_for_terminal_job(
@@ -2221,7 +2221,7 @@ async fn failed_restore_job_keeps_recycle_entry_available() {
     .await;
     let accepted = ctx
         .app
-        .start_restore_recycled_item_job(&manager, &recycle_result.entry_id)
+        .start_restore_recycled_item_job(&manager, &recycle_result.entry_id, false)
         .await
         .expect("accept restore job before runtime failure");
 
@@ -2696,6 +2696,7 @@ async fn batch_replace_existing_restores_in_place_and_recycles_the_incumbent() {
             vec![entry_id.clone()],
             scryer_application::RecycleRestoreConflictPolicy::ReplaceExisting,
             &preview.fingerprint,
+            false,
         )
         .await
         .expect("accept replacement restore job");
@@ -2776,6 +2777,7 @@ async fn batch_restore_rejects_stale_preview_before_queueing() {
             vec![entry_id.clone()],
             scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
             &preview.fingerprint,
+            false,
         )
         .await
         .expect_err("stale preview should not queue a restore");
@@ -2836,12 +2838,14 @@ async fn batch_recycle_jobs_guard_duplicates_without_blocking_independent_entrie
             vec![duplicate_entry.clone()],
             scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
             &duplicate_preview.fingerprint,
+            false,
         ),
         ctx.app.start_restore_recycled_items_job(
             &manager,
             vec![duplicate_entry.clone()],
             scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
             &duplicate_preview.fingerprint,
+            false,
         ),
     );
     assert!(
@@ -2868,12 +2872,14 @@ async fn batch_recycle_jobs_guard_duplicates_without_blocking_independent_entrie
             vec![first_entry],
             scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
             &first_preview.fingerprint,
+            false,
         ),
         ctx.app.start_restore_recycled_items_job(
             &manager,
             vec![second_entry],
             scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
             &second_preview.fingerprint,
+            false,
         ),
     );
     let first = first.expect("first independent entry should be accepted");

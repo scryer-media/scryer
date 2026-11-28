@@ -1060,6 +1060,177 @@ pub struct FixTitleMatchPayload {
     pub warnings: Vec<String>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Review state of a media issue.
+pub enum MediaIssueStatusValue {
+    /// Awaiting a decision.
+    Pending,
+    /// The report was confirmed.
+    Approved,
+    /// The report was declined.
+    Rejected,
+    /// Review ended without approval or rejection.
+    Canceled,
+}
+
+impl From<scryer_domain::MediaIssueStatus> for MediaIssueStatusValue {
+    fn from(value: scryer_domain::MediaIssueStatus) -> Self {
+        match value {
+            scryer_domain::MediaIssueStatus::Pending => Self::Pending,
+            scryer_domain::MediaIssueStatus::Approved => Self::Approved,
+            scryer_domain::MediaIssueStatus::Rejected => Self::Rejected,
+            scryer_domain::MediaIssueStatus::Canceled => Self::Canceled,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Durable execution state for an approved media issue.
+pub enum MediaIssueExecutionStatusValue {
+    /// No remediation has started.
+    None,
+    /// The file is marked bad.
+    Blocked,
+    /// The reviewed file is being moved to the recycle bin.
+    Recycling,
+    /// The file could not be recycled.
+    RecycleFailed,
+    /// The search did not find an eligible replacement.
+    NoEligibleRelease,
+    /// A replacement download is queued.
+    DownloadQueued,
+    /// A file not marked bad was imported for the report's media after the
+    /// report last changed.
+    ReplacementImported,
+    /// A replacement search is underway.
+    Searching,
+}
+
+impl From<scryer_domain::MediaIssueExecutionStatus> for MediaIssueExecutionStatusValue {
+    fn from(value: scryer_domain::MediaIssueExecutionStatus) -> Self {
+        match value {
+            scryer_domain::MediaIssueExecutionStatus::None => Self::None,
+            scryer_domain::MediaIssueExecutionStatus::Blocked => Self::Blocked,
+            scryer_domain::MediaIssueExecutionStatus::Recycling => Self::Recycling,
+            scryer_domain::MediaIssueExecutionStatus::RecycleFailed => Self::RecycleFailed,
+            scryer_domain::MediaIssueExecutionStatus::NoEligibleRelease => Self::NoEligibleRelease,
+            scryer_domain::MediaIssueExecutionStatus::DownloadQueued => Self::DownloadQueued,
+            scryer_domain::MediaIssueExecutionStatus::ReplacementImported => {
+                Self::ReplacementImported
+            }
+            scryer_domain::MediaIssueExecutionStatus::Searching => Self::Searching,
+        }
+    }
+}
+
+#[derive(InputObject, Clone)]
+/// Report one existing media file as bad.
+pub struct SubmitMediaIssueInput {
+    /// ID of the existing library file being reported.
+    pub media_file_id: ID,
+    /// Reason for reporting the file: `corrupted`, `wrong_content`,
+    /// `wrong_language`, `audio_out_of_sync`, `poor_quality` or `other`.
+    /// `other` needs details.
+    pub reason_code: String,
+    /// Optional explanation from the reporter.
+    pub details: Option<String>,
+    /// Requested action; reporting does not authorize recycling.
+    pub remediation: MediaIssueRemediationValue,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A bad-media report and its review/execution state. Filesystem paths are not exposed.
+pub struct MediaIssuePayload {
+    /// ID of the report.
+    pub id: ID,
+    /// ID of the library where the file was reported.
+    pub library_id: ID,
+    /// ID of the title associated with the reported file.
+    pub title_id: ID,
+    /// ID of the reported file as recorded at submission.
+    pub media_file_id: ID,
+    /// ID of the user who submitted the report.
+    pub reporter_user_id: ID,
+    /// Reason recorded for the report.
+    pub reason_code: String,
+    /// Optional explanation supplied by the reporter.
+    pub details: Option<String>,
+    /// Proposed action, not an authorization.
+    pub remediation: MediaIssueRemediationValue,
+    /// Action explicitly authorized by the final review or policy.
+    pub authorized_remediation: Option<MediaIssueRemediationValue>,
+    /// Current review state.
+    pub status: MediaIssueStatusValue,
+    /// IDs of the episodes associated with the reported file.
+    pub affected_episode_ids: Vec<ID>,
+    /// IDs of series-to-movie links associated with the reported file.
+    pub affected_series_movie_link_ids: Vec<ID>,
+    /// ID of the request-rule decision that explains the outcome, when
+    /// report rules ran.
+    pub rule_decision_id: Option<ID>,
+    /// ID of the title blocklist entry that marks the file bad, while it exists.
+    pub blocklist_entry_id: Option<ID>,
+    /// ID of the user who reviewed the report, if reviewed by a user.
+    pub reviewed_by_user_id: Option<ID>,
+    /// When the report was reviewed, in UTC.
+    pub reviewed_at: Option<DateTime<Utc>>,
+    /// Current execution state of the authorized action.
+    pub execution_status: MediaIssueExecutionStatusValue,
+    /// Stable reason code for an execution failure, when recorded.
+    pub execution_error_code: Option<String>,
+    /// When the report was submitted, in UTC.
+    pub created_at: DateTime<Utc>,
+    /// When the report was last updated, in UTC.
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MediaIssuePayload {
+    pub fn from_domain(issue: scryer_domain::MediaIssue) -> async_graphql::Result<Self> {
+        let parse_timestamp = |value: &str, field: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .map(|value| value.with_timezone(&Utc))
+                .map_err(|error| {
+                    async_graphql::Error::new(format!("invalid {field} timestamp: {error}"))
+                })
+        };
+        Ok(Self {
+            id: issue.id.into(),
+            library_id: issue.library_id.into(),
+            title_id: issue.title_id.into(),
+            media_file_id: issue.media_file_id.into(),
+            reporter_user_id: issue.reporter_user_id.into(),
+            reason_code: issue.reason.as_str().to_string(),
+            details: issue.details,
+            remediation: issue.remediation.into(),
+            authorized_remediation: issue.authorized_remediation.map(Into::into),
+            status: issue.status.into(),
+            affected_episode_ids: issue
+                .affected_episode_ids
+                .into_iter()
+                .map(ID::from)
+                .collect(),
+            affected_series_movie_link_ids: issue
+                .affected_series_movie_link_ids
+                .into_iter()
+                .map(ID::from)
+                .collect(),
+            rule_decision_id: issue.rule_decision_id.map(ID::from),
+            blocklist_entry_id: issue.blocklist_id.map(ID::from),
+            reviewed_by_user_id: issue.reviewed_by_user_id.map(ID::from),
+            reviewed_at: issue
+                .reviewed_at
+                .map(|value| parse_timestamp(&value, "media issue reviewed_at"))
+                .transpose()?,
+            execution_status: issue.execution_status.into(),
+            execution_error_code: issue.execution_error_code,
+            created_at: parse_timestamp(&issue.created_at, "media issue created_at")?,
+            updated_at: parse_timestamp(&issue.updated_at, "media issue updated_at")?,
+        })
+    }
+}
+
 #[derive(SimpleObject, Clone)]
 /// Result of assigning an imported file to different episodes of its title.
 pub struct ReassignEpisodeFilePayload {

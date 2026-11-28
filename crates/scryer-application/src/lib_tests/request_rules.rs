@@ -10,6 +10,8 @@ use super::*;
 
 #[path = "request_rules_failure_tests.rs"]
 mod failure_tests;
+#[path = "request_rules_report_tests.rs"]
+mod report_tests;
 use scryer_domain::{
     LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState, MediaRequestStatus,
     RequestDecisionOutcome,
@@ -102,6 +104,7 @@ fn vote(id: &str, vote: RequestVote, held: bool, tags: &[&str]) -> ScopedVote {
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
             shaping: Default::default(),
             notify: None,
+            report_vote: scryer_rules::request::RequestReportVote::Abstain,
             held,
         },
     }
@@ -2490,6 +2493,7 @@ fn sample(harness: &MediaRequestTestHarness, library_id: &str, tvdb_id: i64) -> 
         lease_days: Some(Some(14)),
         required_audio_languages: None,
         preferred_audio_languages: None,
+        report: None,
     }
 }
 

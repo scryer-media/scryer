@@ -514,6 +514,7 @@ mod tests {
             reason: None,
             skip_reason,
             episode_ids: Vec::new(),
+            reason_code: None,
         }
     }
 

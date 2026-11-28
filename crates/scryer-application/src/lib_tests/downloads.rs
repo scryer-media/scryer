@@ -1353,6 +1353,7 @@ async fn local_password_retry_action_requires_current_identity_failure_and_libra
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at: now,
         completed_at: now,
         upgrade: false,
@@ -2665,6 +2666,7 @@ async fn a_manual_import_beside_an_unresolved_reconciliation_is_not_taken_as_imp
         needs_reconciliation: true,
         source_cleanup_failed: false,
         release_burned: false,
+        release_refused: false,
         started_at: now,
         completed_at: now,
         upgrade: false,
@@ -12972,6 +12974,7 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
                 validation,
                 None,
                 None,
+                &crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id),
             )
             .await;
             if manual {
@@ -27671,4 +27674,101 @@ async fn unbound_manual_import_cleanup_waits_while_an_import_holds_the_sources()
     );
     let deleted = run_unbound_manual_import_cleanup(true).await;
     assert!(deleted.is_empty(), "{deleted:?}");
+}
+
+/// A completed download whose only file loses to the library file comes back
+/// refused, not burned; one that also imports a new episode is not refused.
+#[tokio::test]
+async fn an_import_that_only_lost_to_the_library_is_refused() {
+    for with_new_episode in [false, true] {
+        let (
+            FailClosedPackFixture {
+                app,
+                user,
+                title,
+                episode,
+                library_dir: _library_dir,
+                ..
+            },
+            submissions,
+        ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+            series_root_at_library_dir: true,
+            ..Default::default()
+        })
+        .await;
+        let second_episode =
+            create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+
+        let initial_source = tempfile::tempdir().expect("initial source tempdir");
+        write_pack_video(
+            initial_source.path(),
+            "Fail.Closed.Pack.S01E01.1080p.WEB-DL.mkv",
+        );
+        let initial = series_pack_completed_download(
+            "refused-initial",
+            &title.id,
+            "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+            initial_source.path(),
+        );
+        let initial_result = {
+            let _probe = probe_agrees_with_the_name(1920, 1080);
+            crate::import::import::import_completed_download(&app, &user, &initial)
+                .await
+                .expect("initial completed import should run")
+        };
+        assert_eq!(
+            initial_result.decision,
+            scryer_domain::ImportDecision::Imported
+        );
+
+        let source = tempfile::tempdir().expect("source tempdir");
+        let lower = write_pack_video(source.path(), "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv");
+        if with_new_episode {
+            write_pack_video(source.path(), "Fail.Closed.Pack.S01E02.1080p.WEB-DL.mkv");
+        }
+        // Scryer's own automatic grab: a lost comparison is then a skip, not
+        // a hold for an operator.
+        let mut episode_ids = vec![episode.id.clone()];
+        if with_new_episode {
+            episode_ids.push(second_episode.id.clone());
+        }
+        record_pack_identity_submission(
+            &submissions,
+            &title.id,
+            "refused-release",
+            "Fail.Closed.Pack.S01.720p.WEB-DL",
+            SubmissionScope::EpisodeSet { episode_ids },
+        )
+        .await;
+        let completed = series_pack_completed_download(
+            "refused-release",
+            &title.id,
+            "Fail.Closed.Pack.S01.720p.WEB-DL",
+            source.path(),
+        );
+        let result = {
+            let _probes = probe_sequence_agrees_with_the_names([(1280, 720), (1920, 1080)]);
+            crate::import::import::import_completed_download(&app, &user, &completed)
+                .await
+                .expect("second completed import should run")
+        };
+
+        assert!(!result.release_burned, "{result:?}");
+        if with_new_episode {
+            assert_eq!(
+                result.decision,
+                scryer_domain::ImportDecision::Imported,
+                "{result:?}"
+            );
+            assert!(!result.release_refused, "{result:?}");
+        } else {
+            assert_ne!(
+                result.decision,
+                scryer_domain::ImportDecision::Imported,
+                "{result:?}"
+            );
+            assert!(result.release_refused, "{result:?}");
+        }
+        assert!(lower.exists(), "import leaves the refused source in place");
+    }
 }

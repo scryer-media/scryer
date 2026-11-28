@@ -877,6 +877,8 @@ const ko: LocaleDictionary = {
   "settings.downloadClientPriority": "우선순위",
   "settings.downloadClientRemoveCompleted": "완료 시 제거",
   "settings.downloadClientRemoveFailed": "실패 시 제거",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "'실패 시 제거'는 클라이언트에서 실패한 다운로드에 적용됩니다. Scryer가 가져오기를 거부한 토런트는 항상 가져온 토런트처럼 정리됩니다. 목표까지 시드한 뒤 클라이언트가 제거합니다.",
   "settings.downloadClientUseSslInfo":
     "이 다운로드 클라이언트에 연결할 때 SSL/TLS를 사용합니다.",
   "settings.downloadClientEnabledInfo":

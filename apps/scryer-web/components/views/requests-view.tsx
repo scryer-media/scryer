@@ -214,6 +214,7 @@ type RequestsViewProps = {
   mode: RequestsMode;
   canShowAdminMode: boolean;
   canShowRequesterMode: boolean;
+  mediaIssueReview?: React.ReactNode;
   onModeChange: (mode: RequestsMode) => void;
   statusFilter: RequestStatusFilter;
   onStatusFilterChange: (status: RequestStatusFilter) => void;
@@ -780,6 +781,7 @@ export function RequestsView({
   mode,
   canShowAdminMode,
   canShowRequesterMode,
+  mediaIssueReview,
   onModeChange,
   statusFilter,
   onStatusFilterChange,
@@ -1576,7 +1578,7 @@ export function RequestsView({
       className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-transparent [scrollbar-gutter:stable]"
     >
       <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="flex items-start gap-4">
+        <div className="flex flex-wrap items-start gap-4">
           <div className="flex h-11 w-11 flex-none items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]">
             <HeadingIcon className="h-5 w-5" />
           </div>
@@ -1593,6 +1595,7 @@ export function RequestsView({
               {headingCopy}
             </p>
           </div>
+          {mediaIssueReview}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

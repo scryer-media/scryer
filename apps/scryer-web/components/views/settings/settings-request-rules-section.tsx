@@ -213,6 +213,13 @@ type RefField = { field: string; type: string; descKey: string };
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = requestInputContract.sections as RefSectionDef[];
 
+/// What submitting the sample report would do, for a report rule's preview.
+const REPORT_OUTCOME_KEYS = {
+  REVIEW: "settings.requestPreviewReportReview",
+  REJECT: "settings.requestPreviewReportReject",
+  MARK_BAD: "settings.requestPreviewReportMarkBad",
+} as const;
+
 function OutcomeBadge({ outcome }: { outcome: string }) {
   const t = useTranslate();
   const labelKey = requestDecisionOutcomeLabelKey(outcome);
@@ -862,6 +869,14 @@ function RequestPreviewPanel({
 
         {previewResult && decision ? (
           <div id="settings-request-preview-result" className="space-y-2">
+            {previewResult.reportOutcome ? (
+              <p
+                id="settings-request-preview-report-outcome"
+                className="text-sm font-medium"
+              >
+                {t(REPORT_OUTCOME_KEYS[previewResult.reportOutcome])}
+              </p>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <OutcomeBadge outcome={decision.policyOutcome} />
               {decision.votes[0]?.held ? (

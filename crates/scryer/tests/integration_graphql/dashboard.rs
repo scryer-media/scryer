@@ -259,6 +259,7 @@ fn import_rejected_payload(
         reason: Some("fixture rejection".to_string()),
         skip_reason: None,
         episode_ids: vec![],
+        reason_code: None,
     })
 }
 

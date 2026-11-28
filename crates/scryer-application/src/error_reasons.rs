@@ -5563,7 +5563,12 @@ pub mod download_failure {
     /// so it is blocked on every indexer rather than only the one that
     /// served it.
     pub const UNWANTED_EXECUTABLES: &str = "DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES";
-    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES];
+    /// A torrent of Scryer's own grab completed, and import took nothing from
+    /// it: every file lost to the library, or its archives could not be
+    /// extracted. It is failed so it seeds to its goal and is removed, and its
+    /// scope is searched again.
+    pub const IMPORT_REFUSED: &str = "DOWNLOAD_FAILURE_IMPORT_REFUSED";
+    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES, IMPORT_REFUSED];
 }
 
 /// Why Scryer itself wrote a blocklist entry. Stored as the entry's reason.
@@ -6438,6 +6443,31 @@ pub mod services {
 }
 
 pub mod media {
+    /// The file's content matches one of the title's bad-file blocklist entries.
+    pub const IMPORT_MATCHES_BAD_FILE: &str = "MEDIA_IMPORT_MATCHES_BAD_FILE";
+    /// The title's bad-file entries could not be read, so the import waits for review.
+    pub const BAD_FILE_LOOKUP_FAILED: &str = "MEDIA_BAD_FILE_LOOKUP_FAILED";
+    /// An upgrade would replace a file marked bad, so it waits for review.
+    pub const UPGRADE_REPLACES_BAD_FILE: &str = "MEDIA_UPGRADE_REPLACES_BAD_FILE";
+    /// The report did not ask for this remediation, or its authorization is gone.
+    pub const REMEDIATION_NOT_AVAILABLE: &str = "MEDIA_REMEDIATION_NOT_AVAILABLE";
+    /// A confirmed recycle stopped before it finished.
+    pub const RECYCLE_FAILED: &str = "MEDIA_RECYCLE_FAILED";
+    /// A report's details are longer than the limit.
+    pub const DETAILS_TOO_LONG: &str = "MEDIA_DETAILS_TOO_LONG";
+    /// A report with the reason `other` needs details.
+    pub const REASON_REQUIRES_DETAILS: &str = "MEDIA_REASON_REQUIRES_DETAILS";
+    /// A report reason is not one of the known reasons.
+    pub const REASON_UNKNOWN: &str = "MEDIA_REASON_UNKNOWN";
+    /// The reported file has other hard links, so recycling it would not free it.
+    pub const RECYCLE_HARDLINKED_FILE: &str = "MEDIA_RECYCLE_HARDLINKED_FILE";
+    /// The reported file's only other name is its copy in the download folder;
+    /// the recycle moves both names only when the operator chooses that.
+    pub const RECYCLE_HARDLINKED_DOWNLOAD_COPY: &str = "MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY";
+    /// Recycling a reported file is not supported on this platform.
+    pub const RECYCLE_UNSUPPORTED_PLATFORM: &str = "MEDIA_RECYCLE_UNSUPPORTED_PLATFORM";
+    /// The recycled item is a file marked bad; confirm to restore it and clear the mark.
+    pub const RESTORE_MATCHES_BAD_FILE: &str = "MEDIA_RESTORE_MATCHES_BAD_FILE";
     /// Unavailable media analysis cannot authorize replacement of an existing file.
     pub const UNVERIFIED_REPLACEMENT: &str = "MEDIA_UNVERIFIED_REPLACEMENT";
     /// References or companion files cannot safely survive relocation.
@@ -6520,6 +6550,18 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        IMPORT_MATCHES_BAD_FILE,
+        BAD_FILE_LOOKUP_FAILED,
+        UPGRADE_REPLACES_BAD_FILE,
+        REMEDIATION_NOT_AVAILABLE,
+        RECYCLE_FAILED,
+        DETAILS_TOO_LONG,
+        REASON_REQUIRES_DETAILS,
+        REASON_UNKNOWN,
+        RECYCLE_HARDLINKED_FILE,
+        RECYCLE_HARDLINKED_DOWNLOAD_COPY,
+        RECYCLE_UNSUPPORTED_PLATFORM,
+        RESTORE_MATCHES_BAD_FILE,
         UNVERIFIED_REPLACEMENT,
         REFERENCES_REQUIRE_REVIEW,
         PROBE_IO_FAILED,

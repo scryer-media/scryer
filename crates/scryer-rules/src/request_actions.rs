@@ -8,6 +8,11 @@
 //! `notify` sends a notification. `reasons` carries stable codes. Any other
 //! rule name is an author helper and means nothing to the host.
 //!
+//! Two more votes decide a bad-file report instead of a request: `mark_bad`
+//! marks the reported file bad and `reject_report` rejects the report. A rule
+//! declares report heads or request heads, never both; `notify` and `reasons`
+//! go with either. No head recycles a file or starts a search.
+//!
 //! [`REQUEST_HEADS`] is the one description of those heads. The wrapper, the
 //! runtime decode, the static scan, the declared-actions summary and the
 //! builder schema all read it, so a new head is one entry there plus the code
@@ -73,6 +78,8 @@ pub enum RequestActionHead {
     SetPreferredAudioLanguages,
     AddTags,
     Notify,
+    MarkBad,
+    RejectReport,
 }
 
 /// What a head does to a request.
@@ -86,6 +93,8 @@ pub enum RequestHeadRole {
     Tags,
     /// Send a notification.
     Notify,
+    /// Mark a reported file bad or reject the report.
+    ReportVote,
     /// Explain the decision with stable codes.
     Reasons,
 }
@@ -94,6 +103,14 @@ impl RequestHeadRole {
     /// Whether a rule defining a head of this role decides something on its
     /// own. Reasons and a notification only explain or announce a decision.
     pub const fn decides(self) -> bool {
+        matches!(
+            self,
+            Self::Vote | Self::Shaping | Self::Tags | Self::ReportVote
+        )
+    }
+
+    /// Whether a head of this role decides a media request.
+    pub const fn decides_request(self) -> bool {
         matches!(self, Self::Vote | Self::Shaping | Self::Tags)
     }
 }
@@ -235,15 +252,51 @@ const fn audio_languages(
     }
 }
 
+/// The heads that decide a media request. A report head is never chosen
+/// with one of them.
+const REQUEST_DECIDING_HEAD_IDS: &[&str] = &[
+    "APPROVE",
+    "DENY",
+    "MANUAL",
+    "SET_QUALITY_PROFILE",
+    "SET_LEASE_DAYS",
+    "SET_MONITOR",
+    "SET_REQUIRED_AUDIO_LANGUAGES",
+    "SET_PREFERRED_AUDIO_LANGUAGES",
+    "ADD_TAGS",
+];
+/// The heads that decide a bad-file report.
+const REPORT_HEAD_IDS: &[&str] = &["MARK_BAD", "REJECT_REPORT"];
+
+const fn request_head(spec: RequestHeadSpec) -> RequestHeadSpec {
+    RequestHeadSpec {
+        conflicts_with: Some(REPORT_HEAD_IDS),
+        ..spec
+    }
+}
+
+const fn report_vote(
+    id: &'static str,
+    rule_name: &'static str,
+    head: RequestActionHead,
+) -> RequestHeadSpec {
+    RequestHeadSpec {
+        role: RequestHeadRole::ReportVote,
+        conflicts_with: Some(REQUEST_DECIDING_HEAD_IDS),
+        ..vote(id, rule_name, head)
+    }
+}
+
 /// Every head a request rule may define, in the order the wrapper projects
 /// them and the builder lists them. Entry `i` describes the head whose
 /// discriminant is `i`; `reasons` is last.
-pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
-    vote("APPROVE", "approve", RequestActionHead::Approve),
-    vote("DENY", "deny", RequestActionHead::Deny),
-    vote("MANUAL", "manual", RequestActionHead::Manual),
+pub const REQUEST_HEADS: [RequestHeadSpec; 13] = [
+    request_head(vote("APPROVE", "approve", RequestActionHead::Approve)),
+    request_head(vote("DENY", "deny", RequestActionHead::Deny)),
+    request_head(vote("MANUAL", "manual", RequestActionHead::Manual)),
     RequestHeadSpec {
         options: Some("qualityProfiles"),
+        conflicts_with: Some(REPORT_HEAD_IDS),
         ..valued(
             "SET_QUALITY_PROFILE",
             "set_quality_profile",
@@ -259,6 +312,7 @@ pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
         min: Some(0),
         max: Some(MAX_LEASE_DAYS),
         destructive: true,
+        conflicts_with: Some(REPORT_HEAD_IDS),
         ..valued(
             "SET_LEASE_DAYS",
             "set_lease_days",
@@ -270,6 +324,7 @@ pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
     },
     RequestHeadSpec {
         options: Some("monitorTypes"),
+        conflicts_with: Some(REPORT_HEAD_IDS),
         ..valued(
             "SET_MONITOR",
             "set_monitor",
@@ -279,16 +334,16 @@ pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
             &["futureEpisodes"],
         )
     },
-    audio_languages(
+    request_head(audio_languages(
         "SET_REQUIRED_AUDIO_LANGUAGES",
         "set_required_audio_languages",
         RequestActionHead::SetRequiredAudioLanguages,
-    ),
-    audio_languages(
+    )),
+    request_head(audio_languages(
         "SET_PREFERRED_AUDIO_LANGUAGES",
         "set_preferred_audio_languages",
         RequestActionHead::SetPreferredAudioLanguages,
-    ),
+    )),
     RequestHeadSpec {
         options: Some("titleTags"),
         max_items: Some(MAX_TAGS),
@@ -296,6 +351,7 @@ pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
         pattern: Some(TAG_PATTERN),
         item_rule: Some(RequestItemRule::Tag),
         wrapper_default: "[]",
+        conflicts_with: Some(REPORT_HEAD_IDS),
         ..valued(
             "ADD_TAGS",
             "add_tags",
@@ -316,6 +372,12 @@ pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
             &["Approved by a rule"],
         )
     },
+    report_vote("MARK_BAD", "mark_bad", RequestActionHead::MarkBad),
+    report_vote(
+        "REJECT_REPORT",
+        "reject_report",
+        RequestActionHead::RejectReport,
+    ),
     RequestHeadSpec {
         id: "REASONS",
         rule_name: "reasons",
@@ -482,7 +544,9 @@ impl RequestShaping {
             | RequestActionHead::Deny
             | RequestActionHead::Manual
             | RequestActionHead::AddTags
-            | RequestActionHead::Notify => None,
+            | RequestActionHead::Notify
+            | RequestActionHead::MarkBad
+            | RequestActionHead::RejectReport => None,
         }
     }
 
@@ -520,7 +584,9 @@ impl RequestShaping {
             | RequestActionHead::Deny
             | RequestActionHead::Manual
             | RequestActionHead::AddTags
-            | RequestActionHead::Notify => {}
+            | RequestActionHead::Notify
+            | RequestActionHead::MarkBad
+            | RequestActionHead::RejectReport => {}
         }
     }
 
@@ -551,7 +617,9 @@ pub(crate) fn decode_request_actions(value: &Value) -> Result<DecodedRequestActi
             continue;
         };
         let head_value = match spec.role {
-            RequestHeadRole::Vote | RequestHeadRole::Reasons => continue,
+            RequestHeadRole::Vote | RequestHeadRole::ReportVote | RequestHeadRole::Reasons => {
+                continue;
+            }
             _ => decode_head(spec, &value[spec.rule_name])?,
         };
         match spec.role {
@@ -566,7 +634,7 @@ pub(crate) fn decode_request_actions(value: &Value) -> Result<DecodedRequestActi
                     decoded.notify = Some(text);
                 }
             }
-            RequestHeadRole::Vote | RequestHeadRole::Reasons => {}
+            RequestHeadRole::Vote | RequestHeadRole::ReportVote | RequestHeadRole::Reasons => {}
         }
     }
     Ok(decoded)
@@ -738,6 +806,12 @@ pub fn request_builder_schema() -> RuleBuilderSchema {
                 rule: RuleBuilderOutputRuleKind::AtMostOne,
                 of: Some(ids(|spec| spec.role == RequestHeadRole::Vote)),
             },
+            // A report rule marks the file bad or rejects the report, not
+            // both.
+            RuleBuilderOutputRule {
+                rule: RuleBuilderOutputRuleKind::AtMostOne,
+                of: Some(ids(|spec| spec.role == RequestHeadRole::ReportVote)),
+            },
             // Reasons and a notification alone decide nothing, so the server
             // refuses a rule that writes only those.
             RuleBuilderOutputRule {
@@ -785,6 +859,20 @@ impl RequestActionScan {
         self.defined_heads
             .iter()
             .any(|head| head.spec().role.decides())
+    }
+
+    /// Whether the source decides a media request.
+    pub fn decides_request(&self) -> bool {
+        self.defined_heads
+            .iter()
+            .any(|head| head.spec().role.decides_request())
+    }
+
+    /// Whether the source decides a bad-file report.
+    pub fn decides_report(&self) -> bool {
+        self.defined_heads
+            .iter()
+            .any(|head| head.spec().role == RequestHeadRole::ReportVote)
     }
 
     /// The text literals written for one head, in source order.
@@ -853,7 +941,11 @@ impl RequestDeclaredActions {
     /// The field holding one head's declared values; `None` for a vote.
     pub fn slot_mut(&mut self, head: RequestActionHead) -> Option<DeclaredSlot<'_>> {
         Some(match head {
-            RequestActionHead::Approve | RequestActionHead::Deny | RequestActionHead::Manual => {
+            RequestActionHead::Approve
+            | RequestActionHead::Deny
+            | RequestActionHead::Manual
+            | RequestActionHead::MarkBad
+            | RequestActionHead::RejectReport => {
                 return None;
             }
             RequestActionHead::SetQualityProfile => DeclaredSlot::Texts(&mut self.quality_profiles),

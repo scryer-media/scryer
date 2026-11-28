@@ -3689,6 +3689,12 @@ pub struct ImportResult {
     pub source_cleanup_failed: bool,
     #[serde(default)]
     pub release_burned: bool,
+    /// Nothing was imported because every file lost a fair comparison with
+    /// the library: a refusal that settles the download rather than one an
+    /// operator has to resolve. Set apart from `release_burned`, which also
+    /// holds the release to blame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub release_refused: bool,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
     /// The import replaced an existing media file. Only the canonical movie
@@ -4386,6 +4392,11 @@ pub struct TitleHistoryRecord {
 /// identity is the infohash when the release has one -- content identity is the
 /// same wherever the torrent came from -- and otherwise the indexer it failed
 /// on plus its normalized name.
+///
+/// Retention: blocks are kept forever. History retention never prunes the
+/// `blocklist` table; a row goes only when an operator removes it, when its
+/// title is deleted, or when the indexer a release-only block names is
+/// deleted.
 #[derive(Clone, Debug)]
 pub struct BlocklistEntry {
     pub id: String,
@@ -4405,6 +4416,213 @@ pub struct BlocklistEntry {
     pub info_hash: Option<String>,
     pub reason: Option<String>,
     pub created_at: String,
+    /// Set when the entry marks a file bad: the sampled content identity of
+    /// that file. A content-only entry has an empty release name.
+    pub content: Option<BlocklistContentIdentity>,
+}
+
+/// The sampled content identity a bad-file blocklist entry carries.
+///
+/// `(scheme, size_bytes, sample_bytes, sample_blake3)` is the import content
+/// proof: the size plus a BLAKE3 digest of the first and last MiB. A match is
+/// a sampled match, not proof of full-byte equality.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlocklistContentIdentity {
+    pub scheme: String,
+    pub size_bytes: u64,
+    pub sample_bytes: u64,
+    pub sample_blake3: String,
+}
+
+/// Why a reporter says a file is bad.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueReason {
+    /// The file does not play, or plays with visible or audible damage.
+    Corrupted,
+    /// The file holds a different movie or episode.
+    WrongContent,
+    /// The audio is not in the expected language.
+    WrongLanguage,
+    /// Audio and picture drift apart.
+    AudioOutOfSync,
+    /// The picture or sound is far worse than the quality suggests.
+    PoorQuality,
+    /// Anything else; the reporter explains in the details.
+    Other,
+}
+
+impl MediaIssueReason {
+    pub const ALL: [Self; 6] = [
+        Self::Corrupted,
+        Self::WrongContent,
+        Self::WrongLanguage,
+        Self::AudioOutOfSync,
+        Self::PoorQuality,
+        Self::Other,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Corrupted => "corrupted",
+            Self::WrongContent => "wrong_content",
+            Self::WrongLanguage => "wrong_language",
+            Self::AudioOutOfSync => "audio_out_of_sync",
+            Self::PoorQuality => "poor_quality",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str() == value)
+    }
+
+    /// Whether the report condemns the content wherever it appears in the
+    /// title: every file holding it is marked and the import gate refuses
+    /// it. A wrong-content file may be right for another episode, so that
+    /// report marks only its file and blocks only its release.
+    pub const fn applies_title_wide(self) -> bool {
+        !matches!(self, Self::WrongContent)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueRemediation {
+    MarkBad,
+    RecycleAndSearch,
+}
+
+impl MediaIssueRemediation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MarkBad => "mark_bad",
+            Self::RecycleAndSearch => "recycle_and_search",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "mark_bad" => Some(Self::MarkBad),
+            "recycle_and_search" => Some(Self::RecycleAndSearch),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Canceled,
+}
+
+impl MediaIssueStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Canceled => "canceled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "approved" => Some(Self::Approved),
+            "rejected" => Some(Self::Rejected),
+            "canceled" => Some(Self::Canceled),
+            _ => None,
+        }
+    }
+}
+
+/// What has happened to an approved report's file.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueExecutionStatus {
+    None,
+    /// The file is marked bad.
+    Blocked,
+    Recycling,
+    RecycleFailed,
+    NoEligibleRelease,
+    DownloadQueued,
+    /// A file not marked bad was imported for the report's media after the
+    /// report last changed. Derived when reports are read; never stored.
+    ReplacementImported,
+    Searching,
+}
+
+impl MediaIssueExecutionStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Blocked => "blocked",
+            Self::Recycling => "recycling",
+            Self::RecycleFailed => "recycle_failed",
+            Self::NoEligibleRelease => "no_eligible_release",
+            Self::DownloadQueued => "download_queued",
+            Self::ReplacementImported => "replacement_imported",
+            Self::Searching => "searching",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [
+            Self::None,
+            Self::Blocked,
+            Self::Recycling,
+            Self::RecycleFailed,
+            Self::NoEligibleRelease,
+            Self::DownloadQueued,
+            Self::ReplacementImported,
+            Self::Searching,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == value)
+    }
+}
+
+/// A report that a library file is bad.
+///
+/// Retention: reports are kept forever as audit records. Nothing prunes the
+/// `media_issues` table, and history retention does not apply to it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssue {
+    pub id: String,
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub file_path_snapshot: String,
+    pub file_version: String,
+    /// The reported file's sampled content identity.
+    pub content: BlocklistContentIdentity,
+    pub reporter_user_id: String,
+    pub reason: MediaIssueReason,
+    pub details: Option<String>,
+    pub remediation: MediaIssueRemediation,
+    /// The remediation review or a rule authorized. Marking a file bad never
+    /// authorizes recycling it.
+    pub authorized_remediation: Option<MediaIssueRemediation>,
+    pub status: MediaIssueStatus,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+    /// The rule decision trace, in `request_rule_decisions`.
+    pub rule_decision_id: Option<String>,
+    /// The blocklist entry that marks the file bad, while it exists.
+    pub blocklist_id: Option<String>,
+    pub reviewed_by_user_id: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub execution_status: MediaIssueExecutionStatus,
+    pub execution_error_code: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 // ── Titles ───────────────────────────────────────────────────────────────────
@@ -4494,6 +4712,11 @@ pub enum DomainEventType {
     MediaRequestApproved,
     MediaRequestRejected,
     MediaRequestCanceled,
+    MediaIssueSubmitted,
+    MediaIssueApproved,
+    MediaIssueRejected,
+    MediaIssueRecycleExecution,
+    MediaIssueUnmarked,
     TitleAdded,
     TitleUpdated,
     TitleRematched,
@@ -4562,6 +4785,11 @@ impl DomainEventType {
             Self::MediaRequestApproved => "media_request_approved",
             Self::MediaRequestRejected => "media_request_rejected",
             Self::MediaRequestCanceled => "media_request_canceled",
+            Self::MediaIssueSubmitted => "media_issue_submitted",
+            Self::MediaIssueApproved => "media_issue_approved",
+            Self::MediaIssueRejected => "media_issue_rejected",
+            Self::MediaIssueRecycleExecution => "media_issue_recycle_execution",
+            Self::MediaIssueUnmarked => "media_issue_unmarked",
             Self::TitleAdded => "title_added",
             Self::TitleUpdated => "title_updated",
             Self::TitleRematched => "title_rematched",
@@ -4630,6 +4858,11 @@ impl DomainEventType {
             "media_request_approved" => Some(Self::MediaRequestApproved),
             "media_request_rejected" => Some(Self::MediaRequestRejected),
             "media_request_canceled" => Some(Self::MediaRequestCanceled),
+            "media_issue_submitted" => Some(Self::MediaIssueSubmitted),
+            "media_issue_approved" => Some(Self::MediaIssueApproved),
+            "media_issue_rejected" => Some(Self::MediaIssueRejected),
+            "media_issue_recycle_execution" => Some(Self::MediaIssueRecycleExecution),
+            "media_issue_unmarked" => Some(Self::MediaIssueUnmarked),
             "title_added" => Some(Self::TitleAdded),
             "title_updated" => Some(Self::TitleUpdated),
             "title_rematched" => Some(Self::TitleRematched),
@@ -4789,6 +5022,38 @@ pub struct MediaRequestResolvedEventData {
     pub approved_lease_days: Option<i64>,
     #[serde(default)]
     pub policy_tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssueEventData {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub remediation: String,
+    pub status: String,
+    pub execution_status: String,
+}
+
+/// How a bad-file mark was taken off.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIssueUnmarkRoute {
+    /// The title's blocklist entry was cleared.
+    BlocklistClear,
+    /// A recycled copy of the file was restored with confirmation.
+    RecycleRestore,
+}
+
+/// A bad-file mark was taken off. The report stays approved; the event's
+/// actor is who unmarked it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaIssueUnmarkedEventData {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+    pub blocklist_id: String,
+    pub route: MediaIssueUnmarkRoute,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5100,6 +5365,9 @@ pub struct ImportRejectedEventData {
     pub skip_reason: Option<ImportSkipReason>,
     #[serde(default)]
     pub episode_ids: Vec<String>,
+    /// Stable condition beside `reason`, for a refusal a client translates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5635,6 +5903,11 @@ pub enum DomainEventPayload {
     MediaRequestApproved(MediaRequestResolvedEventData),
     MediaRequestRejected(MediaRequestResolvedEventData),
     MediaRequestCanceled(MediaRequestResolvedEventData),
+    MediaIssueSubmitted(MediaIssueEventData),
+    MediaIssueApproved(MediaIssueEventData),
+    MediaIssueRejected(MediaIssueEventData),
+    MediaIssueRecycleExecution(MediaIssueEventData),
+    MediaIssueUnmarked(MediaIssueUnmarkedEventData),
     TitleAdded(TitleAddedEventData),
     TitleUpdated(TitleUpdatedEventData),
     TitleRematched(TitleRematchedEventData),
@@ -5705,6 +5978,11 @@ impl DomainEventPayload {
             Self::MediaRequestApproved(_) => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected(_) => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled(_) => DomainEventType::MediaRequestCanceled,
+            Self::MediaIssueSubmitted(_) => DomainEventType::MediaIssueSubmitted,
+            Self::MediaIssueApproved(_) => DomainEventType::MediaIssueApproved,
+            Self::MediaIssueRejected(_) => DomainEventType::MediaIssueRejected,
+            Self::MediaIssueRecycleExecution(_) => DomainEventType::MediaIssueRecycleExecution,
+            Self::MediaIssueUnmarked(_) => DomainEventType::MediaIssueUnmarked,
             Self::TitleAdded(_) => DomainEventType::TitleAdded,
             Self::TitleUpdated(_) => DomainEventType::TitleUpdated,
             Self::TitleRematched(_) => DomainEventType::TitleRematched,

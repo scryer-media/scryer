@@ -819,8 +819,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // A film tracked both as a movie and as a series movie is looked up by
     // its TMDB id through `seriesMoviesTrackingFilm`: 205->206.
     assert!(query_field_names.contains(&"seriesMoviesTrackingFilm"));
+    // Bad-media review adds the report queue and the recycle preview of a
+    // report: 206->208.
+    assert!(query_field_names.contains(&"mediaIssueRecyclePreview"));
+    assert!(query_field_names.contains(&"mediaIssues"));
     assert_eq!(
-        query_field_count, 206,
+        query_field_count, 208,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -956,8 +960,21 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Changing monitoring for a selection of episodes adds
     // `setEpisodesMonitored`, one call instead of one per episode: 301->302.
     assert!(mutation_field_names.contains(&"setEpisodesMonitored"));
+    // Bad-media reports are submitted, approved, approved for recycle and
+    // rejected: 302->306.
+    for name in [
+        "submitMediaIssue",
+        "approveMediaIssue",
+        "approveMediaIssueRecycleSearch",
+        "rejectMediaIssue",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
     assert_eq!(
-        mutation_field_count, 302,
+        mutation_field_count, 306,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1614,19 +1631,23 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"SetEpisodesMonitoredInput"));
     assert_eq!(
         public_types.len(),
-        1068,
+        1077,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 581);
+    // Bad-media reports add MediaIssuePayload and
+    // MediaIssueRecyclePreviewPayload: OBJECT 581->583.
+    assert_eq!(kind_count("OBJECT"), 583);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
     assert!(public_type_names.contains(&"SetLibraryFullHashBackfillInput"));
-    assert_eq!(kind_count("INPUT_OBJECT"), 254);
+    assert_eq!(kind_count("INPUT_OBJECT"), 256);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 221);
+    // Bad-media reports add three report enums and the two report rule
+    // outcome enums: ENUM 221->226.
+    assert_eq!(kind_count("ENUM"), 226);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

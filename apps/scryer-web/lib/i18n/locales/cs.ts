@@ -1433,6 +1433,8 @@ const cs: LocaleDictionary = {
   "settings.downloadClientPriority": "Priorita",
   "settings.downloadClientRemoveCompleted": "Odebrat dokončené",
   "settings.downloadClientRemoveFailed": "Odebrat neúspěšné",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "„Odebrat neúspěšné“ platí pro stahování, která selhala v klientovi. Torrent, jehož import Scryer odmítl, se vždy uklidí jako importovaný: seeduje do svého cíle a pak ho klient odebere.",
   "settings.downloadClientUseSslInfo":
     "Při připojování k tomuto klientovi pro stahování použít SSL/TLS.",
   "settings.downloadClientEnabledInfo":
@@ -8170,6 +8172,8 @@ const cs: LocaleDictionary = {
   "ruleOutput.lifecycle.notify.placeholder": "Text oznámení",
   "ruleOutput.request.approve": "Schválit",
   "ruleOutput.request.deny": "Zamítnout",
+  "ruleOutput.request.mark_bad": "Označit soubor jako vadný",
+  "ruleOutput.request.reject_report": "Zamítnout hlášení",
   "ruleOutput.request.manual": "Ponechat k posouzení",
   "ruleOutput.request.set_quality_profile": "Profil kvality",
   "ruleOutput.request.set_lease_days": "Výpůjčka",

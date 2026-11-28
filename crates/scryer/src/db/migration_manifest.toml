@@ -4509,3 +4509,20 @@ kind = "sql"
 file = "postgres/migrations/0368_manual_import_candidate_size.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 369
+description = "bad file reports"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0369_bad_file_reports.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0369_bad_file_reports.sql"
+engine = "postgres"
+scope = "all"

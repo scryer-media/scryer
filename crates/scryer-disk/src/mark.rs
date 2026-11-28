@@ -447,6 +447,39 @@ impl Mark {
             .is_some_and(|facts| facts.links.is_some_and(|links| links > 1))
     }
 
+    /// Unknown link counts do not prove this is the file's only name.
+    pub fn has_one_name(&self) -> bool {
+        self.facts.is_some_and(|facts| facts.links == Some(1))
+    }
+
+    /// Whether the read said the file has exactly two names. An unknown
+    /// link count is not two.
+    pub fn has_two_names(&self) -> bool {
+        self.facts.is_some_and(|facts| facts.links == Some(2))
+    }
+
+    /// The original version spelling used by persisted location and review rows.
+    #[cfg(unix)]
+    pub fn legacy_unix_version(&self) -> Option<String> {
+        let Volume::Unix(device) = self.volume else {
+            return None;
+        };
+        let file = self.file?;
+        let facts = self.facts?;
+        let (modified, modified_ns) = since_epoch(facts.modified?);
+        // Unix stat rounds seconds down and reports a nonnegative nanos field.
+        let (modified, modified_ns) = if modified_ns < 0 {
+            (modified.checked_sub(1)?, 1_000_000_000 + modified_ns)
+        } else {
+            (modified, modified_ns)
+        };
+        let (changed, changed_ns) = facts.changed?;
+        let len = facts.len;
+        Some(format!(
+            "{device}:{file}:{len}:{modified}:{modified_ns}:{changed}:{changed_ns}"
+        ))
+    }
+
     /// What was at the path; `None` for a mark that names a volume only.
     pub fn kind(&self) -> Option<EntryKind> {
         self.facts.map(|facts| facts.kind)

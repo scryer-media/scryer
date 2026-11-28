@@ -17,7 +17,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "DENY",
@@ -35,7 +38,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "MANUAL",
@@ -53,7 +59,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "SET_QUALITY_PROFILE",
@@ -71,7 +80,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "SET_LEASE_DAYS",
@@ -89,7 +101,10 @@
       "perItem": false,
       "destructive": true,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "SET_MONITOR",
@@ -107,7 +122,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "SET_REQUIRED_AUDIO_LANGUAGES",
@@ -125,7 +143,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "SET_PREFERRED_AUDIO_LANGUAGES",
@@ -143,7 +164,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "ADD_TAGS",
@@ -161,7 +185,10 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": []
+      "conflictsWith": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
     },
     {
       "id": "NOTIFY",
@@ -180,6 +207,62 @@
       "destructive": false,
       "variants": null,
       "conflictsWith": []
+    },
+    {
+      "id": "MARK_BAD",
+      "head": "mark_bad",
+      "labelKey": "ruleOutput.request.mark_bad",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": [
+        "APPROVE",
+        "DENY",
+        "MANUAL",
+        "SET_QUALITY_PROFILE",
+        "SET_LEASE_DAYS",
+        "SET_MONITOR",
+        "SET_REQUIRED_AUDIO_LANGUAGES",
+        "SET_PREFERRED_AUDIO_LANGUAGES",
+        "ADD_TAGS"
+      ]
+    },
+    {
+      "id": "REJECT_REPORT",
+      "head": "reject_report",
+      "labelKey": "ruleOutput.request.reject_report",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": [
+        "APPROVE",
+        "DENY",
+        "MANUAL",
+        "SET_QUALITY_PROFILE",
+        "SET_LEASE_DAYS",
+        "SET_MONITOR",
+        "SET_REQUIRED_AUDIO_LANGUAGES",
+        "SET_PREFERRED_AUDIO_LANGUAGES",
+        "ADD_TAGS"
+      ]
     },
     {
       "id": "REASONS",
@@ -210,6 +293,13 @@
       ]
     },
     {
+      "rule": "AT_MOST_ONE",
+      "of": [
+        "MARK_BAD",
+        "REJECT_REPORT"
+      ]
+    },
+    {
       "rule": "AT_LEAST_ONE",
       "of": [
         "APPROVE",
@@ -220,7 +310,9 @@
         "SET_MONITOR",
         "SET_REQUIRED_AUDIO_LANGUAGES",
         "SET_PREFERRED_AUDIO_LANGUAGES",
-        "ADD_TAGS"
+        "ADD_TAGS",
+        "MARK_BAD",
+        "REJECT_REPORT"
       ]
     }
   ]

@@ -1,6 +1,8 @@
 pub mod assets;
 #[cfg(test)]
 mod audience_favorites_upgrade_tests;
+#[cfg(test)]
+mod bad_file_reports_upgrade_tests;
 pub mod blake3_identities;
 #[cfg(test)]
 #[path = "blake3_identities_upgrade_tests.rs"]

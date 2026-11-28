@@ -195,6 +195,10 @@ export type TitleReleaseBlocklistEntry = {
   releaseName: string;
   errorMessage: string | null;
   attemptedAt: string;
+  /** True when the entry marks a file bad; clearing it unmarks the file. */
+  markedBadFile: boolean;
+  /** The marked file's size in bytes, for a bad-file entry. */
+  contentSizeBytes: number | null;
 };
 
 export type MovieAvailabilityRecord = {

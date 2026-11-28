@@ -618,6 +618,7 @@ fn import_rejected(title: &Title, n: usize) -> DomainEventPayload {
         dest_path: None,
         quality: None,
         reason: Some("synthetic refusal".to_string()),
+        reason_code: None,
         skip_reason: None,
         episode_ids: Vec::new(),
     })

@@ -235,6 +235,7 @@ test("every fallback a decision can carry is said in words", () => {
     "library_permission",
     "shaping_conflict",
     "shaping_invalid",
+    "report_conflict",
   ]) {
     const key = requestFallbackReasonLabelKey(code);
     assert.ok(key, `${code} has a label`);

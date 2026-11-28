@@ -16,7 +16,9 @@
 //! that performs each read once. [`arbitration`] is the pure across-rule order
 //! (deny > manual > approve), and [`evaluation`] is what wires all of it
 //! together and writes the trace. [`preflight`] is the requester-facing preview
-//! that runs the identical path without persisting anything.
+//! that runs the identical path without persisting anything. [`report`] runs
+//! the report rules against a bad-file report, through the same engine and
+//! trace, with its own arbitration and no permission fallback.
 //!
 //! # What holds the whole thing up
 //!
@@ -43,15 +45,19 @@ pub mod evaluation;
 pub mod facts;
 pub mod preflight;
 pub mod read_model;
+pub mod report;
 pub mod service;
 
 pub use arbitration::{
     ALL_FALLBACKS, ArbitratedShaping, Arbitration, ArbitrationReason, FALLBACK_ERROR,
-    FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL,
-    FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER, ScopedError,
-    ScopedVote, ShapedValue, ShapingRefusal, arbitrate,
+    FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED, FALLBACK_REPORT_CONFLICT,
+    FALLBACK_RULE_MANUAL, FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID,
+    LIBRARY_PERMISSION_DECIDER, ReportArbitration, ReportVerdict, ScopedError, ScopedVote,
+    ShapedValue, ShapingRefusal, arbitrate, arbitrate_report,
 };
-pub use engine::{RequestRuleScope, RequestRulesEngineCache, RequestRulesEngineHandle};
+pub use engine::{
+    RequestRuleKind, RequestRuleScope, RequestRulesEngineCache, RequestRulesEngineHandle,
+};
 pub use evaluation::{
     PREFLIGHT_REQUEST_ID_PREFIX, RecordedVote, RequestDecisionReason, RequestEvaluation,
     RequestEvaluationPurpose, ResolvedShaping,
@@ -66,8 +72,12 @@ pub use preflight::{RequestPreflight, StagedRequestMetadata};
 pub use read_model::{
     MediaRequestPolicyFacts, MediaRequestPolicySelection, RequestRuleDecisionView,
 };
+pub use report::{
+    MEDIA_ISSUE_DECISION_REQUEST_ID_PREFIX, MediaIssueReportSubject, ReportRuleEvaluation,
+    ReportRuleOutcome,
+};
 pub use service::{
     REQUEST_MAX_LEASE_DAYS, RequestRuleDraft, RequestRulePreviewRequest, RequestRulePreviewResult,
-    RequestRulePreviewSource, RequestRuleSample, RequestRuleSetDetail, RequestRuleValidation,
-    validate_lease_days, validate_tag_list,
+    RequestRulePreviewSource, RequestRuleReportSample, RequestRuleSample, RequestRuleSetDetail,
+    RequestRuleValidation, validate_lease_days, validate_tag_list,
 };

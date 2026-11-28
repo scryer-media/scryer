@@ -18,6 +18,11 @@ pub struct TitleReleaseBlocklistEntryPayload {
     pub error_message: Option<String>,
     /// UTC time when the release was attempted.
     pub attempted_at: DateTime<Utc>,
+    /// True when the entry marks a file bad by its sampled content rather
+    /// than blocking a release by name. Clearing it unmarks the file.
+    pub marked_bad_file: bool,
+    /// The marked file's size in bytes, for a bad-file entry.
+    pub content_size_bytes: Option<Long>,
 }
 
 #[derive(SimpleObject, Clone)]

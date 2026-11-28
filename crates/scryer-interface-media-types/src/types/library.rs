@@ -770,6 +770,18 @@ pub struct CancelLibraryScanPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// What approving a bad-file report's recycle-and-search would move.
+pub struct MediaIssueRecyclePreviewPayload {
+    /// The files the recycle moves, and the fingerprint approval must send.
+    pub preview: DeletePreviewPayload,
+    /// `MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY` when the reported file's only
+    /// other name is its copy in the download folder: approval must then set
+    /// `recycleBothNames` to recycle both names, or be cancelled. Null
+    /// otherwise.
+    pub hard_link_reason: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Read-only media deletion preview with confirmation and sample-path details.
 pub struct DeletePreviewPayload {
     /// Stable preview fingerprint required to apply the same plan.

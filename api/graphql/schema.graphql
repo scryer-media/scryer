@@ -5491,6 +5491,26 @@ enum DomainEventTypeValue {
 	"""
 	LIST_UNFOLLOWED
 	"""
+	A bad-media report was submitted.
+	"""
+	MEDIA_ISSUE_SUBMITTED
+	"""
+	A bad-media report was approved.
+	"""
+	MEDIA_ISSUE_APPROVED
+	"""
+	A bad-media report was rejected.
+	"""
+	MEDIA_ISSUE_REJECTED
+	"""
+	A recycle-and-search execution state changed.
+	"""
+	MEDIA_ISSUE_RECYCLE_EXECUTION
+	"""
+	A file marked bad was unmarked; the report stays approved.
+	"""
+	MEDIA_ISSUE_UNMARKED
+	"""
 	A sync of a list ended and its run was recorded, whatever the outcome.
 	"""
 	LIST_SYNC_FINISHED
@@ -17994,6 +18014,186 @@ type MediaHdrCapabilitiesPayload {
 }
 
 """
+Durable execution state for an approved media issue.
+"""
+enum MediaIssueExecutionStatusValue {
+	"""
+	No remediation has started.
+	"""
+	NONE
+	"""
+	The file is marked bad.
+	"""
+	BLOCKED
+	"""
+	The reviewed file is being moved to the recycle bin.
+	"""
+	RECYCLING
+	"""
+	The file could not be recycled.
+	"""
+	RECYCLE_FAILED
+	"""
+	The search did not find an eligible replacement.
+	"""
+	NO_ELIGIBLE_RELEASE
+	"""
+	A replacement download is queued.
+	"""
+	DOWNLOAD_QUEUED
+	"""
+	A file not marked bad was imported for the report's media after the
+	report last changed.
+	"""
+	REPLACEMENT_IMPORTED
+	"""
+	A replacement search is underway.
+	"""
+	SEARCHING
+}
+
+"""
+A bad-media report and its review/execution state. Filesystem paths are not exposed.
+"""
+type MediaIssuePayload {
+	"""
+	ID of the report.
+	"""
+	id: ID!
+	"""
+	ID of the library where the file was reported.
+	"""
+	libraryId: ID!
+	"""
+	ID of the title associated with the reported file.
+	"""
+	titleId: ID!
+	"""
+	ID of the reported file as recorded at submission.
+	"""
+	mediaFileId: ID!
+	"""
+	ID of the user who submitted the report.
+	"""
+	reporterUserId: ID!
+	"""
+	Reason recorded for the report.
+	"""
+	reasonCode: String!
+	"""
+	Optional explanation supplied by the reporter.
+	"""
+	details: String
+	"""
+	Proposed action, not an authorization.
+	"""
+	remediation: MediaIssueRemediationValue!
+	"""
+	Action explicitly authorized by the final review or policy.
+	"""
+	authorizedRemediation: MediaIssueRemediationValue
+	"""
+	Current review state.
+	"""
+	status: MediaIssueStatusValue!
+	"""
+	IDs of the episodes associated with the reported file.
+	"""
+	affectedEpisodeIds: [ID!]!
+	"""
+	IDs of series-to-movie links associated with the reported file.
+	"""
+	affectedSeriesMovieLinkIds: [ID!]!
+	"""
+	ID of the request-rule decision that explains the outcome, when
+	report rules ran.
+	"""
+	ruleDecisionId: ID
+	"""
+	ID of the title blocklist entry that marks the file bad, while it exists.
+	"""
+	blocklistEntryId: ID
+	"""
+	ID of the user who reviewed the report, if reviewed by a user.
+	"""
+	reviewedByUserId: ID
+	"""
+	When the report was reviewed, in UTC.
+	"""
+	reviewedAt: DateTime
+	"""
+	Current execution state of the authorized action.
+	"""
+	executionStatus: MediaIssueExecutionStatusValue!
+	"""
+	Stable reason code for an execution failure, when recorded.
+	"""
+	executionErrorCode: String
+	"""
+	When the report was submitted, in UTC.
+	"""
+	createdAt: DateTime!
+	"""
+	When the report was last updated, in UTC.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+What approving a bad-file report's recycle-and-search would move.
+"""
+type MediaIssueRecyclePreviewPayload {
+	"""
+	The files the recycle moves, and the fingerprint approval must send.
+	"""
+	preview: DeletePreviewPayload!
+	"""
+	`MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY` when the reported file's only
+	other name is its copy in the download folder: approval must then set
+	`recycleBothNames` to recycle both names, or be cancelled. Null
+	otherwise.
+	"""
+	hardLinkReason: String
+}
+
+"""
+What a media issue requests after confirmation.
+"""
+enum MediaIssueRemediationValue {
+	"""
+	Mark the file bad on its title's blocklist and leave it in place.
+	"""
+	MARK_BAD
+	"""
+	Mark the file bad, recycle it, and search for a replacement. Recycling
+	needs an operator's confirmation.
+	"""
+	RECYCLE_AND_SEARCH
+}
+
+"""
+Review state of a media issue.
+"""
+enum MediaIssueStatusValue {
+	"""
+	Awaiting a decision.
+	"""
+	PENDING
+	"""
+	The report was confirmed.
+	"""
+	APPROVED
+	"""
+	The report was declined.
+	"""
+	REJECTED
+	"""
+	Review ended without approval or rejection.
+	"""
+	CANCELED
+}
+
+"""
 Mastering display chromaticity coordinates and luminance.
 """
 type MediaMasteringDisplayPayload {
@@ -21862,6 +22062,56 @@ type MutationRoot {
 		input: RehydrateAllMetadataInput!
 	): RehydrateAllMetadataPayload!
 	"""
+	Submit a bad-media report for one existing media file.
+	"""
+	submitMediaIssue(
+		"""
+		Existing media file and requested bad-media remediation.
+		"""
+		input: SubmitMediaIssueInput!
+	): MediaIssuePayload!
+	"""
+	Explicitly confirm recycle-and-search for a pending media issue through
+	the existing preview/fingerprint/typed-confirmation deletion job.
+	"""
+	approveMediaIssueRecycleSearch(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!,
+		"""
+		Preview fingerprint from the deletion preview.
+		"""
+		previewFingerprint: String!,
+		"""
+		Typed confirmation required by the preview.
+		"""
+		typedConfirmation: String,
+		"""
+		Recycle both names of a reported file hard-linked to its download copy. Required when the preview's `hardLinkReason` is set, and refused otherwise.
+		"""
+		recycleBothNames: Boolean
+	): MediaIssuePayload!
+	"""
+	Confirm a pending report: mark the file bad on its title's blocklist
+	and leave it in place.
+	"""
+	approveMediaIssue(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!
+	): MediaIssuePayload!
+	"""
+	Reject a pending media issue without marking the file bad.
+	"""
+	rejectMediaIssue(
+		"""
+		Pending media-issue identity.
+		"""
+		issueId: ID!
+	): MediaIssuePayload!
+	"""
 	Preview survivor selection and every file disposition before settling conflicts.
 	"""
 	previewPendingImportConflicts(
@@ -23011,7 +23261,11 @@ type MutationRoot {
 		"""
 		Recycled-item identity to restore to its original path.
 		"""
-		id: ID!
+		id: ID!,
+		"""
+		Confirms restoring a file marked bad for its title and clears that mark.
+		"""
+		clearBadFile: Boolean! = false
 	): RestoreRecycledItemPayload!
 	"""
 	Restore selected recycled items using one background job.
@@ -26530,6 +26784,20 @@ type QueryRoot {
 		fileId: ID!
 	): DeletePreviewPayload!
 	"""
+	Preview what approving a bad-file report's recycle-and-search would
+	move into the recycle bin: the reported file, and a copy of the same
+	content still in the download folder it was imported from. A copy that
+	is the reported file's other hard-linked name is reported with
+	`hardLinkReason`. Changes nothing; approval must send this preview's
+	fingerprint.
+	"""
+	mediaIssueRecyclePreview(
+		"""
+		Bad-file report whose recycle would be previewed.
+		"""
+		issueId: ID!
+	): MediaIssueRecyclePreviewPayload!
+	"""
 	Preview deleting one external subtitle file without changing files.
 	"""
 	deleteExternalSubtitlePreview(
@@ -26615,6 +26883,27 @@ type QueryRoot {
 		"""
 		limit: Int
 	): [TitleReleaseBlocklistEntryPayload!]!
+	"""
+	List bounded bad-media reports for a library.
+	"""
+	mediaIssues(
+		"""
+		Library identity whose bad-media reports are returned.
+		"""
+		libraryId: ID!,
+		"""
+		Optional review status filter.
+		"""
+		status: MediaIssueStatusValue,
+		"""
+		Maximum entries to return; defaults to 100 and is clamped to 1 through 1000.
+		"""
+		limit: Int,
+		"""
+		Rows to skip in newest-first report order.
+		"""
+		offset: Int
+	): [MediaIssuePayload!]!
 	"""
 	Return grab, upgrade, import, and failure counts for a trailing window and the window before it.
 	"""
@@ -28585,6 +28874,11 @@ type RecycleRestorePreviewItemPayload {
 	Whether the destination is currently occupied.
 	"""
 	destinationOccupied: Boolean!
+	"""
+	The title blocklist entry this file was marked bad by. Restoring it
+	needs `clearBadFile` and clears that entry.
+	"""
+	badFileEntryId: ID
 }
 
 """
@@ -29150,6 +29444,14 @@ enum RequestActionHead {
 	Add this text to the notification sent when the request is submitted.
 	"""
 	NOTIFY
+	"""
+	Mark the file in a bad-file report bad. A report rule only.
+	"""
+	MARK_BAD
+	"""
+	Reject a bad-file report. A report rule only.
+	"""
+	REJECT_REPORT
 }
 
 """
@@ -29271,6 +29573,47 @@ type RequestPreflightReason {
 }
 
 """
+What submitting a bad-file report would do.
+"""
+enum RequestReportOutcomeValue {
+	"""
+	An operator reviews the report.
+	"""
+	REVIEW
+	"""
+	The report is rejected.
+	"""
+	REJECT
+	"""
+	The file is marked bad. A requested recycle and search still waits for
+	an operator.
+	"""
+	MARK_BAD
+}
+
+"""
+What one report rule said about a sample bad-file report.
+"""
+enum RequestReportVoteValue {
+	"""
+	Neither `mark_bad` nor `reject_report` fired.
+	"""
+	ABSTAIN
+	"""
+	`mark_bad` fired.
+	"""
+	MARK_BAD
+	"""
+	`reject_report` fired.
+	"""
+	REJECT
+	"""
+	Both fired, so the report goes to review.
+	"""
+	CONFLICT
+}
+
+"""
 The durable trace of one request evaluation. It outlives the rules that
 made it.
 
@@ -29377,6 +29720,45 @@ type RequestRulePreviewPayload {
 	The exact document the rule saw.
 	"""
 	inputDocument: JSON!
+	"""
+	What a report rule said about the sample report; null for a request
+	rule.
+	"""
+	reportVote: RequestReportVoteValue
+	"""
+	What submitting the sample report would do if this were the only
+	report rule; null for a request rule.
+	"""
+	reportOutcome: RequestReportOutcomeValue
+}
+
+"""
+A hypothetical bad-file report for previewing a report rule. No file is
+read and nothing is submitted.
+"""
+input RequestRuleReportSampleInput {
+	"""
+	Report reason: `corrupted`, `wrong_content`, `wrong_language`,
+	`audio_out_of_sync`, `poor_quality` or `other`.
+	"""
+	reasonCode: String!
+	"""
+	The action the sample report asks for.
+	"""
+	remediation: MediaIssueRemediationValue!
+	"""
+	True for a file from a known grab. Defaults to true.
+	"""
+	grabbed: Boolean
+	"""
+	Whether the sample report carries details. Defaults to true.
+	"""
+	hasDetails: Boolean
+	"""
+	Whether the reporter asked for the media. Null previews the fact as
+	unknown.
+	"""
+	reporterRequestedMedia: Boolean
 }
 
 """
@@ -29465,6 +29847,12 @@ input RequestRuleSampleInput {
 	leave it to the library.
 	"""
 	preferredAudioLanguages: [String!]
+	"""
+	The bad-file report a report rule is previewed against. A request rule
+	ignores it. Omitted, a report rule sees a `corrupted` report asking to
+	mark a grabbed file bad, with details.
+	"""
+	report: RequestRuleReportSampleInput
 }
 
 """
@@ -29886,6 +30274,11 @@ input RestoreRecycledItemsInput {
 	Fingerprint returned by the current restore preview.
 	"""
 	previewFingerprint: String!
+	"""
+	Confirms restoring files marked bad for their title and clears those
+	marks. Without it, such a file is refused.
+	"""
+	clearBadFiles: Boolean! = false
 }
 
 """
@@ -32587,6 +32980,30 @@ input SubmitExternalReleaseInput {
 }
 
 """
+Report one existing media file as bad.
+"""
+input SubmitMediaIssueInput {
+	"""
+	ID of the existing library file being reported.
+	"""
+	mediaFileId: ID!
+	"""
+	Reason for reporting the file: `corrupted`, `wrong_content`,
+	`wrong_language`, `audio_out_of_sync`, `poor_quality` or `other`.
+	`other` needs details.
+	"""
+	reasonCode: String!
+	"""
+	Optional explanation from the reporter.
+	"""
+	details: String
+	"""
+	Requested action; reporting does not authorize recycling.
+	"""
+	remediation: MediaIssueRemediationValue!
+}
+
+"""
 Metadata and preferences submitted with a media request.
 """
 input SubmitMediaRequestInput {
@@ -34963,6 +35380,15 @@ type TitleReleaseBlocklistEntryPayload {
 	UTC time when the release was attempted.
 	"""
 	attemptedAt: DateTime!
+	"""
+	True when the entry marks a file bad by its sampled content rather
+	than blocking a release by name. Clearing it unmarks the file.
+	"""
+	markedBadFile: Boolean!
+	"""
+	The marked file's size in bytes, for a bad-file entry.
+	"""
+	contentSizeBytes: Long
 }
 
 """

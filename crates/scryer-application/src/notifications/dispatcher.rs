@@ -2684,6 +2684,7 @@ mod tests {
                     reason: Some("not parsable".to_string()),
                     skip_reason: None,
                     episode_ids: Vec::new(),
+                    reason_code: None,
                 }),
             },
             DomainEvent {

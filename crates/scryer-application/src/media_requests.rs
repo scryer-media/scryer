@@ -622,6 +622,7 @@ impl AppUseCase {
                     .requester_user_id
                     .map(|user_id| user_id.trim().to_string())
                     .filter(|user_id| !user_id.is_empty()),
+                created_title_id: None,
                 order: input.order,
                 limit: Some(media_request_page_limit(input.limit)),
                 offset: input.offset,
@@ -663,6 +664,7 @@ impl AppUseCase {
                 library_ids: Some(library_ids),
                 status: input.status,
                 requester_user_id: Some(actor.id.clone()),
+                created_title_id: None,
                 order: MediaRequestOrder::RecentlyUpdated,
                 limit: Some(media_request_page_limit(input.limit)),
                 offset: input.offset,

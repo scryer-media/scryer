@@ -64,6 +64,26 @@ const ru: LocaleDictionary = {
     "Структура медиафайла повреждена. Проверьте исходный файл перед импортом.",
   "error.reason.MEDIA_PROBE_ENCRYPTED":
     "Медиафайл зашифрован, и его не удалось проверить.",
+  "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE":
+    "Этот файл помечен плохим для тайтла, поэтому он не импортирован.",
+  "error.reason.MEDIA_BAD_FILE_LOOKUP_FAILED":
+    "Не удалось проверить плохие файлы тайтла, поэтому импорт ждёт проверки.",
+  "error.reason.MEDIA_REMEDIATION_NOT_AVAILABLE":
+    "Этот отчёт не подходит для выбранного действия.",
+  "error.reason.MEDIA_RECYCLE_FAILED": "Не удалось переместить файл в корзину.",
+  "error.reason.MEDIA_DETAILS_TOO_LONG":
+    "Описание слишком длинное. Не более 4096 символов.",
+  "error.reason.MEDIA_REASON_REQUIRES_DETAILS":
+    "Опишите проблему, если выбрана причина «Другое».",
+  "error.reason.MEDIA_REASON_UNKNOWN": "Эта причина отчёта не распознана.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_FILE":
+    "У файла есть другие жёсткие ссылки, поэтому удаление его не освободит. Пометьте его плохим.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY":
+    "Этот файл связан жёсткой ссылкой со своей копией в папке загрузки. Переместите в корзину оба имени или отмените.",
+  "error.reason.MEDIA_RECYCLE_UNSUPPORTED_PLATFORM":
+    "Удаление файла по отчёту не поддерживается на этой платформе. Пометьте его плохим.",
+  "error.reason.MEDIA_RESTORE_MATCHES_BAD_FILE":
+    "Этот элемент — файл, помеченный плохим для своего тайтла. Подтвердите, чтобы восстановить его и снять пометку.",
 
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer не может подключиться к шлюзу метаданных, поскольку системные часы расходятся более чем на 5 минут. Синхронизируйте системные часы и перезапустите Scryer.",
@@ -1241,6 +1261,8 @@ const ru: LocaleDictionary = {
   "settings.downloadClientPriority": "Приоритет",
   "settings.downloadClientRemoveCompleted": "Удалять завершённые",
   "settings.downloadClientRemoveFailed": "Удалять неудачные",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "«Удалять неудачные» относится к загрузкам, завершившимся ошибкой в клиенте. Торрент, импорт которого Scryer отклонил, всегда обрабатывается как импортированный: он раздаётся до цели, после чего клиент его удаляет.",
   "settings.downloadClientUseSslInfo":
     "Использовать SSL/TLS при подключении к этому клиенту загрузки.",
   "settings.downloadClientRemoveCompletedInfo":
@@ -3408,6 +3430,88 @@ const ru: LocaleDictionary = {
   "mediaFile.subtitles": "Субтитры",
   "mediaFile.subtitleCount": "{{count}} субтитров",
   "mediaFile.delete": "Удалить файл",
+  "mediaFile.markBad": "Пометить как плохое",
+  "mediaFile.markBadFile": "Пометить файл {{file}}",
+  "mediaFile.numberedVersion": "Версия {{number}}",
+  "mediaFile.markBadDescription":
+    "Сообщить, что {{file}} плохой. Дальше решают правила отчётов или оператор.",
+  "mediaFile.markBadOnly": "Только пометить",
+  "mediaFile.markBadOnlyHint":
+    "Оставить файл на диске и пометить его как плохой, чтобы тот же файл больше не импортировался для этого тайтла.",
+  "mediaFile.markBadRecycleSearch": "Пометить, переместить и искать замену",
+  "mediaFile.markBadRecycleSearchHint":
+    "Также попросить оператора переместить файл в корзину и найти замену. Правила могут пометить файл плохим, но никогда не удаляют его.",
+  "mediaFile.markBadReason": "Что не так с этим файлом?",
+  "mediaIssue.reasonLabel": "Причина",
+  "mediaIssue.reason.corrupted":
+    "Не воспроизводится или воспроизводится с повреждениями",
+  "mediaIssue.reason.wrongContent": "Не тот фильм или эпизод",
+  "mediaIssue.reason.wrongLanguage": "Не тот язык аудио",
+  "mediaIssue.reason.audioOutOfSync": "Звук не синхронизирован",
+  "mediaIssue.reason.poorQuality": "Намного хуже заявленного качества",
+  "mediaIssue.reason.other": "Другое",
+  "mediaFile.submitBadReport": "Отправить жалобу",
+  "mediaFile.markBadSubmitted": "Сообщение о плохом медиа отправлено",
+  "mediaFile.markBadSubmitFailed": "Не удалось отправить сообщение",
+  "mediaIssue.reviewTitle": "Проверка проблем с медиа",
+  "mediaIssue.reviewHint":
+    "Проверяйте отчёты о файлах в каждой библиотеке. Файл, помеченный плохим, появляется в заблокированных релизах тайтла; удаление записи там снимает пометку.",
+  "mediaIssue.unmarkHint":
+    "Одобрение помечает файл плохим в списке блокировки тайтла. Чтобы снять пометку, удалите запись из заблокированных релизов тайтла.",
+  "mediaIssue.library": "Библиотека",
+  "mediaIssue.reports": "Сообщения",
+  "mediaIssue.reviewStatus": "Состояние проверки",
+  "mediaIssue.pending": "Ожидает",
+  "mediaIssue.approved": "Одобрено",
+  "mediaIssue.rejected": "Отклонено",
+  "mediaIssue.canceled": "Отменено",
+  "mediaIssue.allReports": "Все сообщения",
+  "mediaIssue.noPending": "Нет ожидающих сообщений",
+  "mediaIssue.noReports": "Сообщения отсутствуют",
+  "mediaIssue.reportsFailed": "Не удалось загрузить сообщения",
+  "mediaIssue.previousPage": "Предыдущая",
+  "mediaIssue.nextPage": "Следующая",
+  "mediaIssue.viewReport": "Просмотреть сообщение",
+  "mediaIssue.hideReport": "Скрыть сообщение",
+  "mediaIssue.titleId": "Тайтл: {{id}}",
+  "mediaIssue.file": "Файл",
+  "mediaIssue.episodes": "Эпизоды",
+  "mediaIssue.noEpisodeAssociations": "Нет привязки к эпизодам",
+  "mediaIssue.requestedAction": "Запрошенное действие",
+  "mediaIssue.approvedAction": "Одобренное действие",
+  "mediaIssue.executionError": "Ошибка выполнения",
+  "mediaIssue.notStarted": "Не начато",
+  "mediaIssue.blocked": "Помечен плохим",
+  "mediaIssue.recycling": "Перемещение",
+  "mediaIssue.recycleFailed": "Перемещение не выполнено",
+  "mediaIssue.noEligibleRelease": "Нет подходящего релиза",
+  "mediaIssue.downloadQueued": "Загрузка поставлена в очередь",
+  "mediaIssue.replacementImported": "Замена импортирована",
+  "mediaIssue.searching": "Поиск замены",
+  "mediaIssue.approveMarkOnly": "Одобрить только пометку",
+  "mediaIssue.approveMarkOnlyHint":
+    "Пометить файл плохим в списке блокировки тайтла и оставить его на диске. Тот же файл больше не импортируется для этого тайтла.",
+  "mediaIssue.reviewRecycle": "Проверить перемещение и поиск",
+  "mediaIssue.approveRecycle": "Одобрить перемещение и поиск",
+  "mediaIssue.hardLinkedPair":
+    "Этот файл связан жёсткой ссылкой со своей копией в папке загрузки: оба имени указывают на одни и те же данные. Место освободится, только если оба имени попадут в корзину. Переместите в корзину оба имени или отмените.",
+  "mediaIssue.recycleBothNames": "Переместить оба имени в корзину",
+  "mediaIssue.approveRecycleHint":
+    "Проверьте файлы ниже. Одобрение помечает файл плохим, перемещает его в корзину вместе с копией, оставшейся в папке загрузки, и ищет замену.",
+  "mediaIssue.previewFingerprint": "Отпечаток проверенного файла",
+  "mediaIssue.typeConfirmation":
+    "Введите DELETE для подтверждения перемещения.",
+  "mediaIssue.unexpectedPreviewScope":
+    "Предварительный просмотр затрагивает неожидаемый набор файлов.",
+  "mediaIssue.reviewSaved": "Проверка сохранена",
+  "mediaIssue.recycleUnavailable": "Перемещение недоступно",
+  "mediaIssue.remediationUnavailable":
+    "Требуется отдельное разрешение для перемещения и поиска",
+  "mediaIssue.reportedFileChanged":
+    "Заявленный файл изменился; повторите проверку",
+  "mediaIssue.reject": "Отклонить",
+  "mediaIssue.rejectHint":
+    "Отклонить отчёт, не помечая файл и не изменяя файлы.",
   "mediaFile.pathNotRecorded": "Путь не сохранён",
   "subtitle.batchProgress":
     "Поиск субтитров: обработано {{completed}} из {{total}}.",
@@ -4684,6 +4788,12 @@ const ru: LocaleDictionary = {
     "Восстановить {{count}} выбранный файл в исходное расположение.",
   "settings.recycleBinRestoreDescriptionOther":
     "Восстановить {{count}} выбранных файлов в исходные расположения.",
+  "settings.recycleBinRestoreBadFileOne":
+    "1 элемент — файл, помеченный плохим для своего тайтла.",
+  "settings.recycleBinRestoreBadFileOther":
+    "Элементов, помеченных плохими для своих тайтлов: {{count}}.",
+  "settings.recycleBinRestoreClearBadFiles":
+    "Всё равно восстановить и снять пометку. Нужно право управлять этими тайтлами.",
   "settings.recycleBinDeleteSelectedConfirmOne":
     "Безвозвратно удалить {{count}} выбранный файл из корзины? Это действие нельзя отменить.",
   "settings.recycleBinDeleteSelectedConfirmOther":
@@ -5743,6 +5853,35 @@ const ru: LocaleDictionary = {
     "Правила задали разные значения одного и того же, поэтому решает человек.",
   "requests.fallbackShapingInvalid":
     "Правила одобрили бы запрос, но заданное ими значение к нему неприменимо, поэтому решает человек.",
+  "requests.fallbackReportConflict":
+    "Правила отчётов расходятся во мнении, поэтому решает человек.",
+  "settings.refReqSectionReport":
+    "— Отчёт о плохом файле, который решает правило отчётов; отсутствует для запроса медиа",
+  "settings.refReqReportReason":
+    "corrupted, wrong_content, wrong_language, audio_out_of_sync, poor_quality или other",
+  "settings.refReqReportRemediation":
+    "Что просил автор отчёта: mark_bad или recycle_and_search",
+  "settings.refReqReportProvenance":
+    "grabbed, если файл получен из известного захвата, иначе unknown",
+  "settings.refReqReportHasDetails": "Описал ли автор отчёта проблему",
+  "settings.refReqReportTitleId": "Тайтл файла из отчёта",
+  "settings.refReqReportMediaFileId": "Файл из отчёта; пути не раскрываются",
+  "settings.refReqReportAffectedEpisodeIds": "Эпизоды, которые содержит файл",
+  "settings.refReqReportAffectedSeriesMovieLinkIds":
+    "Связи сериала с фильмом, которые обслуживает файл",
+  "settings.refReqSectionReportFacts":
+    "— Что Scryer знает об авторе отчёта и медиа",
+  "settings.refReqSectionReportObservations":
+    "— Известен ли каждый факт отчёта",
+  "settings.refReqReportFactsReporterRequestedMedia":
+    "Истина, если одобренный запрос автора отчёта создал тайтл и охватил медиа из отчёта",
+  "settings.refReqReportFactsReporterRequestedMediaValue":
+    "Значение факта, когда оно известно",
+  "settings.requestPreviewReportReview":
+    "Этот пример отчёта ушёл бы на проверку.",
+  "settings.requestPreviewReportReject": "Этот пример отчёта был бы отклонён.",
+  "settings.requestPreviewReportMarkBad":
+    "Этот пример отчёта пометил бы файл плохим. Запрошенные удаление и поиск всё равно ждали бы оператора.",
   "requests.preflightReason": "Причина: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer не смог прочитать всё об этом тайтле, поэтому решение примет человек.",
@@ -7197,6 +7336,8 @@ const ru: LocaleDictionary = {
     "Определите хотя бы одно действие, например unmonitor, delete_files или add_tags, чтобы правило могло что-то делать.",
   "error.ruleActionHeadFunction":
     "Действие нельзя записать как функцию. Запишите его как правило.",
+  "error.ruleMixesReportAndRequestHeads":
+    "Правило решает либо запросы, либо отчёты о плохих файлах, но не то и другое. Перенесите заголовки отчётов (mark_bad, reject_report) в отдельное правило.",
   "error.ruleForeignDataReference":
     "Это правило читает data вне своего пакета. Используйте input.",
   "error.ruleWithTargetNotAllowed":
@@ -12185,6 +12326,11 @@ const ru: LocaleDictionary = {
   "title.clearBlockedRelease": "Убрать {{releaseName}} из списка блокировки",
   "title.clearBlockedReleaseHint":
     "Убрать этот релиз из списка блокировки, чтобы его снова можно было добавить в загрузку",
+  "title.markedBadFile": "Помечен плохим",
+  "title.badFileEntry": "Плохой файл ({{size}})",
+  "title.unmarkBadFile": "Снять пометку с плохого файла {{releaseName}}",
+  "title.unmarkBadFileHint":
+    "Снять пометку, чтобы тот же файл снова можно было импортировать. Отчёт остаётся одобренным.",
   "title.bulkRenameTitle": "Переименовать выбранные тайтлы",
   "title.bulkRenameDescription":
     "Просмотрите и примените переименования для выбранных тайтлов ({{count}}).",
@@ -14614,6 +14760,8 @@ const ru: LocaleDictionary = {
     "Предпочитаемые языки аудио",
   "ruleOutput.request.add_tags": "Добавить теги",
   "ruleOutput.request.notify": "Уведомить",
+  "ruleOutput.request.mark_bad": "Пометить файл плохим",
+  "ruleOutput.request.reject_report": "Отклонить отчёт",
   "ruleOutput.request.notify.placeholder": "Текст уведомления",
   "ruleOutput.request.reasons": "Коды причин",
   "ruleOutput.request.reasons.placeholder": "По одному коду причины в строке",

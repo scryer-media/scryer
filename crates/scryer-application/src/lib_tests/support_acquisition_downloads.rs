@@ -29,6 +29,7 @@ pub(super) struct MockBlocklistRepo {
     pub(super) title_reads: std::sync::atomic::AtomicUsize,
     pub(super) fail_writes: std::sync::atomic::AtomicBool,
     pub(super) fail_reads: std::sync::atomic::AtomicBool,
+    pub(super) recycle_receipts: Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[async_trait]
@@ -240,6 +241,7 @@ impl BlocklistRepository for MockBlocklistRepo {
             info_hash,
             reason: entry.reason.clone(),
             created_at: Utc::now().to_rfc3339(),
+            content: None,
         });
         Ok(true)
     }
@@ -361,6 +363,56 @@ impl BlocklistRepository for MockBlocklistRepo {
             .await
             .retain(|entry| entry.indexer_id != indexer_id);
         Ok(())
+    }
+
+    async fn list_content_identities_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<(String, scryer_domain::BlocklistContentIdentity)>> {
+        if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic blocklist read failure".into(),
+            ));
+        }
+        self.title_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter(|entry| entry.title_id == title_id)
+            .filter_map(|entry| {
+                entry
+                    .content
+                    .clone()
+                    .map(|content| (entry.id.clone(), content))
+            })
+            .collect())
+    }
+
+    async fn remove_and_unmark(&self, id: &str) -> AppResult<Vec<crate::UnmarkedMediaIssue>> {
+        self.entries.lock().await.retain(|entry| entry.id != id);
+        Ok(Vec::new())
+    }
+
+    async fn save_media_issue_recycle_receipt(
+        &self,
+        id: &str,
+        receipt_json: &str,
+    ) -> AppResult<()> {
+        if self.fail_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Repository("receipt write failed".into()));
+        }
+        self.recycle_receipts
+            .lock()
+            .await
+            .insert(id.to_string(), receipt_json.to_string());
+        Ok(())
+    }
+
+    async fn get_media_issue_recycle_receipt(&self, id: &str) -> AppResult<Option<String>> {
+        Ok(self.recycle_receipts.lock().await.get(id).cloned())
     }
 }
 

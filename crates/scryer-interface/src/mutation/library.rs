@@ -811,4 +811,101 @@ impl LibraryMutations {
             titles_cleared: i64::try_from(cleared).unwrap_or(i64::MAX),
         })
     }
+
+    /// Submit a bad-media report for one existing media file.
+    async fn submit_media_issue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Existing media file and requested bad-media remediation.")]
+        input: crate::types::SubmitMediaIssueInput,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let remediation = match input.remediation {
+            crate::types::MediaIssueRemediationValue::MarkBad => {
+                scryer_domain::MediaIssueRemediation::MarkBad
+            }
+            crate::types::MediaIssueRemediationValue::RecycleAndSearch => {
+                scryer_domain::MediaIssueRemediation::RecycleAndSearch
+            }
+        };
+        let issue = app
+            .submit_media_issue(
+                &actor,
+                scryer_application::media_issues::SubmitMediaIssueInput {
+                    media_file_id: input.media_file_id.to_string(),
+                    reason: scryer_application::media_issues::parse_media_issue_reason(
+                        &input.reason_code,
+                    )
+                    .map_err(to_gql_error)?,
+                    details: input.details,
+                    remediation,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Explicitly confirm recycle-and-search for a pending media issue through
+    /// the existing preview/fingerprint/typed-confirmation deletion job.
+    async fn approve_media_issue_recycle_search(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending media-issue identity.")] issue_id: ID,
+        #[graphql(desc = "Preview fingerprint from the deletion preview.")]
+        preview_fingerprint: String,
+        #[graphql(desc = "Typed confirmation required by the preview.")] typed_confirmation: Option<
+            String,
+        >,
+        #[graphql(
+            desc = "Recycle both names of a reported file hard-linked to its download copy. Required when the preview's `hardLinkReason` is set, and refused otherwise."
+        )]
+        recycle_both_names: Option<bool>,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let issue = app
+            .approve_media_issue_recycle_search(
+                &actor,
+                issue_id.as_ref(),
+                &preview_fingerprint,
+                typed_confirmation.as_deref(),
+                recycle_both_names.unwrap_or(false),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Confirm a pending report: mark the file bad on its title's blocklist
+    /// and leave it in place.
+    async fn approve_media_issue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending media-issue identity.")] issue_id: ID,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let issue = app
+            .approve_media_issue(&actor, issue_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
+
+    /// Reject a pending media issue without marking the file bad.
+    async fn reject_media_issue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending media-issue identity.")] issue_id: ID,
+    ) -> GqlResult<crate::types::MediaIssuePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let issue = app
+            .reject_media_issue(&actor, issue_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        crate::types::MediaIssuePayload::from_domain(issue)
+    }
 }

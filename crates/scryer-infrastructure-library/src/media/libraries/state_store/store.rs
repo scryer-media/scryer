@@ -7,19 +7,21 @@ use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeState,
     AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery, AcquisitionScopeStatus,
-    AcquisitionScopeStatusTally, AppResult, BlocklistMatch, BlocklistRepository,
+    AcquisitionScopeStatusTally, AppResult, BlocklistMatch, BlocklistRepository, ConfirmMediaIssue,
     DownloadSourceKind, HousekeepingMediaFileRootRow, HousekeepingRepository,
-    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, PendingRelease,
-    PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
-    PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
-    ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
+    LibraryProbeRepository, LibraryProbeSignature, MediaIssueRecycleIntent, NewBlocklistEntry,
+    NewMediaIssue, PendingRelease, PendingReleaseObservation, PendingReleasePageSort,
+    PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery,
+    ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository, UnmarkedMediaIssue,
+    normalize_release_name,
     subtitles::{
         ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
         SubtitleSearchBackoffKey,
     },
 };
 use scryer_domain::{
-    BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id, SubtitleBlocklistEntry,
+    BlocklistContentIdentity, BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id,
+    MediaIssue, MediaIssueExecutionStatus, MediaIssueStatus, SubtitleBlocklistEntry,
     SubtitleDownload,
 };
 use scryer_plugin_sdk::torrent::normalize_info_hash;
@@ -3484,7 +3486,10 @@ impl PendingReleaseRepository for PendingReleaseStore {
     }
 }
 
-const BLOCKLIST_COLUMNS: &str = "id, title_id, release_name, normalized_release_name, indexer_id, info_hash, reason, created_at";
+// A bad-file entry written without a grab has no release name.
+const BLOCKLIST_COLUMNS: &str = "id, title_id, COALESCE(release_name, '') AS release_name,
+    normalized_release_name, indexer_id, info_hash, reason, created_at, content_scheme,
+    content_size_bytes, content_sample_bytes, content_sample_blake3";
 
 fn blocklist_row_to_entry_sql(row: &SqlRow) -> AppResult<BlocklistEntry> {
     Ok(BlocklistEntry {
@@ -3496,6 +3501,7 @@ fn blocklist_row_to_entry_sql(row: &SqlRow) -> AppResult<BlocklistEntry> {
         info_hash: row.opt_text("info_hash")?,
         reason: row.opt_text("reason")?,
         created_at: row.timestamp_text("created_at")?,
+        content: super::bad_file_store::blocklist_row_content(row)?,
     })
 }
 
@@ -3730,14 +3736,138 @@ impl BlocklistRepository for BlocklistStore {
             // deleted indexer owns.
             return Ok(());
         }
+        // A bad-file entry keeps blocking its content after the indexer that
+        // supplied the release is gone, so it stays.
         execute_datastore_write(
             &self.datastore,
             "delete_blocklist_for_indexer",
-            "DELETE FROM blocklist WHERE indexer_id = {}",
+            "DELETE FROM blocklist
+              WHERE indexer_id = {} AND content_sample_blake3 IS NULL",
             vec![SqlArg::Text(indexer_id.to_string())],
         )
         .await?;
         Ok(())
+    }
+
+    async fn list_content_identities_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<(String, BlocklistContentIdentity)>> {
+        super::bad_file_store::list_content_identities_for_title(&self.datastore, title_id, false)
+            .await
+    }
+
+    async fn list_import_blocking_identities_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<(String, BlocklistContentIdentity)>> {
+        super::bad_file_store::list_content_identities_for_title(&self.datastore, title_id, true)
+            .await
+    }
+
+    async fn marked_bad_file_ids(
+        &self,
+        file_ids: &[String],
+    ) -> AppResult<std::collections::HashSet<String>> {
+        super::bad_file_store::marked_bad_file_ids(&self.datastore, file_ids).await
+    }
+
+    async fn find_content_block(
+        &self,
+        title_id: &str,
+        identity: &BlocklistContentIdentity,
+    ) -> AppResult<Option<BlocklistEntry>> {
+        let sql = format!(
+            "SELECT {BLOCKLIST_COLUMNS} FROM blocklist WHERE {}
+                AND content_blocks_imports = {{}}",
+            super::bad_file_store::CONTENT_IDENTITY_PREDICATE
+        );
+        let mut args = super::bad_file_store::content_identity_lookup_args(title_id, identity);
+        args.push(SqlArg::Bool(true));
+        Ok(
+            fetch_blocklist_entries(self.datastore.read_exec(), &sql, &args)
+                .await?
+                .into_iter()
+                .next(),
+        )
+    }
+
+    async fn remove_and_unmark(&self, id: &str) -> AppResult<Vec<UnmarkedMediaIssue>> {
+        super::bad_file_store::remove_and_unmark(&self.datastore, id).await
+    }
+
+    async fn submit_media_issue(&self, issue: &NewMediaIssue) -> AppResult<(MediaIssue, bool)> {
+        super::bad_file_store::submit_media_issue(&self.datastore, issue).await
+    }
+
+    async fn get_media_issue(&self, id: &str) -> AppResult<Option<MediaIssue>> {
+        super::bad_file_store::get_media_issue(&self.datastore, id).await
+    }
+
+    async fn set_media_issue_rule_decision(&self, id: &str, decision_id: &str) -> AppResult<()> {
+        super::bad_file_store::set_media_issue_rule_decision(&self.datastore, id, decision_id).await
+    }
+
+    async fn list_media_issues(
+        &self,
+        library_id: &str,
+        status: Option<MediaIssueStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<Vec<MediaIssue>> {
+        super::bad_file_store::list_media_issues(&self.datastore, library_id, status, limit, offset)
+            .await
+    }
+
+    async fn confirm_media_issue(&self, confirm: ConfirmMediaIssue<'_>) -> AppResult<bool> {
+        super::bad_file_store::confirm_media_issue(&self.datastore, confirm).await
+    }
+
+    async fn reject_media_issue(
+        &self,
+        id: &str,
+        reviewer_user_id: Option<&str>,
+    ) -> AppResult<Option<MediaIssue>> {
+        super::bad_file_store::reject_media_issue(&self.datastore, id, reviewer_user_id).await
+    }
+
+    async fn set_media_issue_execution_status(
+        &self,
+        id: &str,
+        status: MediaIssueExecutionStatus,
+        error_code: Option<&str>,
+    ) -> AppResult<bool> {
+        super::bad_file_store::set_media_issue_execution_status(
+            &self.datastore,
+            id,
+            status,
+            error_code,
+        )
+        .await
+    }
+
+    async fn interrupted_media_issue_recycles(
+        &self,
+        limit: usize,
+    ) -> AppResult<Vec<MediaIssueRecycleIntent>> {
+        super::bad_file_store::interrupted_media_issue_recycles(&self.datastore, limit).await
+    }
+
+    async fn save_media_issue_recycle_receipt(
+        &self,
+        id: &str,
+        receipt_json: &str,
+    ) -> AppResult<()> {
+        super::bad_file_store::save_media_issue_recycle_receipt(&self.datastore, id, receipt_json)
+            .await
+    }
+
+    async fn get_media_issue_recycle_receipt(&self, id: &str) -> AppResult<Option<String>> {
+        super::bad_file_store::get_media_issue_recycle_receipt(&self.datastore, id).await
+    }
+
+    async fn get_media_issue_recycle_fingerprint(&self, id: &str) -> AppResult<Option<String>> {
+        super::bad_file_store::get_media_issue_recycle_fingerprint(&self.datastore, id).await
     }
 }
 

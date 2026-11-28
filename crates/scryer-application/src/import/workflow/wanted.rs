@@ -100,6 +100,8 @@ async fn execute_resolved_episode_import(
     // Library files earlier passes of this same download placed; never
     // replaced by this pass.
     placed_files: &DownloadPlacedFiles,
+    // The title's bad files, read once for the whole download.
+    bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<EpisodeImportOutcome> {
     // One file for several episodes is named the way rename names a file
     // linked to all of them, so a rename right after the import changes
@@ -186,6 +188,7 @@ async fn execute_resolved_episode_import(
                 ),
                 disc_selection,
                 release_listing_json,
+                bad_files,
             )
             .await
             {
@@ -245,6 +248,7 @@ async fn execute_resolved_episode_import(
                 &prior.file.file_path,
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
@@ -290,6 +294,7 @@ async fn execute_resolved_episode_import(
                 .await
         {
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: reason,
                 reason_code: Some(code.as_str().to_string()),
@@ -467,6 +472,7 @@ async fn execute_resolved_episode_import(
     {
         tracing::debug!(file = %precheck_dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message: reason,
             reason_code: Some(code.as_str().to_string()),
@@ -532,6 +538,7 @@ async fn execute_resolved_episode_import(
         runtime_sample_validation,
         disc_selection,
         release_listing_json,
+        bad_files,
     )
     .await
     {
@@ -542,6 +549,7 @@ async fn execute_resolved_episode_import(
             // must stay grabbable after review.
             if rejection.requires_review() {
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -626,6 +634,7 @@ async fn execute_resolved_episode_import(
             "holding episode replacement for manual resolution"
         );
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message,
             reason_code: Some(
@@ -737,6 +746,7 @@ async fn execute_resolved_episode_import(
                     .iter()
                     .all(|episode_id| own.episode_ids.contains(episode_id));
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -763,6 +773,7 @@ async fn execute_resolved_episode_import(
                 // least as well, so the episodes are in place and the file has
                 // nothing to add. The existing file is left exactly as it is.
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: true,
                     blocklist,
                     message: rejection.message,
                     reason_code,
@@ -822,6 +833,7 @@ async fn execute_resolved_episode_import(
                 "import source would replace a library file this download placed; leaving the library file in place"
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
@@ -862,6 +874,7 @@ async fn execute_resolved_episode_import(
                     "import source is identical to the library file it would replace; leaving the library file in place"
                 );
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -873,6 +886,26 @@ async fn execute_resolved_episode_import(
                     )),
                 });
             }
+        }
+        // The upgrade itself holds over a marked primary incumbent; the
+        // other files it supersedes are checked here, before anything moves.
+        if let Some(rejection) = bad_files
+            .upgrade_refusal(
+                app,
+                &additional_superseded
+                    .iter()
+                    .map(|incumbent| &incumbent.media_file)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+        {
+            return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
+                rejection,
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: None,
+                episode_ids: target_episode_ids.clone(),
+            });
         }
         let replacement_media_root = title_folder_path
             .parent()
@@ -911,6 +944,7 @@ async fn execute_resolved_episode_import(
             import_mode,
             announced_size_bytes,
             completed,
+            bad_files,
         )
         .await
         {

@@ -525,6 +525,24 @@ pub(crate) async fn apply_import_result_with_completed(
     .await
 }
 
+/// Whether a completed import that took nothing ends its download as failed
+/// rather than import-blocked: a torrent of Scryer's own grab whose files all
+/// lost to the library, or whose archives failed every allowed extraction.
+/// Refusals an operator has to resolve, downloads Scryer did not grab and
+/// Usenet downloads stay import-blocked.
+fn import_refusal_settles_torrent(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    result: &ImportResult,
+) -> bool {
+    result.decision != ImportDecision::Imported
+        && !result.needs_reconciliation
+        && (result.release_refused
+            || result.skip_reason == Some(ImportSkipReason::ArchiveExtractionBlocked))
+        && td.client_item.is_scryer_origin
+        && crate::seeding_gate::download_job_is_torrent(app, &td.client_type, td.job_protocol)
+}
+
 pub(super) async fn apply_import_pass_result(
     app: &AppUseCase,
     td: &mut TrackedDownload,
@@ -834,6 +852,31 @@ pub(super) async fn apply_import_pass_result(
     }
 
     td.clear_import_execution_retry();
+
+    if import_refusal_settles_torrent(app, td, &result) {
+        // A torrent of Scryer's own grab that import took nothing from goes
+        // to failure handling, like a burned release: the release is
+        // blocklisted, its scope is searched again, and terminal cleanup
+        // seeds the torrent to its goal before the client removes it.
+        let message = import_result_message(&result, ImportStatus::Failed);
+        tracing::info!(
+            id = %td.id,
+            import_id = result.import_id.as_str(),
+            skip_reason = ?result.skip_reason,
+            reason = %message,
+            "import: refused torrent routed to failure handling"
+        );
+        td.state = TrackedDownloadState::FailedPending;
+        td.status = TrackedDownloadStatus::Error;
+        td.client_item.attention_reason = Some(message.clone());
+        td.client_item.attention_reason_code = None;
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+            crate::tracked_downloads::TrackedStatusMessageKind::ImportRefused,
+            message,
+        )];
+        td.burned_by_import_gate = true;
+        return false;
+    }
 
     match result.decision {
         ImportDecision::Failed => {

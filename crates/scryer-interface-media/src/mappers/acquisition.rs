@@ -166,6 +166,10 @@ pub fn from_title_release_blocklist_entry(
             &entry.attempted_at,
             "title release blocklist attempted_at",
         ),
+        marked_bad_file: entry.marked_bad_file,
+        content_size_bytes: entry
+            .content_size_bytes
+            .map(|size| Long::from(i64::try_from(size).unwrap_or(i64::MAX))),
     }
 }
 

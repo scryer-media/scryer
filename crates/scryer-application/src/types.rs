@@ -315,6 +315,9 @@ pub struct RecycleRestorePreviewItem {
     pub id: String,
     pub original_path: String,
     pub destination_occupied: bool,
+    /// The title bad-file entry the recycled file matches. Restoring it needs
+    /// confirmation and clears the entry.
+    pub bad_file_entry_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2481,6 +2484,11 @@ pub struct TitleReleaseBlocklistEntry {
     pub release_name: String,
     pub error_message: Option<String>,
     pub attempted_at: String,
+    /// The entry marks a file bad by its sampled content. Clearing it takes
+    /// the bad-file mark off the title's files.
+    pub marked_bad_file: bool,
+    /// The marked file's size, for a bad-file entry.
+    pub content_size_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

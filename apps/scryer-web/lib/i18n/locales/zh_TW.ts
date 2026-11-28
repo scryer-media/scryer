@@ -1210,6 +1210,8 @@ const zh_TW: LocaleDictionary = {
   "settings.downloadClientPriority": "優先順序",
   "settings.downloadClientRemoveCompleted": "移除已完成",
   "settings.downloadClientRemoveFailed": "移除失敗項",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "「移除失敗項」適用於在用戶端中失敗的下載。Scryer 拒絕匯入的種子一律比照已匯入的處理：做種至目標後由用戶端移除。",
   "settings.downloadClientUseSslInfo": "連線此下載使用者端時使用 SSL/TLS。",
   "settings.downloadClientEnabledInfo":
     "停用後，此使用者端在下載路由中將被跳過。",
@@ -6662,6 +6664,8 @@ const zh_TW: LocaleDictionary = {
   "ruleOutput.lifecycle.notify.placeholder": "通知內容",
   "ruleOutput.request.approve": "核准",
   "ruleOutput.request.deny": "拒絕",
+  "ruleOutput.request.mark_bad": "將檔案標記為損壞",
+  "ruleOutput.request.reject_report": "駁回回報",
   "ruleOutput.request.manual": "保留審核",
   "ruleOutput.request.set_quality_profile": "品質設定檔",
   "ruleOutput.request.set_lease_days": "保留期",
