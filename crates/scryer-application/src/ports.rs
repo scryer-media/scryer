@@ -13653,6 +13653,14 @@ pub struct NotificationTitlePayload {
     pub aliases: Vec<String>,
     pub original_language: Option<String>,
     pub original_country: Option<String>,
+    /// Fields below carry the title metadata media-server plugins (Jellyfin in
+    /// particular) need to enrich an item without a second datastore lookup.
+    /// They are absent on event contexts that only carry a title snapshot.
+    pub release_date: Option<String>,
+    pub runtime_minutes: Option<i32>,
+    pub studio: Option<String>,
+    pub network: Option<String>,
+    pub content_status: Option<String>,
     pub external_ids: NotificationExternalIdsPayload,
 }
 

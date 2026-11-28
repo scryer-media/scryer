@@ -257,6 +257,11 @@ fn plugin_notification_request(payload: &NotificationPayload) -> PluginNotificat
             aliases: title.aliases.clone(),
             original_language: title.original_language.clone(),
             original_country: title.original_country.clone(),
+            release_date: title.release_date.clone(),
+            runtime_minutes: title.runtime_minutes,
+            studio: title.studio.clone(),
+            network: title.network.clone(),
+            content_status: title.content_status.clone(),
             external_ids: PluginNotificationExternalIds {
                 tmdb_id: title.external_ids.tmdb_id.clone(),
                 imdb_id: title.external_ids.imdb_id.clone(),
@@ -644,8 +649,8 @@ mod component_routing_tests {
 mod request_mapping_tests {
     use super::*;
     use scryer_application::{
-        NotificationAppPayload, NotificationFilePayload, NotificationMediaUpdatePayload,
-        NotificationTitleMovePayload,
+        NotificationAppPayload, NotificationExternalIdsPayload, NotificationFilePayload,
+        NotificationMediaUpdatePayload, NotificationTitleMovePayload, NotificationTitlePayload,
     };
 
     fn payload(event_type: DomainNotificationEventType) -> NotificationPayload {
@@ -737,5 +742,40 @@ mod request_mapping_tests {
         let json = serde_json::to_value(&request).expect("request serializes");
         assert_eq!(json["event_type"], "title_deleted");
         assert!(json.get("title_move").is_none());
+    }
+
+    #[test]
+    fn title_metadata_reaches_the_plugin_payload() {
+        let mut payload = payload(DomainNotificationEventType::ImportComplete);
+        payload.title = Some(NotificationTitlePayload {
+            id: Some("title-1".to_string()),
+            name: "Example".to_string(),
+            facet: "movie".to_string(),
+            year: Some(2024),
+            slug: None,
+            path: None,
+            overview: None,
+            sort_title: None,
+            poster_url: None,
+            background_url: None,
+            tags: Vec::new(),
+            aliases: Vec::new(),
+            original_language: None,
+            original_country: None,
+            release_date: Some("2024-01-02".to_string()),
+            runtime_minutes: Some(95),
+            studio: Some("Studio".to_string()),
+            network: None,
+            content_status: Some("Ended".to_string()),
+            external_ids: NotificationExternalIdsPayload::default(),
+        });
+
+        let request = plugin_notification_request(&payload);
+        let json = serde_json::to_value(&request).expect("request serializes");
+        assert_eq!(json["title"]["release_date"], "2024-01-02");
+        assert_eq!(json["title"]["runtime_minutes"], 95);
+        assert_eq!(json["title"]["studio"], "Studio");
+        assert_eq!(json["title"]["content_status"], "Ended");
+        assert!(json["title"].get("network").is_none());
     }
 }

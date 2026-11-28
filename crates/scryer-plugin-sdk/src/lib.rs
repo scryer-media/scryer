@@ -2947,6 +2947,18 @@ pub struct PluginNotificationTitle {
     pub original_language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_country: Option<String>,
+    /// Title metadata used by media-server plugins to enrich an item. All are
+    /// optional so older hosts (and snapshot-only events) stay compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_minutes: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub studio: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_status: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "PluginNotificationExternalIds::is_empty"
@@ -5962,6 +5974,11 @@ mod tests {
                 aliases: vec!["Example Alias".to_string()],
                 original_language: Some("ja".to_string()),
                 original_country: Some("JP".to_string()),
+                release_date: Some("2024-04-01".to_string()),
+                runtime_minutes: Some(24),
+                studio: Some("Studio".to_string()),
+                network: Some("Network".to_string()),
+                content_status: Some("Continuing".to_string()),
                 external_ids: PluginNotificationExternalIds {
                     tvdb_id: Some("tvdb-1".to_string()),
                     by_source: BTreeMap::from([("tvdb".to_string(), vec!["tvdb-1".to_string()])]),

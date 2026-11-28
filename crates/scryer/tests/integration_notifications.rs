@@ -459,6 +459,11 @@ fn jellyfin_title_payload(
         aliases: Vec::new(),
         original_language: None,
         original_country: None,
+        release_date: Some("2024-01-01".to_string()),
+        runtime_minutes: Some(90),
+        studio: Some("Example Studio".to_string()),
+        network: None,
+        content_status: Some("Ended".to_string()),
         external_ids,
     }
 }

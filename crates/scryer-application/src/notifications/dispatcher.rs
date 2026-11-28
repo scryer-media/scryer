@@ -1278,6 +1278,11 @@ fn title_payload_from_context(title: &TitleContextSnapshot) -> NotificationTitle
         aliases: Vec::new(),
         original_language: None,
         original_country: None,
+        release_date: None,
+        runtime_minutes: None,
+        studio: None,
+        network: None,
+        content_status: None,
         external_ids: NotificationExternalIdsPayload {
             tmdb_id: title.external_ids.tmdb_id.clone(),
             imdb_id: title.external_ids.imdb_id.clone(),
@@ -1829,6 +1834,14 @@ fn title_payload_from_title(title: &Title) -> NotificationTitlePayload {
         aliases: title_aliases(title),
         original_language: title.language.clone(),
         original_country: title.country.clone(),
+        release_date: title
+            .digital_release_date
+            .clone()
+            .or_else(|| title.first_aired.clone()),
+        runtime_minutes: title.runtime_minutes,
+        studio: title.studio.clone(),
+        network: title.network.clone(),
+        content_status: title.content_status.clone(),
         external_ids: external_ids_payload_from_title(title),
     }
 }
@@ -2203,6 +2216,37 @@ mod tests {
             payload.background_url.as_deref(),
             Some("https://artworks.thetvdb.com/banners/example-fanart.jpg")
         );
+    }
+
+    #[test]
+    fn title_payload_carries_media_server_metadata_fields() {
+        let mut title = artwork_title(None, None, None, None);
+        title.first_aired = Some("2024-04-01".to_string());
+        title.digital_release_date = Some("2024-04-02".to_string());
+        title.runtime_minutes = Some(24);
+        title.studio = Some("Studio".to_string());
+        title.network = Some("Network".to_string());
+        title.content_status = Some("Continuing".to_string());
+
+        let payload = title_payload_from_title(&title);
+        assert_eq!(payload.release_date.as_deref(), Some("2024-04-02"));
+        assert_eq!(payload.runtime_minutes, Some(24));
+        assert_eq!(payload.studio.as_deref(), Some("Studio"));
+        assert_eq!(payload.network.as_deref(), Some("Network"));
+        assert_eq!(payload.content_status.as_deref(), Some("Continuing"));
+
+        // No digital release: fall back to first-aired.
+        title.digital_release_date = None;
+        assert_eq!(
+            title_payload_from_title(&title).release_date.as_deref(),
+            Some("2024-04-01")
+        );
+
+        // Snapshot-only events carry no extra metadata.
+        let snapshot = title_payload_from_context(&title_context("Example", MediaFacet::Series));
+        assert_eq!(snapshot.release_date, None);
+        assert_eq!(snapshot.runtime_minutes, None);
+        assert_eq!(snapshot.studio, None);
     }
 
     #[test]

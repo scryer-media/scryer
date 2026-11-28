@@ -17,6 +17,10 @@ SDK 3.2 adds first-class `path` and `tag` config field types and extends
 download-client add requests with optional title slug, year, language, and
 network metadata.
 
+SDK 3.21 adds optional `release_date`, `runtime_minutes`, `studio`, `network`
+and `content_status` to `PluginNotificationTitle` so media-server plugins can
+enrich an item from the notification alone.
+
 SDK 3.10 also carries the `filtered_select` config field type, plus
 `visible_when`, `required_when`, and `advanced` on config fields. Conditions are
 a closed set of operators (`eq`, `ne`, `in`, `not_in`, `non_empty`) evaluated by
