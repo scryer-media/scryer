@@ -5188,6 +5188,38 @@
             "null"
           ]
         },
+        "release_date": {
+          "description": "Title metadata used by media-server plugins to enrich an item. All are\noptional so older hosts (and snapshot-only events) stay compatible.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "studio": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "network": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "external_ids": {
           "$ref": "#/$defs/PluginNotificationExternalIds"
         }
