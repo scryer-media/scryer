@@ -14,6 +14,7 @@ import type { TitleReleaseBlocklistEntry } from "@/lib/types/titles";
 import { cn } from "@/lib/utils";
 import { blocklistReasonText } from "@/lib/utils/blocklist-reason";
 import { formatUiDate } from "@/lib/utils/date-format";
+import { formatMediaFileSize } from "@/lib/utils/media-info-format";
 
 /**
  * A title's blocked releases, shared by both title overviews. The remove action
@@ -89,7 +90,15 @@ export function TitleBlockedReleasesSection({
                 dateTimeFormat,
               );
               const releaseLabel =
-                entry.releaseName.trim() || t("episode.untitledRelease");
+                entry.releaseName.trim() ||
+                (entry.markedBadFile
+                  ? t("title.badFileEntry", {
+                      size:
+                        entry.contentSizeBytes === null
+                          ? "?"
+                          : formatMediaFileSize(entry.contentSizeBytes),
+                    })
+                  : t("episode.untitledRelease"));
               const clearing = clearingEntryId === entry.id;
 
               return (
@@ -102,6 +111,11 @@ export function TitleBlockedReleasesSection({
                       <p className="line-clamp-2 break-words text-[12px] font-semibold text-[var(--scry-ink2)]">
                         {releaseLabel}
                       </p>
+                      {entry.markedBadFile ? (
+                        <p className="mt-1 inline-block rounded-[6px] bg-[var(--scry-danger-bg)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--scry-danger-text)]">
+                          {t("title.markedBadFile")}
+                        </p>
+                      ) : null}
                       {attemptedAtLabel ? (
                         <p className="mt-2 text-[11px] text-[var(--scry-muted3)]">
                           {attemptedAtLabel}
@@ -113,10 +127,17 @@ export function TitleBlockedReleasesSection({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        aria-label={t("title.clearBlockedRelease", {
-                          releaseName: releaseLabel,
-                        })}
-                        title={t("title.clearBlockedReleaseHint")}
+                        aria-label={t(
+                          entry.markedBadFile
+                            ? "title.unmarkBadFile"
+                            : "title.clearBlockedRelease",
+                          { releaseName: releaseLabel },
+                        )}
+                        title={t(
+                          entry.markedBadFile
+                            ? "title.unmarkBadFileHint"
+                            : "title.clearBlockedReleaseHint",
+                        )}
                         className="h-7 shrink-0 gap-1.5 px-2 text-[11px] font-semibold text-[var(--scry-muted)] hover:bg-[var(--scry-danger-bg)] hover:text-[var(--scry-danger-text)]"
                         disabled={clearing}
                         onClick={() => {

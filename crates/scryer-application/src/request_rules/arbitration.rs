@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 
 use scryer_domain::RequestDecisionOutcome;
-use scryer_rules::request::{RequestRuleDecision, RequestVote};
+use scryer_rules::request::{RequestReportVote, RequestRuleDecision, RequestVote};
 use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
 use serde::{Deserialize, Serialize};
 
@@ -51,10 +51,13 @@ pub const FALLBACK_SHAPING_CONFLICT: &str = "shaping_conflict";
 /// request: a quality profile that no longer exists, a monitor value the
 /// facet does not have, or an audio language Scryer does not know.
 pub const FALLBACK_SHAPING_INVALID: &str = "shaping_invalid";
+/// Report rules disagreed: one marked the file bad and another rejected the
+/// report, or one rule did both, so a person decides.
+pub const FALLBACK_REPORT_CONFLICT: &str = "report_conflict";
 
 /// Every fallback code a decision can carry. Released codes are API: never
 /// renamed, reused or repurposed.
-pub const ALL_FALLBACKS: [&str; 7] = [
+pub const ALL_FALLBACKS: [&str; 8] = [
     FALLBACK_RULE_MANUAL,
     FALLBACK_HELD,
     FALLBACK_ERROR,
@@ -62,6 +65,7 @@ pub const ALL_FALLBACKS: [&str; 7] = [
     FALLBACK_LIBRARY_PERMISSION,
     FALLBACK_SHAPING_CONFLICT,
     FALLBACK_SHAPING_INVALID,
+    FALLBACK_REPORT_CONFLICT,
 ];
 
 /// One rule's vote, already narrowed to the rules whose library scope covers
@@ -438,4 +442,124 @@ fn reasons_from(votes: &[&ScopedVote]) -> Vec<ArbitrationReason> {
         }
     }
     reasons
+}
+
+/// What the report rules concluded about one bad-file report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportVerdict {
+    /// A person decides.
+    Review,
+    /// The rules reject the report.
+    Reject,
+    /// The rules mark the file bad. Nothing more: a recycle and search always
+    /// waits for an operator.
+    MarkBad,
+}
+
+/// What the report rules concluded, with the fallback and deciders the trace
+/// records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportArbitration {
+    pub verdict: ReportVerdict,
+    pub fallback_reason: Option<&'static str>,
+    pub deciding_rule_set_ids: Vec<String>,
+    pub reasons: Vec<ArbitrationReason>,
+}
+
+impl ReportArbitration {
+    /// The verdict in the trace's outcome column: marking bad records as an
+    /// automatic approval, a rejection as a denial.
+    pub fn outcome(&self) -> RequestDecisionOutcome {
+        match self.verdict {
+            ReportVerdict::Review => RequestDecisionOutcome::ManualReview,
+            ReportVerdict::Reject => RequestDecisionOutcome::Deny,
+            ReportVerdict::MarkBad => RequestDecisionOutcome::AutoApprove,
+        }
+    }
+}
+
+/// Arbitrate one bad-file report's votes.
+///
+/// | condition | verdict | deciders | fallback |
+/// |---|---|---|---|
+/// | any `manual`, any held rule, any error | `Review` | those rules | `rule_manual` \| `held` \| `error` |
+/// | else `mark_bad` and `reject_report` both fired | `Review` | those rules | `report_conflict` |
+/// | else any `mark_bad` | `MarkBad` | the marking rules | — |
+/// | else any `reject_report` | `Reject` | the rejecting rules | — |
+/// | else | `Review` | — | `no_rule_matched` |
+///
+/// There is no permission fallback: without a rule's verdict, a person
+/// decides.
+pub fn arbitrate_report(votes: &[ScopedVote], errors: &[ScopedError]) -> ReportArbitration {
+    let manuals: Vec<&ScopedVote> = votes
+        .iter()
+        .filter(|vote| vote.decision.held || vote.decision.vote == RequestVote::Manual)
+        .collect();
+    if !manuals.is_empty() || !errors.is_empty() {
+        let authored = manuals.iter().any(|vote| !vote.decision.held);
+        let held = manuals.iter().any(|vote| vote.decision.held);
+        let fallback_reason = if authored {
+            FALLBACK_RULE_MANUAL
+        } else if held {
+            FALLBACK_HELD
+        } else {
+            FALLBACK_ERROR
+        };
+        let mut deciding = rule_set_ids(&manuals);
+        for error in errors {
+            push_unique(&mut deciding, &error.rule_set_id);
+        }
+        return ReportArbitration {
+            verdict: ReportVerdict::Review,
+            fallback_reason: Some(fallback_reason),
+            deciding_rule_set_ids: deciding,
+            reasons: reasons_from(&manuals),
+        };
+    }
+
+    let with_vote = |wanted: &[RequestReportVote]| -> Vec<&ScopedVote> {
+        votes
+            .iter()
+            .filter(|vote| wanted.contains(&vote.decision.report_vote))
+            .collect()
+    };
+    let marks = with_vote(&[RequestReportVote::MarkBad, RequestReportVote::Conflict]);
+    let rejects = with_vote(&[RequestReportVote::Reject, RequestReportVote::Conflict]);
+    match (marks.is_empty(), rejects.is_empty()) {
+        (false, false) => {
+            let mut disagreeing: Vec<&ScopedVote> = marks.clone();
+            for vote in rejects {
+                if !disagreeing
+                    .iter()
+                    .any(|seen| seen.rule_set_id == vote.rule_set_id)
+                {
+                    disagreeing.push(vote);
+                }
+            }
+            ReportArbitration {
+                verdict: ReportVerdict::Review,
+                fallback_reason: Some(FALLBACK_REPORT_CONFLICT),
+                deciding_rule_set_ids: rule_set_ids(&disagreeing),
+                reasons: reasons_from(&disagreeing),
+            }
+        }
+        (false, true) => ReportArbitration {
+            verdict: ReportVerdict::MarkBad,
+            fallback_reason: None,
+            deciding_rule_set_ids: rule_set_ids(&marks),
+            reasons: reasons_from(&marks),
+        },
+        (true, false) => ReportArbitration {
+            verdict: ReportVerdict::Reject,
+            fallback_reason: None,
+            deciding_rule_set_ids: rule_set_ids(&rejects),
+            reasons: reasons_from(&rejects),
+        },
+        (true, true) => ReportArbitration {
+            verdict: ReportVerdict::Review,
+            fallback_reason: Some(FALLBACK_NO_RULE_MATCHED),
+            deciding_rule_set_ids: Vec::new(),
+            reasons: Vec::new(),
+        },
+    }
 }

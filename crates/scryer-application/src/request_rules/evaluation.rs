@@ -20,7 +20,7 @@ use chrono::Utc;
 use scryer_domain::{
     Id, Library, LibraryPermission, RequestDecisionOutcome, RequestRuleDecisionRecord, User,
 };
-use scryer_rules::request::{REQUEST_INPUT_SCHEMA_VERSION, RequestVote};
+use scryer_rules::request::{REQUEST_INPUT_SCHEMA_VERSION, RequestReportVote, RequestVote};
 use serde::Serialize;
 
 use crate::helpers::{HashDomain, blake3_identity_hex};
@@ -170,8 +170,21 @@ pub struct RecordedVote {
     pub shaping: RequestShaping,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notify: Option<String>,
+    /// What a report rule said about a bad-file report: `mark_bad`,
+    /// `reject_report` or `conflict`. Absent when it said nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_vote: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+const fn report_vote_name(vote: RequestReportVote) -> Option<&'static str> {
+    match vote {
+        RequestReportVote::Abstain => None,
+        RequestReportVote::MarkBad => Some("mark_bad"),
+        RequestReportVote::Reject => Some("reject_report"),
+        RequestReportVote::Conflict => Some("conflict"),
+    }
 }
 
 const fn vote_name(vote: RequestVote) -> &'static str {
@@ -183,7 +196,7 @@ const fn vote_name(vote: RequestVote) -> &'static str {
     }
 }
 
-fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedVote> {
+pub(crate) fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedVote> {
     let mut recorded: Vec<RecordedVote> = votes
         .iter()
         .map(|vote| RecordedVote {
@@ -197,6 +210,7 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
             tags: vote.decision.tags.clone(),
             shaping: vote.decision.shaping.clone(),
             notify: vote.decision.notify.clone(),
+            report_vote: report_vote_name(vote.decision.report_vote),
             error: None,
         })
         .collect();
@@ -211,6 +225,7 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
         tags: Vec::new(),
         shaping: RequestShaping::default(),
         notify: None,
+        report_vote: None,
         error: Some(error.message.clone()),
     }));
     recorded

@@ -79,6 +79,66 @@ pub enum RequestActionHeadValue {
     AddTags,
     /// Add this text to the notification sent when the request is submitted.
     Notify,
+    /// Mark the file in a bad-file report bad. A report rule only.
+    MarkBad,
+    /// Reject a bad-file report. A report rule only.
+    RejectReport,
+}
+
+/// What a media issue requests after confirmation.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MediaIssueRemediationValue {
+    /// Mark the file bad on its title's blocklist and leave it in place.
+    MarkBad,
+    /// Mark the file bad, recycle it, and search for a replacement. Recycling
+    /// needs an operator's confirmation.
+    RecycleAndSearch,
+}
+
+impl From<scryer_domain::MediaIssueRemediation> for MediaIssueRemediationValue {
+    fn from(value: scryer_domain::MediaIssueRemediation) -> Self {
+        match value {
+            scryer_domain::MediaIssueRemediation::MarkBad => Self::MarkBad,
+            scryer_domain::MediaIssueRemediation::RecycleAndSearch => Self::RecycleAndSearch,
+        }
+    }
+}
+
+impl From<MediaIssueRemediationValue> for scryer_domain::MediaIssueRemediation {
+    fn from(value: MediaIssueRemediationValue) -> Self {
+        match value {
+            MediaIssueRemediationValue::MarkBad => Self::MarkBad,
+            MediaIssueRemediationValue::RecycleAndSearch => Self::RecycleAndSearch,
+        }
+    }
+}
+
+/// What one report rule said about a sample bad-file report.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestReportVoteValue {
+    /// Neither `mark_bad` nor `reject_report` fired.
+    Abstain,
+    /// `mark_bad` fired.
+    MarkBad,
+    /// `reject_report` fired.
+    Reject,
+    /// Both fired, so the report goes to review.
+    Conflict,
+}
+
+/// What submitting a bad-file report would do.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestReportOutcomeValue {
+    /// An operator reviews the report.
+    Review,
+    /// The report is rejected.
+    Reject,
+    /// The file is marked bad. A requested recycle and search still waits for
+    /// an operator.
+    MarkBad,
 }
 
 /// What a lifecycle claim is.
@@ -382,6 +442,12 @@ pub struct RequestRulePreviewPayload {
     pub undefined_tags: Vec<String>,
     /// The exact document the rule saw.
     pub input_document: Json<serde_json::Value>,
+    /// What a report rule said about the sample report; null for a request
+    /// rule.
+    pub report_vote: Option<RequestReportVoteValue>,
+    /// What submitting the sample report would do if this were the only
+    /// report rule; null for a request rule.
+    pub report_outcome: Option<RequestReportOutcomeValue>,
 }
 
 /// Requester-side pre-flight: what would happen if this draft were submitted
@@ -589,6 +655,28 @@ pub struct RequestRuleSampleInput {
     /// Audio languages the sample prefers, in order. Omit or send null to
     /// leave it to the library.
     pub preferred_audio_languages: Option<Vec<String>>,
+    /// The bad-file report a report rule is previewed against. A request rule
+    /// ignores it. Omitted, a report rule sees a `corrupted` report asking to
+    /// mark a grabbed file bad, with details.
+    pub report: Option<RequestRuleReportSampleInput>,
+}
+
+/// A hypothetical bad-file report for previewing a report rule. No file is
+/// read and nothing is submitted.
+#[derive(InputObject, Clone)]
+pub struct RequestRuleReportSampleInput {
+    /// Report reason: `corrupted`, `wrong_content`, `wrong_language`,
+    /// `audio_out_of_sync`, `poor_quality` or `other`.
+    pub reason_code: String,
+    /// The action the sample report asks for.
+    pub remediation: MediaIssueRemediationValue,
+    /// True for a file from a known grab. Defaults to true.
+    pub grabbed: Option<bool>,
+    /// Whether the sample report carries details. Defaults to true.
+    pub has_details: Option<bool>,
+    /// Whether the reporter asked for the media. Null previews the fact as
+    /// unknown.
+    pub reporter_requested_media: Option<bool>,
 }
 
 /// Runs one rule against one hypothetical request without saving anything.

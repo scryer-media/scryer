@@ -62,6 +62,14 @@ test("existing plugin logos and unknown-provider fallback are preserved", () => 
     "/auth-providers/plex.svg",
   );
   assert.equal(
+    getPluginLogoSources({ providerType: "jellyfin" })?.src,
+    "/plugin-logos/svg/jellyfin-silo.svg",
+  );
+  assert.equal(
+    getPluginLogoSources({ name: "Jellyfin / Silo" })?.src,
+    "/plugin-logos/svg/jellyfin-silo.svg",
+  );
+  assert.equal(
     getPluginLogoSources({ name: "Trakt" })?.src,
     "/plugin-logos/svg/trakt.svg",
   );

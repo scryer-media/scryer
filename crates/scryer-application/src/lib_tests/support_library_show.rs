@@ -413,6 +413,27 @@ impl ShowRepository for MockShowRepo {
             .collect())
     }
 
+    async fn list_series_movie_links_by_movie_tmdb_ids(
+        &self,
+        tmdb_ids: &[String],
+    ) -> AppResult<Vec<crate::SeriesMovieTmdbMatch>> {
+        let links = self.series_movie_links.lock().await;
+        Ok(links
+            .iter()
+            .filter_map(|link| {
+                let tmdb_id = link.movie.tmdb_id.as_deref()?.trim();
+                tmdb_ids
+                    .iter()
+                    .any(|wanted| !tmdb_id.is_empty() && wanted.trim() == tmdb_id)
+                    .then(|| crate::SeriesMovieTmdbMatch {
+                        series_movie_link_id: link.id.clone(),
+                        series_title_id: link.series_title_id.clone(),
+                        tmdb_id: tmdb_id.to_string(),
+                    })
+            })
+            .collect())
+    }
+
     async fn list_series_movie_external_id_lookup_matches(
         &self,
         library_ids: &[String],

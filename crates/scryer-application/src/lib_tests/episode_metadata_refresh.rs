@@ -30,8 +30,11 @@ fn full_episode() -> EpisodeMetadata {
 
 async fn refresh_fixture(
     facet: MediaFacet,
-    tags: Vec<String>,
+    mut tags: Vec<String>,
 ) -> (AppUseCase, Arc<MockShowRepo>, Title) {
+    // Every episode is monitored to start with, so a refresh's own monitoring
+    // decisions are what these tests observe, not the library default.
+    tags.push("scryer:monitor-type:allepisodes".to_string());
     let (app, user) = bootstrap();
     let shows = Arc::new(MockShowRepo::default());
     let app = app.with_test_overrides(|services| services.with_shows(shows.clone()));

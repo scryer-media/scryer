@@ -18,6 +18,11 @@ pub struct TitleReleaseBlocklistEntryPayload {
     pub error_message: Option<String>,
     /// UTC time when the release was attempted.
     pub attempted_at: DateTime<Utc>,
+    /// True when the entry marks a file bad by its sampled content rather
+    /// than blocking a release by name. Clearing it unmarks the file.
+    pub marked_bad_file: bool,
+    /// The marked file's size in bytes, for a bad-file entry.
+    pub content_size_bytes: Option<Long>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -814,10 +819,12 @@ pub struct SubtitleProviderConfigPayload {
 }
 
 #[derive(InputObject)]
-/// Filters for an interactive release search. Exactly one of `titleId` and
-/// `query` names the subject.
+/// Filters for a release search. `startInteractiveReleaseSearch` takes
+/// exactly one of `titleId` and `query` as the subject; `searchReleases`
+/// takes `titleId` and refuses `query`.
 pub struct SearchReleasesInput {
-    /// Title identity whose releases are searched; required unless `query` is given.
+    /// Title identity whose releases are searched. Required by
+    /// `searchReleases`; an interactive search needs it unless `query` is given.
     pub title_id: Option<ID>,
     /// Optional series/movie link identity for an episodic movie target.
     pub series_movie_link_id: Option<ID>,
@@ -828,15 +835,17 @@ pub struct SearchReleasesInput {
     /// Optional episode label or number to search; requires `season`.
     pub episode: Option<String>,
     /// Optional limit. A title search lists at most this many results
-    /// (default 50, max 200); a `query` search asks each indexer for this many
-    /// (default 100, 1 to 500); `aggregatePageSize` sets how many merged results
-    /// each page lists.
+    /// (default 50, max 200). An interactive `query` search asks each indexer
+    /// for this many (default 100, 1 to 500); `aggregatePageSize` sets how many
+    /// merged results each page lists.
     pub limit: Option<i32>,
     /// Results per page for a `query` search, after merging every indexer's
     /// results (default 100, 1 to 100). Later pages use the `first` argument
     /// of `continueInteractiveReleaseSearch`.
     pub aggregate_page_size: Option<i32>,
-    /// Raw operator query sent as typed to each indexer, without a catalog title.
+    /// Raw operator query sent as typed to each indexer, without a catalog
+    /// title. Interactive searches only: `searchReleases` refuses it with
+    /// `INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED`.
     pub query: Option<String>,
     /// Optional indexer configuration identities to restrict the search to.
     pub indexer_ids: Option<Vec<ID>>,
@@ -1578,6 +1587,54 @@ pub struct ManualImportFilePreviewPayload {
     pub suggested_series_movie_link_id: Option<String>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+/// Estimated comparison of a manual-import file with the files already holding the episodes it is mapped to.
+pub enum ManualImportVerdictValue {
+    /// The file would be an upgrade over what the episodes hold.
+    Upgrade,
+    /// The file ties what the episodes hold.
+    Equal,
+    /// What the episodes hold is better than the file.
+    Downgrade,
+    /// None of the episodes holds a file.
+    NoCurrentFile,
+}
+
+#[derive(InputObject)]
+/// One manual-import candidate and the episodes to estimate it against.
+pub struct ManualImportVerdictRequestInput {
+    /// Candidate ID from the persisted manual-import selection.
+    pub candidate_id: ID,
+    /// Episode IDs the candidate is mapped to; IDs outside the selection's title are ignored.
+    pub episode_ids: Vec<ID>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// The best file already holding the episodes a manual-import candidate is mapped to.
+pub struct ManualImportCurrentFilePayload {
+    /// Quality label of the file, or null when unavailable.
+    pub quality: Option<String>,
+    /// Release group of the file, or null when unavailable.
+    pub release_group: Option<String>,
+    /// Score the file holds the episodes at.
+    pub score: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Estimated upgrade verdict for one manual-import candidate. Display only: the import decides again on the landed file.
+pub struct ManualImportVerdictPayload {
+    /// Candidate ID the estimate is for.
+    pub candidate_id: ID,
+    /// Episodes of the title the estimate covers; a multi-episode file is judged across all of them.
+    pub episode_ids: Vec<ID>,
+    /// Estimated verdict, or null when the candidate cannot be estimated.
+    pub verdict: Option<ManualImportVerdictValue>,
+    /// Estimated score of the candidate, or null when it cannot be estimated.
+    pub estimated_score: Option<i32>,
+    /// Best file already holding the episodes, or null when none does or it cannot be estimated.
+    pub current_file: Option<ManualImportCurrentFilePayload>,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Series-movie target candidate for a manual import.
 pub struct ManualImportSeriesMovieTargetPayload {
@@ -1790,6 +1847,10 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     /// A local monthly limit on the indexer refused the search, or its usage
     /// could not be checked. `failureReasonCode` carries the reason code.
     MonthlyLimit,
+    /// The indexer's next query slot lies further out than an interactive
+    /// search waits, so it sent no request. `retryAfterSeconds` carries the
+    /// delay to that slot.
+    QueryBudget,
 }
 
 /// How Scryer obtained the capabilities it used to search an indexer.
@@ -1834,9 +1895,15 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     /// Stable code for a failure the operator must act on, such as
     /// `ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
     /// not loaded, or the monthly limit reason when `skipReason` is
-    /// `MONTHLY_LIMIT`; null for other failures and when the indexer did not
-    /// fail.
+    /// `MONTHLY_LIMIT`. `INDEXER_QUERY_BUDGET_NOT_SEARCHED` marks an indexer
+    /// skipped for its query budget, and `INDEXER_QUERY_BUDGET_PARTLY_SEARCHED`
+    /// a completed indexer that sent some of its requests before its budget
+    /// stopped the rest; its results are kept. Null for other failures and
+    /// when the indexer did not fail.
     pub failure_reason_code: Option<String>,
+    /// Seconds until the indexer can be asked again, when its query budget or
+    /// a rate limit stopped the search and the delay is known.
+    pub retry_after_seconds: Option<i32>,
     /// How the capabilities used for this indexer were obtained, or null
     /// before they were resolved.
     pub caps_source: Option<IndexerCapsSourceValue>,

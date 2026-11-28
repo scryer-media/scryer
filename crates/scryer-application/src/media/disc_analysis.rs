@@ -1,5 +1,5 @@
 //! Project authored playback titles without mixing their stream or storage facts.
-use scryer_media_types::{DiscTitle, StreamKind};
+use scryer_media_types::{Codec, DiscTitle, StreamDetail, StreamKind};
 
 pub(crate) fn for_title(
     image: &crate::MediaFileAnalysis,
@@ -10,7 +10,7 @@ pub(crate) fn for_title(
             && stream.metadata.disposition.attached_picture != Some(true)
             && stream.metadata.disposition.still_image != Some(true)
             && (stream.metadata.disposition.attached_picture.is_some()
-                || !matches!(stream.codec.as_deref(), Some("mjpeg" | "png")))
+                || !matches!(stream.codec, Some(Codec::Mjpeg | Codec::Png)))
     });
     let program = video.and_then(|stream| stream.metadata.program_id);
     let streams = title
@@ -26,13 +26,9 @@ pub(crate) fn for_title(
         .iter()
         .enumerate()
         .filter(|(_, stream)| stream.metadata.disposition.commentary != Some(true));
-    let best = scryer_media_types::primary_audio_stream_index(audio.iter().map(|stream| {
-        (
-            stream.metadata.disposition.default == Some(true),
-            stream.metadata.disposition.commentary == Some(true),
-            stream.name.as_deref(),
-        )
-    }))
+    let best = scryer_media_types::primary_audio_position(
+        audio.iter().map(|stream| stream.audio_candidate()),
+    )
     .map(|index| audio[index]);
     let subtitle = streams
         .iter()
@@ -47,8 +43,8 @@ pub(crate) fn for_title(
             .map(|seconds| seconds as i32),
         num_chapters: i32::try_from(title.chapters.len()).ok(),
         video_codec: video
-            .and_then(|stream| stream.codec.as_deref())
-            .and_then(crate::release_parser::VideoCodec::parse),
+            .and_then(|stream| stream.codec.as_ref())
+            .and_then(|codec| crate::release_parser::VideoCodec::parse(codec.as_str())),
         video_width: video.and_then(|stream| stream.width),
         video_height: video.and_then(|stream| stream.height),
         video_bitrate_kbps: video.and_then(|stream| kbps(stream.metadata.bitrate_bps)),
@@ -63,7 +59,7 @@ pub(crate) fn for_title(
             })
             .filter(|rate| rate.denominator > 0)
             .map(|rate| format!("{:.3}", rate.numerator as f64 / rate.denominator as f64)),
-        audio_codec: best.and_then(|stream| stream.codec.clone()),
+        audio_codec: best.and_then(|stream| codec_name(stream)),
         audio_profile: best.and_then(|stream| stream.metadata.profile.clone()),
         audio_channels: best.and_then(|stream| stream.channels),
         audio_bitrate_kbps: best.and_then(|stream| kbps(stream.metadata.bitrate_bps)),
@@ -76,7 +72,7 @@ pub(crate) fn for_title(
         audio_streams: audio
             .into_iter()
             .map(|stream| crate::AudioStreamDetail {
-                codec: stream.codec.clone(),
+                codec: codec_name(stream),
                 profile: stream.metadata.profile.clone(),
                 channels: stream.channels,
                 language: stream
@@ -94,12 +90,12 @@ pub(crate) fn for_title(
         ),
         subtitle_codecs: subtitle
             .iter()
-            .filter_map(|stream| stream.codec.clone())
+            .filter_map(|stream| codec_name(stream))
             .collect(),
         subtitle_streams: subtitle
             .into_iter()
             .map(|stream| crate::SubtitleStreamDetail {
-                codec: stream.codec.clone(),
+                codec: codec_name(stream),
                 language: stream
                     .language
                     .as_deref()
@@ -113,18 +109,7 @@ pub(crate) fn for_title(
     };
     if let Some(video) = video {
         let hdr = &video.metadata.hdr;
-        analysis.video_hdr_format = if hdr.dolby_vision == Some(true) {
-            Some("Dolby Vision")
-        } else if hdr.hdr10plus == Some(true) {
-            Some("HDR10+")
-        } else if hdr.hdr10 == Some(true) {
-            Some("HDR10")
-        } else if hdr.hlg == Some(true) {
-            Some("HLG")
-        } else {
-            None
-        }
-        .map(str::to_string);
+        analysis.video_hdr_format = video.hdr_format().map(|format| format.as_str().to_owned());
         analysis.dovi_profile = hdr.dovi.as_ref().and_then(|dovi| dovi.profile);
         analysis.dovi_bl_compat_id = hdr
             .dovi
@@ -143,6 +128,10 @@ pub(crate) fn for_title(
         disc.selected_title_id = Some(title.id.clone());
     }
     analysis
+}
+
+fn codec_name(stream: &StreamDetail) -> Option<String> {
+    stream.codec.as_ref().map(|codec| codec.as_str().to_owned())
 }
 
 fn kbps(value: Option<u64>) -> Option<i32> {

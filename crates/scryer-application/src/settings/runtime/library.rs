@@ -24,6 +24,19 @@ fn validate_default_monitor_type(facet: &MediaFacet, value: &str) -> AppResult<(
 }
 
 /// The saved choice when it is valid for the facet, else the facet's built-in default.
+/// A library's default tag labels as stored: trimmed, lowercased, without
+/// blanks or repeats, in the order given.
+fn normalized_default_title_tags(labels: Vec<String>) -> Vec<String> {
+    let mut normalized: Vec<String> = Vec::with_capacity(labels.len());
+    for label in labels {
+        let label = label.trim().to_lowercase();
+        if !label.is_empty() && !normalized.contains(&label) {
+            normalized.push(label);
+        }
+    }
+    normalized
+}
+
 fn effective_default_monitor_type(facet: &MediaFacet, saved: Option<&str>) -> String {
     let choices = default_monitor_type_choices(facet);
     saved
@@ -821,6 +834,125 @@ impl AppUseCase {
         Ok(effective_default_monitor_type(&library.facet, saved.as_deref()))
     }
 
+    /// The tag labels the library gives every new title, as saved.
+    pub(crate) async fn library_default_title_tags(
+        &self,
+        library_id: &str,
+    ) -> AppResult<Vec<String>> {
+        Ok(self
+            .read_setting_json_value::<Vec<String>>(DEFAULT_TITLE_TAGS_KEY, Some(library_id))
+            .await?
+            .unwrap_or_default())
+    }
+
+    /// Refuse a default tag the registry does not define. A reserved
+    /// `scryer:` label is never a registry tag, so it is refused the same way.
+    async fn require_defined_default_title_tags(&self, labels: &[String]) -> AppResult<()> {
+        if let Some(label) = labels
+            .iter()
+            .find(|label| crate::is_reserved_title_tag(label))
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::NOT_DEFINED_TAG,
+                format!("'{label}' is not a defined tag"),
+            ));
+        }
+        self.require_registered_title_tags(labels).await
+    }
+
+    /// Rewrite `label` to `replacement` (or drop it) in every library's
+    /// default tags, returning how many libraries changed. One read covers
+    /// every library; only a library whose list changes is written.
+    pub(crate) async fn rewrite_library_default_title_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        let library_ids = self
+            .services
+            .catalog
+            .libraries
+            .list(None)
+            .await?
+            .into_iter()
+            .map(|library| library.id)
+            .collect::<Vec<_>>();
+        if library_ids.is_empty() {
+            return Ok(0);
+        }
+        let rows = self
+            .services
+            .config
+            .settings
+            .list_setting_json_explicit_for_scope_ids(
+                SETTINGS_SCOPE_SYSTEM,
+                DEFAULT_TITLE_TAGS_KEY,
+                &library_ids,
+            )
+            .await?;
+        let mut changed = 0_u64;
+        let mut seen = std::collections::HashSet::new();
+        for (library_id, raw_value) in rows {
+            // The reader takes the first stored row for a scope id.
+            if !seen.insert(library_id.clone()) {
+                continue;
+            }
+            let Ok(labels) = serde_json::from_str::<Vec<String>>(&raw_value) else {
+                continue;
+            };
+            if !labels.iter().any(|existing| existing == label) {
+                continue;
+            }
+            let rewritten = normalized_default_title_tags(
+                labels
+                    .into_iter()
+                    .filter_map(|existing| {
+                        if existing == label {
+                            replacement.map(str::to_string)
+                        } else {
+                            Some(existing)
+                        }
+                    })
+                    .collect(),
+            );
+            if rewritten.is_empty() {
+                self.delete_scoped_system_setting(DEFAULT_TITLE_TAGS_KEY, &library_id)
+                    .await?;
+            } else {
+                self.upsert_scoped_system_setting_json(
+                    DEFAULT_TITLE_TAGS_KEY,
+                    &library_id,
+                    &rewritten,
+                    None,
+                )
+                .await?;
+            }
+            changed += 1;
+        }
+        Ok(changed)
+    }
+
+    /// The library's default monitoring as a `scryer:monitor-type:` tag
+    /// value, for a new series or anime title whose add names no monitor
+    /// type. Movies are monitored by the add's own `monitored` flag, so they
+    /// have none.
+    pub(crate) async fn new_title_default_monitor_type_tag_value(
+        &self,
+        library_id: &str,
+        facet: &MediaFacet,
+    ) -> AppResult<Option<String>> {
+        if *facet == MediaFacet::Movie {
+            return Ok(None);
+        }
+        let saved = self
+            .read_setting_string_value_explicit(DEFAULT_MONITOR_TYPE_KEY, Some(library_id))
+            .await?;
+        crate::media_requests::normalize_requested_monitor_type(
+            facet,
+            Some(effective_default_monitor_type(facet, saved.as_deref())),
+        )
+    }
+
     pub async fn title_quality_profile_id_for_library(
         &self,
         actor: &User,
@@ -1316,6 +1448,8 @@ impl AppUseCase {
                 (MovieAvailabilityOverrides::default(), None)
             };
 
+        let default_title_tags = self.library_default_title_tags(&library.id).await?;
+
         Ok(LibrarySettings {
             search_languages: self
                 .read_setting_json_value::<Vec<String>>(
@@ -1340,6 +1474,7 @@ impl AppUseCase {
             use_season_folders,
             default_monitor_type,
             default_monitor_type_override,
+            default_title_tags,
             quality_profile_id_override,
             quality_profile_id,
             request_quality_profile_ids_override,
@@ -1840,6 +1975,10 @@ impl AppUseCase {
         if let Some(value) = &settings.default_monitor_type {
             validate_default_monitor_type(&library.facet, value)?;
         }
+        let default_title_tags =
+            normalized_default_title_tags(settings.default_title_tags.clone().unwrap_or_default());
+        self.require_defined_default_title_tags(&default_title_tags)
+            .await?;
         let movie_availability = settings.movie_availability.clone().normalized()?;
         if library.facet != MediaFacet::Movie && !movie_availability.is_empty() {
             return Err(AppError::validation_refused(crate::error_reasons::settings::MOVIE_AVAILABILITY_SETTINGS_REQUIRE_MOVIE_LIBRARY, "movie availability settings require a movie library".to_string()));
@@ -1968,6 +2107,18 @@ impl AppUseCase {
         } else {
             self.delete_scoped_system_setting(DEFAULT_MONITOR_TYPE_KEY, &library.id)
                 .await?;
+        }
+        if default_title_tags.is_empty() {
+            self.delete_scoped_system_setting(DEFAULT_TITLE_TAGS_KEY, &library.id)
+                .await?;
+        } else {
+            self.upsert_scoped_system_setting_json(
+                DEFAULT_TITLE_TAGS_KEY,
+                &library.id,
+                &default_title_tags,
+                Some(actor.id.clone()),
+            )
+            .await?;
         }
         if let Some(profile_id) = normalize_optional_string(settings.quality_profile_id) {
             self.upsert_scoped_system_setting_json(
@@ -2245,6 +2396,7 @@ impl AppUseCase {
             METADATA_LANGUAGE_KEY.to_string(),
             USE_SEASON_FOLDERS_KEY.to_string(),
             DEFAULT_MONITOR_TYPE_KEY.to_string(),
+            DEFAULT_TITLE_TAGS_KEY.to_string(),
             QUALITY_PROFILE_ID_KEY.to_string(),
             REQUEST_QUALITY_PROFILE_IDS_KEY.to_string(),
             SCORING_PERSONA_KEY.to_string(),

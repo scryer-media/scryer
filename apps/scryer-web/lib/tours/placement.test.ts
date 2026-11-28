@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   TOUR_TARGET_GAP,
+  TOUR_TIGHT_GAP,
   TOUR_VIEWPORT_MARGIN,
   placeTourCard,
   spotlightRect,
@@ -40,6 +41,17 @@ test("a tall centered target sends the card beside it", () => {
   assert.ok(
     placement.left + card.width <= viewport.width - TOUR_VIEWPORT_MARGIN,
   );
+});
+
+test("a side too short for the arrow still takes the card clear of the target", () => {
+  // A wide table across the middle of a laptop screen: the card fits below it
+  // only without the arrow's gap, which beats covering the table.
+  const laptop = { width: 1024, height: 768 };
+  const table = { top: 208, left: 254, width: 740, height: 251 };
+  const placement = placeTourCard(laptop, { width: 448, height: 240 }, table);
+  const spot = spotlightRect(table);
+  assert.equal(placement.side, "below");
+  assert.equal(placement.top, spot.top + spot.height + TOUR_TIGHT_GAP);
 });
 
 test("with no room on any side the card stays centered over the page", () => {

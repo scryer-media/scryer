@@ -436,7 +436,15 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     );
     // The set is held between walks and patched on change; a walk with
     // nothing changed since the last one reads nothing to obtain it.
-    let walk_targets = match app.walk_targets(&now, blocked_facets).await {
+    // A facet turned off for the instance is frozen: its titles stay in the
+    // catalog but no search runs for them. A failed read freezes nothing.
+    let mut walk_blocked_facets = blocked_facets.to_vec();
+    for facet in app.disabled_facets().await.unwrap_or_default() {
+        if !walk_blocked_facets.contains(&facet) {
+            walk_blocked_facets.push(facet);
+        }
+    }
+    let walk_targets = match app.walk_targets(&now, &walk_blocked_facets).await {
         Ok(targets) => targets,
         Err(err) => {
             warn!(error = %err, "failed to derive acquisition targets");
@@ -2778,6 +2786,7 @@ async fn commit_season_pack_proposal(
                         info_hash_hint: info_hash_hint.clone(),
                         seed_goal_ratio: None,
                         seed_goal_seconds: None,
+                        seed_never_remove: false,
                         tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
                         tracker_min_seed_time_minutes: seed_minimums.min_seed_time_minutes,
                         season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,
@@ -5859,6 +5868,7 @@ async fn commit_scope_grab(
                     info_hash_hint: info_hash_hint.clone(),
                     seed_goal_ratio: None,
                     seed_goal_seconds: None,
+                    seed_never_remove: false,
                     tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
                     tracker_min_seed_time_minutes: seed_minimums.min_seed_time_minutes,
                     season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,

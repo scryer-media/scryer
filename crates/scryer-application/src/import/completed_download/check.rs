@@ -815,6 +815,7 @@ async fn notify_manual_interaction_once(app: &AppUseCase, td: &mut TrackedDownlo
             reason: Some(message.clone()),
             skip_reason: None,
             episode_ids: Vec::new(),
+            reason_code: None,
         })
     };
     let event = match title.as_ref() {

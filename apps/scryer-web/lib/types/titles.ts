@@ -103,6 +103,8 @@ export type TitleCollectionRecord = {
   episodesOwned?: number | null;
   episodesMonitored?: number | null;
   episodesTotal?: number | null;
+  episodesOnDisk?: number | null;
+  episodesExpected?: number | null;
   episodes?: TitleCollectionEpisodeRecord[] | null;
   createdAt?: string | null;
 };
@@ -193,6 +195,10 @@ export type TitleReleaseBlocklistEntry = {
   releaseName: string;
   errorMessage: string | null;
   attemptedAt: string;
+  /** True when the entry marks a file bad; clearing it unmarks the file. */
+  markedBadFile: boolean;
+  /** The marked file's size in bytes, for a bad-file entry. */
+  contentSizeBytes: number | null;
 };
 
 export type MovieAvailabilityRecord = {
@@ -202,6 +208,18 @@ export type MovieAvailabilityRecord = {
   reason: string;
   market: string;
   minimumAvailability: string;
+};
+
+/** One film tracked twice: as a series movie of a show and as a movie title. */
+export type SameFilmPairing = {
+  tmdbId: string;
+  seriesMovieLinkId: string;
+  seriesTitleId: string;
+  seriesTitleName: string;
+  seriesTitleFacet: Facet;
+  movieTitleId: string | null;
+  movieTitleName: string | null;
+  movieTitleFacet: Facet | null;
 };
 
 export type TitleRecord = {
@@ -221,12 +239,16 @@ export type TitleRecord = {
   slug?: string | null;
   imdbId?: string | null;
   externalIds?: ExternalId[] | null;
+  sameFilmElsewhere?: SameFilmPairing[];
   qualityTier?: string | null;
   currentQualityTier?: string | null;
   sizeBytes?: number | null;
   episodesOwned?: number | null;
   episodesMonitored?: number | null;
   episodesTotal?: number | null;
+  episodesOnDisk?: number | null;
+  episodesExpected?: number | null;
+  episodeRecordsTotal?: number | null;
   contentStatus?: string | null;
   posterUrl?: string | null;
   posterSourceUrl?: string | null;
@@ -407,6 +429,7 @@ export type LibrarySettingsRecord = {
   useSeasonFoldersOverride: boolean | null;
   useSeasonFolders: boolean;
   defaultMonitorTypeOverride?: string | null;
+  defaultTitleTags?: string[] | null;
   qualityProfileIdOverride: string | null;
   qualityProfileId: string;
   requestQualityProfileIdsOverride: string[] | null;
@@ -450,6 +473,7 @@ export type LibrarySettingsRecord = {
 
 export type LibrarySettingsDraft = {
   defaultMonitorType?: string | null;
+  defaultTitleTags?: string[] | null;
   searchLanguages?: string[] | null;
   requiredAudioLanguages: string[] | null;
   preferredAudioLanguages: string[] | null;

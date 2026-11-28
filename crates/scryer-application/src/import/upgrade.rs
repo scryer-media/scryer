@@ -38,6 +38,8 @@ pub struct UpgradeOutcome {
     /// Path of the replaced file when the replacement landed at a different
     /// path; `None` when the old file was replaced in place.
     pub previous_path: Option<String>,
+    /// How the replacement file was placed, for the import's record.
+    pub placement: scryer_domain::ImportFilePlacement,
     pub(crate) destination_permit: crate::import_workflow::ImportDestinationPermit,
 }
 
@@ -291,7 +293,13 @@ pub(crate) async fn execute_upgrade(
     import_mode: ImportMode,
     announced_size_bytes: Option<i64>,
     completed: Option<&scryer_domain::CompletedDownload>,
+    bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<UpgradeResult> {
+    // A file marked bad leaves the library only through the operator's
+    // confirmed recycle, never as an upgrade's incumbent.
+    if let Some(rejection) = bad_files.upgrade_refusal(app, &[existing_file]).await {
+        return Ok(UpgradeResult::Rejected(rejection));
+    }
     let audit_actor = DomainEventActor::from(actor);
 
     let old_path = stored_path_to_path_buf(&existing_file.file_path);
@@ -388,6 +396,7 @@ pub(crate) async fn execute_upgrade(
         source_cleanup: replacement.source_cleanup.map(Box::new),
         final_path_string: replacement.final_path_string,
         previous_path,
+        placement: replacement.placement,
         destination_permit: replacement.destination_permit,
     }))
 }
@@ -433,6 +442,8 @@ struct PreparedUpgradeReplacement {
     final_path_string: String,
     same_final_path: bool,
     source_cleanup: Option<ImportSourceCleanupGuard>,
+    /// How the replacement file was placed.
+    placement: scryer_domain::ImportFilePlacement,
     destination_permit: crate::import_workflow::ImportDestinationPermit,
     /// The episodes the replaced file covered, as its recycle entry records
     /// them; empty for a movie.
@@ -1341,6 +1352,7 @@ async fn prepare_replacement_before_old_removal(
         destination_created,
         new_size_bytes: file_result.size_bytes as i64,
         import_path: import_path.to_path_buf(),
+        placement: file_result.file_placement(final_path_string.clone()),
         final_path_string,
         same_final_path,
         source_cleanup: file_result.source_cleanup.clone(),

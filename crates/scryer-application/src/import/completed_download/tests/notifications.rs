@@ -39,6 +39,7 @@ async fn check_emits_manual_interaction_notification_once() {
         client_id: "client-1".to_string(),
         client_type: "nzbget".to_string(),
         client_item: DownloadQueueItem {
+            client_job_protocol: None,
             id: Id::new().0,
             title_id: None,
             episode_id: None,
@@ -87,6 +88,7 @@ async fn check_emits_manual_interaction_notification_once() {
         facet: Some("series".to_string()),
         source_title: None,
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: TitleMatchType::Unmatched,
@@ -104,6 +106,7 @@ async fn check_emits_manual_interaction_notification_once() {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     check(&app, &mut td).await;

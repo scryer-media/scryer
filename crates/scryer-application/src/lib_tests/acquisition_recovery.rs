@@ -100,6 +100,7 @@ async fn notification_broadcast_wakes_once_for_notification_batches() {
                     reason: Some("not parsable".to_string()),
                     skip_reason: None,
                     episode_ids: Vec::new(),
+                    reason_code: None,
                 }),
             ),
             crate::domain_events::new_global_domain_event(
@@ -903,6 +904,7 @@ async fn an_upgrade_waits_while_the_queued_movie_download_is_live() {
         .await
         .expect("record the live submission");
     *client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "lantern-quay-live".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: None,
@@ -1675,6 +1677,7 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         facet: Some("movie".to_string()),
         source_title: Some("Fixture.Release.2020.1080p-GROUP".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -1692,6 +1695,7 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         burned_by_import_gate: true,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -1732,6 +1736,8 @@ enum FailedGrabKind {
     OtherImportVerdict,
     /// The download client reported the failure.
     ClientReported,
+    /// Import took nothing from the download and the refusal settles it.
+    ImportRefused,
 }
 
 /// Runs failure handling for a grab served by `indexer-a` and returns the
@@ -1797,6 +1803,13 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
             true,
         ),
         FailedGrabKind::OtherImportVerdict => (vec!["warning timed out".into()], true),
+        FailedGrabKind::ImportRefused => (
+            vec![crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::ImportRefused,
+                "not an upgrade for the library file",
+            )],
+            true,
+        ),
         FailedGrabKind::ClientReported => {
             client_item.attention_reason = Some("connection reset by server".to_string());
             (Vec::new(), false)
@@ -1809,6 +1822,7 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
         client_id: "primary".to_string(),
         client_type: "nzbget".to_string(),
         client_item,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         completed_source: None,
         state: scryer_domain::TrackedDownloadState::FailedPending,
         status: scryer_domain::TrackedDownloadStatus::Error,
@@ -1833,6 +1847,7 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
         burned_by_import_gate,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
     crate::failed_download_handler::process_failed(&app, &mut tracked).await;
     assert_eq!(tracked.state, scryer_domain::TrackedDownloadState::Failed);
@@ -1869,6 +1884,20 @@ async fn an_executables_failure_on_one_indexer_blocks_the_release_on_every_index
     assert_eq!(entries[0].indexer_id, "", "the block names no indexer");
     assert!(blocked_on(&app, &title_id, "indexer-a").await);
     assert!(blocked_on(&app, &title_id, "indexer-b").await);
+}
+
+#[tokio::test]
+async fn a_refused_import_fails_the_grab_and_blocks_it_on_its_own_indexer() {
+    let (app, title_id) = fail_grab_from_indexer_a(FailedGrabKind::ImportRefused).await;
+    let entries = title_blocklist_entries(&app, &title_id).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].indexer_id, "indexer-a");
+    assert_eq!(
+        entries[0].reason.as_deref(),
+        Some("import rejected: not an upgrade for the library file"),
+        "the entry names import's verdict, not the client's report"
+    );
+    assert!(!blocked_on(&app, &title_id, "indexer-b").await);
 }
 
 #[tokio::test]
@@ -2026,6 +2055,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         facet: Some("movie".to_string()),
         source_title: Some("Failed.Release.1080p.WEB-DL".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -2043,6 +2073,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -2925,6 +2956,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         facet: Some("series".to_string()),
         source_title: Some("Pals.S05.720p.BluRay.DD5.1.x264-NTb".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -2942,6 +2974,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -3176,6 +3209,7 @@ async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() 
         facet: Some("movie".to_string()),
         source_title: Some("Observed.Failure.Safety.2024.1080p.WEB-DL".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::TitleParse,
@@ -3193,6 +3227,7 @@ async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() 
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -3452,6 +3487,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         facet: Some("anime".to_string()),
         source_title: Some("Season.Pack.Failure.Recovery.S07.1080p.WEB-DL".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -3469,6 +3505,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -4538,6 +4575,7 @@ async fn acquisition_cycle_episode_submission_blocks_only_matching_episode() {
         .expect("record active episode submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "episode-one-active".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: Some(episode_one.id.clone()),
@@ -4776,6 +4814,7 @@ async fn acquisition_cycle_collection_submission_blocks_same_season_only() {
         .expect("record active season pack submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "season-one-pack".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: None,
@@ -12235,6 +12274,7 @@ async fn acquisition_cycle_title_submission_still_blocks_movie_search() {
         .expect("record active movie submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "movie-active".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: None,
@@ -20430,6 +20470,7 @@ async fn a_saved_pack_waits_while_an_episode_it_covers_is_downloading() {
         .await
         .expect("record the live episode submission");
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "season-seven-episode-live".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: Some(episode_id),

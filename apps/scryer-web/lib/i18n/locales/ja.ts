@@ -107,6 +107,72 @@ const ja: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "帯域制限（KB/s）",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "このクライアントのすべてのダウンロードで共有されます。空欄または 0 で無制限。",
+  "settings.downloadClientTorboxApiKey": "API トークン",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "TorBox アカウントの API トークンです。",
+  "settings.downloadClientTorboxCachedOnly": "キャッシュ済みのみ",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "TorBox にまだキャッシュされていないダウンロードを拒否します。",
+  "httpRelease.refusal.filePathInvalid":
+    "このダウンロードのファイルに、ダウンロードフォルダー内に保存できないパスがあります。",
+  "httpRelease.refusal.tooManyFiles":
+    "このダウンロードのファイル数が、1 つのダウンロードで扱える上限を超えています。",
+  "httpRelease.refusal.linkKeyInvalid":
+    "このダウンロードのファイルに、使用できるリンク参照がありません。",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "このダウンロードのファイルには、このダウンローダーが取得できないリンクが必要です。",
+  "httpRelease.refusal.linkRefused":
+    "サーバーがファイルのダウンロードリンクを拒否し続けました。",
+  "httpRelease.refusal.linkUnavailable":
+    "ファイルのダウンロードリンクが利用可能になりませんでした。",
+  "error.reason.TORBOX_TOKEN_REJECTED":
+    "TorBox が API トークンを拒否しました。",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "TorBox のプランにはこの機能が含まれていません。",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "TorBox アカウントがアクティブなダウンロード数の上限に達しました。",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox アカウントは待機期間中のため、まだ新しいダウンロードを受け付けません。",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "TorBox アカウントが月間ダウンロード上限に達しました。",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "TorBox の新規ダウンロードの 1 時間あたりの上限に達しました。",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "このダウンロードは TorBox のプランで許可されたサイズを超えています。",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox にこのダウンロードのキャッシュがなく、このクライアントはキャッシュ済みのダウンロードのみ受け付けます。",
+  "error.reason.TORBOX_INVALID_TORRENT":
+    "TorBox が torrent を読み取れませんでした。",
+  "error.reason.TORBOX_INVALID_NZB": "NZB を読み取れませんでした。",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "このダウンロードはすでに TorBox アカウントにあります。",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox にこの項目はありません。",
+  "error.reason.TORBOX_LINK_OFFLINE":
+    "TorBox のダウンロードリンクがオフラインです。",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox がリクエストの受け付け頻度を制限しています。",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox を利用できません。",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox がこのダウンロードのファイルを感染ありと判定しました。",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox はこのダウンロードのファイルを zip アーカイブとしてのみ提供しています。",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "この TorBox ダウンロードには動画ファイルがありません。",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox はこのダウンロードが失敗したと報告しています。",
+  "error.reason.TORBOX_ITEM_MISSING":
+    "TorBox にこのダウンロードはもうありません。",
+  "error.reason.TORBOX_STALLED": "このダウンロードは TorBox で停滞しています。",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "この TorBox ダウンロードのファイル名は、このシステムに保存できません。",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "このリリースには、TorBox に送れる magnet リンク、torrent ファイル、NZB がありません。",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox はこのダウンロードに対するこの操作に対応していません。",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "この TorBox クライアントにそのダウンロードはありません。",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "TorBox クライアントに API トークンがありません。",
   "settings.publicUrlTitle": "公開 URL",
   "settings.publicUrlHelp":
     "ユーザーやサービスが Scryer にアクセスするアドレスです（例: https://scryer.example.com）。アカウント連携と OAuth には変更がすぐに反映され、パスキーには Scryer の再起動後に反映されます。",
@@ -826,6 +892,8 @@ const ja: LocaleDictionary = {
   "settings.downloadClientPriority": "優先度",
   "settings.downloadClientRemoveCompleted": "完了時に削除",
   "settings.downloadClientRemoveFailed": "失敗時に削除",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "「失敗時に削除」はクライアント内で失敗したダウンロードに適用されます。Scryer がインポートを拒否したトレントは常にインポート済みと同様に扱われ、目標までシードした後にクライアントから削除されます。",
   "settings.downloadClientUseSslInfo":
     "このダウンロードクライアントへの接続時にSSL/TLSを使用します。",
   "settings.downloadClientEnabledInfo":
@@ -1460,6 +1528,20 @@ const ja: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "このファイルに複数のエピソードを割り当てる",
   "queue.manualImportApplySuggestions": "すべてに候補を適用",
+  "queue.manualImportApplySuggestionsSelected": "選択項目に候補を適用",
+  "queue.manualImportSelectAll": "すべて選択",
+  "queue.manualImportSelectNone": "選択を解除",
+  "queue.manualImportSelectInvert": "選択を反転",
+  "queue.manualImportSelectMatching": "一致する項目を選択",
+  "queue.manualImportSelectMatchingLabel": "ファイル名に含む…",
+  "queue.manualImportSelectedCount": "{{count}} 件選択中",
+  "queue.manualImportSkipSelected": "選択項目をスキップ",
+  "queue.manualImportAssignSelected": "選択項目に対象を割り当て…",
+  "queue.manualImportVerdict.UPGRADE": "アップグレード",
+  "queue.manualImportVerdict.EQUAL": "同等の品質",
+  "queue.manualImportVerdict.DOWNGRADE": "ダウングレード",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "新しいファイル",
+  "queue.manualImportVerdictEstimated": "推定",
   "queue.removeFailed": "削除に失敗しました",
   "queue.manualImportTooltip":
     "手動インポートは対応が必要なキューアイテムで利用できます。",
@@ -2213,7 +2295,7 @@ const ja: LocaleDictionary = {
   "settings.notificationNoProviders":
     "通知プラグインがインストールされていません。先にプラグインページから通知プラグインをインストールしてください。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "リリース取得",
   "settings.notificationEvent.download": "ダウンロードに失敗しました",
   "settings.notificationEvent.upgrade": "インポートされたアップグレード",
@@ -2395,6 +2477,10 @@ const ja: LocaleDictionary = {
   "history.rematched": "再マッチ",
   "history.seedingStarted": "シード中",
   "history.seedingCompleted": "シード完了",
+  "history.subtitleDownloaded": "字幕をダウンロード",
+  "history.subtitleFailed": "字幕の取得に失敗",
+  "history.subtitleDeleted": "字幕を削除",
+  "history.subtitleBlocklisted": "字幕をブロック",
   "history.downloadIgnored": "無視",
   "history.downloadMissing": "クライアントに表示されていません",
   "history.facet": "カテゴリ",
@@ -3897,10 +3983,10 @@ const ja: LocaleDictionary = {
     "ルールはリリースを採点し、Scryer が望むものを優先し、望まないものを見送れるようにします。",
   "tours.onboarding.mediaServers.title": "メディアサーバー",
   "tours.onboarding.mediaServers.body":
-    "Jellyfin、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
+    "Jellyfin / Silo、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。サービスはこの「プラグイン」パネルから追加します。Jellyfin、Plex、Emby もここにあります。「メディアサーバー」で接続済みでも、このパネルからそのサーバーのプラグインをインストールするまで、インポート後にサーバーは更新されません。",
+    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。サービスはこの「プラグイン」パネルから追加します。Jellyfin / Silo、Plex、Emby もここにあります。「メディアサーバー」で接続済みでも、このパネルからそのサーバーのプラグインをインストールするまで、インポート後にサーバーは更新されません。",
   "tours.onboarding.plugins.title": "プラグイン",
   "tours.onboarding.plugins.body":
     "プラグインはインデクサー、ダウンロードクライアント、通知サービスを追加します。ここでインストールと更新ができます。",

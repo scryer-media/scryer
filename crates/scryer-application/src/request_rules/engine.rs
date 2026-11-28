@@ -24,6 +24,15 @@
 //! The scope map is captured **with** the engine, in the same swap, so a rule
 //! and the scope it was compiled under can never be read from different
 //! generations.
+//!
+//! # Request rules and report rules
+//!
+//! A rule decides media requests or bad-file reports, never both: validation
+//! refuses a rule that defines heads of both kinds. Each loaded rule's kind is
+//! read once, at rebuild, from the heads its source defines, and an evaluation
+//! runs only the rules of its own kind. A rule whose kind cannot be read, such
+//! as a stored source that no longer parses, counts for both, so its failure
+//! holds requests and reports alike.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -31,6 +40,39 @@ use std::sync::{Arc, RwLock};
 use scryer_rules::request::{RequestPolicy, RequestRulesEngine};
 
 use crate::{AppError, AppResult, AppUseCase};
+
+/// What a loaded rule decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestRuleKind {
+    /// Media requests: the acquisition and shaping heads.
+    Request,
+    /// Bad-file reports: `mark_bad` and `reject_report`.
+    Report,
+    /// The heads could not be read; the rule counts for both.
+    Unknown,
+}
+
+impl RequestRuleKind {
+    /// The kind of a stored rule source, from the heads it defines.
+    pub fn of_source(rego_source: &str, rule_set_id: &str) -> Self {
+        match scryer_rules::request_actions::scan_request_action_heads(rego_source, rule_set_id) {
+            Ok(scan) => match (scan.decides_request(), scan.decides_report()) {
+                (false, true) => Self::Report,
+                (true, true) => Self::Unknown,
+                _ => Self::Request,
+            },
+            Err(_) => Self::Unknown,
+        }
+    }
+
+    pub fn judges_requests(self) -> bool {
+        matches!(self, Self::Request | Self::Unknown)
+    }
+
+    pub fn judges_reports(self) -> bool {
+        matches!(self, Self::Report | Self::Unknown)
+    }
+}
 
 /// What the engine knows about one loaded rule set beyond its compiled policy.
 #[derive(Clone, Debug)]
@@ -40,11 +82,21 @@ pub struct RequestRuleScope {
     pub library_ids: Vec<String>,
     pub revision_number: i64,
     pub content_hash: String,
+    pub kind: RequestRuleKind,
 }
 
 impl RequestRuleScope {
     /// Whether this rule's vote counts for a request targeting `library_id`.
     pub fn covers(&self, library_id: &str) -> bool {
+        self.kind.judges_requests() && self.covers_library(library_id)
+    }
+
+    /// Whether this rule's vote counts for a bad-file report in `library_id`.
+    pub fn covers_report(&self, library_id: &str) -> bool {
+        self.kind.judges_reports() && self.covers_library(library_id)
+    }
+
+    fn covers_library(&self, library_id: &str) -> bool {
         self.library_ids.is_empty() || self.library_ids.iter().any(|id| id == library_id)
     }
 }
@@ -62,9 +114,12 @@ pub struct RequestRulesEngineCache {
     /// True after a persisted rule mutation could not be reflected in this
     /// generation. Evaluation must hold rather than consult stale policy.
     pub unavailable: bool,
-    /// The fact families some loaded rule may read. Evaluation leaves the
-    /// others unread.
+    /// The fact families some loaded request rule may read. Evaluation leaves
+    /// the others unread.
     pub fact_reads: crate::request_rules::facts::RequestFactReads,
+    /// Whether some loaded report rule may read whether the reporter asked
+    /// for the reported media. A report reads it only then.
+    pub report_reads_requester_relationship: bool,
 }
 
 impl Default for RequestRulesEngineCache {
@@ -76,6 +131,7 @@ impl Default for RequestRulesEngineCache {
             generation: 0,
             unavailable: false,
             fact_reads: crate::request_rules::facts::RequestFactReads::ALL,
+            report_reads_requester_relationship: true,
         }
     }
 }
@@ -85,11 +141,21 @@ impl RequestRulesEngineCache {
         self.scopes.is_empty()
     }
 
-    /// The rules whose scope covers `library_id`, as `(id, scope)` pairs.
+    /// The request rules whose scope covers `library_id`, as `(id, scope)`
+    /// pairs.
     pub fn scopes_for_library(&self, library_id: &str) -> Vec<(&String, &RequestRuleScope)> {
         self.scopes
             .iter()
             .filter(|(_, scope)| scope.covers(library_id))
+            .collect()
+    }
+
+    /// The report rules whose scope covers `library_id`, as `(id, scope)`
+    /// pairs.
+    pub fn report_scopes_for_library(&self, library_id: &str) -> Vec<(&String, &RequestRuleScope)> {
+        self.scopes
+            .iter()
+            .filter(|(_, scope)| scope.covers_report(library_id))
             .collect()
     }
 }
@@ -198,6 +264,7 @@ impl AppUseCase {
                         library_ids: rule_set.library_ids,
                         revision_number: rule_set.current_revision_number,
                         content_hash: String::new(),
+                        kind: RequestRuleKind::Unknown,
                     },
                 );
                 load_errors.insert(
@@ -219,6 +286,7 @@ impl AppUseCase {
                     library_ids: rule_set.library_ids,
                     revision_number: revision.revision_number,
                     content_hash: revision.source_content_hash,
+                    kind: RequestRuleKind::of_source(&revision.rego_source, &rule_set.id),
                 },
             );
             policies.push(policy);
@@ -256,12 +324,26 @@ impl AppUseCase {
             }
         };
         let rule_count = policies.len();
-        // Every loaded rule is evaluated, whichever libraries it covers.
+        // Every loaded rule of a kind is evaluated, whichever libraries it
+        // covers, so the reads are the union over that kind.
+        let kind_of = |policy: &&RequestPolicy| {
+            scopes
+                .get(&policy.id)
+                .map_or(RequestRuleKind::Unknown, |scope| scope.kind)
+        };
         let fact_reads = crate::request_rules::facts::RequestFactReads::for_policies(
             policies
                 .iter()
+                .filter(|policy| kind_of(policy).judges_requests())
                 .map(|policy| (policy.rego_source.as_str(), policy.id.as_str())),
         );
+        let report_reads_requester_relationship =
+            crate::request_rules::facts::report_rules_read_requester_relationship(
+                policies
+                    .iter()
+                    .filter(|policy| kind_of(policy).judges_reports())
+                    .map(|policy| (policy.rego_source.as_str(), policy.id.as_str())),
+            );
 
         let mut guard = self
             .services
@@ -286,6 +368,7 @@ impl AppUseCase {
             generation,
             unavailable: false,
             fact_reads,
+            report_reads_requester_relationship,
         });
         drop(guard);
 

@@ -1215,11 +1215,35 @@ fn two_roots_one_held(
         (p(ROOT), VolumeClass::LibraryRoot),
         (p(OTHER_ROOT), VolumeClass::LibraryRoot),
     ]);
-    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
     let (open, gate) = mpsc::channel();
     *backend.gate.lock().unwrap() = Some(gate);
     *backend.gate_under.lock().unwrap() = Some(p(held));
     (disk, backend, open)
+}
+
+async fn time_out_held_probe(disk: &Disk, backend: &Scripted, path: &'static str) -> PathReading {
+    const BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+    disk.set_probe_timeout_for_test(BOUND);
+    tokio::time::pause();
+    let (entered, reading) = mpsc::channel();
+    *backend.entered.lock().unwrap() = Some(entered);
+    let probe = tokio::spawn({
+        let disk = disk.clone();
+        async move { disk.fresh(path).await }
+    });
+    tokio::task::spawn_blocking(move || reading.recv_timeout(BOUND))
+        .await
+        .expect("probe entry waiter panicked")
+        .expect("the held probe reached the backend");
+    backend.entered.lock().unwrap().take();
+
+    // The backend has recorded this probe and its gate is still held.
+    tokio::time::advance(BOUND * 2).await;
+    tokio::time::resume();
+    tokio::time::timeout(BOUND, probe)
+        .await
+        .expect("the held probe timed out")
+        .expect("the probe task panicked")
 }
 
 fn lstats_under(backend: &Scripted, root: &str) -> usize {
@@ -1243,7 +1267,7 @@ async fn until_clear(disk: &Disk, path: &str) {
     .expect("every held read answered");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn a_dead_root_holds_one_probe_and_one_trial_and_answers_the_rest_at_once() {
     let clock = ManualClock::at(at(0));
     let (disk, backend, open) = two_roots_one_held(&clock, ROOT);
@@ -1260,14 +1284,14 @@ async fn a_dead_root_holds_one_probe_and_one_trial_and_answers_the_rest_at_once(
     // The first probe outlives its bound; the root is now suspect, and the
     // next read under it goes out as the one trial, which is held too.
     assert_eq!(
-        disk.fresh("/srv/fixture-media/a.mkv").await,
+        time_out_held_probe(&disk, &backend, "/srv/fixture-media/a.mkv").await,
         PathReading::Unreachable {
             observed_at: at(0),
             cause: reason::DISK_TIMED_OUT
         }
     );
     assert_eq!(
-        disk.fresh("/srv/fixture-media/b.mkv").await,
+        time_out_held_probe(&disk, &backend, "/srv/fixture-media/b.mkv").await,
         PathReading::Unreachable {
             observed_at: at(0),
             cause: reason::DISK_TIMED_OUT
@@ -1359,7 +1383,7 @@ async fn a_dead_root_holds_one_probe_and_one_trial_and_answers_the_rest_at_once(
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn a_path_still_out_past_its_bound_is_refused_after_its_root_answers_again() {
     let clock = ManualClock::at(at(0));
     let (disk, backend, open) = two_roots_one_held(&clock, "/srv/fixture-media/a.mkv");
@@ -1367,7 +1391,7 @@ async fn a_path_still_out_past_its_bound_is_refused_after_its_root_answers_again
     backend.stat_is("/srv/fixture-media/b.mkv", Ok(file(5)));
 
     assert_eq!(
-        disk.fresh("/srv/fixture-media/a.mkv").await,
+        time_out_held_probe(&disk, &backend, "/srv/fixture-media/a.mkv").await,
         PathReading::Unreachable {
             observed_at: at(0),
             cause: reason::DISK_TIMED_OUT
@@ -2300,7 +2324,7 @@ fn an_uncached_read_sees_a_link_count_another_name_lowered() {
     assert_eq!(backend.calls_of("lstat"), 3);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn reads_under_a_stuck_root_are_refused_but_writes_go_out() {
     let clock = ManualClock::at(at(0));
     let (disk, backend, open) = two_roots_one_held(&clock, ROOT);
@@ -2308,8 +2332,15 @@ async fn reads_under_a_stuck_root_are_refused_but_writes_go_out() {
     backend.stat_is("/srv/fixture-media/b.mkv", Ok(file(5)));
     backend.holds("/srv/fixture-media/c.nfo", b"x");
     // The first probe outlives its bound and the trial after it is held too.
-    disk.fresh("/srv/fixture-media/a.mkv").await;
-    disk.fresh("/srv/fixture-media/b.mkv").await;
+    for path in ["/srv/fixture-media/a.mkv", "/srv/fixture-media/b.mkv"] {
+        assert_eq!(
+            time_out_held_probe(&disk, &backend, path).await,
+            PathReading::Unreachable {
+                observed_at: at(0),
+                cause: reason::DISK_TIMED_OUT,
+            }
+        );
+    }
 
     disk.set_probe_timeout_for_test(std::time::Duration::from_secs(3600));
     for error in [

@@ -4,6 +4,9 @@ const ru: LocaleDictionary = {
   "settings.defaultMonitorType": "Отслеживание новых тайтлов по умолчанию",
   "settings.defaultMonitorTypeHelp":
     "Начальный выбор при добавлении или запросе тайтла. Существующие тайтлы и подписки на списки не меняются.",
+  "settings.libraryDefaultTitleTags": "Теги для новых тайтлов",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Добавляются к каждому тайтлу, добавленному в эту библиотеку вручную, из списка или при одобрении запроса. Тайтлы, найденные сканированием библиотеки, и уже добавленные тайтлы не меняются.",
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Эта версия Prowlarr не поддерживается. Обновите Prowlarr до версии 2.0 или новее.",
   "error.reason.STANDBY_NOT_FOUND":
@@ -61,6 +64,26 @@ const ru: LocaleDictionary = {
     "Структура медиафайла повреждена. Проверьте исходный файл перед импортом.",
   "error.reason.MEDIA_PROBE_ENCRYPTED":
     "Медиафайл зашифрован, и его не удалось проверить.",
+  "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE":
+    "Этот файл помечен плохим для тайтла, поэтому он не импортирован.",
+  "error.reason.MEDIA_BAD_FILE_LOOKUP_FAILED":
+    "Не удалось проверить плохие файлы тайтла, поэтому импорт ждёт проверки.",
+  "error.reason.MEDIA_REMEDIATION_NOT_AVAILABLE":
+    "Этот отчёт не подходит для выбранного действия.",
+  "error.reason.MEDIA_RECYCLE_FAILED": "Не удалось переместить файл в корзину.",
+  "error.reason.MEDIA_DETAILS_TOO_LONG":
+    "Описание слишком длинное. Не более 4096 символов.",
+  "error.reason.MEDIA_REASON_REQUIRES_DETAILS":
+    "Опишите проблему, если выбрана причина «Другое».",
+  "error.reason.MEDIA_REASON_UNKNOWN": "Эта причина отчёта не распознана.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_FILE":
+    "У файла есть другие жёсткие ссылки, поэтому удаление его не освободит. Пометьте его плохим.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY":
+    "Этот файл связан жёсткой ссылкой со своей копией в папке загрузки. Переместите в корзину оба имени или отмените.",
+  "error.reason.MEDIA_RECYCLE_UNSUPPORTED_PLATFORM":
+    "Удаление файла по отчёту не поддерживается на этой платформе. Пометьте его плохим.",
+  "error.reason.MEDIA_RESTORE_MATCHES_BAD_FILE":
+    "Этот элемент — файл, помеченный плохим для своего тайтла. Подтвердите, чтобы восстановить его и снять пометку.",
 
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer не может подключиться к шлюзу метаданных, поскольку системные часы расходятся более чем на 5 минут. Синхронизируйте системные часы и перезапустите Scryer.",
@@ -112,6 +135,65 @@ const ru: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Ограничение скорости (КБ/с)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Общее для всех загрузок этого клиента. Пусто или 0 — без ограничения.",
+  "settings.downloadClientTorboxApiKey": "API-токен",
+  "settings.downloadClientTorboxApiKeyHelp": "API-токен учётной записи TorBox.",
+  "settings.downloadClientTorboxCachedOnly": "Только из кэша",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Отклонять загрузки, которых ещё нет в кэше TorBox.",
+  "httpRelease.refusal.filePathInvalid":
+    "У файла этой загрузки путь, который нельзя сохранить в её папке загрузки.",
+  "httpRelease.refusal.tooManyFiles":
+    "В этой загрузке больше файлов, чем может содержать одна загрузка.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "У файла этой загрузки нет пригодной ссылки.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Файлу этой загрузки нужна ссылка, которую этот загрузчик не может получить.",
+  "httpRelease.refusal.linkRefused":
+    "Сервер раз за разом отклонял ссылки на загрузку файла.",
+  "httpRelease.refusal.linkUnavailable":
+    "Для файла так и не появилась ссылка на загрузку.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox отклонил API-токен.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Тариф TorBox не включает эту функцию.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Учётная запись TorBox достигла предела активных загрузок.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Учётная запись TorBox находится в периоде ожидания и пока не принимает новые загрузки.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Учётная запись TorBox достигла месячного предела загрузок.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "Достигнут почасовой предел новых загрузок TorBox.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Эта загрузка больше, чем позволяет тариф TorBox.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "Этой загрузки нет в кэше TorBox, а этот клиент принимает только загрузки из кэша.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox не смог прочитать торрент.",
+  "error.reason.TORBOX_INVALID_NZB": "Не удалось прочитать NZB.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Эта загрузка уже есть в учётной записи TorBox.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "У TorBox нет этого элемента.",
+  "error.reason.TORBOX_LINK_OFFLINE": "Ссылка на загрузку TorBox недоступна.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox ограничивает частоту приёма запросов.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox недоступен.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox пометил файл этой загрузки как заражённый.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox предлагает файл этой загрузки только в виде zip-архива.",
+  "error.reason.TORBOX_NO_VIDEO_FILE": "В этой загрузке TorBox нет видеофайла.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox сообщает, что эта загрузка завершилась ошибкой.",
+  "error.reason.TORBOX_ITEM_MISSING": "У TorBox больше нет этой загрузки.",
+  "error.reason.TORBOX_STALLED": "Эта загрузка остановилась на TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Имена файлов этой загрузки TorBox нельзя сохранить в этой системе.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "У этого релиза нет magnet-ссылки, торрент-файла или NZB для отправки в TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox не поддерживает это действие для этой загрузки.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "У этого клиента TorBox нет такой загрузки.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "У клиента TorBox нет API-токена.",
   "settings.publicUrlTitle": "Публичный URL",
   "settings.publicUrlHelp":
     "Адрес, по которому люди и сервисы обращаются к Scryer, например https://scryer.example.com. Привязка аккаунтов и OAuth применяют изменение сразу, а ключи доступа — после перезапуска Scryer.",
@@ -1121,6 +1203,12 @@ const ru: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Разрешения",
   "settings.mediaServerAutoAddEnabled":
     "Автоматически добавлять новых подтверждённых пользователей",
+  "settings.mediaServerRefreshOffer":
+    "Обновлять библиотеку этого сервера, когда Scryer импортирует, переименовывает, удаляет или перемещает медиа",
+  "settings.mediaServerRefreshOfferHelp":
+    "Подписывает это подключение в разделе «Уведомления» на: {{events}}. Изменить или удалить подписку можно там.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Для обновления библиотеки после импорта нужен плагин уведомлений этого сервера, но он не установлен. Чтобы установить его, откройте",
   "settings.defaultAppPermissions": "Разрешения приложения по умолчанию",
   "settings.defaultLibraryPermissions": "Разрешения библиотеки по умолчанию",
   "settings.mediaServerPathMappings": "Сопоставление путей",
@@ -1173,6 +1261,8 @@ const ru: LocaleDictionary = {
   "settings.downloadClientPriority": "Приоритет",
   "settings.downloadClientRemoveCompleted": "Удалять завершённые",
   "settings.downloadClientRemoveFailed": "Удалять неудачные",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "«Удалять неудачные» относится к загрузкам, завершившимся ошибкой в клиенте. Торрент, импорт которого Scryer отклонил, всегда обрабатывается как импортированный: он раздаётся до цели, после чего клиент его удаляет.",
   "settings.downloadClientUseSslInfo":
     "Использовать SSL/TLS при подключении к этому клиенту загрузки.",
   "settings.downloadClientRemoveCompletedInfo":
@@ -1299,6 +1389,10 @@ const ru: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Шаблон папки содержит недопустимый символ файловой системы: {{character}}",
   "settings.renameTemplateLabel": "Шаблон переименования",
+  "settings.renameTemplateNoExtensionTitle": "Сохранить без {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "В этом шаблоне переименования нет токена {ext}. Scryer добавит расширение каждого файла в конец имени.",
+  "settings.renameTemplateNoExtensionConfirm": "Всё равно сохранить",
   "settings.renameTemplatePlaceholder": "Заполнитель",
   "settings.renameTemplateHelp":
     "Токены шаблона основаны на метаданных (например: {title}, {year}, {quality}, {ext}).",
@@ -1419,6 +1513,11 @@ const ru: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Персонализированные рекомендации",
   "settings.personalizedDiscoveryHelp":
     "Отправляет сводку вашей библиотеки в шлюз метаданных, чтобы рекомендации могли предлагать тайтлы на основе того, что у вас есть. Отключите, чтобы ограничить рекомендации только публичными лентами.",
+  "settings.disabledFacetsLabel": "Типы медиа",
+  "settings.disabledFacetsHelp":
+    "Отключите тип медиа для всех. Он пропадёт из навигации, подборок, поиска и списков выбора, а его поиски, сканирования и обновления остановятся. Уже добавленные тайтлы остаются доступны.",
+  "settings.disabledFacetsLastEnabled":
+    "Хотя бы один тип медиа должен оставаться включённым.",
   "settings.srrdbFilenameRecoveryLabel":
     "Восстанавливать запутанные имена файлов через srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
@@ -1719,6 +1818,13 @@ const ru: LocaleDictionary = {
   "title.contextTitleList": "Список материалов",
   "title.contextListDisclosure": "Список",
   "title.showTitleList": "Показать список",
+  "title.sortBy": "Сортировка",
+  "title.sortAscending": "По возрастанию",
+  "title.sortDescending": "По убыванию",
+  "title.sameFilmAsSeriesMovie": "Также отслеживается как фильм сериала {{titles}}.",
+  "title.sameFilmAsMovieTitle": "Также отслеживается как фильм: {{titles}}.",
+  "title.sameFilmBeforeAdd": "Уже отслеживается как фильм сериала {{titles}}.",
+  "title.sameFilmMarker": "Также отслеживается как фильм",
   "title.hideTitleList": "Скрыть список",
   "title.contextEmptyTitle": "Материал не выбран",
   "title.contextEmptyBody": "Нет данных для предварительного просмотра.",
@@ -1800,8 +1906,8 @@ const ru: LocaleDictionary = {
   "title.table.runtime": "Продолжительность",
   "title.table.avgRuntime": "Средняя продолжительность",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} эпизодов",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} эпизодов (отслеживается: {{monitored}})",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} эпизодов (всего: {{total}})",
   "title.table.status": "Статус",
   "title.table.root": "Корневая папка",
   "title.table.popularity": "Популярность",
@@ -1919,6 +2025,10 @@ const ru: LocaleDictionary = {
     "Ошибка в {{count}} индексаторах: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "Пропущено индексаторов: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "Индексаторов, опрошенных частично из-за лимита запросов: {{count}} ({{names}})",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: следующий запрос возможен через {{seconds}} с",
   "title.noReleasesFound": "Для {{name}} релизы не найдены.",
   "title.searchNeedsDownloadClientTitle":
     "Для поиска требуется клиент загрузки",
@@ -2225,6 +2335,20 @@ const ru: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Назначить этому файлу несколько эпизодов",
   "queue.manualImportApplySuggestions": "Применить предложения ко всем",
+  "queue.manualImportApplySuggestionsSelected": "Применить предложения к выбранным",
+  "queue.manualImportSelectAll": "Выбрать все",
+  "queue.manualImportSelectNone": "Снять выбор",
+  "queue.manualImportSelectInvert": "Инвертировать выбор",
+  "queue.manualImportSelectMatching": "Выбрать совпадающие",
+  "queue.manualImportSelectMatchingLabel": "Имя файла содержит…",
+  "queue.manualImportSelectedCount": "Выбрано: {{count}}",
+  "queue.manualImportSkipSelected": "Пропустить выбранные",
+  "queue.manualImportAssignSelected": "Назначить цель выбранным…",
+  "queue.manualImportVerdict.UPGRADE": "Улучшение",
+  "queue.manualImportVerdict.EQUAL": "То же качество",
+  "queue.manualImportVerdict.DOWNGRADE": "Ухудшение",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Новый файл",
+  "queue.manualImportVerdictEstimated": "оценка",
   "queue.removeFailed": "Удалить ошибочные",
   "queue.manualImportTooltip":
     "Ручной импорт доступен для элементов очереди, требующих внимания.",
@@ -2532,6 +2656,10 @@ const ru: LocaleDictionary = {
     "Сбросить MFA для пользователя {{name}}? При следующем входе ему потребуется повторно настроить MFA.",
   "settings.loginEnabled": "Вход разрешён",
   "settings.loginDisabled": "Вход запрещён",
+  "settings.accountOrigin.scryer": "Учётная запись Scryer",
+  "settings.accountOrigin.mediaServerLogin": "Создана при входе через {{provider}}",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Создана при входе через медиасервер",
+  "settings.linkedMediaServer": "Связана с {{provider}}",
   "settings.enableLogin": "Разрешить вход",
   "settings.disableLogin": "Запретить вход",
   "settings.disableLoginConfirm":
@@ -3302,6 +3430,88 @@ const ru: LocaleDictionary = {
   "mediaFile.subtitles": "Субтитры",
   "mediaFile.subtitleCount": "{{count}} субтитров",
   "mediaFile.delete": "Удалить файл",
+  "mediaFile.markBad": "Пометить как плохое",
+  "mediaFile.markBadFile": "Пометить файл {{file}}",
+  "mediaFile.numberedVersion": "Версия {{number}}",
+  "mediaFile.markBadDescription":
+    "Сообщить, что {{file}} плохой. Дальше решают правила отчётов или оператор.",
+  "mediaFile.markBadOnly": "Только пометить",
+  "mediaFile.markBadOnlyHint":
+    "Оставить файл на диске и пометить его как плохой, чтобы тот же файл больше не импортировался для этого тайтла.",
+  "mediaFile.markBadRecycleSearch": "Пометить, переместить и искать замену",
+  "mediaFile.markBadRecycleSearchHint":
+    "Также попросить оператора переместить файл в корзину и найти замену. Правила могут пометить файл плохим, но никогда не удаляют его.",
+  "mediaFile.markBadReason": "Что не так с этим файлом?",
+  "mediaIssue.reasonLabel": "Причина",
+  "mediaIssue.reason.corrupted":
+    "Не воспроизводится или воспроизводится с повреждениями",
+  "mediaIssue.reason.wrongContent": "Не тот фильм или эпизод",
+  "mediaIssue.reason.wrongLanguage": "Не тот язык аудио",
+  "mediaIssue.reason.audioOutOfSync": "Звук не синхронизирован",
+  "mediaIssue.reason.poorQuality": "Намного хуже заявленного качества",
+  "mediaIssue.reason.other": "Другое",
+  "mediaFile.submitBadReport": "Отправить жалобу",
+  "mediaFile.markBadSubmitted": "Сообщение о плохом медиа отправлено",
+  "mediaFile.markBadSubmitFailed": "Не удалось отправить сообщение",
+  "mediaIssue.reviewTitle": "Проверка проблем с медиа",
+  "mediaIssue.reviewHint":
+    "Проверяйте отчёты о файлах в каждой библиотеке. Файл, помеченный плохим, появляется в заблокированных релизах тайтла; удаление записи там снимает пометку.",
+  "mediaIssue.unmarkHint":
+    "Одобрение помечает файл плохим в списке блокировки тайтла. Чтобы снять пометку, удалите запись из заблокированных релизов тайтла.",
+  "mediaIssue.library": "Библиотека",
+  "mediaIssue.reports": "Сообщения",
+  "mediaIssue.reviewStatus": "Состояние проверки",
+  "mediaIssue.pending": "Ожидает",
+  "mediaIssue.approved": "Одобрено",
+  "mediaIssue.rejected": "Отклонено",
+  "mediaIssue.canceled": "Отменено",
+  "mediaIssue.allReports": "Все сообщения",
+  "mediaIssue.noPending": "Нет ожидающих сообщений",
+  "mediaIssue.noReports": "Сообщения отсутствуют",
+  "mediaIssue.reportsFailed": "Не удалось загрузить сообщения",
+  "mediaIssue.previousPage": "Предыдущая",
+  "mediaIssue.nextPage": "Следующая",
+  "mediaIssue.viewReport": "Просмотреть сообщение",
+  "mediaIssue.hideReport": "Скрыть сообщение",
+  "mediaIssue.titleId": "Тайтл: {{id}}",
+  "mediaIssue.file": "Файл",
+  "mediaIssue.episodes": "Эпизоды",
+  "mediaIssue.noEpisodeAssociations": "Нет привязки к эпизодам",
+  "mediaIssue.requestedAction": "Запрошенное действие",
+  "mediaIssue.approvedAction": "Одобренное действие",
+  "mediaIssue.executionError": "Ошибка выполнения",
+  "mediaIssue.notStarted": "Не начато",
+  "mediaIssue.blocked": "Помечен плохим",
+  "mediaIssue.recycling": "Перемещение",
+  "mediaIssue.recycleFailed": "Перемещение не выполнено",
+  "mediaIssue.noEligibleRelease": "Нет подходящего релиза",
+  "mediaIssue.downloadQueued": "Загрузка поставлена в очередь",
+  "mediaIssue.replacementImported": "Замена импортирована",
+  "mediaIssue.searching": "Поиск замены",
+  "mediaIssue.approveMarkOnly": "Одобрить только пометку",
+  "mediaIssue.approveMarkOnlyHint":
+    "Пометить файл плохим в списке блокировки тайтла и оставить его на диске. Тот же файл больше не импортируется для этого тайтла.",
+  "mediaIssue.reviewRecycle": "Проверить перемещение и поиск",
+  "mediaIssue.approveRecycle": "Одобрить перемещение и поиск",
+  "mediaIssue.hardLinkedPair":
+    "Этот файл связан жёсткой ссылкой со своей копией в папке загрузки: оба имени указывают на одни и те же данные. Место освободится, только если оба имени попадут в корзину. Переместите в корзину оба имени или отмените.",
+  "mediaIssue.recycleBothNames": "Переместить оба имени в корзину",
+  "mediaIssue.approveRecycleHint":
+    "Проверьте файлы ниже. Одобрение помечает файл плохим, перемещает его в корзину вместе с копией, оставшейся в папке загрузки, и ищет замену.",
+  "mediaIssue.previewFingerprint": "Отпечаток проверенного файла",
+  "mediaIssue.typeConfirmation":
+    "Введите DELETE для подтверждения перемещения.",
+  "mediaIssue.unexpectedPreviewScope":
+    "Предварительный просмотр затрагивает неожидаемый набор файлов.",
+  "mediaIssue.reviewSaved": "Проверка сохранена",
+  "mediaIssue.recycleUnavailable": "Перемещение недоступно",
+  "mediaIssue.remediationUnavailable":
+    "Требуется отдельное разрешение для перемещения и поиска",
+  "mediaIssue.reportedFileChanged":
+    "Заявленный файл изменился; повторите проверку",
+  "mediaIssue.reject": "Отклонить",
+  "mediaIssue.rejectHint":
+    "Отклонить отчёт, не помечая файл и не изменяя файлы.",
   "mediaFile.pathNotRecorded": "Путь не сохранён",
   "subtitle.batchProgress":
     "Поиск субтитров: обработано {{completed}} из {{total}}.",
@@ -3604,6 +3814,8 @@ const ru: LocaleDictionary = {
   "status.editingRule": "Редактирование правила {{name}}",
   "status.deletingRule": "Удалить правило {{name}}?",
   "status.mediaServerCreated": "Подключение к медиасерверу сохранено.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Подключение к медиасерверу сохранено, но эти подписки на обновление библиотеки не созданы: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Подключение к медиасерверу обновлено.",
   "status.mediaServerDeleted": "Медиасервер {{name}} удалён.",
   "status.plexServersDiscovered": "Серверы Plex загружены.",
@@ -3661,6 +3873,14 @@ const ru: LocaleDictionary = {
   "profile.localAccount": "Локальная",
   "profile.externalAccount": "Внешняя",
   "profile.appearance": "Внешний вид",
+  "profile.facetVisibility": "Типы медиа",
+  "profile.facetVisibilityDescription":
+    "Выберите, какие типы медиа показывать в навигации, подборках, поиске и списках выбора. Уже добавленные тайтлы остаются доступны.",
+  "profile.facetVisibilityLastVisible":
+    "Хотя бы один тип медиа должен оставаться видимым.",
+  "profile.facetVisibilityDisabledByAdmin":
+    "Администратор отключил этот тип медиа для всех.",
+  "profile.facetVisibilitySaved": "Настройка типов медиа сохранена.",
   "profile.appearanceDescription":
     "Настройте внешний вид Scryer для своей учётной записи.",
   "profile.highlightColor": "Цвет выделения",
@@ -3739,7 +3959,7 @@ const ru: LocaleDictionary = {
   "profile.linkedAccountConnection": "Подключение",
   "profile.linkedAccountUnknownConnection": "Неизвестное подключение",
   "profile.linkedAccountStatus": "Статус",
-  "profile.linkJellyfinAccount": "Подключить Jellyfin",
+  "profile.linkJellyfinAccount": "Подключить Jellyfin / Silo",
   "profile.linkPlexAccount": "Подключить Plex",
   "profile.linkAccountConnection": "Подключение",
   "profile.linkAccountUsername": "Имя пользователя",
@@ -3775,7 +3995,7 @@ const ru: LocaleDictionary = {
     "Слишком много попыток входа. Подождите немного и повторите попытку.",
   "auth.signInWithScryerPassword": "Войти с помощью пароля Scryer",
   "auth.signInWithPasskey": "Войти с помощью ключа доступа",
-  "auth.signInWithJellyfin": "Войти через Jellyfin",
+  "auth.signInWithJellyfin": "Войти через Jellyfin / Silo",
   "auth.jellyfinFailed": "Не удалось выполнить вход через Jellyfin.",
   "auth.signInWithPlex": "Войти через Plex",
   "auth.plexFailed": "Не удалось выполнить вход через Plex.",
@@ -3973,7 +4193,7 @@ const ru: LocaleDictionary = {
   "settings.notificationJellyfinChannelHint":
     "Сопоставления путей должны связывать папки Scryer с путями к папкам, доступным Jellyfin. Оставьте их пустыми, если оба сервиса используют одинаковые пути.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Завершение импорта — стандартный триггер для запуска сканирования Jellyfin после импорта. Здесь доступны только события Jellyfin, способные обновить библиотеку.",
+    "Завершение импорта — стандартный триггер для запуска сканирования Jellyfin / Silo после импорта. Здесь доступны только события Jellyfin / Silo, способные обновить библиотеку.",
   "settings.notificationEvent.grab": "Релиз получен",
   "settings.notificationEvent.download": "Ошибка загрузки",
   "settings.notificationEvent.upgrade": "Обновление импортировано",
@@ -4420,6 +4640,16 @@ const ru: LocaleDictionary = {
   "history.noMore": "Больше событий нет",
   "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Загрузить ещё",
+  "history.placement": "Размещение",
+  "history.placementHardLink": "Жёсткая ссылка",
+  "history.placementCopy": "Скопирован",
+  "history.placementSymlink": "Символическая ссылка",
+  "history.placementRenamed": "Перемещён на место",
+  "history.placementAlreadyPresent": "Уже в библиотеке",
+  "history.linkFallbackFailed": "Скопирован, так как жёсткая ссылка не удалась",
+  "history.linkFallbackNotPossible": "Скопирован, так как жёсткая ссылка здесь невозможна",
+  "history.linkFallbackUnverifiable": "Скопирован, так как жёсткую ссылку не удалось проверить",
+  "history.linkFallbackError": "ошибка {{code}}",
   "convenience.title": "Упрощённые правила",
   "convenience.requiredAudioLabel": "Обязательные языки аудиодорожек",
   "convenience.requiredAudioHelp":
@@ -4558,6 +4788,12 @@ const ru: LocaleDictionary = {
     "Восстановить {{count}} выбранный файл в исходное расположение.",
   "settings.recycleBinRestoreDescriptionOther":
     "Восстановить {{count}} выбранных файлов в исходные расположения.",
+  "settings.recycleBinRestoreBadFileOne":
+    "1 элемент — файл, помеченный плохим для своего тайтла.",
+  "settings.recycleBinRestoreBadFileOther":
+    "Элементов, помеченных плохими для своих тайтлов: {{count}}.",
+  "settings.recycleBinRestoreClearBadFiles":
+    "Всё равно восстановить и снять пометку. Нужно право управлять этими тайтлами.",
   "settings.recycleBinDeleteSelectedConfirmOne":
     "Безвозвратно удалить {{count}} выбранный файл из корзины? Это действие нельзя отменить.",
   "settings.recycleBinDeleteSelectedConfirmOther":
@@ -5617,6 +5853,35 @@ const ru: LocaleDictionary = {
     "Правила задали разные значения одного и того же, поэтому решает человек.",
   "requests.fallbackShapingInvalid":
     "Правила одобрили бы запрос, но заданное ими значение к нему неприменимо, поэтому решает человек.",
+  "requests.fallbackReportConflict":
+    "Правила отчётов расходятся во мнении, поэтому решает человек.",
+  "settings.refReqSectionReport":
+    "— Отчёт о плохом файле, который решает правило отчётов; отсутствует для запроса медиа",
+  "settings.refReqReportReason":
+    "corrupted, wrong_content, wrong_language, audio_out_of_sync, poor_quality или other",
+  "settings.refReqReportRemediation":
+    "Что просил автор отчёта: mark_bad или recycle_and_search",
+  "settings.refReqReportProvenance":
+    "grabbed, если файл получен из известного захвата, иначе unknown",
+  "settings.refReqReportHasDetails": "Описал ли автор отчёта проблему",
+  "settings.refReqReportTitleId": "Тайтл файла из отчёта",
+  "settings.refReqReportMediaFileId": "Файл из отчёта; пути не раскрываются",
+  "settings.refReqReportAffectedEpisodeIds": "Эпизоды, которые содержит файл",
+  "settings.refReqReportAffectedSeriesMovieLinkIds":
+    "Связи сериала с фильмом, которые обслуживает файл",
+  "settings.refReqSectionReportFacts":
+    "— Что Scryer знает об авторе отчёта и медиа",
+  "settings.refReqSectionReportObservations":
+    "— Известен ли каждый факт отчёта",
+  "settings.refReqReportFactsReporterRequestedMedia":
+    "Истина, если одобренный запрос автора отчёта создал тайтл и охватил медиа из отчёта",
+  "settings.refReqReportFactsReporterRequestedMediaValue":
+    "Значение факта, когда оно известно",
+  "settings.requestPreviewReportReview":
+    "Этот пример отчёта ушёл бы на проверку.",
+  "settings.requestPreviewReportReject": "Этот пример отчёта был бы отклонён.",
+  "settings.requestPreviewReportMarkBad":
+    "Этот пример отчёта пометил бы файл плохим. Запрошенные удаление и поиск всё равно ждали бы оператора.",
   "requests.preflightReason": "Причина: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer не смог прочитать всё об этом тайтле, поэтому решение примет человек.",
@@ -6372,6 +6637,13 @@ const ru: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "Пауза после недавних ошибок",
   "indexerSearch.skipReason.backedOffUntil": "Пауза до {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Не поддерживает текстовый поиск",
+  "indexerSearch.skipReason.queryBudget": "Превышен лимит запросов",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Превышен лимит запросов до {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Превышен лимит запросов, повторный запрос через {{seconds}} с",
+  "indexerSearch.queryBudget.partlySearched":
+    "Опрошен частично: лимит запросов остановил оставшиеся запросы. Результаты отправленных запросов сохранены.",
   "indexerSearch.health.retryFailed": "Повторить неудачные",
   "indexerSearch.refine.title": "Уточнить",
   "indexerSearch.refine.reset": "Сбросить",
@@ -7064,6 +7336,8 @@ const ru: LocaleDictionary = {
     "Определите хотя бы одно действие, например unmonitor, delete_files или add_tags, чтобы правило могло что-то делать.",
   "error.ruleActionHeadFunction":
     "Действие нельзя записать как функцию. Запишите его как правило.",
+  "error.ruleMixesReportAndRequestHeads":
+    "Правило решает либо запросы, либо отчёты о плохих файлах, но не то и другое. Перенесите заголовки отчётов (mark_bad, reject_report) в отдельное правило.",
   "error.ruleForeignDataReference":
     "Это правило читает data вне своего пакета. Используйте input.",
   "error.ruleWithTargetNotAllowed":
@@ -7285,6 +7559,8 @@ const ru: LocaleDictionary = {
   "error.fallback.failedToRestartProwlarrDiscovery":
     "Не удалось перезапустить обнаружение Prowlarr",
   "error.fallback.failedToSave": "Не удалось сохранить",
+  "error.fallback.failedToUpdateFacetVisibility":
+    "Не удалось обновить показываемые типы медиа.",
   "error.fallback.failedToUpdateSponsorPreference":
     "Не удалось обновить настройку Sponsor.",
   "error.fallback.importFailed": "Не удалось выполнить импорт",
@@ -10997,6 +11273,12 @@ const ru: LocaleDictionary = {
     "Набор доверенных сертификатов должен содержать сертификаты X.509 в кодировке PEM.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Набор доверенных сертификатов может содержать только блоки PEM сертификатов X.509.",
+  "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
+    "Хотя бы один тип медиа должен оставаться видимым.",
+  "error.reason.SETTINGS_ALL_FACETS_DISABLED":
+    "Хотя бы один тип медиа должен оставаться включённым.",
+  "error.reason.SETTINGS_FACET_DISABLED":
+    "Этот тип медиа отключён на этом сервере.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "В настройках столбцов таблицы один и тот же столбец указан несколько раз.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
@@ -11330,6 +11612,8 @@ const ru: LocaleDictionary = {
     "Выберите и сезон, и эпизод.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "Поиск фильма сериала не может включать сезон или эпизод.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "Этот поиск принимает тайтл, а не произвольный текст. Для поиска по тексту запустите интерактивный поиск.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Выберите тайтл для поиска релизов.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":
@@ -11593,6 +11877,9 @@ const ru: LocaleDictionary = {
   "dashboard.storageFree": "Свободно: {{size}}",
   "dashboard.storageUnavailable": "Данные об использовании недоступны",
   "dashboard.storageUsage": "{{used}}/{{total}} ТБ",
+  "dashboard.storageLibrarySize": "{{size}} в этой библиотеке",
+  "dashboard.storageLibraryUsageHint":
+    "Библиотека занимает {{library}} ТБ; на томе занято {{used}} ТБ",
   "dashboard.storageLegend": "В норме · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "МАЛО",
   "dashboard.tagCrit": "КРИТ",
@@ -12039,6 +12326,11 @@ const ru: LocaleDictionary = {
   "title.clearBlockedRelease": "Убрать {{releaseName}} из списка блокировки",
   "title.clearBlockedReleaseHint":
     "Убрать этот релиз из списка блокировки, чтобы его снова можно было добавить в загрузку",
+  "title.markedBadFile": "Помечен плохим",
+  "title.badFileEntry": "Плохой файл ({{size}})",
+  "title.unmarkBadFile": "Снять пометку с плохого файла {{releaseName}}",
+  "title.unmarkBadFileHint":
+    "Снять пометку, чтобы тот же файл снова можно было импортировать. Отчёт остаётся одобренным.",
   "title.bulkRenameTitle": "Переименовать выбранные тайтлы",
   "title.bulkRenameDescription":
     "Просмотрите и примените переименования для выбранных тайтлов ({{count}}).",
@@ -12654,6 +12946,10 @@ const ru: LocaleDictionary = {
   "history.titleMoved": "Перемещён",
   "history.seedingStarted": "Сидирование",
   "history.seedingCompleted": "Сидирование завершено",
+  "history.subtitleDownloaded": "Субтитры загружены",
+  "history.subtitleFailed": "Ошибка субтитров",
+  "history.subtitleDeleted": "Субтитры удалены",
+  "history.subtitleBlocklisted": "Субтитры заблокированы",
   "indexerErrors.title": "История ошибок индексаторов",
   "indexerErrors.scopedTitle": "{{indexer}} — история ошибок",
   "indexerErrors.history": "История ошибок",
@@ -14464,6 +14760,8 @@ const ru: LocaleDictionary = {
     "Предпочитаемые языки аудио",
   "ruleOutput.request.add_tags": "Добавить теги",
   "ruleOutput.request.notify": "Уведомить",
+  "ruleOutput.request.mark_bad": "Пометить файл плохим",
+  "ruleOutput.request.reject_report": "Отклонить отчёт",
   "ruleOutput.request.notify.placeholder": "Текст уведомления",
   "ruleOutput.request.reasons": "Коды причин",
   "ruleOutput.request.reasons.placeholder": "По одному коду причины в строке",
@@ -14512,10 +14810,10 @@ const ru: LocaleDictionary = {
     "Правила оценивают релизы, чтобы Scryer выбирал нужные вам и пропускал ненужные.",
   "tours.onboarding.mediaServers.title": "Медиасерверы",
   "tours.onboarding.mediaServers.body":
-    "Подключите Jellyfin, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
+    "Подключите Jellyfin / Silo, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
   "tours.onboarding.notifications.title": "Уведомления",
   "tours.onboarding.notifications.body":
-    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
+    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно. Сервисы добавляются из этой панели «Плагины». Здесь же Jellyfin / Silo, Plex и Emby: сервер обновляется после импорта, только когда его плагин установлен из этой панели, даже если сервер уже подключён в разделе «Медиасерверы».",
   "tours.onboarding.plugins.title": "Плагины",
   "tours.onboarding.plugins.body":
     "Плагины добавляют индексаторы, клиенты загрузки и службы уведомлений. Устанавливайте и обновляйте их здесь.",

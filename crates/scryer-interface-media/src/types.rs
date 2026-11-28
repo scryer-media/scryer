@@ -58,6 +58,88 @@ impl From<scryer_application::FileScoreEvaluationView> for FileScoreEvaluationPa
     }
 }
 
+/// Session or restricted authentication result returned after authentication.
+#[derive(SimpleObject, Clone)]
+pub struct LoginPayload {
+    /// Access token or short-lived MFA-enrollment token; clients must treat it as secret.
+    pub token: String,
+    /// Authenticated user summary without password or credential secrets.
+    pub user: UserPayload,
+    /// Token expiry as a UTC timestamp.
+    pub expires_at: DateTime<Utc>,
+    /// UTC time through which MFA verification remains fresh, or null when not verified.
+    pub mfa_verified_until: Option<DateTime<Utc>>,
+    /// UTC time through which account-security changes may be authorized.
+    pub security_action_verified_until: Option<DateTime<Utc>>,
+    /// True when the token can only complete MFA enrollment.
+    pub mfa_enrollment_required: bool,
+    /// True when the token can only replace an administrator-provided temporary password.
+    pub password_change_required: bool,
+    /// Whether the session was requested to persist.
+    pub persist_session: bool,
+}
+
+/// Result of the operator's first-run authentication decision.
+#[derive(SimpleObject)]
+pub struct InitialAuthenticationPayload {
+    /// Whether the initial authentication decision is durably complete.
+    pub completed: bool,
+    /// Login tokens for password authentication; null when authentication is disabled.
+    pub login: Option<LoginPayload>,
+    /// Whether the saved network choice takes effect only after a restart.
+    pub restart_required_for_bind: bool,
+    /// Whether the network choice was not saved because SCRYER_BIND sets the address.
+    pub bind_ignored_because_pinned: bool,
+}
+
+/// Result of completing MFA enrollment during login.
+#[derive(SimpleObject, Clone)]
+pub struct LoginMfaEnrollmentCompletePayload {
+    /// Updated TOTP status without the shared secret.
+    pub status: TotpStatusPayload,
+    /// Newly generated one-time recovery codes.
+    pub recovery_codes: Vec<String>,
+    /// Authenticated login payload issued after enrollment completes.
+    pub login: LoginPayload,
+}
+
+/// Result of completing passkey enrollment during a restricted login enrollment session.
+#[derive(SimpleObject, Clone)]
+pub struct LoginPasskeyEnrollmentCompletePayload {
+    /// Registered passkey summary.
+    pub passkey: PasskeySummaryPayload,
+    /// Authenticated login payload issued after enrollment completes.
+    pub login: LoginPayload,
+}
+
+/// User summary with authorization and credential-presence flags, never credential values.
+#[derive(SimpleObject, Clone)]
+#[graphql(complex)]
+pub struct UserPayload {
+    /// ID of the user.
+    pub id: ID,
+    /// Login username.
+    pub username: String,
+    /// Whether password or external login is enabled.
+    pub login_enabled: bool,
+    /// Whether this is the default administrator account.
+    pub is_default_admin: bool,
+    /// Whether a password is configured, without revealing it.
+    pub has_password: bool,
+    /// Whether a local password must be replaced before the next local-password session is full.
+    pub password_change_required: bool,
+    /// Whether MFA is configured, without revealing its secret.
+    pub has_mfa: bool,
+    /// Whether a passkey is configured.
+    pub has_passkey: bool,
+    /// Local or externally provisioned account origin.
+    pub account_kind: UserAccountKindValue,
+    /// Application-wide permissions granted to the user.
+    pub app_permissions: Vec<AppPermissionValue>,
+    /// Library-specific permission grants.
+    pub library_permissions: Vec<UserLibraryPermissionGrantPayload>,
+}
+
 #[derive(SimpleObject, Clone)]
 #[graphql(complex)]
 /// Catalog metadata, monitoring settings, and media identity for a title.
@@ -476,6 +558,28 @@ pub struct MovieEntityPayload {
     pub anidb_id: Option<String>,
     /// Aggregated ratings cached during the movie's latest metadata hydration.
     pub ratings: TitleRatingPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One film tracked twice: as a series movie of a show and as a movie title,
+/// matched by TMDB movie id.
+pub struct SameFilmPairingPayload {
+    /// TMDB movie id both sides carry.
+    pub tmdb_id: String,
+    /// Series-movie link that tracks the film inside the show.
+    pub series_movie_link_id: ID,
+    /// Show that holds the series movie.
+    pub series_title_id: ID,
+    /// Name of the show.
+    pub series_title_name: String,
+    /// Facet of the show.
+    pub series_title_facet: MediaFacetValue,
+    /// Movie title that tracks the same film, or null before the movie is added.
+    pub movie_title_id: Option<ID>,
+    /// Name of the movie title, or null before the movie is added.
+    pub movie_title_name: Option<String>,
+    /// Facet of the movie title, or null before the movie is added.
+    pub movie_title_facet: Option<MediaFacetValue>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -954,6 +1058,177 @@ pub struct FixTitleMatchPayload {
     pub library_scan: Option<LibraryScanSummaryPayload>,
     /// Non-fatal warnings produced while repairing the match.
     pub warnings: Vec<String>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Review state of a media issue.
+pub enum MediaIssueStatusValue {
+    /// Awaiting a decision.
+    Pending,
+    /// The report was confirmed.
+    Approved,
+    /// The report was declined.
+    Rejected,
+    /// Review ended without approval or rejection.
+    Canceled,
+}
+
+impl From<scryer_domain::MediaIssueStatus> for MediaIssueStatusValue {
+    fn from(value: scryer_domain::MediaIssueStatus) -> Self {
+        match value {
+            scryer_domain::MediaIssueStatus::Pending => Self::Pending,
+            scryer_domain::MediaIssueStatus::Approved => Self::Approved,
+            scryer_domain::MediaIssueStatus::Rejected => Self::Rejected,
+            scryer_domain::MediaIssueStatus::Canceled => Self::Canceled,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Durable execution state for an approved media issue.
+pub enum MediaIssueExecutionStatusValue {
+    /// No remediation has started.
+    None,
+    /// The file is marked bad.
+    Blocked,
+    /// The reviewed file is being moved to the recycle bin.
+    Recycling,
+    /// The file could not be recycled.
+    RecycleFailed,
+    /// The search did not find an eligible replacement.
+    NoEligibleRelease,
+    /// A replacement download is queued.
+    DownloadQueued,
+    /// A file not marked bad was imported for the report's media after the
+    /// report last changed.
+    ReplacementImported,
+    /// A replacement search is underway.
+    Searching,
+}
+
+impl From<scryer_domain::MediaIssueExecutionStatus> for MediaIssueExecutionStatusValue {
+    fn from(value: scryer_domain::MediaIssueExecutionStatus) -> Self {
+        match value {
+            scryer_domain::MediaIssueExecutionStatus::None => Self::None,
+            scryer_domain::MediaIssueExecutionStatus::Blocked => Self::Blocked,
+            scryer_domain::MediaIssueExecutionStatus::Recycling => Self::Recycling,
+            scryer_domain::MediaIssueExecutionStatus::RecycleFailed => Self::RecycleFailed,
+            scryer_domain::MediaIssueExecutionStatus::NoEligibleRelease => Self::NoEligibleRelease,
+            scryer_domain::MediaIssueExecutionStatus::DownloadQueued => Self::DownloadQueued,
+            scryer_domain::MediaIssueExecutionStatus::ReplacementImported => {
+                Self::ReplacementImported
+            }
+            scryer_domain::MediaIssueExecutionStatus::Searching => Self::Searching,
+        }
+    }
+}
+
+#[derive(InputObject, Clone)]
+/// Report one existing media file as bad.
+pub struct SubmitMediaIssueInput {
+    /// ID of the existing library file being reported.
+    pub media_file_id: ID,
+    /// Reason for reporting the file: `corrupted`, `wrong_content`,
+    /// `wrong_language`, `audio_out_of_sync`, `poor_quality` or `other`.
+    /// `other` needs details.
+    pub reason_code: String,
+    /// Optional explanation from the reporter.
+    pub details: Option<String>,
+    /// Requested action; reporting does not authorize recycling.
+    pub remediation: MediaIssueRemediationValue,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A bad-media report and its review/execution state. Filesystem paths are not exposed.
+pub struct MediaIssuePayload {
+    /// ID of the report.
+    pub id: ID,
+    /// ID of the library where the file was reported.
+    pub library_id: ID,
+    /// ID of the title associated with the reported file.
+    pub title_id: ID,
+    /// ID of the reported file as recorded at submission.
+    pub media_file_id: ID,
+    /// ID of the user who submitted the report.
+    pub reporter_user_id: ID,
+    /// Reason recorded for the report.
+    pub reason_code: String,
+    /// Optional explanation supplied by the reporter.
+    pub details: Option<String>,
+    /// Proposed action, not an authorization.
+    pub remediation: MediaIssueRemediationValue,
+    /// Action explicitly authorized by the final review or policy.
+    pub authorized_remediation: Option<MediaIssueRemediationValue>,
+    /// Current review state.
+    pub status: MediaIssueStatusValue,
+    /// IDs of the episodes associated with the reported file.
+    pub affected_episode_ids: Vec<ID>,
+    /// IDs of series-to-movie links associated with the reported file.
+    pub affected_series_movie_link_ids: Vec<ID>,
+    /// ID of the request-rule decision that explains the outcome, when
+    /// report rules ran.
+    pub rule_decision_id: Option<ID>,
+    /// ID of the title blocklist entry that marks the file bad, while it exists.
+    pub blocklist_entry_id: Option<ID>,
+    /// ID of the user who reviewed the report, if reviewed by a user.
+    pub reviewed_by_user_id: Option<ID>,
+    /// When the report was reviewed, in UTC.
+    pub reviewed_at: Option<DateTime<Utc>>,
+    /// Current execution state of the authorized action.
+    pub execution_status: MediaIssueExecutionStatusValue,
+    /// Stable reason code for an execution failure, when recorded.
+    pub execution_error_code: Option<String>,
+    /// When the report was submitted, in UTC.
+    pub created_at: DateTime<Utc>,
+    /// When the report was last updated, in UTC.
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MediaIssuePayload {
+    pub fn from_domain(issue: scryer_domain::MediaIssue) -> async_graphql::Result<Self> {
+        let parse_timestamp = |value: &str, field: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .map(|value| value.with_timezone(&Utc))
+                .map_err(|error| {
+                    async_graphql::Error::new(format!("invalid {field} timestamp: {error}"))
+                })
+        };
+        Ok(Self {
+            id: issue.id.into(),
+            library_id: issue.library_id.into(),
+            title_id: issue.title_id.into(),
+            media_file_id: issue.media_file_id.into(),
+            reporter_user_id: issue.reporter_user_id.into(),
+            reason_code: issue.reason.as_str().to_string(),
+            details: issue.details,
+            remediation: issue.remediation.into(),
+            authorized_remediation: issue.authorized_remediation.map(Into::into),
+            status: issue.status.into(),
+            affected_episode_ids: issue
+                .affected_episode_ids
+                .into_iter()
+                .map(ID::from)
+                .collect(),
+            affected_series_movie_link_ids: issue
+                .affected_series_movie_link_ids
+                .into_iter()
+                .map(ID::from)
+                .collect(),
+            rule_decision_id: issue.rule_decision_id.map(ID::from),
+            blocklist_entry_id: issue.blocklist_id.map(ID::from),
+            reviewed_by_user_id: issue.reviewed_by_user_id.map(ID::from),
+            reviewed_at: issue
+                .reviewed_at
+                .map(|value| parse_timestamp(&value, "media issue reviewed_at"))
+                .transpose()?,
+            execution_status: issue.execution_status.into(),
+            execution_error_code: issue.execution_error_code,
+            created_at: parse_timestamp(&issue.created_at, "media issue created_at")?,
+            updated_at: parse_timestamp(&issue.updated_at, "media issue updated_at")?,
+        })
+    }
 }
 
 #[derive(SimpleObject, Clone)]

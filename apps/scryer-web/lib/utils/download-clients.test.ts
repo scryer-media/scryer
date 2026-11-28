@@ -5,11 +5,14 @@ import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
   buildDownloadClientTypeOptions,
+  defaultDownloadClientConfigValuesForFields,
+  downloadClientConfigFieldValue,
   downloadClientConnectionTestBlocker,
   isFileBackedDownloadClientConfigField,
   isHostlessDownloadClientType,
   normalizeDownloadClientDraft,
 } from "./download-clients.ts";
+import { providerConfigValuesToRecord } from "./provider-config.ts";
 import type { ConfigFieldDef, DownloadClientDraft } from "../types/index.ts";
 
 function configField(
@@ -125,6 +128,116 @@ test("blank optional descriptor secrets are omitted", () => {
   );
 
   assert.equal(values.has("password"), false);
+});
+
+test("a cleared saved descriptor text field is sent as an empty string and shows empty again", () => {
+  const fields = [
+    configField({ key: "category", defaultValue: "synthetic-default" }),
+    configField({ key: "directory", fieldType: "PATH" }),
+    configField({ key: "tag", defaultValue: "synthetic-tag" }),
+    configField({ key: "limit", fieldType: "NUMBER", defaultValue: "5" }),
+    configField({ key: "token", fieldType: "PASSWORD" }),
+  ];
+  const values = valuesByKey(
+    buildDownloadClientConfigValues(
+      draft({
+        clientType: "transmission",
+        configValues: {
+          category: "",
+          directory: "  ",
+          limit: "",
+          token: "",
+        },
+      }),
+      fields,
+      new Set(),
+      { category: "synthetic-saved", directory: "/synthetic/saved", limit: "3" },
+    ),
+  );
+
+  assert.deepEqual(values.get("category"), {
+    key: "category",
+    stringValue: "",
+  });
+  assert.deepEqual(values.get("directory"), {
+    key: "directory",
+    stringValue: "",
+  });
+  // Never saved: not sent, so the plugin keeps its default.
+  assert.equal(values.has("tag"), false);
+  // Numbers and secrets keep their own handling.
+  assert.equal(values.has("limit"), false);
+  assert.equal(values.has("token"), false);
+
+  // Read back, the stored empty value shows empty, not the default; a key
+  // that was never saved still shows the default.
+  const stored = providerConfigValuesToRecord([
+    {
+      key: "category",
+      value: { __typename: "StringConfigValuePayload", stringValue: "" },
+    },
+  ]);
+  const reloaded = draft({ clientType: "transmission", configValues: stored });
+  assert.equal(downloadClientConfigFieldValue(reloaded, fields[0]), "");
+  assert.equal(
+    downloadClientConfigFieldValue(reloaded, fields[2]),
+    "synthetic-tag",
+  );
+});
+
+test("a new client omits blank descriptor fields, defaults filled or not", () => {
+  const fields = [
+    configField({ key: "category" }),
+    configField({
+      key: "priority",
+      fieldType: "SELECT",
+      options: [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+      ],
+    }),
+    configField({ key: "directory", fieldType: "PATH" }),
+    configField({ key: "tag", defaultValue: "synthetic-tag" }),
+  ];
+  const values = valuesByKey(
+    buildDownloadClientConfigValues(
+      draft({
+        clientType: "transmission",
+        configValues: defaultDownloadClientConfigValuesForFields(fields),
+      }),
+      fields,
+    ),
+  );
+
+  assert.equal(values.has("category"), false);
+  assert.equal(values.has("priority"), false);
+  assert.equal(values.has("directory"), false);
+  assert.equal(values.get("tag")?.stringValue, "synthetic-tag");
+});
+
+test("an edit sends empty only for a saved value the operator cleared", () => {
+  const fields = [
+    configField({ key: "category" }),
+    configField({ key: "directory", fieldType: "PATH" }),
+  ];
+  const values = valuesByKey(
+    buildDownloadClientConfigValues(
+      draft({
+        clientType: "transmission",
+        configValues: { category: "", directory: "" },
+      }),
+      fields,
+      new Set(),
+      { category: "synthetic-saved", directory: "" },
+    ),
+  );
+
+  assert.deepEqual(values.get("category"), {
+    key: "category",
+    stringValue: "",
+  });
+  // Saved empty, still empty: nothing changed, nothing sent.
+  assert.equal(values.has("directory"), false);
 });
 
 test("stored descriptor secrets can be explicitly cleared", () => {
@@ -303,5 +416,67 @@ test("the built-in HTTP downloader is offered with its own settings and no addre
   assert.deepEqual(
     values.find((value) => value.key === "max_concurrent_downloads"),
     { key: "max_concurrent_downloads", intValue: 3 },
+  );
+});
+
+test("TorBox is offered with a token, a download folder and the downloader limits, and no address", () => {
+  const option = buildDownloadClientTypeOptions([]).find(
+    (entry) => entry.value === "torbox",
+  );
+  assert.ok(option, "torbox is a built-in type");
+  assert.ok(isHostlessDownloadClientType("TorBox"));
+  assert.equal(
+    downloadClientConnectionTestBlocker(
+      draft({ clientType: "torbox", host: "", port: "" }),
+    ),
+    null,
+  );
+  const fields = option.configFields ?? [];
+  assert.deepEqual(
+    fields.map((field) => field.key),
+    [
+      "api_key",
+      "download_dir",
+      "cached_only",
+      "max_concurrent_downloads",
+      "max_connections_per_host",
+      "bandwidth_limit_kbps",
+    ],
+  );
+  const cachedOnly = fields.find((field) => field.key === "cached_only");
+  assert.equal(cachedOnly?.fieldType, "BOOL");
+  assert.equal(cachedOnly?.defaultValue, "false");
+
+  const values = buildDownloadClientConfigValues(
+    draft({
+      clientType: "torbox",
+      host: "",
+      port: "",
+      configValues: {
+        api_key: "synthetic-token",
+        download_dir: "/srv/synthetic-downloads",
+        cached_only: "true",
+      },
+    }),
+    fields,
+  );
+  assert.deepEqual(
+    values.find((value) => value.key === "api_key"),
+    { key: "api_key", secretValue: "synthetic-token" },
+  );
+  assert.deepEqual(
+    values.find((value) => value.key === "cached_only"),
+    { key: "cached_only", boolValue: true },
+  );
+  assert.ok(!values.some((value) => value.key === "host"));
+
+  const cleared = buildDownloadClientConfigValues(
+    draft({ clientType: "torbox", configValues: { api_key: "" } }),
+    fields,
+    new Set(["api_key"]),
+  );
+  assert.deepEqual(
+    cleared.find((value) => value.key === "api_key" && "clearSecret" in value),
+    { key: "api_key", clearSecret: true },
   );
 });

@@ -395,6 +395,8 @@ const SERIES_SIDE_PANEL_COLLECTION_FIELDS = `
       episodesOwned
       episodesMonitored
       episodesTotal
+      episodesOnDisk
+      episodesExpected
       episodeRecordsTotal
       createdAt`;
 
@@ -592,6 +594,21 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
       }
     }`;
 
+const SAME_FILM_PAIRING_FIELDS = `
+      tmdbId
+      seriesMovieLinkId
+      seriesTitleId
+      seriesTitleName
+      seriesTitleFacet
+      movieTitleId
+      movieTitleName
+      movieTitleFacet`;
+
+export const seriesMoviesTrackingFilmQuery = `query SeriesMoviesTrackingFilm($tmdbId: String!) {
+  seriesMoviesTrackingFilm(tmdbId: $tmdbId) {${SAME_FILM_PAIRING_FIELDS}
+  }
+}`;
+
 const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     id
     name
@@ -665,6 +682,8 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     createdAt
     collections {${MOVIE_SIDE_PANEL_COLLECTION_FIELDS}
     }
+    sameFilmElsewhere {${SAME_FILM_PAIRING_FIELDS}
+    }
     wantedItems {
       items {${WANTED_ITEM_FIELDS}
       }
@@ -731,6 +750,8 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     }
     seriesMovieLinks {${SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS}
     }
+    sameFilmElsewhere {${SAME_FILM_PAIRING_FIELDS}
+    }
     certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
     }${TITLE_CAST_CREDIT_SELECTION}`;
@@ -795,8 +816,14 @@ const HISTORY_SCORING_FIELDS = `scoring {
   comparisons { fileId episodeIds previousScore delta }
 }`;
 
+const HISTORY_FILE_PLACEMENT_FIELDS = `filePlacements {
+  path placement
+  linkFallback { cause reason osErrorCode }
+}`;
+
 const TITLE_EVENT_FIELDS = `
     ${HISTORY_SCORING_FIELDS}
+    ${HISTORY_FILE_PLACEMENT_FIELDS}
     id
     titleId
     episodeId
@@ -818,7 +845,9 @@ const TITLE_RELEASE_BLOCKLIST_FIELDS = `
     id
     releaseName
     errorMessage
-    attemptedAt`;
+    attemptedAt
+    markedBadFile
+    contentSizeBytes`;
 
 const EXTERNAL_SUBTITLE_FIELDS = `
     id
@@ -1299,6 +1328,14 @@ export const deleteMediaFilePreviewQuery = `query DeleteMediaFilePreview($fileId
   }
 }`;
 
+export const mediaIssueRecyclePreviewQuery = `query MediaIssueRecyclePreview($issueId: ID!) {
+  mediaIssueRecyclePreview(issueId: $issueId) {
+    preview {${DELETE_PREVIEW_FIELDS}
+    }
+    hardLinkReason
+  }
+}`;
+
 export const deleteEpisodeFilesPreviewQuery = `query DeleteEpisodeFilesPreview($input: DeleteEpisodeFilesPreviewInput!) {
   deleteEpisodeFilesPreview(input: $input) {
     preview {${DELETE_PREVIEW_FIELDS}
@@ -1479,6 +1516,7 @@ function interactiveReleaseSearchQueryWith(extraResultFields = ""): string {
       elapsedMs
       failureReason
       failureReasonCode
+      retryAfterSeconds
       rateLimited
       skipReason
       skippedUntil
@@ -1517,6 +1555,9 @@ export const TITLE_LIST_FIELDS = `
     episodesOwned
     episodesMonitored
     episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal
     contentStatus
     metadataLanguage
     metadataLanguageOverride
@@ -1611,7 +1652,10 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
     fields.push(`
     episodesOwned
     episodesMonitored
-    episodesTotal`);
+    episodesTotal
+    episodesOnDisk
+    episodesExpected
+    episodeRecordsTotal`);
   }
   if (projection.runtime) {
     fields.push(`
@@ -1815,6 +1859,7 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     useSeasonFoldersOverride
     useSeasonFolders
     defaultMonitorTypeOverride
+    defaultTitleTags
     qualityProfileIdOverride
     qualityProfileId
     requestQualityProfileIdsOverride
@@ -2543,7 +2588,7 @@ export const acquisitionSearchJobQuery = `query AcquisitionSearchJob($id: ID!) {
   }
 }`;
 
-export const usersQuery = `query Users {
+export const usersQuery = `query Users($includeLinkedMediaServers: Boolean! = false) {
   users {
     id
     username
@@ -2554,6 +2599,7 @@ export const usersQuery = `query Users {
     hasMfa
     hasPasskey
     accountKind
+    linkedMediaServers @include(if: $includeLinkedMediaServers)
     appPermissions
     libraryPermissions {
       libraryId
@@ -3263,8 +3309,15 @@ export const libraryDefaultMovieAvailabilityQuery = `query LibraryDefaultMovieAv
   }
 }`;
 
+export const libraryAnimeMonitorSpecialsQuery = `query LibraryAnimeMonitorSpecials($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    monitorSpecials
+  }
+}`;
+
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    disabledFacets
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
@@ -3298,6 +3351,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    hiddenFacets
     language
     tableColumns {
       deviceClass
@@ -3921,6 +3975,8 @@ export const instanceFeaturesQuery = `query InstanceFeatures {
     apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    disabledFacets
+    viewableFacets
   }
 }`;
 
@@ -4157,6 +4213,7 @@ export const previewRestoreRecycledItemsQuery = `query PreviewRestoreRecycledIte
       id
       originalPath
       destinationOccupied
+      badFileEntryId
     }
   }
 }`;
@@ -4582,6 +4639,36 @@ export const requestRuleDecisionsQuery = `query RequestRuleDecisions($limit: Int
   }
 }`;
 
+export const mediaIssuesQuery = `query MediaIssues($libraryId: ID!, $status: MediaIssueStatusValue, $limit: Int, $offset: Int) {
+  mediaIssues(libraryId: $libraryId, status: $status, limit: $limit, offset: $offset) {
+    id
+    titleId
+    mediaFileId
+    affectedEpisodeIds
+    reasonCode
+    remediation
+    authorizedRemediation
+    status
+    executionStatus
+    executionErrorCode
+    details
+    createdAt
+  }
+}`;
+
+export const mediaIssueRecycleSettingsQuery = `query MediaIssueRecycleSettings {
+  recycleBinSettings {
+    enabled
+    validationError
+  }
+}`;
+
+export const mediaIssueTitleQuery = `query MediaIssueTitle($titleId: ID!) {
+  title(id: $titleId) {
+    name
+  }
+}`;
+
 /// The requester's own pre-flight. It takes the submit input verbatim, which is
 /// what makes the answer it gives the same one the submit path will reach, and
 /// it carries no field a vote could travel in.
@@ -4696,6 +4783,14 @@ export const notificationSubscriptionsQuery = `query NotificationSubscriptions {
 
 export const notificationProviderTypesQuery = `query NotificationProviderTypes {
   notificationProviderTypes {${PROVIDER_TYPE_FIELDS}
+  }
+}`;
+
+/** Installed notification providers and their events, for the media-server refresh offer. */
+export const mediaServerRefreshProvidersQuery = `query MediaServerRefreshProviders {
+  notificationProviderTypes {
+    providerType
+    supportedEvents
   }
 }`;
 
@@ -5158,6 +5253,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
   titleHistory(filter: $filter) {
     items {
       ${HISTORY_SCORING_FIELDS}
+      ${HISTORY_FILE_PLACEMENT_FIELDS}
       id
       titleId
       titleName
@@ -5423,6 +5519,7 @@ export const dashboardStorageQuery = `query DashboardStorage {
     facet
     usedBytes
     totalBytes
+    libraryBytes
   }
 }`;
 
@@ -6380,5 +6477,13 @@ export const libraryFullHashBackfillQuery = `query LibraryFullHashBackfill {
   libraries(permission: MANAGE_LIBRARY) {
     id
     fullHashBackfillEnabled
+  }
+}`;
+
+export const manualImportVerdictsQuery = `query ManualImportVerdicts($selectionId: ID!, $files: [ManualImportVerdictRequestInput!]!) {
+  manualImportVerdicts(selectionId: $selectionId, files: $files) {
+    candidateId
+    episodeIds
+    verdict
   }
 }`;

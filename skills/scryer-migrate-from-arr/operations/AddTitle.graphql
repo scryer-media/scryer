@@ -1,7 +1,9 @@
 # Add one title that has no files yet (the import does not create these).
 # Side effect: confirm the whole batch first. Variables: {"input": {"name": "...",
 #   "facet": "MOVIE"|"SERIES"|"ANIME", "libraryId": "...", "monitored": true, "tags": [],
-#   "tmdbId": 0 | "tvdbId": "..." | "imdbId": "..."}}
+#   "tmdbId": 0 | "tvdbId": "..." | "imdbId": "...",
+#   "options": {"monitorType": "ALL_EPISODES"}}}  (options for SERIES and ANIME only;
+#   without a monitorType a series takes the library's default monitoring)
 mutation AddTitle($input: AddTitleInput!) {
   addTitle(input: $input) {
     reusedExistingTitle

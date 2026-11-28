@@ -1998,6 +1998,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         client_id: "client-1".to_string(),
         client_type: "nzbget".to_string(),
         client_item: DownloadQueueItem {
+            client_job_protocol: None,
             id: Id::new().0,
             title_id: Some(title_id.to_string()),
             episode_id: None,
@@ -2046,6 +2047,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         facet: Some(facet.to_string()),
         source_title: Some(release_title.to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: TitleMatchType::Submission,
@@ -2063,6 +2065,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     }
 }
 
@@ -2072,6 +2075,7 @@ fn build_completed_download(
     category: Option<&str>,
 ) -> CompletedDownload {
     CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "client-1".to_string(),

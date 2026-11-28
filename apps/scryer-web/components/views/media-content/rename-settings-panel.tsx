@@ -5,6 +5,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { Translate } from "@/components/root/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   applyRenameTemplatePreview,
+  renameTemplateWritesToken,
   splitRenameTemplateSegments,
   validateFolderTemplateSyntax,
   validateRenameTemplateSyntax,
@@ -1528,12 +1530,26 @@ export function RenameSettingsPanel({
     [renameTokenDescriptions, templateValue],
   );
 
+  // A file template without the extension token still saves, but only after
+  // the person confirms it. The held submit event is replayed on confirm.
+  const [pendingNoExtensionSubmit, setPendingNoExtensionSubmit] =
+    React.useState<React.FormEvent<HTMLFormElement> | null>(null);
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    if (
+      renameEnabled &&
+      templateValue.trim() &&
+      !renameTemplateWritesToken(templateValue, "ext")
+    ) {
+      event.preventDefault();
+      setPendingNoExtensionSubmit(event);
+      return;
+    }
+    return updateCategoryMediaProfileSettings(event);
+  };
+
   return (
     <>
-      <form
-        onSubmit={updateCategoryMediaProfileSettings}
-        className="space-y-[18px]"
-      >
+      <form onSubmit={handleSubmit} className="space-y-[18px]">
         <RenameSettingsSection
           icon={Folder}
           title={t("settings.folderRenameSectionTitle")}
@@ -1811,6 +1827,25 @@ export function RenameSettingsPanel({
           </Button>
         </div>
       </form>
+      <ConfirmDialog
+        open={pendingNoExtensionSubmit !== null}
+        title={t("settings.renameTemplateNoExtensionTitle")}
+        description={t("settings.renameTemplateNoExtensionDescription")}
+        confirmLabel={t("settings.renameTemplateNoExtensionConfirm")}
+        cancelLabel={t("label.cancel")}
+        contentId="rename-settings-no-extension-dialog"
+        confirmButtonId="rename-settings-no-extension-confirm"
+        cancelButtonId="rename-settings-no-extension-cancel"
+        confirmButtonVariant="default"
+        onConfirm={() => {
+          const event = pendingNoExtensionSubmit;
+          setPendingNoExtensionSubmit(null);
+          if (event) {
+            return updateCategoryMediaProfileSettings(event);
+          }
+        }}
+        onCancel={() => setPendingNoExtensionSubmit(null)}
+      />
       {referenceSlot
         ? createPortal(
             <RenameReferencePanel

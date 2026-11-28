@@ -128,7 +128,8 @@ export function ListFacetFilters({
     // Expand alpha filters before editing one facet so the other facets retain their rules.
     const expanded = filters.flatMap((filter): ListFilter[] =>
       filter.kind === "RATING_AT_LEAST"
-        ? (["MOVIE", "SERIES", "ANIME"] as Facet[]).map((facet) => ({
+        ? // eslint-disable-next-line no-restricted-syntax -- expands a stored all-facet filter into per-facet rules
+          (["MOVIE", "SERIES", "ANIME"] as Facet[]).map((facet) => ({
             ...EMPTY_LIST_FILTER,
             kind: "RATINGS",
             facet,
@@ -138,7 +139,8 @@ export function ListFacetFilters({
             ],
           }))
         : filter.kind === "EXCLUDE_GENRES"
-          ? (["MOVIE", "SERIES", "ANIME"] as Facet[]).map((facet) => ({
+          ? // eslint-disable-next-line no-restricted-syntax -- expands a stored all-facet filter into per-facet rules
+            (["MOVIE", "SERIES", "ANIME"] as Facet[]).map((facet) => ({
               ...EMPTY_LIST_FILTER,
               kind: "EXCLUDE_CANONICAL_TAGS",
               facet,

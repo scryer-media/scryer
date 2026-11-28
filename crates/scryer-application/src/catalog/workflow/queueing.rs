@@ -313,6 +313,8 @@ impl AppUseCase {
                 release_name: entry.release_name,
                 error_message: entry.reason,
                 attempted_at: entry.created_at,
+                marked_bad_file: entry.content.is_some(),
+                content_size_bytes: entry.content.as_ref().map(|content| content.size_bytes),
             })
             .collect())
     }
@@ -322,6 +324,8 @@ impl AppUseCase {
     ///
     /// One delete is the whole operation: the schema keys a block on its
     /// release, so there is no second row naming the same one to sweep up.
+    /// Clearing a bad-file entry also takes the bad-file mark off the title's
+    /// files and records the unmark on the reports it confirmed.
     pub async fn clear_title_release_blocklist_entry(
         &self,
         actor: &User,
@@ -340,7 +344,12 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
-        self.services.workflow.blocklist_repo.remove(id).await
+        self.remove_blocklist_entry_and_unmark(
+            actor,
+            &entry,
+            scryer_domain::MediaIssueUnmarkRoute::BlocklistClear,
+        )
+        .await
     }
 }
 impl AppUseCase {
@@ -565,6 +574,7 @@ impl AppUseCase {
                     info_hash_hint: info_hash_hint.clone(),
                     seed_goal_ratio: None,
                     seed_goal_seconds: None,
+                    seed_never_remove: false,
                     // Manual/interactive queueing carries a resolved source URL,
                     // not the indexer release object, so there is no `extra` map to
                     // read tracker minimums from on this path.

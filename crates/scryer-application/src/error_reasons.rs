@@ -767,8 +767,18 @@ pub mod catalog {
     pub const MOVIE_ENTITY_NOT_FOUND: &str = "CATALOG_MOVIE_ENTITY_NOT_FOUND";
     /// The title tag is invalid.
     pub const TAG_INVALID: &str = "CATALOG_TAG_INVALID";
+    /// One episode monitoring change named more distinct episodes than it
+    /// accepts. Carries [`EPISODE_MONITOR_BATCH_MAX_IDS_FACT`] and
+    /// [`EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT`].
+    pub const EPISODE_MONITOR_BATCH_TOO_LARGE: &str = "CATALOG_EPISODE_MONITOR_BATCH_TOO_LARGE";
+    /// One episode monitoring change named episodes that do not exist.
+    /// Carries [`EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT`].
+    pub const EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES: &str =
+        "CATALOG_EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        EPISODE_MONITOR_BATCH_TOO_LARGE,
+        EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES,
         TAG_INVALID,
         TITLE_NOT_FOUND,
         SEARCH_QUERY_REQUIRED,
@@ -854,6 +864,44 @@ pub mod catalog {
         SMG_NO_SERIES_NOT_FOUND,
         MOVIE_ENTITY_NOT_FOUND,
     ];
+
+    /// The most distinct episodes one monitoring change accepts.
+    pub const EPISODE_MONITOR_BATCH_MAX_IDS_FACT: &str = "maxEpisodeIds";
+    /// How many distinct episodes the refused monitoring change named.
+    pub const EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT: &str = "requestedEpisodeIds";
+    /// The requested episode ids that match no episode, in request order.
+    pub const EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT: &str = "unknownEpisodeIds";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[
+        EPISODE_MONITOR_BATCH_MAX_IDS_FACT,
+        EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT,
+        EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod security {
@@ -3663,6 +3711,12 @@ pub mod settings {
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
     /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
     pub const UI_TOUR_ID_INVALID: &str = "SETTINGS_UI_TOUR_ID_INVALID";
+    /// Hidden facets would hide every facet; at least one must stay visible.
+    pub const UI_ALL_FACETS_HIDDEN: &str = "SETTINGS_UI_ALL_FACETS_HIDDEN";
+    /// Disabled facets would turn off every facet; at least one must stay on.
+    pub const ALL_FACETS_DISABLED: &str = "SETTINGS_ALL_FACETS_DISABLED";
+    /// The work belongs to a facet an administrator turned off for this instance.
+    pub const FACET_DISABLED: &str = "SETTINGS_FACET_DISABLED";
     /// A tour progress update names no tour, or more tours than one update may record.
     pub const UI_TOUR_COUNT_OUT_OF_RANGE: &str = "SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE";
     /// The color must be a #RRGGBB hex color.
@@ -3930,6 +3984,9 @@ pub mod settings {
         DASHBOARD_PANEL_SETTINGS_INVALID,
         LANGUAGE_OUT_OF_RANGE,
         UI_TOUR_ID_INVALID,
+        UI_ALL_FACETS_HIDDEN,
+        ALL_FACETS_DISABLED,
+        FACET_DISABLED,
         UI_TOUR_COUNT_OUT_OF_RANGE,
         MUST_RRGGBB_HEX_COLOR,
         UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED,
@@ -4386,6 +4443,35 @@ pub mod indexer_caps {
             let mut unique = std::collections::HashSet::new();
             for reason in super::ALL {
                 assert!(reason.starts_with("INDEXER_CAPS_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
+/// Why an interactive search did not wait for an indexer's query budget.
+pub mod indexer_query_budget {
+    /// The indexer's next request slot lay beyond the longest wait an
+    /// interactive search allows, so nothing was sent to it.
+    pub const NOT_SEARCHED: &str = "INDEXER_QUERY_BUDGET_NOT_SEARCHED";
+    /// Some of the indexer's requests were sent; the next slot for the rest
+    /// lay beyond the longest wait an interactive search allows.
+    pub const PARTLY_SEARCHED: &str = "INDEXER_QUERY_BUDGET_PARTLY_SEARCHED";
+    /// Every reason owned by interactive query-budget pacing.
+    pub const ALL: &[&str] = &[NOT_SEARCHED, PARTLY_SEARCHED];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("INDEXER_QUERY_BUDGET_"));
                 assert!(
                     reason
                         .bytes()
@@ -5477,7 +5563,12 @@ pub mod download_failure {
     /// so it is blocked on every indexer rather than only the one that
     /// served it.
     pub const UNWANTED_EXECUTABLES: &str = "DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES";
-    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES];
+    /// A torrent of Scryer's own grab completed, and import took nothing from
+    /// it: every file lost to the library, or its archives could not be
+    /// extracted. It is failed so it seeds to its goal and is removed, and its
+    /// scope is searched again.
+    pub const IMPORT_REFUSED: &str = "DOWNLOAD_FAILURE_IMPORT_REFUSED";
+    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES, IMPORT_REFUSED];
 }
 
 /// Why Scryer itself wrote a blocklist entry. Stored as the entry's reason.
@@ -6003,8 +6094,12 @@ pub mod import {
     pub const UNPARSEABLE_EPISODE_MEMBER: &str = "IMPORT_UNPARSEABLE_EPISODE_MEMBER";
     /// Preparing to replace the library file failed, so the new file was not placed and the existing file was kept.
     pub const UPGRADE_PREPARATION_FAILED: &str = "IMPORT_UPGRADE_PREPARATION_FAILED";
+    /// A manual-import verdict request named more files, or more episodes for one file, than one request may carry.
+    pub const MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE: &str =
+        "IMPORT_MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE,
         INCUMBENT_IDENTITY_UNDECIDED,
         RETRY_LIMIT_REACHED,
         INCUMBENT_PLACED_BY_THIS_DOWNLOAD,
@@ -6348,6 +6443,31 @@ pub mod services {
 }
 
 pub mod media {
+    /// The file's content matches one of the title's bad-file blocklist entries.
+    pub const IMPORT_MATCHES_BAD_FILE: &str = "MEDIA_IMPORT_MATCHES_BAD_FILE";
+    /// The title's bad-file entries could not be read, so the import waits for review.
+    pub const BAD_FILE_LOOKUP_FAILED: &str = "MEDIA_BAD_FILE_LOOKUP_FAILED";
+    /// An upgrade would replace a file marked bad, so it waits for review.
+    pub const UPGRADE_REPLACES_BAD_FILE: &str = "MEDIA_UPGRADE_REPLACES_BAD_FILE";
+    /// The report did not ask for this remediation, or its authorization is gone.
+    pub const REMEDIATION_NOT_AVAILABLE: &str = "MEDIA_REMEDIATION_NOT_AVAILABLE";
+    /// A confirmed recycle stopped before it finished.
+    pub const RECYCLE_FAILED: &str = "MEDIA_RECYCLE_FAILED";
+    /// A report's details are longer than the limit.
+    pub const DETAILS_TOO_LONG: &str = "MEDIA_DETAILS_TOO_LONG";
+    /// A report with the reason `other` needs details.
+    pub const REASON_REQUIRES_DETAILS: &str = "MEDIA_REASON_REQUIRES_DETAILS";
+    /// A report reason is not one of the known reasons.
+    pub const REASON_UNKNOWN: &str = "MEDIA_REASON_UNKNOWN";
+    /// The reported file has other hard links, so recycling it would not free it.
+    pub const RECYCLE_HARDLINKED_FILE: &str = "MEDIA_RECYCLE_HARDLINKED_FILE";
+    /// The reported file's only other name is its copy in the download folder;
+    /// the recycle moves both names only when the operator chooses that.
+    pub const RECYCLE_HARDLINKED_DOWNLOAD_COPY: &str = "MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY";
+    /// Recycling a reported file is not supported on this platform.
+    pub const RECYCLE_UNSUPPORTED_PLATFORM: &str = "MEDIA_RECYCLE_UNSUPPORTED_PLATFORM";
+    /// The recycled item is a file marked bad; confirm to restore it and clear the mark.
+    pub const RESTORE_MATCHES_BAD_FILE: &str = "MEDIA_RESTORE_MATCHES_BAD_FILE";
     /// Unavailable media analysis cannot authorize replacement of an existing file.
     pub const UNVERIFIED_REPLACEMENT: &str = "MEDIA_UNVERIFIED_REPLACEMENT";
     /// References or companion files cannot safely survive relocation.
@@ -6430,6 +6550,18 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        IMPORT_MATCHES_BAD_FILE,
+        BAD_FILE_LOOKUP_FAILED,
+        UPGRADE_REPLACES_BAD_FILE,
+        REMEDIATION_NOT_AVAILABLE,
+        RECYCLE_FAILED,
+        DETAILS_TOO_LONG,
+        REASON_REQUIRES_DETAILS,
+        REASON_UNKNOWN,
+        RECYCLE_HARDLINKED_FILE,
+        RECYCLE_HARDLINKED_DOWNLOAD_COPY,
+        RECYCLE_UNSUPPORTED_PLATFORM,
+        RESTORE_MATCHES_BAD_FILE,
         UNVERIFIED_REPLACEMENT,
         REFERENCES_REQUIRE_REVIEW,
         PROBE_IO_FAILED,

@@ -299,6 +299,7 @@ async fn execute_history_retry(
                 // never taken for an import however much this attempt placed.
                 needs_reconciliation: error.requires_manual_reconciliation(),
                 release_burned: false,
+                release_refused: false,
                 title_id: release_evidence
                     .title_id()
                     .map(str::to_string)
@@ -331,7 +332,7 @@ async fn retry_tracked_snapshot(
         &completed.client_type,
         &completed.download_client_item_id,
     );
-    let item = scryer_domain::DownloadQueueItem {
+    let item = scryer_domain::DownloadQueueItem { client_job_protocol: None,
         id: id.clone(),
         title_id: None,
         episode_id: None,
@@ -549,6 +550,32 @@ pub(crate) enum TerminalFailureOrigin {
     ManualBlocklist,
 }
 
+/// Whether a terminal download is a torrent whose import Scryer refused.
+///
+/// Such a torrent ends the way an imported one does, whatever the client's
+/// "Remove failed" setting says: it seeds until its goal is met, then the
+/// client is asked to remove it (or stop it, or hand it off, as the profile
+/// says). With no goal it is removed at once. A download that failed in the
+/// client, a warning that outlasted its timeout, and every Usenet download
+/// keep following "Remove failed".
+pub(crate) fn rejected_torrent_goes_to_seeding_gate(
+    app: &AppUseCase,
+    tracked: &crate::tracked_downloads::TrackedDownload,
+    state: TrackedDownloadState,
+) -> bool {
+    state == TrackedDownloadState::Failed
+        && tracked.burned_by_import_gate
+        && !tracked.manual_failure_cleanup
+        && !tracked.status_messages.iter().any(|message| {
+            message.kind == crate::tracked_downloads::TrackedStatusMessageKind::WarningTimeout
+        })
+        && crate::seeding_gate::download_job_is_torrent(
+            app,
+            &tracked.client_type,
+            tracked.job_protocol,
+        )
+}
+
 pub(crate) async fn should_remove_terminal_download(
     app: &AppUseCase,
     client_id: &str,
@@ -609,6 +636,9 @@ async fn reconcile_terminal_download_cleanup(
     client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
+    // What the job's grab record says it is; decides only on a client that
+    // carries both usenet and torrent jobs.
+    job_protocol: crate::seeding_gate::DownloadJobProtocol,
     library_id: Option<&str>,
     facet: Option<&MediaFacet>,
     state: TrackedDownloadState,
@@ -679,7 +709,7 @@ async fn reconcile_terminal_download_cleanup(
         seed_time_seconds: observed_seed_time_seconds,
     };
 
-    let is_torrent = crate::seeding_gate::client_type_is_torrent(app, client_type);
+    let is_torrent = crate::seeding_gate::download_job_is_torrent(app, client_type, job_protocol);
     if state == TrackedDownloadState::Failed
         && is_torrent
         && failure_origin == TerminalFailureOrigin::ClientFailure
@@ -695,6 +725,9 @@ async fn reconcile_terminal_download_cleanup(
             client_type: client_type.trim().to_string(),
             client_item_id: download_client_item_id.trim().to_string(),
             info_hash: crate::normalize_torrent_info_hash(Some(download_client_item_id)),
+            // Already resolved by the caller, the client's report included.
+            job_protocol,
+            client_reported_protocol: None,
         };
         let decision = crate::seeding_gate::evaluate_seeding_gate_with(
             app,
@@ -3599,6 +3632,7 @@ mod move_import_source_cleanup_gate_tests {
             source_cleanup,
             verification: None,
             library_file_unsettled: false,
+            link_fallback: None,
         }
     }
 

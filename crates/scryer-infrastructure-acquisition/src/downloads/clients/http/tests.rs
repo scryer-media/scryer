@@ -230,6 +230,7 @@ fn seeded_job(download_dir: &Path, url: &str, bytes_done: u64) -> HttpJob {
             forbidden_answers: 0,
             skipped_error: None,
             skipped_reason: None,
+            link_key: None,
         }],
         output_dir,
         // As a crash mid-transfer leaves it.

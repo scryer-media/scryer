@@ -663,18 +663,20 @@ impl MediaFileRepository for FailingMediaFileRepo {
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         self.inner
-            .list_title_episode_progress_summaries(title_ids)
+            .list_title_episode_progress_summaries(title_ids, aired_through)
             .await
     }
 
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         self.inner
-            .list_collection_episode_progress_summaries(title_ids)
+            .list_collection_episode_progress_summaries(title_ids, aired_through)
             .await
     }
 
@@ -1009,18 +1011,20 @@ impl MediaFileRepository for CountingMediaFileRepo {
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         self.inner
-            .list_title_episode_progress_summaries(title_ids)
+            .list_title_episode_progress_summaries(title_ids, aired_through)
             .await
     }
 
     async fn list_collection_episode_progress_summaries(
         &self,
         title_ids: &[String],
+        aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         self.inner
-            .list_collection_episode_progress_summaries(title_ids)
+            .list_collection_episode_progress_summaries(title_ids, aired_through)
             .await
     }
 
@@ -1420,6 +1424,15 @@ async fn seed_library_settings_definitions(ctx: &TestContext) {
                 is_sensitive: false,
                 validation_json: None,
             },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "catalog.default_title_tags".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
         ])
         .await
         .expect("seed library import settings definitions");
@@ -1641,6 +1654,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 key_name: "movie.availability_delay_days".into(),
                 data_type: "number".into(),
                 default_value_json: "0".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "general".into(),
+                scope: "system".into(),
+                key_name: "ui.disabled_facets".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
                 is_sensitive: false,
                 validation_json: None,
             },
@@ -2139,6 +2161,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 key_name: "catalog.default_monitor_type".into(),
                 data_type: "string".into(),
                 default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "catalog.default_title_tags".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
                 is_sensitive: false,
                 validation_json: None,
             },

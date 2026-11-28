@@ -7,7 +7,8 @@ use crate::domain_events::{
     new_global_domain_event, new_title_domain_event, title_context_snapshot,
 };
 use scryer_domain::{
-    AppPermissionMask, LibraryPermissionMask, MediaFileAnalyzedEventData, MediaPathUpdate,
+    AppPermissionMask, ImportCompletedEventData, ImportRejectedEventData, ImportStatus,
+    LibraryPermissionMask, MediaFileAnalyzedEventData, MediaPathUpdate,
     MediaRequestSubmittedEventData, MediaUpdateType,
 };
 
@@ -497,6 +498,237 @@ async fn activity_visibility_with_prefetched_libraries_follows_each_title() {
                 .is_none_or(|title_id| movie_titles.contains(&title_id))
         );
     }
+}
+
+#[tokio::test]
+async fn an_import_resolver_enters_the_feed_but_sees_no_other_library() {
+    let fixture = seed_history().await;
+    let app = &fixture.app;
+    let series = seed_title(
+        app,
+        "title-ashgrove-series",
+        "Ashgrove",
+        MediaFacet::Series,
+        9101,
+    )
+    .await;
+    for title in [&series, &fixture.emberfall] {
+        app.append_domain_event(new_title_domain_event(
+            &fixture.admin,
+            title,
+            analyzed(title, 7_777, vec![]),
+        ))
+        .await
+        .expect("append activity event");
+    }
+
+    let mut resolver = test_user_with_app_permissions("import-resolver", AppPermissionMask::NONE);
+    resolver.authorization.libraries = [(
+        series.library_id.clone(),
+        LibraryPermissionMask::RESOLVE_IMPORTS,
+    )]
+    .into_iter()
+    .collect();
+
+    app.latest_domain_event_sequence(&resolver)
+        .await
+        .expect("resolver reads the feed tail");
+    app.subscribe_activity_events(&resolver)
+        .await
+        .expect("resolver subscribes to activity");
+    app.subscribe_domain_event_sequences(&resolver)
+        .await
+        .expect("resolver subscribes to feed sequences");
+    app.subscribe_import_history(&resolver)
+        .await
+        .expect("resolver subscribes to import history");
+
+    let movie_titles = [
+        fixture.emberfall.id.as_str(),
+        fixture.cinderwake.id.as_str(),
+    ];
+    let recent = app
+        .recent_activity(&resolver, 200, 0)
+        .await
+        .expect("resolver reads recent activity");
+    assert!(recent.iter().all(|event| {
+        event
+            .title_id
+            .as_deref()
+            .is_none_or(|title_id| !movie_titles.contains(&title_id))
+    }));
+    let after = app
+        .list_activity_events_after_sequence(&resolver, 0, 500)
+        .await
+        .expect("resolver reads activity after a sequence");
+    let all_events = fixture.domain_events.events.lock().await.clone();
+    for (sequence, _) in &after {
+        let event = all_events
+            .iter()
+            .find(|event| event.sequence == *sequence)
+            .expect("listed event exists");
+        assert!(
+            event
+                .title_id
+                .as_deref()
+                .is_none_or(|title_id| !movie_titles.contains(&title_id))
+        );
+    }
+
+    // A member with no library grant at all is still refused.
+    let outsider = test_user_with_app_permissions("no-grant-member", AppPermissionMask::NONE);
+    let refused = app
+        .recent_activity(&outsider, 10, 0)
+        .await
+        .expect_err("a member without a grant is refused");
+    assert_eq!(
+        refused.reason(),
+        Some(crate::error_reasons::events::LIBRARY_ACCESS_DENIED)
+    );
+}
+
+fn import_completed(title: &Title, n: usize) -> DomainEventPayload {
+    DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+        title: title_context_snapshot(title),
+        media_updates: Vec::new(),
+        imported_count: 1,
+        import_id: Some(format!("import-{n}")),
+        source_system: None,
+        source_ref: None,
+        source_title: Some(format!("Synthetic.Release.{n}")),
+        source_path: Some(format!("/downloads/synthetic-{n}.mkv")),
+        dest_path: Some(format!("/library/{}/file-{n}.mkv", title.name)),
+        quality: None,
+        episode_ids: Vec::new(),
+        size_bytes: None,
+        upgrade: false,
+        file_placements: Vec::new(),
+    })
+}
+
+fn import_rejected(title: &Title, n: usize) -> DomainEventPayload {
+    DomainEventPayload::ImportRejected(ImportRejectedEventData {
+        title: Some(title_context_snapshot(title)),
+        status: ImportStatus::Failed,
+        import_id: Some(format!("import-{n}")),
+        source_system: None,
+        source_ref: None,
+        source_title: Some(format!("Synthetic.Release.{n}")),
+        source_path: Some(format!("/downloads/synthetic-{n}.mkv")),
+        dest_path: None,
+        quality: None,
+        reason: Some("synthetic refusal".to_string()),
+        reason_code: None,
+        skip_reason: None,
+        episode_ids: Vec::new(),
+    })
+}
+
+#[tokio::test]
+async fn an_import_resolver_reads_only_their_librarys_import_events() {
+    let harness = bootstrap_media_request_app();
+    let (app, admin) = (harness.app, harness.manager);
+    let series = seed_title(&app, "title-larkspur", "Larkspur", MediaFacet::Series, 9201).await;
+    let movie = seed_title(
+        &app,
+        "title-quillmoor",
+        "Quillmoor",
+        MediaFacet::Movie,
+        9202,
+    )
+    .await;
+    assert_ne!(series.library_id, movie.library_id);
+
+    let append = |title: &Title, payload| {
+        let event = new_title_domain_event(&admin, title, payload);
+        let app = app.clone();
+        async move { app.append_domain_event(event).await.expect("append event") }
+    };
+    let own_completed = append(&series, import_completed(&series, 1)).await;
+    let own_rejected = append(&series, import_rejected(&series, 2)).await;
+    let own_analyzed = append(&series, analyzed(&series, 3, vec![])).await;
+    let other_completed = append(&movie, import_completed(&movie, 4)).await;
+    let own_request = app
+        .append_domain_event(new_global_domain_event(
+            &admin,
+            requested(&series, 5, &series.library_id, 9201),
+        ))
+        .await
+        .expect("append request");
+
+    let member = |name: &str, mask: LibraryPermissionMask| {
+        let mut user = test_user_with_app_permissions(name, AppPermissionMask::NONE);
+        user.authorization.libraries = [(series.library_id.clone(), mask)].into_iter().collect();
+        user
+    };
+    let resolver = member("import-resolver", LibraryPermissionMask::RESOLVE_IMPORTS);
+    let viewer = member("library-viewer", LibraryPermissionMask::VIEW);
+    let seeded = [
+        own_completed.sequence,
+        own_rejected.sequence,
+        own_analyzed.sequence,
+        other_completed.sequence,
+        own_request.sequence,
+    ];
+    let feed = |actor: User| {
+        let app = app.clone();
+        async move {
+            let mut sequences = app
+                .list_domain_events(
+                    &actor,
+                    &DomainEventFilter {
+                        limit: 500,
+                        ..DomainEventFilter::default()
+                    },
+                )
+                .await
+                .expect("domain event feed")
+                .into_iter()
+                .map(|event| event.sequence)
+                .filter(|sequence| seeded.contains(sequence))
+                .collect::<Vec<_>>();
+            sequences.sort_unstable();
+            sequences
+        }
+    };
+
+    assert_eq!(
+        feed(resolver.clone()).await,
+        vec![own_completed.sequence, own_rejected.sequence],
+        "a resolver reads their library's import events and nothing else"
+    );
+    assert_eq!(
+        feed(viewer.clone()).await,
+        vec![own_request.sequence],
+        "View still reads catalog-level events only"
+    );
+
+    // The live stream and the history list agree with the feed.
+    let mut streamed = app
+        .list_activity_events_after_sequence(&resolver, 0, 500)
+        .await
+        .expect("resolver reads the live stream")
+        .into_iter()
+        .map(|(sequence, _)| sequence)
+        .filter(|sequence| seeded.contains(sequence))
+        .collect::<Vec<_>>();
+    streamed.sort_unstable();
+    assert!(!streamed.is_empty());
+    assert!(
+        streamed
+            .iter()
+            .all(|sequence| [own_completed.sequence, own_rejected.sequence].contains(sequence))
+    );
+    let history = app
+        .recent_events(&resolver, None, 100, 0)
+        .await
+        .expect("resolver reads recent events");
+    assert!(!history.is_empty());
+    assert!(
+        history
+            .iter()
+            .all(|event| event.title_id.as_deref() == Some(series.id.as_str()))
+    );
 }
 
 /// The live feed's budgeted reads, resumed from each read's resume point,

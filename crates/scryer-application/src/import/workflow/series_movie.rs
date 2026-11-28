@@ -180,6 +180,7 @@ async fn run_import(
                     needs_reconciliation: false,
                     source_cleanup_failed: true,
                     release_burned: false,
+                    release_refused: false,
                     title_id,
                     ..base_completed_import_result(
                         import_id,
@@ -306,9 +307,10 @@ async fn run_import(
 /// - [`RejectionDisposition::Hold`] records `skipped`: nobody can decide this
 ///   without an operator.
 ///
-/// All three leave the download in `ImportBlocked` — `result_state.rs` maps
-/// every non-`Imported` decision there — so the dispositions differ only in
-/// their side effects.
+/// `Hold` leaves the download in `ImportBlocked`. `Skip` marks the result
+/// `release_refused`, which fails a torrent of Scryer's own grab so it takes
+/// the rejected-torrent cleanup; any other download is left `ImportBlocked`
+/// too.
 async fn carry_out_import_rejection(
     app: &AppUseCase,
     actor: &User,
@@ -389,6 +391,7 @@ async fn carry_out_import_rejection(
     )
     .await?;
     let release_burned = decision == ImportDecision::Rejected;
+    let release_refused = disposition == crate::import_decide::RejectionDisposition::Skip;
     let result = ImportResult {
         import_id: import_id.to_string(),
         decision,
@@ -408,6 +411,7 @@ async fn carry_out_import_rejection(
         // that yields `Rejected` here); the tracked download then fails instead
         // of parking as import-blocked.
         release_burned,
+        release_refused,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -1176,6 +1180,7 @@ async fn resolve_completed_import_target(
                     archive_message
                 )),
                 release_burned: false,
+                release_refused: false,
                 ..base_completed_import_result(import_id, completed, release_evidence, started_at)
             };
             let result_json = serde_json::to_string(&result).ok();
@@ -1202,6 +1207,7 @@ async fn resolve_completed_import_target(
                 title.name, title.facet
             )),
             release_burned: false,
+            release_refused: false,
             ..base_completed_import_result(import_id, completed, release_evidence, started_at)
         };
         let result_json = serde_json::to_string(&result).ok();
@@ -1421,6 +1427,7 @@ async fn resolve_completed_import_target(
             title_id: Some(title.id.clone()),
             error_message: Some(error_message),
             release_burned: false,
+            release_refused: false,
             ..base_completed_import_result(import_id, completed, release_evidence, started_at)
         };
         let result_json = serde_json::to_string(&result).ok();
@@ -1679,6 +1686,7 @@ async fn hold_replacement_for_manual_resolution(
         link_type: None,
         error_message: Some(message),
         release_burned: false,
+        release_refused: false,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -1861,6 +1869,7 @@ async fn import_additional_movie_download(
         crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
         disc_selection,
         release_evidence.release_listing_json(),
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await
     {
@@ -2041,6 +2050,7 @@ async fn import_additional_movie_download(
             link_type: None,
             error_message: Some(reason),
             release_burned: false,
+            release_refused: false,
             started_at,
             completed_at: Utc::now(),
             upgrade: false,
@@ -2166,6 +2176,7 @@ async fn import_additional_movie_download(
         link_type: Some(link_type),
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -2197,6 +2208,9 @@ async fn import_additional_movie_download(
                 // Single-file import, so the file's size is also the total.
                 size_bytes: Some(file_result.size_bytes as i64),
                 upgrade: false,
+                file_placements: vec![
+                    file_result.file_placement(path_to_stored_string(&dest_path)),
+                ],
             }),
         ))
         .await;
@@ -2350,6 +2364,7 @@ async fn import_movie_download(
             .map(|runtime_minutes| runtime_minutes.saturating_mul(60)),
         manual_replacement,
     );
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
     let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
@@ -2363,6 +2378,7 @@ async fn import_movie_download(
         runtime_sample_validation,
         largest.disc_selection.as_ref(),
         release_evidence.release_listing_json(),
+        &bad_files,
     )
     .await
     {
@@ -2446,6 +2462,7 @@ async fn import_movie_download(
                 link_type: None,
                 error_message: Some(rejection.message),
                 release_burned: true,
+                release_refused: false,
                 started_at,
                 completed_at: Utc::now(),
                 upgrade: false,
@@ -2547,6 +2564,7 @@ async fn import_movie_download(
             link_type: None,
             error_message: Some(reason),
             release_burned: false,
+            release_refused: false,
             started_at,
             completed_at: Utc::now(),
             upgrade: false,
@@ -2790,6 +2808,7 @@ async fn import_movie_download(
             import_mode,
             release_evidence.announced_size_bytes(),
             Some(completed),
+            &bad_files,
         )
         .await
         {
@@ -2826,6 +2845,7 @@ async fn import_movie_download(
                         .then_some(scryer_domain::ImportStrategy::Move),
                     error_message: None,
                     release_burned: false,
+                    release_refused: false,
                     started_at,
                     completed_at: Utc::now(),
                     upgrade: true,
@@ -2870,6 +2890,7 @@ async fn import_movie_download(
                             // Single-file import, so the file's size is also the total.
                             size_bytes: Some(outcome.new_size_bytes),
                             upgrade: true,
+                            file_placements: vec![outcome.placement.clone()],
                         }),
                     ))
                     .await;
@@ -3103,6 +3124,7 @@ async fn import_movie_download(
         link_type: Some(link_type),
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -3134,6 +3156,9 @@ async fn import_movie_download(
                 // Single-file import, so the file's size is also the total.
                 size_bytes: Some(file_result.size_bytes as i64),
                 upgrade: false,
+                file_placements: vec![
+                    file_result.file_placement(path_to_stored_string(&dest_path)),
+                ],
             }),
         ))
         .await;
@@ -3178,6 +3203,7 @@ async fn import_series_movie_download(
                     title.id
                 )),
                 release_burned: false,
+                release_refused: false,
                 ..base_completed_import_result(import_id, completed, release_evidence, started_at)
             };
             let result_json = serde_json::to_string(&result).ok();
@@ -3195,6 +3221,7 @@ async fn import_series_movie_download(
                     "series movie link {series_movie_link_id} not found"
                 )),
                 release_burned: false,
+                release_refused: false,
                 ..base_completed_import_result(import_id, completed, release_evidence, started_at)
             };
             let result_json = serde_json::to_string(&result).ok();
@@ -3359,6 +3386,7 @@ async fn import_series_movie_download(
             .map(|runtime_minutes| runtime_minutes.saturating_mul(60)),
         manual_replacement,
     );
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
     let prepared = match crate::post_download_gate::prepare_import_candidate(
         app,
         title,
@@ -3371,6 +3399,7 @@ async fn import_series_movie_download(
         false,
         runtime_sample_validation,
         release_evidence.release_listing_json(),
+        &bad_files,
     )
     .await
     {
@@ -3457,6 +3486,7 @@ async fn import_series_movie_download(
                 link_type: None,
                 error_message: Some(rejection.message),
                 release_burned: true,
+                release_refused: false,
                 started_at,
                 completed_at: Utc::now(),
                 upgrade: false,
@@ -3704,6 +3734,7 @@ async fn import_series_movie_download(
                 import_mode,
                 release_evidence.announced_size_bytes(),
                 Some(completed),
+                &bad_files,
             )
             .await
             {
@@ -3775,6 +3806,7 @@ async fn import_series_movie_download(
                             .then_some(scryer_domain::ImportStrategy::Move),
                         error_message: None,
                         release_burned: false,
+                        release_refused: false,
                         started_at,
                         completed_at: Utc::now(),
                         upgrade: true,
@@ -3812,6 +3844,7 @@ async fn import_series_movie_download(
                                 // Single-file import, so the file's size is also the total.
                                 size_bytes: Some(outcome.new_size_bytes),
                                 upgrade: true,
+                                file_placements: vec![outcome.placement.clone()],
                             }),
                         ))
                         .await;
@@ -3847,6 +3880,7 @@ async fn import_series_movie_download(
                         link_type: None,
                         error_message: Some(rejection.message),
                         release_burned: false,
+                        release_refused: false,
                         started_at,
                         completed_at: Utc::now(),
                         upgrade: false,
@@ -4077,6 +4111,7 @@ async fn import_series_movie_download(
         link_type: Some(link_type),
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at,
         completed_at: Utc::now(),
         upgrade: false,
@@ -4107,6 +4142,7 @@ async fn import_series_movie_download(
             // Single-file import, so the file's size is also the total.
             size_bytes: Some(file_result.size_bytes as i64),
             upgrade: false,
+            file_placements: vec![file_result.file_placement(path_to_stored_string(&dest_path))],
         }),
     ))
     .await?;

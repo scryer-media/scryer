@@ -752,6 +752,7 @@ impl NzbgetDownloadClient {
                 let remaining_seconds = extract_remaining_seconds_from_entry(group);
 
                 Some(DownloadQueueItem {
+                    client_job_protocol: None,
                     attention_reason_code: None,
                     id: nzb_id.to_string(),
                     title_id: scryer_parameters.title_id,
@@ -965,6 +966,7 @@ impl NzbgetDownloadClient {
                 }
 
                 items.push(DownloadQueueItem {
+                    client_job_protocol: None,
                     attention_reason_code: None,
                     id: id.clone(),
                     title_id: scryer_parameters.title_id,
@@ -1187,6 +1189,7 @@ fn history_queue_item_from_nzbget_entry(entry: &Value) -> Option<DownloadQueueIt
     let scryer_parameters = extract_nzbget_parameters(entry);
 
     Some(DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: password_failure.map(|failure| failure.reason_code().to_string()),
         id: nzb_id.to_string(),
         title_id: scryer_parameters.title_id,
@@ -1843,6 +1846,7 @@ impl DownloadClient for NzbgetDownloadClient {
         };
         Ok(Some(scryer_application::DownloadCleanupPayload {
             download: scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "nzbget".into(),
                 client_id: client_id.into(),
@@ -1981,6 +1985,7 @@ fn completed_download_from_nzbget_history_entry(
     );
 
     Some(scryer_domain::CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: String::new(),
@@ -3305,6 +3310,7 @@ mod tests {
         };
 
         let matching = DownloadQueueItem {
+            client_job_protocol: None,
             attention_reason_code: None,
             id: "queue-1".to_string(),
             title_id: Some("title-1".to_string()),

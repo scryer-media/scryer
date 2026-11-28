@@ -332,6 +332,41 @@ impl AppUseCase {
             );
         }
     }
+
+    /// [`Self::after_episode_monitoring_persisted`] for a batch stored in one
+    /// write: each title is marked once and the wanted rows of every
+    /// unmonitored episode go in one delete.
+    async fn after_episodes_monitoring_persisted(&self, episodes: &[&Episode], monitored: bool) {
+        let mut marked = HashSet::new();
+        for episode in episodes {
+            if marked.insert(episode.title_id.as_str()) {
+                self.runtime
+                    .acquisition
+                    .target_cache
+                    .mark_title(&episode.title_id);
+            }
+        }
+        if monitored || episodes.is_empty() {
+            return;
+        }
+        let episode_ids = episodes
+            .iter()
+            .map(|episode| episode.id.clone())
+            .collect::<Vec<_>>();
+        if let Err(err) = self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .delete_acquisition_scope_states_for_episodes(&episode_ids)
+            .await
+        {
+            warn!(
+                episode_count = episode_ids.len(),
+                error = %err,
+                "failed to delete wanted items after disabling episode monitoring"
+            );
+        }
+    }
 }
 impl AppUseCase {
     /// Applies one entry's title change and derived-state follow-ups.
@@ -1110,7 +1145,302 @@ impl AppUseCase {
             .await?;
         Ok(episode)
     }
+
+    /// [`Self::set_episode_monitored`] for many episodes, with the same
+    /// permission and ownership checks, parent propagation, wanted-row cleanup
+    /// and title events, each done once for the batch. Returns the episodes in
+    /// request order; a repeated id is answered once.
+    ///
+    /// The request is refused whole, before anything changes, when it names
+    /// more than [`EPISODE_MONITOR_BATCH_MAX`] distinct episodes, a title the
+    /// actor cannot manage, or an episode that does not exist. An actor who
+    /// does not manage titles in every library is refused access for an
+    /// unknown id, as for an episode it cannot manage. Episodes, titles,
+    /// collections and permissions are each read once, the episodes whose
+    /// state changes are written in one transaction, the titles they monitor
+    /// in one statement, and the title events in one append.
+    pub async fn set_episodes_monitored(
+        &self,
+        actor: &User,
+        episode_ids: &[String],
+        monitored: bool,
+    ) -> AppResult<Vec<Episode>> {
+        use crate::error_reasons::catalog as reasons;
+
+        let mut seen = HashSet::new();
+        let requested = episode_ids
+            .iter()
+            .filter(|id| seen.insert(id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if requested.len() > EPISODE_MONITOR_BATCH_MAX {
+            return Err(AppError::validation_refused_with_facts(
+                reasons::EPISODE_MONITOR_BATCH_TOO_LARGE,
+                format!(
+                    "one request may change monitoring for at most {EPISODE_MONITOR_BATCH_MAX} episodes"
+                ),
+                vec![
+                    crate::RefusalFact::new(
+                        reasons::EPISODE_MONITOR_BATCH_MAX_IDS_FACT,
+                        EPISODE_MONITOR_BATCH_MAX.to_string(),
+                    ),
+                    crate::RefusalFact::new(
+                        reasons::EPISODE_MONITOR_BATCH_REQUESTED_IDS_FACT,
+                        requested.len().to_string(),
+                    ),
+                ],
+            ));
+        }
+        if requested.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut episodes_by_id = self
+            .services
+            .catalog
+            .shows
+            .get_episodes_by_ids(&requested)
+            .await?
+            .into_iter()
+            .map(|episode| (episode.id.clone(), episode))
+            .collect::<HashMap<_, _>>();
+        let mut title_ids = Vec::new();
+        let mut collection_ids = Vec::new();
+        {
+            let mut seen_titles = HashSet::new();
+            let mut seen_collections = HashSet::new();
+            for episode_id in &requested {
+                let Some(episode) = episodes_by_id.get(episode_id.as_str()) else {
+                    continue;
+                };
+                if seen_titles.insert(episode.title_id.as_str()) {
+                    title_ids.push(episode.title_id.clone());
+                }
+                if let Some(collection_id) = episode.collection_id.as_deref()
+                    && seen_collections.insert(collection_id)
+                {
+                    collection_ids.push(collection_id.to_string());
+                }
+            }
+        }
+        let mut titles_by_id = self
+            .services
+            .catalog
+            .titles
+            .get_by_ids(&title_ids)
+            .await?
+            .into_iter()
+            .map(|title| (title.id.clone(), title))
+            .collect::<HashMap<_, _>>();
+        if let Some(missing) = title_ids
+            .iter()
+            .find(|title_id| !titles_by_id.contains_key(title_id.as_str()))
+        {
+            return Err(AppError::not_found_reason(
+                reasons::TITLE_NOT_FOUND,
+                format!("title {missing}"),
+            ));
+        }
+        // Permission is checked before existence. An id that names nothing
+        // is refused as one the actor may not manage unless the actor manages
+        // titles in every library, so a caller cannot tell an episode it has
+        // no access to from one that does not exist.
+        let permissions = self.library_permission_context(actor, None).await?;
+        let access_denied = || {
+            AppError::unauthorized_reason(
+                crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                "You do not have access to this library".to_string(),
+            )
+        };
+        if title_ids.iter().any(|title_id| {
+            !permissions.allows(
+                &titles_by_id[title_id.as_str()].library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+        }) {
+            return Err(access_denied());
+        }
+        let unknown = requested
+            .iter()
+            .filter(|id| !episodes_by_id.contains_key(id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            if !permissions.allows_on_every_library(scryer_domain::LibraryPermission::ManageTitles)
+            {
+                return Err(access_denied());
+            }
+            return Err(AppError::validation_refused_with_facts(
+                reasons::EPISODE_MONITOR_BATCH_UNKNOWN_EPISODES,
+                format!("{} of the requested episodes do not exist", unknown.len()),
+                vec![crate::RefusalFact::list(
+                    reasons::EPISODE_MONITOR_BATCH_UNKNOWN_IDS_FACT,
+                    unknown,
+                )],
+            ));
+        }
+
+        let _location_guards = self
+            .acquire_location_title_mutations(
+                &crate::location::ownership_guard::EPISODE_MONITOR_EDIT_ENTRY,
+                &title_ids,
+            )
+            .await
+            .into_iter()
+            .collect::<AppResult<Vec<_>>>()?;
+
+        // Monitoring an episode monitors its season and its title, so the
+        // seasons are read before anything is written: a missing one refuses
+        // the request with nothing changed.
+        let collections_to_monitor = if monitored && !collection_ids.is_empty() {
+            let collections = self
+                .services
+                .catalog
+                .shows
+                .get_collections_by_ids(&collection_ids)
+                .await?;
+            let found = collections
+                .iter()
+                .map(|collection| collection.id.as_str())
+                .collect::<HashSet<_>>();
+            if let Some(missing) = collection_ids
+                .iter()
+                .find(|collection_id| !found.contains(collection_id.as_str()))
+            {
+                return Err(AppError::not_found_reason(
+                    reasons::COLLECTION_NOT_FOUND,
+                    format!("collection {missing}"),
+                ));
+            }
+            collections
+                .into_iter()
+                .filter(|collection| !collection.monitored)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let changed_ids = requested
+            .iter()
+            .filter(|id| episodes_by_id[id.as_str()].monitored != monitored)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut changed_titles = HashSet::new();
+        if !changed_ids.is_empty() {
+            self.services
+                .catalog
+                .shows
+                .set_episodes_monitored(&changed_ids, monitored)
+                .await?;
+            for episode_id in &changed_ids {
+                if let Some(episode) = episodes_by_id.get_mut(episode_id.as_str()) {
+                    episode.monitored = monitored;
+                    changed_titles.insert(episode.title_id.clone());
+                }
+            }
+            let changed = changed_ids
+                .iter()
+                .map(|episode_id| &episodes_by_id[episode_id.as_str()])
+                .collect::<Vec<_>>();
+            self.after_episodes_monitoring_persisted(&changed, monitored)
+                .await;
+        }
+
+        if !collections_to_monitor.is_empty() {
+            let ids = collections_to_monitor
+                .iter()
+                .map(|collection| collection.id.clone())
+                .collect::<Vec<_>>();
+            self.services
+                .catalog
+                .shows
+                .set_collections_monitored(&ids, true)
+                .await?;
+            for collection in &collections_to_monitor {
+                self.runtime
+                    .acquisition
+                    .target_cache
+                    .mark_title(&collection.title_id);
+                changed_titles.insert(collection.title_id.clone());
+                tracing::info!(
+                    collection_id = %collection.id,
+                    "auto-monitored collection because an episode was monitored"
+                );
+            }
+        }
+
+        // Monitoring an episode monitors its title: those titles are written
+        // in one statement, and every title event goes out in one append.
+        let titles_to_monitor = if monitored {
+            title_ids
+                .iter()
+                .filter(|title_id| !titles_by_id[title_id.as_str()].monitored)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if !titles_to_monitor.is_empty() {
+            self.services
+                .catalog
+                .titles
+                .set_titles_monitored(&titles_to_monitor, true)
+                .await?;
+            self.invalidate_monitored_title_matcher().await;
+            for title_id in &titles_to_monitor {
+                let Some(title) = titles_by_id.get_mut(title_id.as_str()) else {
+                    continue;
+                };
+                title.monitored = true;
+                self.runtime.acquisition.target_cache.mark_title(title_id);
+                self.reconcile_series_movie_link_monitoring_for_title(title)
+                    .await?;
+                tracing::info!(
+                    title_id = %title.id,
+                    title_name = %title.name,
+                    "auto-monitored title because an episode was monitored"
+                );
+            }
+        }
+        let mut wake_acquisition = !titles_to_monitor.is_empty();
+        let mut title_events = Vec::new();
+        for title_id in &title_ids {
+            let title = &titles_by_id[title_id.as_str()];
+            if monitored {
+                if changed_titles.contains(title_id) {
+                    self.runtime.acquisition.target_cache.mark_title(title_id);
+                    wake_acquisition = true;
+                }
+            } else if !changed_titles.contains(title_id) {
+                continue;
+            }
+            title_events.push(crate::events::activity_api::title_updated_domain_event(
+                actor, title,
+            ));
+        }
+        if wake_acquisition {
+            self.runtime.acquisition.acquisition_wake.notify_one();
+        }
+        if !title_events.is_empty()
+            && let Err(error) = self.append_domain_events(title_events).await
+        {
+            tracing::warn!(
+                title_count = title_ids.len(),
+                error = %error,
+                "failed to append title updated domain events"
+            );
+        }
+
+        Ok(requested
+            .iter()
+            .map(|episode_id| episodes_by_id[episode_id.as_str()].clone())
+            .collect())
+    }
 }
+
+/// The most distinct episodes one [`AppUseCase::set_episodes_monitored`]
+/// call changes, far above any one library's series.
+pub(crate) const EPISODE_MONITOR_BATCH_MAX: usize = 10_000;
 impl AppUseCase {
     #[expect(
         clippy::too_many_arguments,

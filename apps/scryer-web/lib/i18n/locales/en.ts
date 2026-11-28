@@ -4,6 +4,9 @@ const en: LocaleDictionary = {
   "settings.defaultMonitorType": "Default monitoring for new titles",
   "settings.defaultMonitorTypeHelp":
     "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
+  "settings.libraryDefaultTitleTags": "Tags for new titles",
+  "settings.libraryDefaultTitleTagsHelp":
+    "Added to every title added to this library, by hand, from a list or by approving a request. Titles found by a library scan and titles already here are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":
@@ -111,6 +114,26 @@ const en: LocaleDictionary = {
     "The media structure is malformed. Review the source file before importing.",
   "error.reason.MEDIA_PROBE_ENCRYPTED":
     "The media is encrypted and could not be verified.",
+  "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE":
+    "This file is marked bad for the title, so it was not imported.",
+  "error.reason.MEDIA_BAD_FILE_LOOKUP_FAILED":
+    "The title’s bad files could not be checked, so the import waits for review.",
+  "error.reason.MEDIA_REMEDIATION_NOT_AVAILABLE":
+    "This report is not eligible for the selected action.",
+  "error.reason.MEDIA_RECYCLE_FAILED": "The file could not be recycled.",
+  "error.reason.MEDIA_DETAILS_TOO_LONG":
+    "The details are too long. Use at most 4096 characters.",
+  "error.reason.MEDIA_REASON_REQUIRES_DETAILS":
+    "Describe the problem when the reason is Something else.",
+  "error.reason.MEDIA_REASON_UNKNOWN": "That report reason is not recognized.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_FILE":
+    "This file has other hard links, so recycling it would not free it. Mark it bad instead.",
+  "error.reason.MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY":
+    "This file is hard-linked to its download copy. Recycle both names, or cancel.",
+  "error.reason.MEDIA_RECYCLE_UNSUPPORTED_PLATFORM":
+    "Recycling a reported file is not supported on this platform. Mark it bad instead.",
+  "error.reason.MEDIA_RESTORE_MATCHES_BAD_FILE":
+    "This item is a file marked bad for its title. Confirm to restore it and unmark it.",
 
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
@@ -288,6 +311,8 @@ const en: LocaleDictionary = {
   "error.fallback.failedToRestartProwlarrDiscovery":
     "Failed to restart Prowlarr discovery",
   "error.fallback.failedToSave": "Failed to save",
+  "error.fallback.failedToUpdateFacetVisibility":
+    "Failed to update which media types are shown.",
   "error.fallback.failedToUpdateSponsorPreference":
     "Failed to update Sponsor preference.",
   "error.fallback.importFailed": "Import failed",
@@ -3967,6 +3992,12 @@ const en: LocaleDictionary = {
     "Trusted certificate bundle must contain PEM-encoded X.509 certificates.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Trusted certificate bundle may only contain X.509 certificate PEM blocks.",
+  "error.reason.SETTINGS_UI_ALL_FACETS_HIDDEN":
+    "At least one media type must stay visible.",
+  "error.reason.SETTINGS_ALL_FACETS_DISABLED":
+    "At least one media type must stay on.",
+  "error.reason.SETTINGS_FACET_DISABLED":
+    "This media type is turned off for this instance.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
     "A table's column settings list the same column more than once.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
@@ -4342,6 +4373,8 @@ const en: LocaleDictionary = {
     "Choose both a season and episode.",
   "error.reason.INTERFACE_RELEASE_SEARCH_MOVIE_SCOPE_INVALID":
     "A series movie search cannot include a season or episode.",
+  "error.reason.INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED":
+    "This search takes a title, not free text. Run a free-text search as an interactive search instead.",
   "error.reason.INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED":
     "Choose a title to search for releases.",
   "error.reason.INTERFACE_REQUEST_LEASE_CONFLICT":
@@ -4486,6 +4519,67 @@ const en: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Bandwidth limit (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Shared by all downloads of this client. Empty or 0 means unlimited.",
+  "settings.downloadClientTorboxApiKey": "API token",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "The API token of the TorBox account.",
+  "settings.downloadClientTorboxCachedOnly": "Cached only",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Refuse downloads that TorBox does not already have cached.",
+  "httpRelease.refusal.filePathInvalid":
+    "A file in this download has a path that cannot be saved inside its download folder.",
+  "httpRelease.refusal.tooManyFiles":
+    "This download has more files than one download may hold.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "A file in this download has no usable link reference.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "A file in this download needs a link that this downloader cannot obtain.",
+  "httpRelease.refusal.linkRefused":
+    "The server kept refusing the download links for a file.",
+  "httpRelease.refusal.linkUnavailable":
+    "No download link became available for a file.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox rejected the API token.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "The TorBox plan does not include this feature.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "The TorBox account has reached its limit of active downloads.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "The TorBox account is in a cooldown period and accepts no new downloads yet.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "The TorBox account has reached its monthly download limit.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "The hourly limit of new TorBox downloads has been reached.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "This download is larger than the TorBox plan allows.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox does not have this download cached, and this client accepts only cached downloads.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox could not read the torrent.",
+  "error.reason.TORBOX_INVALID_NZB": "The NZB could not be read.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "This download is already in the TorBox account.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox does not hold this item.",
+  "error.reason.TORBOX_LINK_OFFLINE": "The TorBox download link is offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox is limiting how often it accepts requests.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox is unavailable.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox flagged a file in this download as infected.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox offers a file in this download only as a zip archive.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "This TorBox download has no video file.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox reports that this download failed.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox no longer holds this download.",
+  "error.reason.TORBOX_STALLED": "This download is stalled on TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "The file names in this TorBox download cannot be saved on this system.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "This release has no magnet link, torrent file or NZB to send to TorBox.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox does not support this action for this download.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "This TorBox client has no such download.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "The TorBox client has no API token.",
   "settings.publicUrlTitle": "Public URL",
   "settings.publicUrlHelp":
     "The address people and services use to reach Scryer, such as https://scryer.example.com. Account linking and OAuth use a change immediately; passkeys use it after Scryer restarts.",
@@ -4847,6 +4941,9 @@ const en: LocaleDictionary = {
   "dashboard.storageFree": "{{size}} free",
   "dashboard.storageUnavailable": "Usage unavailable",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} in this library",
+  "dashboard.storageLibraryUsageHint":
+    "This library holds {{library}} TB; {{used}} TB of the volume is in use",
   "dashboard.storageLegend": "OK · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "LOW",
   "dashboard.tagCrit": "CRIT",
@@ -5878,6 +5975,12 @@ const en: LocaleDictionary = {
   "settings.mediaServerEnabled": "Enable media server connection",
   "settings.mediaServerAuthCapabilities": "Permissions",
   "settings.mediaServerAutoAddEnabled": "Auto-add new verified users",
+  "settings.mediaServerRefreshOffer":
+    "Refresh this server's library when Scryer imports, renames, deletes or moves media",
+  "settings.mediaServerRefreshOfferHelp":
+    "Subscribes this connection under Notifications to: {{events}}. You can change or remove it there.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Library refresh after imports needs this server's notification plugin, which is not installed. To install it, open",
   "settings.mediaServerPathMappings": "Path Mappings",
   "settings.mediaServerPathMappingsHelp":
     "Each rule is saved as server path => Scryer path.",
@@ -5969,6 +6072,8 @@ const en: LocaleDictionary = {
   "settings.downloadClientPriority": "Priority",
   "settings.downloadClientRemoveCompleted": "Remove Completed",
   "settings.downloadClientRemoveFailed": "Remove Failed",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "Remove Failed covers downloads that failed in the client. A torrent whose import Scryer refused is always cleaned up like an imported one: it seeds to its goal, then the client removes it.",
   "settings.downloadClientUseSslInfo":
     "Use SSL/TLS when connecting to this download client.",
   "settings.downloadClientEnabledInfo":
@@ -6074,6 +6179,10 @@ const en: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Folder template contains an illegal filesystem character: {{character}}",
   "settings.renameTemplateLabel": "Rename template",
+  "settings.renameTemplateNoExtensionTitle": "Save without {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "This rename template has no {ext} token. Scryer will add each file's extension to the end of the name.",
+  "settings.renameTemplateNoExtensionConfirm": "Save anyway",
   "settings.renameTemplatePlaceholder": "Placeholder",
   "settings.renameTemplateRequired": "Rename template is required.",
   "settings.renameCollisionPolicyLabel": "Collision policy",
@@ -6206,6 +6315,10 @@ const en: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Personalized discovery",
   "settings.personalizedDiscoveryHelp":
     "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
+  "settings.disabledFacetsLabel": "Media types",
+  "settings.disabledFacetsHelp":
+    "Turn a media type off for everyone. It leaves navigation, discovery, search and pickers, and its searches, scans and refreshes stop. Titles you already have stay reachable.",
+  "settings.disabledFacetsLastEnabled": "At least one media type must stay on.",
   "settings.srrdbFilenameRecoveryLabel":
     "Recover obfuscated filenames from srrdb.com",
   "settings.srrdbFilenameRecoveryHelp":
@@ -6572,6 +6685,13 @@ const en: LocaleDictionary = {
   "title.contextTitleList": "Title list",
   "title.contextListDisclosure": "List",
   "title.showTitleList": "Show list",
+  "title.sortBy": "Sort by",
+  "title.sortAscending": "Ascending",
+  "title.sortDescending": "Descending",
+  "title.sameFilmAsSeriesMovie": "Also tracked as a series movie of {{titles}}.",
+  "title.sameFilmAsMovieTitle": "Also tracked as a movie: {{titles}}.",
+  "title.sameFilmBeforeAdd": "Already tracked as a series movie of {{titles}}.",
+  "title.sameFilmMarker": "Also tracked as a movie",
   "title.hideTitleList": "Hide list",
   "title.contextForYouTitle": "Discover",
   "title.contextForYouTop": "Top",
@@ -6600,6 +6720,11 @@ const en: LocaleDictionary = {
   "title.clearBlockedRelease": "Remove {{releaseName}} from the blocklist",
   "title.clearBlockedReleaseHint":
     "Remove this release from the blocklist so it can be grabbed again",
+  "title.markedBadFile": "Marked bad",
+  "title.badFileEntry": "Bad file ({{size}})",
+  "title.unmarkBadFile": "Unmark bad file {{releaseName}}",
+  "title.unmarkBadFileHint":
+    "Unmark this file so the same content can be imported again. The report stays approved.",
   "title.contextAdded": "Added",
   "title.columns": "Columns",
   "title.toggleColumns": "Toggle columns",
@@ -6617,8 +6742,8 @@ const en: LocaleDictionary = {
   "title.table.runtime": "Runtime",
   "title.table.avgRuntime": "Avg runtime",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} episodes",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} episodes ({{monitored}} monitored)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} episodes (total: {{total}})",
   "title.table.status": "Status",
   "title.table.root": "Root",
   "title.table.popularity": "Popularity",
@@ -6722,6 +6847,10 @@ const en: LocaleDictionary = {
     "{{count}} indexer(s) failed: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) skipped: {{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} indexer(s) searched in part, over their query budget: {{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: can be asked again in {{seconds}} s",
   "title.contextReleaseSearchUnroutable.noUsenetClient":
     "{{count}} Usenet release(s) hidden, no enabled Usenet download client: {{names}}",
   "title.contextReleaseSearchUnroutable.noTorrentClient":
@@ -7015,6 +7144,20 @@ const en: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Assign several episodes to this file",
   "queue.manualImportApplySuggestions": "Apply suggestions to all",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Same quality",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "New file",
+  "queue.manualImportVerdictEstimated": "estimated",
+  "queue.manualImportApplySuggestionsSelected": "Apply suggestions to selected",
+  "queue.manualImportSelectAll": "Select all",
+  "queue.manualImportSelectNone": "Select none",
+  "queue.manualImportSelectInvert": "Invert selection",
+  "queue.manualImportSelectMatching": "Select matching",
+  "queue.manualImportSelectMatchingLabel": "File name contains…",
+  "queue.manualImportSelectedCount": "{{count}} selected",
+  "queue.manualImportSkipSelected": "Skip selected",
+  "queue.manualImportAssignSelected": "Assign target to selected…",
   "queue.removeFailed": "Remove Failed",
   "queue.manualImportTooltip":
     "Manual import is available for attention-required queue items.",
@@ -7312,6 +7455,11 @@ const en: LocaleDictionary = {
     "Reset authentication factors for {{name}}? All active sessions and registered authentication factors will be revoked. They will need their primary credentials again. If the login policy requires MFA, they will need to enroll a new passkey or authenticator; otherwise their next password login will succeed without enrollment.",
   "settings.loginEnabled": "Login enabled",
   "settings.loginDisabled": "Login disabled",
+  "settings.accountOrigin.scryer": "Scryer account",
+  "settings.accountOrigin.mediaServerLogin": "Created by {{provider}} login",
+  "settings.accountOrigin.mediaServerLoginUnknown":
+    "Created by media server login",
+  "settings.linkedMediaServer": "Linked to {{provider}}",
   "settings.enableLogin": "Enable login",
   "settings.disableLogin": "Disable login",
   "settings.disableLoginConfirm":
@@ -8372,6 +8520,90 @@ const en: LocaleDictionary = {
     "Some ranges or warnings were omitted because the report limit was reached.",
   "mediaFile.subtitleCount": "{{count}} Subs",
   "mediaFile.delete": "Delete file",
+  "mediaFile.markBad": "Mark bad",
+  "mediaFile.markBadFile": "Mark bad: {{file}}",
+  "mediaFile.numberedVersion": "File version {{number}}",
+  "mediaFile.markBadDescription":
+    "Report {{file}} as bad. Report rules or an operator decide what happens next.",
+  "mediaFile.markBadOnly": "Mark bad only",
+  "mediaFile.markBadOnlyHint":
+    "Keep the file on disk and mark it bad, so the same file is not imported again for this title.",
+  "mediaFile.markBadRecycleSearch": "Mark bad, recycle, and search",
+  "mediaFile.markBadRecycleSearchHint":
+    "Also ask an operator to recycle the file and search for a replacement. Rules can mark a file bad but never recycle it.",
+  "mediaFile.markBadReason": "What’s wrong with this file?",
+  "mediaIssue.reasonLabel": "Reason",
+  "mediaIssue.reason.corrupted": "Does not play, or plays damaged",
+  "mediaIssue.reason.wrongContent": "Wrong movie or episode",
+  "mediaIssue.reason.wrongLanguage": "Wrong audio language",
+  "mediaIssue.reason.audioOutOfSync": "Audio out of sync",
+  "mediaIssue.reason.poorQuality": "Far worse than its quality suggests",
+  "mediaIssue.reason.other": "Something else",
+  "mediaFile.submitBadReport": "Submit report",
+  "mediaFile.markBadSubmitted": "Bad-media report submitted",
+  "mediaFile.markBadSubmitFailed":
+    "The report could not be submitted. Check that this version is still available and try again.",
+  "mediaIssue.reviewTitle": "Bad-media review",
+  "mediaIssue.reviewHint":
+    "Review reported files for each library. A file marked bad appears in its title’s blocked releases; removing it there unmarks the file.",
+  "mediaIssue.unmarkHint":
+    "Approving marks the file bad on its title’s blocklist. To unmark it later, remove the entry from the title’s blocked releases.",
+  "mediaIssue.library": "Library",
+  "mediaIssue.reports": "Reports",
+  "mediaIssue.reviewStatus": "Review status",
+  "mediaIssue.pending": "Pending review",
+  "mediaIssue.approved": "Approved",
+  "mediaIssue.rejected": "Rejected",
+  "mediaIssue.canceled": "Canceled",
+  "mediaIssue.allReports": "All reports",
+  "mediaIssue.noPending": "No reports are waiting for review in this library.",
+  "mediaIssue.noReports": "No bad-media reports in this library.",
+  "mediaIssue.reportsFailed":
+    "Could not load the reports. Refresh to try again.",
+  "mediaIssue.previousPage": "Previous page",
+  "mediaIssue.nextPage": "Next page",
+  "mediaIssue.viewReport": "View report",
+  "mediaIssue.hideReport": "Hide report",
+  "mediaIssue.titleId": "Title: {{id}}",
+  "mediaIssue.file": "Affected file",
+  "mediaIssue.episodes": "Affected episodes and linked movies",
+  "mediaIssue.noEpisodeAssociations": "No episode or linked movie associations",
+  "mediaIssue.requestedAction": "Requested action",
+  "mediaIssue.approvedAction": "Approved action",
+  "mediaIssue.executionError": "Execution error",
+  "mediaIssue.notStarted": "No action started",
+  "mediaIssue.blocked": "Marked bad",
+  "mediaIssue.recycling": "Recycling",
+  "mediaIssue.recycleFailed": "Recycle failed",
+  "mediaIssue.noEligibleRelease": "No eligible replacement release",
+  "mediaIssue.downloadQueued": "Replacement download queued",
+  "mediaIssue.replacementImported": "Replacement imported",
+  "mediaIssue.searching": "Replacement search",
+  "mediaIssue.approveMarkOnly": "Approve mark bad only",
+  "mediaIssue.approveMarkOnlyHint":
+    "Mark the file bad on its title’s blocklist and leave it on disk. The same file is not imported again for this title.",
+  "mediaIssue.reviewRecycle": "Review recycle and search",
+  "mediaIssue.approveRecycle": "Approve recycle and search",
+  "mediaIssue.approveRecycleHint":
+    "Review the files below. Approval marks the file bad, moves it to the recycle bin with any copy of it left in its download folder, and searches for a replacement.",
+  "mediaIssue.hardLinkedPair":
+    "This file is hard-linked to its copy in the download folder, so both names point to the same data. Recycling frees the space only if both names go to the recycle bin. Recycle both names, or cancel.",
+  "mediaIssue.recycleBothNames": "Recycle both names",
+  "mediaIssue.previewFingerprint": "Reviewed file fingerprint",
+  "mediaIssue.typeConfirmation": "Type DELETE to approve recycling.",
+  "mediaIssue.unexpectedPreviewScope":
+    "The preview does not identify exactly one media file. This report cannot be approved for recycling.",
+  "mediaIssue.reviewSaved":
+    "Review saved. Switch to All reports to see its execution status.",
+  "mediaIssue.recycleUnavailable":
+    "The recycle bin is disabled or unavailable. You can still approve mark bad only.",
+  "mediaIssue.remediationUnavailable":
+    "This report is not eligible for the selected action.",
+  "mediaIssue.reportedFileChanged":
+    "The reported file no longer matches the report. Ask for a new report on the current file.",
+  "mediaIssue.reject": "Reject report",
+  "mediaIssue.rejectHint":
+    "Reject this report without marking the file bad or changing files.",
   "subtitle.batchProgress":
     "Searching subtitles: {{completed}} of {{total}} processed.",
   "subtitle.batchCompleted":
@@ -8640,6 +8872,8 @@ const en: LocaleDictionary = {
   "status.editingRule": "Editing rule {{name}}",
   "status.deletingRule": "Delete rule {{name}}?",
   "status.mediaServerCreated": "Media server connection saved.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Media server connection saved, but these library refresh subscriptions were not created: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Media server connection updated.",
   "status.mediaServerDeleted": "Deleted media server {{name}}.",
   "status.plexServersDiscovered": "Plex servers loaded.",
@@ -8683,6 +8917,14 @@ const en: LocaleDictionary = {
 
   "profile.accountInfo": "Account",
   "profile.appearance": "Appearance",
+  "profile.facetVisibility": "Media types",
+  "profile.facetVisibilityDescription":
+    "Choose which media types appear in navigation, discovery, search and pickers. Titles you already have stay reachable.",
+  "profile.facetVisibilityLastVisible":
+    "At least one media type must stay visible.",
+  "profile.facetVisibilityDisabledByAdmin":
+    "An administrator turned this media type off for everyone.",
+  "profile.facetVisibilitySaved": "Media type preference saved.",
   "profile.appearanceDescription":
     "Personalize how Scryer looks for your account.",
   "profile.highlightColor": "Highlight color",
@@ -8759,7 +9001,7 @@ const en: LocaleDictionary = {
   "profile.linkedAccountConnection": "Connection",
   "profile.linkedAccountUnknownConnection": "Unknown connection",
   "profile.linkedAccountStatus": "Status",
-  "profile.linkJellyfinAccount": "Link Jellyfin",
+  "profile.linkJellyfinAccount": "Link Jellyfin / Silo",
   "profile.linkPlexAccount": "Link Plex",
   "profile.linkAccountConnection": "Connection",
   "profile.linkAccountUsername": "Username",
@@ -8789,7 +9031,7 @@ const en: LocaleDictionary = {
     "Too many sign-in attempts. Please wait a moment and try again.",
   "auth.signInWithScryerPassword": "Sign in with Scryer password",
   "auth.signInWithPasskey": "Sign in with passkey",
-  "auth.signInWithJellyfin": "Sign in with Jellyfin",
+  "auth.signInWithJellyfin": "Sign in with Jellyfin / Silo",
   "auth.jellyfinFailed": "Jellyfin sign-in failed.",
   "auth.signInWithPlex": "Sign in with Plex",
   "auth.plexFailed": "Plex sign-in failed.",
@@ -9014,7 +9256,7 @@ const en: LocaleDictionary = {
   "settings.notificationNoProviders":
     "No notification plugins installed. Install a notification plugin from the Plugins page first.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Grabbed Release",
   "settings.notificationEvent.download": "Download Failed",
   "settings.notificationEvent.upgrade": "Upgrade Imported",
@@ -9497,6 +9739,10 @@ const en: LocaleDictionary = {
   "history.rematched": "Rematched",
   "history.seedingStarted": "Seeding",
   "history.seedingCompleted": "Seeding done",
+  "history.subtitleDownloaded": "Subtitle downloaded",
+  "history.subtitleFailed": "Subtitle failed",
+  "history.subtitleDeleted": "Subtitle deleted",
+  "history.subtitleBlocklisted": "Subtitle blocklisted",
   "history.downloadIgnored": "Ignored",
   "history.downloadMissing": "Not visible in client",
   "history.facet": "Facet",
@@ -9510,6 +9756,18 @@ const en: LocaleDictionary = {
   "history.noMore": "No more events",
   "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Load more",
+  "history.placement": "Placement",
+  "history.placementHardLink": "Hard linked",
+  "history.placementCopy": "Copied",
+  "history.placementSymlink": "Symlinked",
+  "history.placementRenamed": "Moved into place",
+  "history.placementAlreadyPresent": "Already in the library",
+  "history.linkFallbackFailed": "Copied because the hard link failed",
+  "history.linkFallbackNotPossible":
+    "Copied because a hard link is not possible here",
+  "history.linkFallbackUnverifiable":
+    "Copied because the hard link could not be verified",
+  "history.linkFallbackError": "error {{code}}",
 
   // Indexer error diagnostics
   "indexerErrors.title": "Indexer error history",
@@ -9714,6 +9972,12 @@ const en: LocaleDictionary = {
     "Restore {{count}} selected file to its original path.",
   "settings.recycleBinRestoreDescriptionOther":
     "Restore {{count}} selected files to their original paths.",
+  "settings.recycleBinRestoreBadFileOne":
+    "1 item is a file marked bad for its title.",
+  "settings.recycleBinRestoreBadFileOther":
+    "{{count}} items are files marked bad for their titles.",
+  "settings.recycleBinRestoreClearBadFiles":
+    "Restore them anyway and unmark them. This needs permission to manage those titles.",
   "settings.recycleBinDeleteSelectedConfirmOne":
     "Permanently delete {{count}} selected recycle-bin file. This cannot be undone.",
   "settings.recycleBinDeleteSelectedConfirmOther":
@@ -10947,6 +11211,38 @@ const en: LocaleDictionary = {
     "Rules set different values for the same thing, so a person decides.",
   "requests.fallbackShapingInvalid":
     "Rules would approve, but a value they set cannot apply to this request, so a person decides.",
+  "requests.fallbackReportConflict":
+    "Report rules disagree about this report, so a person decides.",
+  "settings.refReqSectionReport":
+    "— The bad-file report a report rule decides; absent for a media request",
+  "settings.refReqReportReason":
+    "corrupted, wrong_content, wrong_language, audio_out_of_sync, poor_quality or other",
+  "settings.refReqReportRemediation":
+    "What the reporter asked for: mark_bad or recycle_and_search",
+  "settings.refReqReportProvenance":
+    "grabbed when the file came from a known grab, otherwise unknown",
+  "settings.refReqReportHasDetails":
+    "Whether the reporter described the problem",
+  "settings.refReqReportTitleId": "The reported file’s title",
+  "settings.refReqReportMediaFileId":
+    "The reported file; paths are not exposed",
+  "settings.refReqReportAffectedEpisodeIds": "Episodes the reported file holds",
+  "settings.refReqReportAffectedSeriesMovieLinkIds":
+    "Series-to-movie links the reported file serves",
+  "settings.refReqSectionReportFacts":
+    "— What Scryer knows about the reporter and the media",
+  "settings.refReqSectionReportObservations":
+    "— Whether each report fact is known",
+  "settings.refReqReportFactsReporterRequestedMedia":
+    "True when an approved request of the reporter’s created the title and covered the reported media",
+  "settings.refReqReportFactsReporterRequestedMediaValue":
+    "The fact’s value when known",
+  "settings.requestPreviewReportReview":
+    "Submitting this sample report would leave it for review.",
+  "settings.requestPreviewReportReject":
+    "Submitting this sample report would reject it.",
+  "settings.requestPreviewReportMarkBad":
+    "Submitting this sample report would mark the file bad. A requested recycle and search would still wait for an operator.",
   "requests.preflightReason": "Reason: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer could not read everything about this title, so a person will decide.",
@@ -11839,6 +12135,13 @@ const en: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "In backoff after recent failures",
   "indexerSearch.skipReason.backedOffUntil": "In backoff until {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Does not support text search",
+  "indexerSearch.skipReason.queryBudget": "Over its query budget",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Over its query budget until {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Over its query budget, can be asked again in {{seconds}} s",
+  "indexerSearch.queryBudget.partlySearched":
+    "Searched in part: its query budget stopped the remaining requests. Results from the requests it sent are kept.",
   "indexerSearch.caps.fresh": "Capabilities from cached snapshot",
   "indexerSearch.caps.managed": "Capabilities from managed indexer",
   "indexerSearch.caps.refreshed": "Capabilities refreshed",
@@ -12807,6 +13110,8 @@ const en: LocaleDictionary = {
     "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
   "error.ruleActionHeadFunction":
     "An action cannot be written as a function. Write it as a rule instead.",
+  "error.ruleMixesReportAndRequestHeads":
+    "A rule decides media requests or bad-file reports, not both. Move the report heads (mark_bad, reject_report) into a rule of their own.",
   "error.ruleForeignDataReference":
     "This rule reads data outside its own package. Use input instead.",
   "error.ruleWithTargetNotAllowed":
@@ -13544,6 +13849,8 @@ const en: LocaleDictionary = {
     "Preferred audio languages",
   "ruleOutput.request.add_tags": "Add tags",
   "ruleOutput.request.notify": "Notify",
+  "ruleOutput.request.mark_bad": "Mark file bad",
+  "ruleOutput.request.reject_report": "Reject report",
   "ruleOutput.request.notify.placeholder": "Notification text",
   "ruleOutput.request.reasons": "Reason codes",
   "ruleOutput.request.reasons.placeholder": "One reason code per line",
@@ -13592,10 +13899,10 @@ const en: LocaleDictionary = {
     "Rules score releases, so Scryer prefers the ones you want and passes over the ones you don't.",
   "tours.onboarding.mediaServers.title": "Media servers",
   "tours.onboarding.mediaServers.body":
-    "Connect Jellyfin, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
+    "Connect Jellyfin / Silo, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
   "tours.onboarding.notifications.title": "Notifications",
   "tours.onboarding.notifications.body":
-    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
+    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin / Silo, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins add indexers, download clients and notification services. Install and update them here.",

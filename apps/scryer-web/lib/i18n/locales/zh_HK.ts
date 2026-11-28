@@ -79,6 +79,52 @@ const zh_HK: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "頻寬限制（KB/s）",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "由此用戶端的所有下載共用。留空或 0 表示不限制。",
+  "settings.downloadClientTorboxApiKey": "API 權杖",
+  "settings.downloadClientTorboxApiKeyHelp": "TorBox 帳戶的 API 權杖。",
+  "settings.downloadClientTorboxCachedOnly": "僅限已快取",
+  "settings.downloadClientTorboxCachedOnlyHelp": "拒絕 TorBox 尚未快取的下載。",
+  "httpRelease.refusal.filePathInvalid":
+    "此下載中有檔案的路徑無法儲存到其下載資料夾內。",
+  "httpRelease.refusal.tooManyFiles":
+    "此下載的檔案數量超過單一下載可容納的數量。",
+  "httpRelease.refusal.linkKeyInvalid": "此下載中有檔案沒有可用的連結參照。",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "此下載中有檔案需要此下載器無法取得的連結。",
+  "httpRelease.refusal.linkRefused": "伺服器一再拒絕某個檔案的下載連結。",
+  "httpRelease.refusal.linkUnavailable": "某個檔案始終沒有可用的下載連結。",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox 拒絕了 API 權杖。",
+  "error.reason.TORBOX_PLAN_RESTRICTED": "TorBox 方案不包含此功能。",
+  "error.reason.TORBOX_ACTIVE_LIMIT": "TorBox 帳戶已達到進行中下載數量的上限。",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox 帳戶處於冷卻期，暫不接受新的下載。",
+  "error.reason.TORBOX_MONTHLY_LIMIT": "TorBox 帳戶已達到每月下載上限。",
+  "error.reason.TORBOX_HOURLY_LIMIT": "已達到每小時新增 TorBox 下載的上限。",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "此下載超過 TorBox 方案允許的大小。",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox 沒有快取此下載，而此用戶端只接受已快取的下載。",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox 無法讀取該種子。",
+  "error.reason.TORBOX_INVALID_NZB": "無法讀取 NZB。",
+  "error.reason.TORBOX_DUPLICATE_ITEM": "此下載已在 TorBox 帳戶中。",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox 沒有此項目。",
+  "error.reason.TORBOX_LINK_OFFLINE": "TorBox 下載連結已離線。",
+  "error.reason.TORBOX_RATE_LIMITED": "TorBox 正在限制接受要求的頻率。",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox 無法使用。",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox 將此下載中的一個檔案標記為已感染。",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox 只以 zip 壓縮檔形式提供此下載中的一個檔案。",
+  "error.reason.TORBOX_NO_VIDEO_FILE": "此 TorBox 下載中沒有影片檔案。",
+  "error.reason.TORBOX_REMOTE_FAILED": "TorBox 回報此下載失敗。",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox 中已不再有此下載。",
+  "error.reason.TORBOX_STALLED": "此下載在 TorBox 上停滯。",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "此 TorBox 下載中的檔案名稱無法在此系統上儲存。",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "此發行沒有可傳送到 TorBox 的磁力連結、種子檔案或 NZB。",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED": "TorBox 不支援對此下載執行此操作。",
+  "error.reason.TORBOX_JOB_NOT_FOUND": "此 TorBox 用戶端沒有該下載。",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "TorBox 用戶端沒有 API 權杖。",
   "settings.publicUrlTitle": "公開 URL",
   "settings.publicUrlHelp":
     "用戶及服務存取 Scryer 所用的地址，例如 https://scryer.example.com。帳戶連結及 OAuth 會即時使用變更；密鑰要在 Scryer 重新啟動後才使用。",
@@ -360,6 +406,9 @@ const zh_HK: LocaleDictionary = {
   "dashboard.storageFree": "剩餘 {{size}}",
   "dashboard.storageUnavailable": "無法獲取使用量",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "此媒體庫佔 {{size}}",
+  "dashboard.storageLibraryUsageHint":
+    "此媒體庫佔用 {{library}} TB；磁碟區已使用 {{used}} TB",
   "dashboard.storageLegend": "正常 · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "偏低",
   "dashboard.tagCrit": "緊急",
@@ -1072,6 +1121,12 @@ const zh_HK: LocaleDictionary = {
   "settings.mediaServerEnabled": "已啟用媒體伺服器",
   "settings.mediaServerAuthCapabilities": "驗證功能",
   "settings.mediaServerAutoAddEnabled": "自動新增已啟用",
+  "settings.mediaServerRefreshOffer":
+    "當 Scryer 匯入、重新命名、刪除或移動媒體時，重新整理此伺服器的媒體庫",
+  "settings.mediaServerRefreshOfferHelp":
+    "在「通知」中為此連線訂閱：{{events}}。你可以在那裡更改或移除。",
+  "settings.mediaServerRefreshPluginMissing":
+    "匯入後重新整理媒體庫需要此伺服器的通知外掛程式，但尚未安裝。如要安裝，請開啟",
   "settings.mediaServerPathMappings": "路徑對應",
   "settings.mediaServerPathMappingsHelp":
     "若媒體伺服器對媒體資料夾的檢視路徑與 Scryer 不同，請在此設定路徑對應。",
@@ -1154,6 +1209,8 @@ const zh_HK: LocaleDictionary = {
   "settings.downloadClientPriority": "優先級",
   "settings.downloadClientRemoveCompleted": "移除已完成",
   "settings.downloadClientRemoveFailed": "移除失敗項",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "「移除失敗項」適用於在用戶端中失敗的下載。Scryer 拒絕匯入的種子一律比照已匯入的處理：做種至目標後由用戶端移除。",
   "settings.downloadClientUseSslInfo": "連接此下載客戶端時使用 SSL/TLS。",
   "settings.downloadClientEnabledInfo":
     "禁用後，此客戶端在下載路由中將被跳過。",
@@ -1253,6 +1310,10 @@ const zh_HK: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "資料夾範本包含非法的文件系統字元：{{character}}",
   "settings.renameTemplateLabel": "重命名模板",
+  "settings.renameTemplateNoExtensionTitle": "不含 {ext} 仍要儲存？",
+  "settings.renameTemplateNoExtensionDescription":
+    "此重新命名範本沒有 {ext} 標記。Scryer 會將每個檔案的副檔名加到名稱結尾。",
+  "settings.renameTemplateNoExtensionConfirm": "仍要儲存",
   "settings.renameTemplatePlaceholder": "佔位符",
   "settings.renameTemplateRequired": "重命名模板為必填項。",
   "settings.renameCollisionPolicyLabel": "衝突策略",
@@ -1612,6 +1673,13 @@ const zh_HK: LocaleDictionary = {
   "title.contextTitleList": "作品清單",
   "title.contextListDisclosure": "清單",
   "title.showTitleList": "顯示清單",
+  "title.sortBy": "排序方式",
+  "title.sortAscending": "遞增",
+  "title.sortDescending": "遞減",
+  "title.sameFilmAsSeriesMovie": "亦作為劇集 {{titles}} 的電影追蹤。",
+  "title.sameFilmAsMovieTitle": "亦作為電影追蹤：{{titles}}。",
+  "title.sameFilmBeforeAdd": "已作為劇集 {{titles}} 的電影追蹤。",
+  "title.sameFilmMarker": "亦作為電影追蹤",
   "title.hideTitleList": "隱藏清單",
   "title.contextForYouTitle": "從你的資料庫推薦",
   "title.contextForYouTop": "熱門",
@@ -1654,8 +1722,8 @@ const zh_HK: LocaleDictionary = {
   "title.table.runtime": "片長",
   "title.table.avgRuntime": "平均片長",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} 集",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} 集 ({{monitored}} 集已監控)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} 集（共 {{total}} 集）",
   "title.table.status": "狀態",
   "title.table.root": "根目錄",
   "title.table.popularity": "熱門度",
@@ -1756,6 +1824,10 @@ const zh_HK: LocaleDictionary = {
     "{{count}} 個索引器失敗：{{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} 個索引器已略過：{{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} 個索引器只搜尋了部分，已超出查詢配額：{{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}：{{seconds}} 秒後可再次查詢",
   "title.noReleasesFound": "未找到 {{name}} 的發佈資源。",
   "title.searchNeedsDownloadClientTitle": "搜尋需要下載客戶端",
   "title.searchNeedsDownloadClientDescription":
@@ -2016,6 +2088,20 @@ const zh_HK: LocaleDictionary = {
   "queue.manualImportMultipleEpisodes": "此檔案包含多集",
   "queue.manualImportMultipleEpisodesLabel": "為此檔案分配多集",
   "queue.manualImportApplySuggestions": "全部應用建議",
+  "queue.manualImportApplySuggestionsSelected": "對所選項目套用建議",
+  "queue.manualImportSelectAll": "全選",
+  "queue.manualImportSelectNone": "全不選",
+  "queue.manualImportSelectInvert": "反向選取",
+  "queue.manualImportSelectMatching": "選取相符項目",
+  "queue.manualImportSelectMatchingLabel": "檔名包含…",
+  "queue.manualImportSelectedCount": "已選取 {{count}} 項",
+  "queue.manualImportSkipSelected": "略過所選項目",
+  "queue.manualImportAssignSelected": "為所選項目指定目標…",
+  "queue.manualImportVerdict.UPGRADE": "升級",
+  "queue.manualImportVerdict.EQUAL": "質素相同",
+  "queue.manualImportVerdict.DOWNGRADE": "降級",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "新檔案",
+  "queue.manualImportVerdictEstimated": "估計",
   "queue.removeFailed": "移除失敗",
   "queue.manualImportTooltip": "手動導入可用於需要關注的隊列項。",
   "queue.releaseTitle": "發佈資源",
@@ -2259,6 +2345,10 @@ const zh_HK: LocaleDictionary = {
     "確定要重設 {{name}} 的身份驗證要素嗎？所有活躍登入階段與已註冊的驗證要素都將被撤銷。他們將需要再次使用其主要憑證。若登入政策要求 MFA，他們將需要註冊新的通行密鑰或驗證器；否則下次密碼登入將無需註冊即可成功。",
   "settings.loginEnabled": "已啟用登入",
   "settings.loginDisabled": "已停用登入",
+  "settings.accountOrigin.scryer": "Scryer 帳號",
+  "settings.accountOrigin.mediaServerLogin": "由 {{provider}} 登入建立",
+  "settings.accountOrigin.mediaServerLoginUnknown": "由媒體伺服器登入建立",
+  "settings.linkedMediaServer": "已連結 {{provider}}",
   "settings.enableLogin": "啟用登入",
   "settings.disableLogin": "停用登入",
   "settings.disableLoginConfirm":
@@ -3245,6 +3335,8 @@ const zh_HK: LocaleDictionary = {
   "status.editingRule": "正在編輯規則 {{name}}",
   "status.deletingRule": "刪除規則 {{name}}？",
   "status.mediaServerCreated": "媒體伺服器連線已儲存。",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "媒體伺服器連線已儲存，但以下媒體庫重新整理訂閱未能建立：{{events}}。{{reason}}",
   "status.mediaServerUpdated": "媒體伺服器連線已更新。",
   "status.mediaServerDeleted": "已刪除媒體伺服器 {{name}}。",
   "status.plexServersDiscovered": "已載入 Plex 伺服器。",
@@ -3349,7 +3441,7 @@ const zh_HK: LocaleDictionary = {
   "profile.linkedAccountConnection": "連線",
   "profile.linkedAccountUnknownConnection": "未知連線",
   "profile.linkedAccountStatus": "狀態",
-  "profile.linkJellyfinAccount": "連結 Jellyfin",
+  "profile.linkJellyfinAccount": "連結 Jellyfin / Silo",
   "profile.linkPlexAccount": "連結 Plex",
   "profile.linkAccountConnection": "連線",
   "profile.linkAccountUsername": "用戶名稱",
@@ -3376,7 +3468,7 @@ const zh_HK: LocaleDictionary = {
   "auth.signInRateLimited": "登入嘗試次數過多。請稍候再試。",
   "auth.signInWithScryerPassword": "使用 Scryer 密碼登入",
   "auth.signInWithPasskey": "使用通行密鑰登入",
-  "auth.signInWithJellyfin": "使用 Jellyfin 登入",
+  "auth.signInWithJellyfin": "使用 Jellyfin / Silo 登入",
   "auth.jellyfinFailed": "Jellyfin 登入失敗。",
   "auth.signInWithPlex": "使用 Plex 登入",
   "auth.plexFailed": "Plex 登入失敗。",
@@ -3576,7 +3668,7 @@ const zh_HK: LocaleDictionary = {
   "settings.notificationNoProviders":
     "未安裝通知插件。請先在插件頁面安裝通知插件。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "已抓取發佈",
   "settings.notificationEvent.download": "下載失敗",
   "settings.notificationEvent.upgrade": "升級進口",
@@ -3948,6 +4040,10 @@ const zh_HK: LocaleDictionary = {
   "history.rematched": "重新匹配",
   "history.seedingStarted": "做種中",
   "history.seedingCompleted": "做種完成",
+  "history.subtitleDownloaded": "字幕已下載",
+  "history.subtitleFailed": "字幕失敗",
+  "history.subtitleDeleted": "字幕已刪除",
+  "history.subtitleBlocklisted": "字幕已封鎖",
   "history.downloadIgnored": "已忽略",
   "history.downloadMissing": "用戶端中不可見",
   "history.facet": "分類",
@@ -5926,6 +6022,13 @@ const zh_HK: LocaleDictionary = {
   "indexerSearch.skipReason.backedOff": "因近期失敗而暫停",
   "indexerSearch.skipReason.backedOffUntil": "暫停至 {{time}}",
   "indexerSearch.skipReason.noTextSearch": "不支援文字搜尋",
+  "indexerSearch.skipReason.queryBudget": "已超出查詢配額",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "已超出查詢配額，至 {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "已超出查詢配額，{{seconds}} 秒後可再次查詢",
+  "indexerSearch.queryBudget.partlySearched":
+    "只搜尋了部分：查詢配額停止了其餘請求。已送出請求的結果會保留。",
   "indexerSearch.health.retryFailed": "重試失敗項",
   "indexerSearch.refine.title": "篩選",
   "indexerSearch.refine.reset": "重設",
@@ -6552,6 +6655,8 @@ const zh_HK: LocaleDictionary = {
   "ruleOutput.lifecycle.notify.placeholder": "通知內容",
   "ruleOutput.request.approve": "批准",
   "ruleOutput.request.deny": "拒絕",
+  "ruleOutput.request.mark_bad": "將檔案標記為損壞",
+  "ruleOutput.request.reject_report": "駁回報告",
   "ruleOutput.request.manual": "留待審批",
   "ruleOutput.request.set_quality_profile": "質素設定檔",
   "ruleOutput.request.set_lease_days": "保留期",
@@ -6609,10 +6714,10 @@ const zh_HK: LocaleDictionary = {
     "規則為發佈評分，讓 Scryer 優先選擇你想要的，略過你不想要的。",
   "tours.onboarding.mediaServers.title": "媒體伺服器",
   "tours.onboarding.mediaServers.body":
-    "連接 Jellyfin、Plex 或 Emby，Scryer 便能知道你看過甚麼。如要在 Scryer 匯入後重新整理伺服器，亦需在「插件」中安裝該伺服器的插件。",
+    "連接 Jellyfin / Silo、Plex 或 Emby，Scryer 便能知道你看過甚麼。如要在 Scryer 匯入後重新整理伺服器，亦需在「插件」中安裝該伺服器的插件。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「插件」面板加入。Jellyfin、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連接，亦需從這個面板安裝該伺服器的插件，匯入後伺服器才會重新整理。",
+    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「插件」面板加入。Jellyfin / Silo、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連接，亦需從這個面板安裝該伺服器的插件，匯入後伺服器才會重新整理。",
   "tours.onboarding.plugins.title": "插件",
   "tours.onboarding.plugins.body":
     "插件可加入索引器、下載客戶端和通知服務。在這裏安裝和更新它們。",

@@ -90,6 +90,35 @@ pub struct RequestRuleSample {
     pub required_audio_languages: Option<Vec<String>>,
     /// `None` leaves it to the library.
     pub preferred_audio_languages: Option<Vec<String>>,
+    /// The sample bad-file report a report rule is previewed against. A
+    /// request rule ignores it; a report rule without one sees
+    /// [`RequestRuleReportSample::default`].
+    pub report: Option<RequestRuleReportSample>,
+}
+
+/// A hypothetical bad-file report for previewing a report rule. Nothing is
+/// read from a real file.
+#[derive(Clone, Debug)]
+pub struct RequestRuleReportSample {
+    pub reason: scryer_domain::MediaIssueReason,
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    /// True for a file from a known grab.
+    pub grabbed: bool,
+    pub has_details: bool,
+    /// `None` previews the fact as unknown.
+    pub reporter_requested_media: Option<bool>,
+}
+
+impl Default for RequestRuleReportSample {
+    fn default() -> Self {
+        Self {
+            reason: scryer_domain::MediaIssueReason::Corrupted,
+            remediation: scryer_domain::MediaIssueRemediation::MarkBad,
+            grabbed: true,
+            has_details: true,
+            reporter_requested_media: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +189,12 @@ pub struct RequestRulePreviewResult {
     pub input_json: String,
     /// True when the sample's metadata could not be fully established.
     pub metadata_partial: bool,
+    /// What a report rule said about the sample report; `None` for a request
+    /// rule.
+    pub report_vote: Option<scryer_rules::request::RequestReportVote>,
+    /// What submitting the sample report would do with this rule alone;
+    /// `None` for a request rule.
+    pub report_outcome: Option<crate::request_rules::ReportVerdict>,
 }
 
 /// A rule set with its current revision; a missing revision is a repository
@@ -580,6 +615,19 @@ impl AppUseCase {
                 )
             })?;
 
+        if crate::request_rules::RequestRuleKind::of_source(&policy.rego_source, &policy.id)
+            == crate::request_rules::RequestRuleKind::Report
+        {
+            return self
+                .preview_report_rule(
+                    &policy,
+                    &requester,
+                    &library,
+                    sample.report.unwrap_or_default(),
+                )
+                .await;
+        }
+
         let external_ids =
             crate::media_requests::normalize_media_request_external_ids(sample.external_ids)?;
         let (snapshot, enriched_ids) = if external_ids.is_empty() {
@@ -732,6 +780,131 @@ impl AppUseCase {
             error,
             input_json,
             metadata_partial,
+            report_vote: None,
+            report_outcome: None,
+        })
+    }
+
+    /// Preview a report rule against a sample report: the vote, and what
+    /// submitting that report would do if this were the only report rule.
+    async fn preview_report_rule(
+        &self,
+        policy: &RequestPolicy,
+        requester: &User,
+        library: &scryer_domain::Library,
+        sample: RequestRuleReportSample,
+    ) -> AppResult<RequestRulePreviewResult> {
+        use crate::request_rules::arbitration::{ScopedError, ScopedVote, arbitrate_report};
+
+        let evaluated_at = Utc::now();
+        let requester_doc = self
+            .request_requester_doc(requester, &library.id, evaluated_at)
+            .await?;
+        let report = scryer_rules::request::RequestReportDoc {
+            reason: sample.reason.as_str().to_string(),
+            remediation: sample.remediation.as_str().to_string(),
+            provenance: if sample.grabbed { "grabbed" } else { "unknown" }.to_string(),
+            has_details: sample.has_details,
+            title_id: "sample-title".to_string(),
+            media_file_id: "sample-media-file".to_string(),
+            affected_episode_ids: Vec::new(),
+            affected_series_movie_link_ids: Vec::new(),
+            facts: scryer_rules::request::RequestReportFactsDoc {
+                reporter_requested_media: match sample.reporter_requested_media {
+                    Some(value) => scryer_rules::request::Observation::known(value),
+                    None => scryer_rules::request::Observation::unknown(
+                        crate::request_rules::facts::fact_reason::NOT_YET_COLLECTED,
+                    ),
+                },
+            },
+        };
+        let input = crate::request_rules::report::build_report_input(
+            evaluated_at,
+            requester_doc,
+            library,
+            report,
+        );
+        let input_json = serde_json::to_string_pretty(&input).unwrap_or_else(|_| "{}".to_string());
+
+        let source_content_hash = content_hash(&policy.rego_source);
+        let engine = RequestRulesEngine::build(std::slice::from_ref(policy)).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::COMPILE_FAILED,
+                format!("rule failed to compile: {error}"),
+            )
+        })?;
+        let mut evaluator = engine.evaluator();
+        let outcome = evaluator.evaluate(&input).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
+                format!("rule evaluation failed: {error}"),
+            )
+        })?;
+
+        let votes: Vec<ScopedVote> = outcome
+            .records
+            .iter()
+            .map(|record| ScopedVote {
+                rule_set_id: record.rule_set_id.clone(),
+                rule_set_name: record.rule_set_name.clone(),
+                revision_number: 0,
+                content_hash: source_content_hash.clone(),
+                decision: record.decision.clone(),
+            })
+            .collect();
+        let mut errors: Vec<ScopedError> = outcome
+            .errors
+            .iter()
+            .map(|failure| ScopedError {
+                rule_set_id: failure.rule_set_id.clone(),
+                rule_set_name: failure.rule_set_name.clone(),
+                revision_number: 0,
+                content_hash: source_content_hash.clone(),
+                message: failure.message.clone(),
+            })
+            .collect();
+        if votes.is_empty() && errors.is_empty() {
+            errors.push(ScopedError {
+                rule_set_id: policy.id.clone(),
+                rule_set_name: policy.name.clone(),
+                revision_number: 0,
+                content_hash: source_content_hash.clone(),
+                message: "rule produced no decision".to_string(),
+            });
+        }
+        let verdict = arbitrate_report(&votes, &errors).verdict;
+        let record = outcome.records.first();
+        Ok(RequestRulePreviewResult {
+            rule_set_id: policy.id.clone(),
+            source_content_hash,
+            evaluated_at,
+            vote: record.map(|record| record.decision.vote),
+            held: record.is_some_and(|record| record.decision.held),
+            reasons: record
+                .map(|record| {
+                    record
+                        .decision
+                        .reason_codes
+                        .iter()
+                        .map(|code| RequestDecisionReason {
+                            code: code.clone(),
+                            rule_name: record.rule_set_name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            tags: Vec::new(),
+            undefined_tags: Vec::new(),
+            shaping: RequestShaping::default(),
+            notify: record.and_then(|record| record.decision.notify.clone()),
+            error: record
+                .is_none()
+                .then(|| errors.first().map(|error| error.message.clone()))
+                .flatten(),
+            input_json,
+            metadata_partial: false,
+            report_vote: record.map(|record| record.decision.report_vote),
+            report_outcome: Some(verdict),
         })
     }
 

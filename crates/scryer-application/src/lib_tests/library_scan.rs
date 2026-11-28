@@ -11189,6 +11189,14 @@ async fn resolve_pending_import_creating_series_title_from_folder_claims_folder_
         Some(series_folder.to_string_lossy().as_ref()),
         "creating a title from a folder must claim the folder"
     );
+    assert!(
+        result
+            .title
+            .tags
+            .iter()
+            .any(|tag| tag == "scryer:monitor-type:futureepisodes"),
+        "a title created from a pending import takes the library's default monitoring"
+    );
     let summary = result
         .library_scan
         .expect("a folder resolution reports the scan it ran");

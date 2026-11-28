@@ -17,6 +17,12 @@ export type TourCardPlacement = {
 export const TOUR_VIEWPORT_MARGIN = 16;
 /** Space kept between the card and the spotlight, room for the arrow. */
 export const TOUR_TARGET_GAP = 56;
+/**
+ * The least space kept between the card and the spotlight, used when no side
+ * has room for the arrow: a card just clear of its target reads better than
+ * one laid over it.
+ */
+export const TOUR_TIGHT_GAP = 12;
 /** How far the spotlight extends past its target. */
 export const TOUR_SPOTLIGHT_PADDING = 6;
 
@@ -47,7 +53,9 @@ export function spotlightRect(target: TourRect): TourRect {
  * Where the card goes. It sits in the middle of the viewport, as a lightbox,
  * unless that would cover the spotlight; then it moves just clear of the
  * spotlight on the side with the most room, keeping to the middle along the
- * other axis. When no side has room it stays centered over the page.
+ * other axis, with room for the arrow when there is any and snug against the
+ * spotlight when there is not. When no side has room even then, it stays
+ * centered over the page.
  */
 export function placeTourCard(
   viewport: TourSize,
@@ -87,47 +95,33 @@ export function placeTourCard(
     return center;
   }
 
-  const room = {
-    above: spot.top - TOUR_TARGET_GAP - margin,
-    below:
-      viewport.height - (spot.top + spot.height) - TOUR_TARGET_GAP - margin,
-    left: spot.left - TOUR_TARGET_GAP - margin,
-    right: viewport.width - (spot.left + spot.width) - TOUR_TARGET_GAP - margin,
-  };
   type Side = Exclude<TourCardPlacement["side"], "center">;
-  const vertical: Side[] = (["below", "above"] as const)
-    .filter((side) => room[side] >= card.height)
-    .sort((a, b) => room[b] - room[a]);
-  const horizontal: Side[] = (["right", "left"] as const)
-    .filter((side) => room[side] >= card.width)
-    .sort((a, b) => room[b] - room[a]);
-  const side = vertical[0] ?? horizontal[0];
-  if (!side) return center;
+  for (const gap of [TOUR_TARGET_GAP, TOUR_TIGHT_GAP]) {
+    const room = {
+      above: spot.top - gap - margin,
+      below: viewport.height - (spot.top + spot.height) - gap - margin,
+      left: spot.left - gap - margin,
+      right: viewport.width - (spot.left + spot.width) - gap - margin,
+    };
+    const vertical: Side[] = (["below", "above"] as const)
+      .filter((side) => room[side] >= card.height)
+      .sort((a, b) => room[b] - room[a]);
+    const horizontal: Side[] = (["right", "left"] as const)
+      .filter((side) => room[side] >= card.width)
+      .sort((a, b) => room[b] - room[a]);
+    const side = vertical[0] ?? horizontal[0];
+    if (!side) continue;
 
-  switch (side) {
-    case "below":
-      return {
-        side,
-        left: centeredLeft,
-        top: spot.top + spot.height + TOUR_TARGET_GAP,
-      };
-    case "above":
-      return {
-        side,
-        left: centeredLeft,
-        top: spot.top - TOUR_TARGET_GAP - card.height,
-      };
-    case "right":
-      return {
-        side,
-        top: centeredTop,
-        left: spot.left + spot.width + TOUR_TARGET_GAP,
-      };
-    case "left":
-      return {
-        side,
-        top: centeredTop,
-        left: spot.left - TOUR_TARGET_GAP - card.width,
-      };
+    switch (side) {
+      case "below":
+        return { side, left: centeredLeft, top: spot.top + spot.height + gap };
+      case "above":
+        return { side, left: centeredLeft, top: spot.top - gap - card.height };
+      case "right":
+        return { side, top: centeredTop, left: spot.left + spot.width + gap };
+      case "left":
+        return { side, top: centeredTop, left: spot.left - gap - card.width };
+    }
   }
+  return center;
 }

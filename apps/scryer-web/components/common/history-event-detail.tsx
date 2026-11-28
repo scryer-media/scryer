@@ -9,6 +9,10 @@ import { cn } from "@/lib/utils";
 import { titleMoveHistoryDetails } from "@/lib/utils/history-moves";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DecidedByBadge } from "@/components/common/decided-by-badge";
+import {
+  importLinkFallbackLabelKey,
+  importPlacementLabelKey,
+} from "@/lib/utils/history-placements";
 
 const friendlyKeys: Record<string, string> = {
   import_id: "Import ID",
@@ -54,6 +58,7 @@ const structuredDataKeys = new Set([
   "dest_path",
   "reason",
   "blocklist_reason",
+  "file_placements",
 ]);
 
 function formatKey(key: string): string {
@@ -107,10 +112,16 @@ function parseDataJson(raw: unknown): Record<string, unknown> | null {
 type HistoryEventDetailEntry = {
   key: string;
   value: string;
+  /** Stable code beside the reason; the reason text is the fallback. */
+  code?: string | null;
 };
 
 const DOWNLOAD_REASON_KEYS: Readonly<Record<string, string>> = {
   DOWNLOAD_CLIENT_ITEM_MISSING: "history.downloadMissing",
+};
+
+const REASON_CODE_KEYS: Readonly<Record<string, string>> = {
+  MEDIA_IMPORT_MATCHES_BAD_FILE: "error.reason.MEDIA_IMPORT_MATCHES_BAD_FILE",
 };
 
 export function buildHistoryEventDetail(event: TitleHistoryEvent): {
@@ -140,7 +151,13 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
     event.skipReason ? { key: "skip_reason", value: event.skipReason } : null,
     event.sourcePath ? { key: "source_path", value: event.sourcePath } : null,
     event.destPath ? { key: "dest_path", value: event.destPath } : null,
-    event.failureReason ? { key: "reason", value: event.failureReason } : null,
+    event.failureReason
+      ? {
+          key: "reason",
+          value: event.failureReason,
+          code: event.failureReasonCode,
+        }
+      : null,
     event.blocklistReason
       ? { key: "blocklist_reason", value: event.blocklistReason }
       : null,
@@ -150,6 +167,7 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
   );
   const hasDetail =
     Boolean(event.scoring) ||
+    (event.filePlacements?.length ?? 0) > 0 ||
     structuredDetails.length > 0 ||
     rawDetails.length > 0;
 
@@ -238,7 +256,58 @@ export function HistoryEventDetailContent({
           ) : null}
         </div>
       ) : null}
-      {structuredDetails.map(({ key, value }) => (
+      {event.filePlacements?.length ? (
+        <div
+          id={selectorId("history-event-placements", event.id)}
+          className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]"
+        >
+          <span className="text-muted-foreground">{t("history.placement")}</span>
+          <ul className="min-w-0 space-y-0.5">
+            {event.filePlacements.map((placement) => {
+              const placementKey = importPlacementLabelKey(placement.placement);
+              const fallback = placement.linkFallback;
+              const fallbackKey = fallback
+                ? importLinkFallbackLabelKey(fallback.cause)
+                : null;
+              return (
+                <li key={placement.path} className="min-w-0">
+                  <span
+                    className={cn(
+                      "text-foreground",
+                      fallback?.cause === "FAILED" &&
+                        "text-[var(--scry-warning-text)]",
+                    )}
+                  >
+                    {fallback
+                      ? fallbackKey
+                        ? t(fallbackKey)
+                        : fallback.cause
+                      : placementKey
+                        ? t(placementKey)
+                        : placement.placement}
+                  </span>
+                  {fallback ? (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      ({fallback.reason}
+                      {fallback.osErrorCode != null
+                        ? `, ${t("history.linkFallbackError", { code: fallback.osErrorCode })}`
+                        : ""}
+                      )
+                    </span>
+                  ) : null}
+                  {event.filePlacements!.length > 1 ? (
+                    <div className="font-[family-name:var(--font-code)] text-muted-foreground">
+                      {formatValue(placement.path, "dest_path")}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+      {structuredDetails.map(({ key, value, code }) => (
         <div
           key={key}
           className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]"
@@ -250,7 +319,9 @@ export function HistoryEventDetailContent({
               key.endsWith("_path") && "font-[family-name:var(--font-code)]",
             )}
           >
-            {key === "reason" && DOWNLOAD_REASON_KEYS[value]
+            {key === "reason" && code && REASON_CODE_KEYS[code]
+              ? t(REASON_CODE_KEYS[code])
+              : key === "reason" && DOWNLOAD_REASON_KEYS[value]
               ? t(DOWNLOAD_REASON_KEYS[value])
               : key === "skip_reason" && importSkipReasonLabelKey(String(value))
                 ? t(importSkipReasonLabelKey(String(value))!)

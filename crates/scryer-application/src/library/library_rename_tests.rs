@@ -1528,6 +1528,65 @@ fn resolve_rename_common_metadata_prefers_analysis_over_parsed_metadata() {
 }
 
 #[test]
+fn resolve_rename_common_metadata_never_renders_a_parse_hint_as_edition() {
+    let with_remux =
+        "Paper Lantern Engine (2007) {tmdb-900001} [Remux][1080p][DTS-HD MA][5.1][H.264]";
+    let without_remux = "Paper Lantern Engine (2007) {tmdb-900001} [1080p][DTS-HD MA][5.1][H.264]";
+    for name in [with_remux, without_remux] {
+        let parsed = parse_release_metadata(name);
+        assert_eq!(parsed.edition, None, "{name}");
+        let mut media_file = test_media_file(&format!("/library/{name}.mkv"));
+        media_file.edition = None;
+        let resolved = resolve_rename_common_metadata(
+            Some(&media_file),
+            &parsed,
+            "Paper Lantern Engine",
+            Some("2007"),
+            "mkv",
+        );
+        assert_eq!(resolved.edition, "", "{name}");
+
+        let resolved = resolve_rename_common_metadata(
+            None,
+            &parsed,
+            "Paper Lantern Engine",
+            Some("2007"),
+            "mkv",
+        );
+        assert_eq!(resolved.edition, "", "{name}");
+    }
+}
+
+#[test]
+fn resolve_rename_common_metadata_falls_back_to_parsed_edition() {
+    let parsed =
+        parse_release_metadata("Paper.Lantern.Engine.2007.Directors.Cut.1080p.BluRay.x264-GRP");
+    let parsed_edition = parsed.edition.clone().expect("parsed edition");
+    assert!(parsed_edition.contains("Cut"), "{parsed_edition}");
+
+    let mut media_file = test_media_file("/library/Paper Lantern Engine (2007).mkv");
+    media_file.edition = None;
+    let resolved = resolve_rename_common_metadata(
+        Some(&media_file),
+        &parsed,
+        "Paper Lantern Engine",
+        Some("2007"),
+        "mkv",
+    );
+    assert_eq!(resolved.edition, parsed_edition);
+
+    media_file.edition = Some("Extended".to_string());
+    let resolved = resolve_rename_common_metadata(
+        Some(&media_file),
+        &parsed,
+        "Paper Lantern Engine",
+        Some("2007"),
+        "mkv",
+    );
+    assert_eq!(resolved.edition, "Extended");
+}
+
+#[test]
 fn resolve_rename_common_metadata_uses_persisted_parsed_backup_when_analysis_missing() {
     let mut media_file = test_media_file("/library/Movie.2024.mkv");
     media_file.video_codec = None;
@@ -1562,7 +1621,7 @@ fn probed_series_analysis(channels: i32, layout: &str) -> crate::MediaFileAnalys
             revision: scryer_media_types::ANALYSIS_REVISION,
             streams: vec![scryer_media_types::StreamDetail {
                 kind: scryer_media_types::StreamKind::Audio,
-                codec: Some("aac".to_string()),
+                codec: Some(scryer_media_types::Codec::Aac),
                 channels: Some(channels),
                 metadata: scryer_media_types::StreamMetadata {
                     channel_layout: Some(layout.to_string()),

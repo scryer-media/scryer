@@ -570,6 +570,7 @@ async fn validate_completed_import_source_and_mark_processing(
             decision: ImportDecision::Skipped,
             skip_reason: Some(ImportSkipReason::NoVideoFiles),
             release_burned: false,
+            release_refused: false,
             title_id: completed_import_request_title_id(&request),
             ..base_completed_import_result(
                 &request.import_id,
@@ -655,6 +656,7 @@ async fn finalize_completed_import_error(
         reason_code: error.reason().map(str::to_string),
         needs_reconciliation: requires_reconciliation,
         release_burned: false,
+        release_refused: false,
         title_id: completed_import_request_title_id(request),
         ..base_completed_import_result(
             &request.import_id,

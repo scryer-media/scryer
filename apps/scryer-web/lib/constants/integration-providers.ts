@@ -37,3 +37,19 @@ export function isVisibleExternalAccountProvider(
 ): provider is VisibleExternalAccountProvider {
   return VISIBLE_EXTERNAL_ACCOUNT_PROVIDER_SET.has(provider);
 }
+
+/** The provider's product name, which is not translated. */
+export function externalAccountProviderLabel(
+  provider: ExternalAccountProvider,
+): string {
+  switch (provider) {
+    case "PLEX":
+      return "Plex";
+    case "JELLYFIN":
+      return "Jellyfin / Silo";
+    case "EMBY":
+      return "Emby";
+    default:
+      return provider;
+  }
+}

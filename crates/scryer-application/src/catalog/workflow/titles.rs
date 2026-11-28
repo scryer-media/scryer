@@ -287,6 +287,10 @@ impl AppUseCase {
         if sort.key == crate::TitleCatalogSortKey::Profile && sort.profile_names.is_none() {
             sort.profile_names = Some(self.title_catalog_profile_names(&library_ids).await?);
         }
+        if sort.key == crate::TitleCatalogSortKey::Episodes && sort.episodes_aired_through.is_none()
+        {
+            sort.episodes_aired_through = Some(self.runtime.environment.now().date_naive());
+        }
         self.services
             .catalog
             .titles
@@ -997,10 +1001,18 @@ impl AppUseCase {
     pub async fn add_title_with_options_patch_outcome_in_library(
         &self,
         actor: &User,
-        request: NewTitle,
+        mut request: NewTitle,
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<AddTitleOutcome> {
+        // A facet turned off for the instance is frozen: its existing titles
+        // stay, but no new ones are added to it.
+        self.ensure_facet_enabled(&request.facet, "Adding a title")
+            .await?;
+        self.apply_library_default_monitor_type(&mut request, &library_id)
+            .await?;
+        self.apply_library_default_title_tags(&mut request, &library_id)
+            .await?;
         // Creation is the third door into `titles.tags`, alongside the tag patch
         // and the whole-bag `updateTitle(tags:)` write, and it is gated exactly
         // like them: a title may not be born carrying a label the registry does
@@ -1028,13 +1040,67 @@ impl AppUseCase {
         self.finish_add_title_with_outcome(created).await
     }
 
+    /// Gives a new title that names no monitor type the library's default
+    /// monitoring. A title the add reuses keeps its own tags, since the store
+    /// returns the existing row rather than this one.
+    pub(crate) async fn apply_library_default_monitor_type(
+        &self,
+        request: &mut NewTitle,
+        library_id: &str,
+    ) -> AppResult<()> {
+        let prefix = crate::media_requests::TITLE_MONITOR_TYPE_TAG_PREFIX;
+        if !request
+            .tags
+            .iter()
+            .any(|tag| tag.trim().to_ascii_lowercase().starts_with(prefix))
+            && let Some(monitor_type) = self
+                .new_title_default_monitor_type_tag_value(library_id, &request.facet)
+                .await?
+        {
+            request.tags.push(format!("{prefix}{monitor_type}"));
+        }
+        Ok(())
+    }
+
+    /// Gives a new title the library's default tags. A label the registry no
+    /// longer defines is left out, so a default that went stale never blocks
+    /// an add. A title the add reuses keeps its own tags, as above.
+    pub(crate) async fn apply_library_default_title_tags(
+        &self,
+        request: &mut NewTitle,
+        library_id: &str,
+    ) -> AppResult<()> {
+        let labels = self.library_default_title_tags(library_id).await?;
+        if labels.is_empty() {
+            return Ok(());
+        }
+        let undefined = self.undefined_title_tag_labels(&labels).await?;
+        for label in labels {
+            if crate::is_reserved_title_tag(&label) || undefined.contains(&label) {
+                continue;
+            }
+            if !request
+                .tags
+                .iter()
+                .any(|tag| tag.trim().eq_ignore_ascii_case(&label))
+            {
+                request.tags.push(label);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn add_title_and_bind_pending_import_with_outcome_in_library(
         &self,
         actor: &User,
-        request: NewTitle,
+        mut request: NewTitle,
         library_id: String,
         pending_import_id: &str,
     ) -> AppResult<AddTitleOutcome> {
+        self.apply_library_default_monitor_type(&mut request, &library_id)
+            .await?;
+        self.apply_library_default_title_tags(&mut request, &library_id)
+            .await?;
         let created = self
             .create_title_without_hydration_and_bind_pending_import_in_library(
                 actor,

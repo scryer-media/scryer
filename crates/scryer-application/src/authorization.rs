@@ -296,6 +296,49 @@ impl AppUseCase {
             .collect())
     }
 
+    /// The facets whose catalog the actor has a use for: View, Request,
+    /// Manage Titles or Manage Library on at least one of its libraries, in
+    /// facet order. One library listing answers every facet.
+    pub async fn viewable_facets(&self, actor: &User) -> AppResult<Vec<MediaFacet>> {
+        const CATALOG_PERMISSIONS: [LibraryPermission; 4] = [
+            LibraryPermission::View,
+            LibraryPermission::Request,
+            LibraryPermission::ManageTitles,
+            LibraryPermission::ManageLibrary,
+        ];
+        let libraries = self.services.catalog.libraries.list(None).await?;
+        let authorization = self.authorization_for_actor(actor).await?;
+        // Before any library row exists the built-in default libraries stand
+        // in, as they do for every other permission check.
+        let candidates = if libraries.is_empty() {
+            [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
+                .into_iter()
+                .map(|facet| {
+                    let id = scryer_domain::default_library_id_for_facet(&facet);
+                    (facet, id)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            libraries
+                .into_iter()
+                .map(|library| (library.facet, library.id))
+                .collect()
+        };
+        let mut viewable = Vec::new();
+        for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+            let usable = candidates.iter().any(|(library_facet, library_id)| {
+                *library_facet == facet
+                    && CATALOG_PERMISSIONS.iter().any(|permission| {
+                        effective_library_permission(&authorization, library_id, *permission)
+                    })
+            });
+            if usable {
+                viewable.push(facet);
+            }
+        }
+        Ok(viewable)
+    }
+
     /// The library ids a permission check resolves against, before any actor is
     /// considered. Before any library row exists the built-in default library
     /// ids stand in, so bootstrap-time callers still resolve a scope.
@@ -466,6 +509,18 @@ impl LibraryPermissionContext {
             permissions.iter().any(|permission| {
                 effective_library_permission(&self.authorization, &library.id, *permission)
             })
+        })
+    }
+
+    /// Whether the actor holds `permission` on `library_id`.
+    pub(crate) fn allows(&self, library_id: &str, permission: LibraryPermission) -> bool {
+        effective_library_permission(&self.authorization, library_id, permission)
+    }
+
+    /// Whether the actor holds `permission` on every library.
+    pub(crate) fn allows_on_every_library(&self, permission: LibraryPermission) -> bool {
+        self.candidate_library_ids.iter().all(|library_id| {
+            effective_library_permission(&self.authorization, library_id, permission)
         })
     }
 

@@ -924,8 +924,8 @@ impl ImportRepository for ImportStore {
                         SqlRuntime::execute(
                             SqlExec::Tx(tx),
                             "INSERT INTO manual_import_selection_candidates
-                             (id, selection_id, canonical_path, quality, created_at)
-                             VALUES ({}, {}, {}, {}, {})",
+                             (id, selection_id, canonical_path, quality, size_bytes, created_at)
+                             VALUES ({}, {}, {}, {}, {}, {})",
                             &[
                                 SqlArg::Text(candidate.id.clone()),
                                 SqlArg::Text(selection.id.clone()),
@@ -934,6 +934,7 @@ impl ImportRepository for ImportStore {
                                 // databases, but never persist filename-derived
                                 // quality as manual-import score evidence.
                                 SqlArg::OptText(None),
+                                SqlArg::OptI64(candidate.size_bytes),
                                 SqlArg::Timestamp(now),
                             ],
                         )
@@ -977,7 +978,7 @@ impl ImportRepository for ImportStore {
         let selection_id = selection.text("id")?;
         let candidates = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT id, canonical_path, quality
+            "SELECT id, canonical_path, quality, size_bytes
              FROM manual_import_selection_candidates
              WHERE selection_id = {}",
             &[SqlArg::Text(selection_id)],
@@ -1022,7 +1023,7 @@ impl ImportRepository for ImportStore {
             let selection_id = selection.text("id")?;
             let candidates = SqlRuntime::fetch_all(
                 self.datastore.read_exec(),
-                "SELECT id, canonical_path, quality
+                "SELECT id, canonical_path, quality, size_bytes
                  FROM manual_import_selection_candidates
                  WHERE selection_id = {}",
                 &[SqlArg::Text(selection_id)],
@@ -1057,7 +1058,7 @@ impl ImportRepository for ImportStore {
         };
         let candidates = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT id, canonical_path, quality
+            "SELECT id, canonical_path, quality, size_bytes
              FROM manual_import_selection_candidates
              WHERE selection_id = {}",
             &[SqlArg::Text(selection_id.to_string())],
@@ -1111,7 +1112,7 @@ impl ImportRepository for ImportStore {
                     let candidates = SqlRuntime::fetch_all(
                         SqlExec::Tx(tx),
                         &format!(
-                            "SELECT id, canonical_path, quality
+                            "SELECT id, canonical_path, quality, size_bytes
                              FROM manual_import_selection_candidates
                              WHERE selection_id = {{}} AND id IN ({placeholders})"
                         ),
@@ -1269,6 +1270,7 @@ fn manual_import_selection_from_rows(
             Ok(ManualImportSelectionCandidate {
                 id: candidate.text("id")?,
                 canonical_path: candidate.text("canonical_path")?,
+                size_bytes: candidate.opt_i64("size_bytes")?,
             })
         })
         .collect::<AppResult<Vec<_>>>()?;
@@ -1438,6 +1440,34 @@ impl ImportArtifactRepository for ImportStore {
             })
         })
         .await
+    }
+
+    async fn imported_source_for_media_file(
+        &self,
+        media_file_id: &str,
+    ) -> AppResult<Option<scryer_application::ImportedMediaFileSource>> {
+        // Served by idx_download_import_artifacts_imported_media_file on both
+        // engines; a file has one artifact row per episode it holds.
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT import_id, relative_path
+             FROM download_import_artifacts
+             WHERE imported_media_file_id = {}
+               AND result = 'imported'
+               AND import_id IS NOT NULL
+               AND relative_path IS NOT NULL
+             ORDER BY created_at DESC
+             LIMIT 1",
+            &[SqlArg::Text(media_file_id.to_owned())],
+        )
+        .await?;
+        row.map(|row| {
+            Ok(scryer_application::ImportedMediaFileSource {
+                import_id: row.text("import_id")?,
+                relative_path: row.text("relative_path")?,
+            })
+        })
+        .transpose()
     }
 
     async fn list_by_source_identity(
@@ -1690,6 +1720,7 @@ mod tests {
                  selection_id TEXT NOT NULL,
                  canonical_path TEXT NOT NULL,
                  quality TEXT,
+                 size_bytes INTEGER,
                  created_at TEXT NOT NULL
              )",
         )
@@ -1961,12 +1992,14 @@ mod tests {
         deleted.candidates = vec![ManualImportSelectionCandidate {
             id: "candidate-a".to_string(),
             canonical_path: "/downloads/release/a.mkv".to_string(),
+            size_bytes: None,
         }];
         let mut kept = selection("kept-title-selection", source_identity("sel-b"));
         kept.title_id = "title-2".to_string();
         kept.candidates = vec![ManualImportSelectionCandidate {
             id: "candidate-b".to_string(),
             canonical_path: "/downloads/release/b.mkv".to_string(),
+            size_bytes: Some(1_000),
         }];
         store
             .replace_manual_import_selection(deleted)
@@ -1991,6 +2024,11 @@ mod tests {
             .unwrap()
             .expect("another title's selection survives");
         assert_eq!(kept.candidates.len(), 1);
+        assert_eq!(
+            kept.candidates[0].size_bytes,
+            Some(1_000),
+            "a candidate keeps the size the preview found"
+        );
         assert_eq!(candidate_count(&store, "kept-title-selection").await, 1);
     }
 

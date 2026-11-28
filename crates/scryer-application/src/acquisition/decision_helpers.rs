@@ -147,8 +147,16 @@ fn best_cutoff_quality_for<'a, F: CutoffFile>(
         .filter(|file| file.primary)
         .filter(|file| matches(file))
         .filter_map(|file| {
-            let quality = file.quality_label.map(str::trim)?;
-            (!quality.is_empty()).then_some((file, quality))
+            let quality =
+                crate::types::stored_quality_label(file.quality_label, None).or_else(|| {
+                    // A scanned resolution stands in for a missing label only
+                    // when the profile ranks it; an unranked one (`1080i`, `576p`
+                    // on most profiles) leaves the file with no quality, as before.
+                    crate::types::stored_quality_label(None, file.resolution).filter(|resolution| {
+                        rank(resolution) != crate::admission::tier_sort_key(None)
+                    })
+                })?;
+            Some((file, quality))
         })
         .min_by(|(left_file, left), (right_file, right)| {
             rank(left)
@@ -162,6 +170,7 @@ pub(crate) struct CutoffFileFacts<'a> {
     episode_id: Option<&'a str>,
     series_movie_link_ids: &'a [String],
     quality_label: Option<&'a str>,
+    resolution: Option<&'a str>,
     created_at: &'a str,
     primary: bool,
 }
@@ -177,6 +186,7 @@ impl CutoffFile for TitleMediaFile {
             episode_id: self.episode_id.as_deref(),
             series_movie_link_ids: &self.series_movie_link_ids,
             quality_label: self.quality_label.as_deref(),
+            resolution: self.resolution.as_deref(),
             created_at: &self.created_at,
             primary: self.role.is_primary(),
         }
@@ -189,6 +199,7 @@ impl CutoffFile for crate::MediaFileCutoffSummary {
             episode_id: self.episode_id.as_deref(),
             series_movie_link_ids: &self.series_movie_link_ids,
             quality_label: self.quality_label.as_deref(),
+            resolution: self.resolution.as_deref(),
             created_at: &self.created_at,
             primary: true,
         }

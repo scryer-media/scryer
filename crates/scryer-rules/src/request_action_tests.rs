@@ -348,6 +348,110 @@ fn a_held_rule_carries_no_shaping() {
     assert_eq!(decision.notify, None);
 }
 
+// ── Report heads ────────────────────────────────────────────────────────────
+
+#[test]
+fn a_rule_that_mixes_report_and_request_heads_is_refused() {
+    for body in [
+        "approve := true\nmark_bad := true\n",
+        "deny := true\nreject_report := true\n",
+        "set_lease_days := 7\nmark_bad := true\n",
+        "add_tags := [\"family\"]\nreject_report := true\n",
+    ] {
+        let result = validate(body);
+        assert!(!result.valid, "{body}");
+        assert!(
+            codes(&result).contains(&diagnostic_codes::RULE_MIXES_REPORT_AND_REQUEST_HEADS),
+            "{body}: {:?}",
+            result.diagnostics
+        );
+    }
+
+    for body in [
+        "mark_bad := true if input.report.reason == \"corrupted\"\n",
+        "reject_report := true if not input.report.has_details\nnotify := \"rejected\"\n",
+        "mark_bad := true if input.report.facts.reporter_requested_media\nreasons contains \"own_request\"\n",
+        "mark_bad := true\nreject_report := true if input.report.reason == \"other\"\n",
+    ] {
+        let result = validate(body);
+        assert!(result.valid, "{body}: {:?}", result.diagnostics);
+    }
+}
+
+#[test]
+fn report_heads_decode_into_a_report_vote() {
+    use crate::request::RequestReportVote;
+    assert_eq!(
+        decide("mark_bad := true\n").report_vote,
+        RequestReportVote::MarkBad
+    );
+    assert_eq!(
+        decide("reject_report := true\n").report_vote,
+        RequestReportVote::Reject
+    );
+    assert_eq!(
+        decide("mark_bad := true\nreject_report := true\n").report_vote,
+        RequestReportVote::Conflict
+    );
+    let silent = decide("mark_bad := true if input.report.reason == \"other\"\n");
+    assert_eq!(silent.report_vote, RequestReportVote::Abstain);
+    assert_eq!(silent.vote, RequestVote::Abstain);
+}
+
+#[test]
+fn a_report_rule_reading_an_unknown_report_fact_is_held() {
+    let mut input = synthetic_request_input();
+    input
+        .report
+        .as_mut()
+        .unwrap()
+        .facts
+        .reporter_requested_media = crate::request::Observation::unknown("lookup_failed");
+    let engine = RequestRulesEngine::build(&[RequestPolicy {
+        id: RULE_ID.to_string(),
+        name: "fixture".to_string(),
+        rego_source: source("mark_bad := true if input.report.facts.reporter_requested_media\n"),
+    }])
+    .expect("policy compiles");
+    let result = engine
+        .evaluator()
+        .evaluate(&input)
+        .expect("evaluation runs");
+    let decision = &result.records[0].decision;
+    assert!(decision.held);
+    assert_eq!(
+        decision.report_vote,
+        crate::request::RequestReportVote::Abstain
+    );
+}
+
+#[test]
+fn report_rules_read_only_the_report_fact_family() {
+    let report_family: &[&str] = &["report.reporter_requested_media"];
+    let title_family: &[&str] = &["is_adult"];
+    let reads = |body: &str| {
+        crate::validation::request_rule_may_read_fact_families(
+            &source(body),
+            RULE_ID,
+            &[report_family, title_family],
+        )
+    };
+    assert_eq!(
+        reads("mark_bad := true if input.report.facts.reporter_requested_media\n"),
+        vec![true, false]
+    );
+    assert_eq!(
+        reads(
+            "mark_bad := true if input.report.observations.reporter_requested_media.status == \"unknown\"\n"
+        ),
+        vec![true, false]
+    );
+    assert_eq!(
+        reads("mark_bad := true if input.report.reason == \"corrupted\"\n"),
+        vec![false, false]
+    );
+}
+
 // ── The head table ──────────────────────────────────────────────────────────
 
 /// The wrapper projects heads in this order, and stored shaping and the
@@ -369,6 +473,8 @@ fn the_heads_keep_their_order() {
             SetPreferredAudioLanguages,
             AddTags,
             Notify,
+            MarkBad,
+            RejectReport,
         ]
     );
     assert_eq!(

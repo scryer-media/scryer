@@ -165,6 +165,12 @@ export type RequestRulePreviewResult = {
   /// The document the matcher actually saw, or null when it could not be
   /// re-parsed. The "why did this not match" affordance.
   inputDocument: unknown;
+  /// What a report rule said about the sample report; null for a request
+  /// rule.
+  reportVote?: "ABSTAIN" | "MARK_BAD" | "REJECT" | "CONFLICT" | null;
+  /// What submitting the sample report would do with this rule alone; null
+  /// for a request rule.
+  reportOutcome?: "REVIEW" | "REJECT" | "MARK_BAD" | null;
 };
 
 /// What the requester's own pre-flight returns. It has no field a vote could

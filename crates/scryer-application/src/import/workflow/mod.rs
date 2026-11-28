@@ -765,6 +765,24 @@ impl std::ops::Deref for CoordinatedImportFileResult {
     }
 }
 
+/// The download folder a completed-download import read its files from, with
+/// the client's remote path mappings applied. `None` for a manual import or a
+/// payload this version cannot read.
+pub(crate) async fn completed_import_download_dir(
+    app: &AppUseCase,
+    record: &ImportRecord,
+) -> Option<PathBuf> {
+    let payload =
+        serde_json::from_str::<StoredCompletedImportRequestPayload>(&record.payload_json).ok()?;
+    let mut completed = match payload {
+        StoredCompletedImportRequestPayload::Current(payload) => payload.completed,
+        StoredCompletedImportRequestPayload::Legacy(completed) => completed,
+    };
+    remap_completed_download_for_client(app, &mut completed).await;
+    let dir = completed.dest_dir.trim();
+    (!dir.is_empty()).then(|| stored_path_to_path_buf(dir))
+}
+
 // This facade keeps the previous module scope while the former junk drawer is
 // mechanically split into functional source files.
 include!("poller.rs");
@@ -777,6 +795,7 @@ include!("paths.rs");
 include!("metadata.rs");
 include!("wanted.rs");
 include!("manual.rs");
+include!("manual_verdict.rs");
 include!("results.rs");
 include!("retry.rs");
 include!("held_sources.rs");

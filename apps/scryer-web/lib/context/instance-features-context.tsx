@@ -17,6 +17,8 @@ export const DEFAULT_INSTANCE_FEATURES: InstanceFeatures = {
   apiExplorerEnabled: false,
   experimentalFeaturesEnabled: false,
   personalizedDiscoveryEnabled: true,
+  disabledFacets: [],
+  viewableFacets: null,
 };
 
 type InstanceFeaturesContextValue = {
@@ -40,6 +42,8 @@ function normalizeInstanceFeatures(
     personalizedDiscoveryEnabled:
       features?.personalizedDiscoveryEnabled ??
       DEFAULT_INSTANCE_FEATURES.personalizedDiscoveryEnabled,
+    disabledFacets: features?.disabledFacets ?? [],
+    viewableFacets: features?.viewableFacets ?? null,
   };
 }
 

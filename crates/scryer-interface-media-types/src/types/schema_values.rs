@@ -850,6 +850,10 @@ pub enum DomainEventTypeValue {
     SubtitleDownloaded,
     /// A subtitle search failed.
     SubtitleSearchFailed,
+    /// A subtitle file was deleted.
+    SubtitleDeleted,
+    /// A subtitle was deleted and its provider file blocklisted.
+    SubtitleBlocklisted,
     /// A library scan started.
     LibraryScanStarted,
     /// A title was discovered during a library scan.
@@ -890,6 +894,16 @@ pub enum DomainEventTypeValue {
     ListSyncFailed,
     /// A public list was unfollowed.
     ListUnfollowed,
+    /// A bad-media report was submitted.
+    MediaIssueSubmitted,
+    /// A bad-media report was approved.
+    MediaIssueApproved,
+    /// A bad-media report was rejected.
+    MediaIssueRejected,
+    /// A recycle-and-search execution state changed.
+    MediaIssueRecycleExecution,
+    /// A file marked bad was unmarked; the report stays approved.
+    MediaIssueUnmarked,
     /// A sync of a list ended and its run was recorded, whatever the outcome.
     ListSyncFinished,
     /// A list was followed, changed, turned on or off, or unfollowed.
@@ -909,6 +923,11 @@ impl DomainEventTypeValue {
             DomainEventType::MediaRequestApproved => Self::MediaRequestApproved,
             DomainEventType::MediaRequestRejected => Self::MediaRequestRejected,
             DomainEventType::MediaRequestCanceled => Self::MediaRequestCanceled,
+            DomainEventType::MediaIssueSubmitted => Self::MediaIssueSubmitted,
+            DomainEventType::MediaIssueApproved => Self::MediaIssueApproved,
+            DomainEventType::MediaIssueRejected => Self::MediaIssueRejected,
+            DomainEventType::MediaIssueRecycleExecution => Self::MediaIssueRecycleExecution,
+            DomainEventType::MediaIssueUnmarked => Self::MediaIssueUnmarked,
             DomainEventType::TitleAdded => Self::TitleAdded,
             DomainEventType::TitleUpdated => Self::TitleUpdated,
             DomainEventType::TitleRematched => Self::TitleRematched,
@@ -939,6 +958,8 @@ impl DomainEventTypeValue {
             DomainEventType::PostProcessingCompleted => Self::PostProcessingCompleted,
             DomainEventType::SubtitleDownloaded => Self::SubtitleDownloaded,
             DomainEventType::SubtitleSearchFailed => Self::SubtitleSearchFailed,
+            DomainEventType::SubtitleDeleted => Self::SubtitleDeleted,
+            DomainEventType::SubtitleBlocklisted => Self::SubtitleBlocklisted,
             DomainEventType::LibraryScanStarted => Self::LibraryScanStarted,
             DomainEventType::LibraryScanTitleDiscovered => Self::LibraryScanTitleDiscovered,
             DomainEventType::LibraryScanDeltaRecorded => Self::LibraryScanDeltaRecorded,
@@ -975,6 +996,11 @@ impl DomainEventTypeValue {
             Self::MediaRequestApproved => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled => DomainEventType::MediaRequestCanceled,
+            Self::MediaIssueSubmitted => DomainEventType::MediaIssueSubmitted,
+            Self::MediaIssueApproved => DomainEventType::MediaIssueApproved,
+            Self::MediaIssueRejected => DomainEventType::MediaIssueRejected,
+            Self::MediaIssueRecycleExecution => DomainEventType::MediaIssueRecycleExecution,
+            Self::MediaIssueUnmarked => DomainEventType::MediaIssueUnmarked,
             Self::TitleAdded => DomainEventType::TitleAdded,
             Self::TitleUpdated => DomainEventType::TitleUpdated,
             Self::TitleRematched => DomainEventType::TitleRematched,
@@ -1005,6 +1031,8 @@ impl DomainEventTypeValue {
             Self::PostProcessingCompleted => DomainEventType::PostProcessingCompleted,
             Self::SubtitleDownloaded => DomainEventType::SubtitleDownloaded,
             Self::SubtitleSearchFailed => DomainEventType::SubtitleSearchFailed,
+            Self::SubtitleDeleted => DomainEventType::SubtitleDeleted,
+            Self::SubtitleBlocklisted => DomainEventType::SubtitleBlocklisted,
             Self::LibraryScanStarted => DomainEventType::LibraryScanStarted,
             Self::LibraryScanTitleDiscovered => DomainEventType::LibraryScanTitleDiscovered,
             Self::LibraryScanDeltaRecorded => DomainEventType::LibraryScanDeltaRecorded,

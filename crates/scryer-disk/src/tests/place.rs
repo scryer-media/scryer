@@ -469,6 +469,29 @@ fn a_hard_link_is_made_or_refused_with_the_reason_it_cannot_be() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_refused_with_a_no_links_error_number_cannot_be_held() {
+    for code in [
+        libc::EPERM,
+        libc::ENOTSUP,
+        libc::EOPNOTSUPP,
+        libc::EMLINK,
+        libc::EINVAL,
+    ] {
+        assert!(
+            crate::link_not_possible(&io::Error::from_raw_os_error(code)),
+            "{code}"
+        );
+    }
+    for code in [libc::EIO, libc::ENOENT, libc::EACCES, libc::ENOSPC] {
+        assert!(
+            !crate::link_not_possible(&io::Error::from_raw_os_error(code)),
+            "{code}"
+        );
+    }
+}
+
 #[test]
 fn a_link_that_cannot_be_made_is_copied_when_the_policy_allows() {
     for kind in [io::ErrorKind::CrossesDevices, io::ErrorKind::Other] {

@@ -233,6 +233,44 @@ async fn graphql_metadata_series_by_smg_id_serves_a_tmdb_primary_series() {
 }
 
 #[tokio::test]
+async fn graphql_metadata_series_serves_blank_provider_dates_as_null() {
+    let ctx = TestContext::new().await;
+    // A provider can leave a series premiere or an episode air date blank.
+    // The series still loads, and each missing date reads as null.
+    let mut fixture: Value =
+        serde_json::from_str(&load_fixture("smg/titles_movie.json")).expect("fixture is JSON");
+    let series = &mut fixture["data"]["titles"]["series"][0];
+    series["first_aired"] = json!("");
+    series["episodes"][0]["aired"] = json!("");
+    let fixture = fixture.to_string();
+    for http_method in ["GET", "POST"] {
+        Mock::given(method(http_method))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
+            .mount(&ctx.smg_server)
+            .await;
+    }
+
+    let body = gql(
+        &ctx,
+        r#"query($input: MetadataSeriesInput!) {
+            metadataSeries(input: $input) {
+                name firstAired
+                episodes { name aired }
+            }
+        }"#,
+        json!({ "input": { "smgId": 303 } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let series = &body["data"]["metadataSeries"];
+    assert_eq!(series["name"], "TMDB Primary Series");
+    assert_eq!(series["firstAired"], Value::Null);
+    assert_eq!(series["episodes"][0]["name"], "Pilot");
+    assert_eq!(series["episodes"][0]["aired"], Value::Null);
+}
+
+#[tokio::test]
 async fn graphql_metadata_series_requires_an_identity() {
     let ctx = TestContext::new().await;
     let body = gql(

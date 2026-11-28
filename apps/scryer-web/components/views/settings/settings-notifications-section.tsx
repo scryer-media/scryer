@@ -34,6 +34,10 @@ import {
 } from "@/components/ui/table";
 import type { Translate } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
+import {
+  humanizeSnakeCase,
+  notificationEventLabel,
+} from "@/lib/notification-capabilities";
 import { subscribableProviderNotificationEvents } from "@/lib/notification-capabilities";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { sectionLabelForFacet } from "@/lib/facets/helpers";
@@ -52,6 +56,7 @@ import type { Facet } from "@/lib/types/titles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { useFacets } from "@/lib/facets/use-facets";
 
 type SettingsNotificationsSectionProps = {
   channels: NotificationChannel[];
@@ -104,6 +109,7 @@ type SettingsNotificationsSectionProps = {
 };
 
 const SCOPE_OPTIONS = ["global", "facet", "title"] as const;
+// eslint-disable-next-line no-restricted-syntax -- stored scope values; the picker filters with useFacets().values
 const FACET_SCOPE_OPTIONS: Facet[] = ["MOVIE", "SERIES", "ANIME"];
 const MEDIA_SERVER_PROVIDER_TYPES = new Set(["jellyfin", "plex", "emby"]);
 
@@ -129,55 +135,6 @@ function NotificationActionButton({
       {children}
     </IconButton>
   );
-}
-
-const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
-  grab: "settings.notificationEvent.grab",
-  download: "settings.notificationEvent.download",
-  upgrade: "settings.notificationEvent.upgrade",
-  import_complete: "settings.notificationEvent.importComplete",
-  import_rejected: "settings.notificationEvent.importRejected",
-  rename: "settings.notificationEvent.rename",
-  title_added: "settings.notificationEvent.titleAdded",
-  title_deleted: "settings.notificationEvent.titleDeleted",
-  title_moved: "settings.notificationEvent.titleMoved",
-  file_deleted: "settings.notificationEvent.fileDeleted",
-  file_deleted_for_upgrade: "settings.notificationEvent.fileDeletedForUpgrade",
-  file_restored: "settings.notificationEvent.fileRestored",
-  post_processing_completed:
-    "settings.notificationEvent.postProcessingCompleted",
-  subtitle_downloaded: "settings.notificationEvent.subtitleDownloaded",
-  subtitle_search_failed: "settings.notificationEvent.subtitleSearchFailed",
-  media_request_submitted: "settings.notificationEvent.mediaRequestSubmitted",
-  media_request_approved: "settings.notificationEvent.mediaRequestApproved",
-  media_request_rejected: "settings.notificationEvent.mediaRequestRejected",
-  media_request_canceled: "settings.notificationEvent.mediaRequestCanceled",
-  health_issue: "settings.notificationEvent.healthIssue",
-  health_restored: "settings.notificationEvent.healthRestored",
-  application_update: "settings.notificationEvent.applicationUpdate",
-  manual_interaction_required:
-    "settings.notificationEvent.manualInteractionRequired",
-  list_title_added: "settings.notificationEvent.listTitleAdded",
-  list_request_submitted: "settings.notificationEvent.listRequestSubmitted",
-  list_item_held: "settings.notificationEvent.listItemHeld",
-  list_title_left: "settings.notificationEvent.listTitleLeft",
-  list_sync_failed: "settings.notificationEvent.listSyncFailed",
-  list_unfollowed: "settings.notificationEvent.listUnfollowed",
-  lifecycle_rule_notified: "settings.notificationEvent.lifecycleRuleNotified",
-  test: "settings.notificationEvent.test",
-};
-
-function humanizeSnakeCase(value: string) {
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function notificationEventLabel(eventType: string, t: Translate) {
-  const key = NOTIFICATION_EVENT_LABEL_KEYS[eventType];
-  return key ? t(key) : humanizeSnakeCase(eventType);
 }
 
 function notificationScopeLabel(scope: string, t: Translate) {
@@ -463,6 +420,7 @@ export function SettingsNotificationsSection({
   localPathStyle,
 }: SettingsNotificationsSectionProps) {
   const t = useTranslate();
+  const { values: visibleFacetValues } = useFacets();
   const normalizedChannelType = channelDraft.channelType.trim().toLowerCase();
   const isEditingChannel = channelEditorMode === "edit";
   const isEditingSubscription = subscriptionEditorMode === "edit";
@@ -1355,7 +1313,10 @@ export function SettingsNotificationsSection({
                         {t("settings.notificationScopeId")}
                       </Label>
                       <div className="flex flex-wrap gap-4 rounded-md border border-border bg-card/40 p-3">
-                        {FACET_SCOPE_OPTIONS.map((facet) => (
+                        {visibleFacetValues(
+                          FACET_SCOPE_OPTIONS,
+                          selectedFacetScopeIds,
+                        ).map((facet) => (
                           <label
                             key={facet}
                             className="flex items-center gap-2 text-sm"

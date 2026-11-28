@@ -1,0 +1,10 @@
+# Asked before a torrent is sent: a Weaver without torrents refuses
+# `protocol` and `torrent`, so nothing of the torrent reaches it.
+query TorrentSupport {
+  queueItems(first: 1) {
+    protocol
+    torrent {
+      id
+    }
+  }
+}

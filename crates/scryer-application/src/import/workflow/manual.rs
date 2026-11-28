@@ -546,12 +546,20 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
             }
         }
     }
+    let job_protocol = crate::seeding_gate::job_protocol_for_client_item(
+        app,
+        None,
+        &locator,
+        completed.client_job_protocol,
+    )
+    .await;
     let _ = reconcile_terminal_download_cleanup(
         app,
         None,
         &completed.client_id,
         &completed.client_type,
         &completed.download_client_item_id,
+        job_protocol,
         library_id.as_deref(),
         Some(&facet),
         TrackedDownloadState::Imported,
@@ -2277,6 +2285,7 @@ pub async fn begin_manual_import_selection(
         candidates.push(crate::ManualImportSelectionCandidate {
             id: candidate_id.clone(),
             canonical_path: canonical_path.clone(),
+            size_bytes: Some(file.size_bytes),
         });
         files.push(ManualImportSelectionFilePreview {
             candidate_id,
@@ -3177,6 +3186,7 @@ async fn execute_manual_series_movie_import(
         crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
         mapping.disc_selection.as_ref(),
         release_evidence.release_listing_json(),
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await
     {
@@ -3861,8 +3871,13 @@ async fn execute_manual_import_with_release_evidence_inner(
     // Indexes into `results` of files whose importer already emitted Import
     // Complete for them; the manual-level event covers only the rest.
     let mut self_notified_results: HashSet<usize> = HashSet::new();
+    // How each file this manual import landed was placed, by its index into
+    // `results`.
+    let mut result_placements: HashMap<usize, scryer_domain::ImportFilePlacement> =
+        HashMap::new();
     let placed_files =
         DownloadPlacedFiles::load_for_manual_import(app, import_id, completed).await?;
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&title.id);
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
@@ -4192,6 +4207,7 @@ async fn execute_manual_import_with_release_evidence_inner(
             false,
             mapping.disc_selection.as_ref(),
             &placed_files,
+            &bad_files,
         )
         .await
         {
@@ -4202,6 +4218,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                 size_bytes,
                 source_cleanup,
                 previous_path,
+                placement,
                 destination_permit: _destination_permit,
                 ..
             }) => {
@@ -4255,6 +4272,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     imported_size_bytes =
                         Some(imported_size_bytes.unwrap_or(0).saturating_add(size_bytes));
                 }
+                result_placements.insert(results.len(), placement);
                 results.push(manual_import_file_result(
                     mapping,
                     true,
@@ -4464,6 +4482,12 @@ async fn execute_manual_import_with_release_evidence_inner(
                 episode_ids,
                 size_bytes: imported_size_bytes,
                 upgrade: upgrade_imported,
+                file_placements: (0..results.len())
+                    .filter(|index| {
+                        results[*index].success && !self_notified_results.contains(index)
+                    })
+                    .filter_map(|index| result_placements.remove(&index))
+                    .collect(),
             }),
         ))
         .await?;
@@ -4882,6 +4906,7 @@ impl QueuedManualImportOutcome {
             link_type: None,
             error_message: None,
             release_burned: false,
+            release_refused: false,
             started_at: now,
             completed_at: now,
             upgrade: false,

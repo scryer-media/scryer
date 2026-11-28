@@ -560,6 +560,37 @@ impl AppUseCase {
             })
             .collect())
     }
+
+    /// The managed bytes of each library in `library_ids` the actor holds
+    /// privileged access to, from the catalog alone: the figure each
+    /// library's own catalog reports, read in one pass. A library the actor
+    /// may not manage, or with no tracked media file, is left out.
+    pub async fn library_managed_bytes(
+        &self,
+        actor: &User,
+        library_ids: &[String],
+    ) -> AppResult<Vec<crate::LibraryManagedBytes>> {
+        let privileged = self
+            .require_privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let library_ids = library_ids
+            .iter()
+            .filter(|library_id| privileged.contains(*library_id))
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.services
+            .catalog
+            .titles
+            .list_library_managed_bytes(&library_ids)
+            .await
+    }
 }
 
 /// Used and total bytes of a probed filesystem, or `None` when a figure does

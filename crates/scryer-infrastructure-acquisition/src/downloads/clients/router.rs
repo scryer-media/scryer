@@ -56,7 +56,7 @@ pub fn download_client_feedback_timeout() -> Duration {
 }
 
 /// Read a staged NZB back out of its zstd frame, for handing to a browser.
-async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
+pub(super) async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
     let input = Disk::process()
         .open(&staged_nzb.compressed_path, Open::read())
         .await
@@ -280,6 +280,14 @@ fn download_client_remote_path_mappings(
             None
         }
     }
+}
+
+/// Whether a completed row of this client may name the parent of its release
+/// folder, so the release folder is looked for on disk. TorBox reports the
+/// engine's own job folder, so probing for it decides nothing. Weaver reports
+/// each job's own folder too, for NZBs as before torrents and for torrents.
+fn completed_import_dir_may_be_parent(client_type: &str) -> bool {
+    client_type != super::torbox::client::CLIENT_TYPE && client_type != "weaver"
 }
 
 fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDownload) {
@@ -1463,6 +1471,10 @@ impl PrioritizedDownloadClientRouter {
         if Self::is_native_nzb_client_type(&config.client_type) {
             return artifact_kind == DownloadArtifactKind::NzbBytes;
         }
+        if Self::is_native_two_family_client_type(&config.client_type) {
+            // Torrents and NZBs alike: TorBox and Weaver take both.
+            return true;
+        }
         let Some(provider) = plugin_provider else {
             return false;
         };
@@ -1827,6 +1839,7 @@ impl PrioritizedDownloadClientRouter {
         if seed_goals.is_resolved() {
             effective_request.seed_goal_ratio = seed_goals.seed_goal_ratio;
             effective_request.seed_goal_seconds = seed_goals.seed_goal_seconds;
+            effective_request.seed_never_remove = seed_goals.never_remove;
         }
 
         Ok((effective_request, seed_goals))
@@ -1971,7 +1984,14 @@ impl PrioritizedDownloadClientRouter {
     }
 
     fn is_native_nzb_client_type(client_type: &str) -> bool {
-        matches!(client_type, "nzbget" | "sabnzbd" | "weaver")
+        matches!(client_type, "nzbget" | "sabnzbd")
+    }
+
+    /// Native clients that take both families: torrents and NZBs alike.
+    /// Whether one Weaver instance has torrents is its own client's check at
+    /// submit; a Weaver without them refuses the torrent as unavailable.
+    fn is_native_two_family_client_type(client_type: &str) -> bool {
+        client_type == super::torbox::client::CLIENT_TYPE || client_type == "weaver"
     }
 
     fn request_uses_nzb_payload(request: &DownloadClientAddRequest) -> bool {
@@ -2127,6 +2147,14 @@ impl PrioritizedDownloadClientRouter {
             }
             "http" => {
                 let client = HttpDownloadClient::for_config(config, proxy_config, http_client)?;
+                Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
+            }
+            super::torbox::client::CLIENT_TYPE => {
+                let client = super::torbox::TorboxDownloadClient::for_config(
+                    config,
+                    proxy_config,
+                    http_client,
+                )?;
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             _ => {
@@ -2997,7 +3025,8 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .await
             {
                 Ok((mut effective_request, resolved_seed_goals)) => {
-                    if Self::is_native_nzb_client_type(&config.client_type)
+                    if (Self::is_native_nzb_client_type(&config.client_type)
+                        || Self::is_native_two_family_client_type(&config.client_type))
                         && Self::request_uses_nzb_payload(&effective_request)
                         && let Some(staged_nzb) = staged_nzb.as_ref()
                     {
@@ -3510,7 +3539,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                                 if let Some(mappings) = mappings.as_deref() {
                                     apply_remote_path_mappings_to_completed_download(row, mappings);
                                 }
-                                if accepts_torrents {
+                                if accepts_torrents
+                                    && completed_import_dir_may_be_parent(&config.client_type)
+                                {
                                     normalize_completed_download_import_dir(row);
                                 }
                             }
@@ -3736,7 +3767,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         if let Some(mappings) = mappings.as_deref() {
                             apply_remote_path_mappings_to_completed_download(item, mappings);
                         }
-                        if accepts_torrents {
+                        if accepts_torrents
+                            && completed_import_dir_may_be_parent(&config.client_type)
+                        {
                             normalize_completed_download_import_dir(item);
                         }
                         accepted_items.push(item.clone());
@@ -3869,7 +3902,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         if let Some(mappings) = mappings.as_deref() {
                             apply_remote_path_mappings_to_completed_download(item, mappings);
                         }
-                        if accepts_torrents {
+                        if accepts_torrents
+                            && completed_import_dir_may_be_parent(&config.client_type)
+                        {
                             normalize_completed_download_import_dir(item);
                         }
                         accepted_items.push(item.clone());
@@ -4006,7 +4041,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         DownloadSourceKind::MagnetUri,
                         self.plugin_provider.as_ref(),
                     );
-                    if accepts_torrents {
+                    if accepts_torrents && completed_import_dir_may_be_parent(&config.client_type) {
                         normalize_completed_download_import_dir(&mut item);
                     }
                     item
@@ -4467,6 +4502,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -4916,6 +4952,7 @@ mod tests {
                 .unwrap()
                 .push((client_ids.to_vec(), client_types.to_vec()));
             Ok(vec![scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: "default".to_string(),
@@ -5787,8 +5824,8 @@ mod tests {
         let router = PrioritizedDownloadClientRouter::new(
             Arc::new(MockDownloadClientConfigRepository {
                 configs: vec![
-                    test_config("other", "Other", "weaver", 0),
-                    test_config("mapped", "Mapped", "weaver", 1),
+                    test_config("other", "Other", "sabnzbd", 0),
+                    test_config("mapped", "Mapped", "sabnzbd", 1),
                 ],
             }),
             Arc::new(MockSettingsRepository::default()),
@@ -6581,6 +6618,7 @@ mod tests {
 
     fn test_queue_item(id: &str) -> DownloadQueueItem {
         DownloadQueueItem {
+            client_job_protocol: None,
             attention_reason_code: None,
             id: format!("queue-{id}"),
             title_id: None,
@@ -6734,6 +6772,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -6815,6 +6854,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -6915,6 +6955,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7103,6 +7144,7 @@ mod tests {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7216,6 +7258,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7285,6 +7328,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7356,6 +7400,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7427,6 +7472,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7502,6 +7548,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7584,6 +7631,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7617,6 +7665,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7684,6 +7733,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7751,6 +7801,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -7896,6 +7947,7 @@ mod tests {
             info_hash_hint: Some("ABCDEF0123456789ABCDEF0123456789ABCDEF01".to_string()),
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -7942,6 +7994,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_download_carries_never_remove_without_a_numeric_goal() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let router = seeding_router(
+            primary.clone(),
+            "qbittorrent",
+            vec!["torrent_file".to_string()],
+            r#"{"primary": {"enabled": true}}"#,
+        )
+        .with_seed_goal_resolution(Arc::new(MockSeedingProfileRepository {
+            profiles: vec![scryer_domain::SeedingProfile {
+                ratio: None,
+                seed_time_minutes: None,
+                never_remove: true,
+                ..test_seeding_profile("indexer-profile")
+            }],
+        }));
+        let grab = router
+            .submit_download(&torrent_add_request(Some("indexer-1")))
+            .await
+            .expect("routes");
+        let sent = primary.submissions.lock().unwrap();
+        assert!(sent[0].seed_never_remove);
+        assert_eq!(sent[0].seed_goal_ratio, None);
+        assert_eq!(sent[0].seed_goal_seconds, None);
+        assert!(grab.seed_goals.expect("resolved").never_remove);
+    }
+
+    #[tokio::test]
     async fn submit_download_resolves_and_persists_seeding_goals_for_torrents() {
         let primary = Arc::new(MockDownloadClient::default());
         let router = seeding_router(
@@ -7967,6 +8047,7 @@ mod tests {
         // clamps the ratio up.
         assert_eq!(sent.seed_goal_ratio, Some(3.0));
         assert_eq!(sent.seed_goal_seconds, Some(3600));
+        assert!(!sent.seed_never_remove);
 
         let recorded = grab.seed_goals.as_ref().expect("goals should be returned");
         assert_eq!(
@@ -8133,6 +8214,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8195,6 +8277,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8282,6 +8365,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8363,6 +8447,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8432,6 +8517,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8496,6 +8582,7 @@ mod tests {
                 info_hash_hint: None,
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
+                seed_never_remove: false,
                 tracker_min_seed_ratio: None,
                 tracker_min_seed_time_minutes: None,
                 season_pack_seed_ratio: None,
@@ -8797,6 +8884,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(scryer_domain::CompletedDownload {
+                        client_job_protocol: None,
                         subtitle_paths: Vec::new(),
                         client_type: "qbittorrent".to_string(),
                         client_id: String::new(),
@@ -8913,6 +9001,7 @@ mod tests {
 
         client_a.completed_downloads.lock().unwrap().extend([
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -8928,6 +9017,7 @@ mod tests {
                 posted_file_names: Vec::new(),
             },
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -8945,6 +9035,7 @@ mod tests {
         ]);
         client_b.completed_downloads.lock().unwrap().extend([
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -8960,6 +9051,7 @@ mod tests {
                 posted_file_names: Vec::new(),
             },
             scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9026,6 +9118,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9088,6 +9181,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9182,6 +9276,7 @@ mod tests {
             let release_dir = root.path().join(release_name);
             std::fs::create_dir(&release_dir).unwrap();
             let mut item = scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "any-torrent-client".to_string(),
                 client_id: "client-a".to_string(),
@@ -9213,6 +9308,7 @@ mod tests {
             "missing.7z",
         ] {
             let mut item = scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "any-torrent-client".to_string(),
                 client_id: "client-a".to_string(),
@@ -9234,6 +9330,174 @@ mod tests {
         }
     }
 
+    #[test]
+    fn weaver_accepts_both_families_and_the_usenet_clients_nzbs_only() {
+        let weaver = test_config("weaver", "Weaver", "weaver", 0);
+        let sabnzbd = test_config("sab", "SABnzbd", "sabnzbd", 1);
+        for kind in [
+            DownloadArtifactKind::NzbBytes,
+            DownloadArtifactKind::MagnetUri,
+            DownloadArtifactKind::TorrentBytes,
+        ] {
+            assert!(
+                PrioritizedDownloadClientRouter::config_accepts_artifact_kind(&weaver, kind, None),
+                "{kind:?}"
+            );
+            assert_eq!(
+                PrioritizedDownloadClientRouter::config_accepts_artifact_kind(&sabnzbd, kind, None),
+                kind == DownloadArtifactKind::NzbBytes,
+                "{kind:?}"
+            );
+        }
+        for kind in [
+            DownloadSourceKind::NzbUrl,
+            DownloadSourceKind::NzbFile,
+            DownloadSourceKind::MagnetUri,
+            DownloadSourceKind::TorrentFile,
+        ] {
+            assert!(
+                PrioritizedDownloadClientRouter::config_accepts_source_kind(&weaver, kind, None),
+                "{kind:?}"
+            );
+        }
+    }
+
+    fn weaver_config_for(
+        server: &wiremock::MockServer,
+        id: &str,
+        priority: i64,
+    ) -> DownloadClientConfig {
+        let address = server.address();
+        let mut config = test_config(id, "Weaver", "weaver", priority);
+        config.config_json = format!(
+            r#"{{"host":"{}","port":"{}"}}"#,
+            address.ip(),
+            address.port()
+        );
+        config
+    }
+
+    fn magnet_add_request() -> DownloadClientAddRequest {
+        DownloadClientAddRequest {
+            http: None,
+            title: test_title(),
+            search_facet: None,
+            purpose: scryer_application::DownloadSubmissionPurpose::Standard,
+            download_id: None,
+            source_hint: None,
+            staged_nzb: None,
+            resolved_download_artifact: Some(ResolvedDownloadArtifact::Magnet {
+                uri: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".to_string(),
+                info_hash_hint: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+            }),
+            source_kind: Some(DownloadSourceKind::MagnetUri),
+            source_title: Some("Test Release".to_string()),
+            source_password: None,
+            category: None,
+            queue_priority: None,
+            download_directory: None,
+            release_title: None,
+            indexer_name: None,
+            indexer_id: None,
+            info_hash_hint: None,
+            seed_goal_ratio: None,
+            seed_goal_seconds: None,
+            seed_never_remove: false,
+            tracker_min_seed_ratio: None,
+            tracker_min_seed_time_minutes: None,
+            season_pack_seed_ratio: None,
+            season_pack_seed_time_minutes: None,
+            is_recent: None,
+            season_pack: None,
+            pinned_download_client_id: None,
+        }
+    }
+
+    // A torrent goes to a Weaver that has torrents; one without them refuses
+    // it before anything is sent, and the router moves on to the next client.
+    #[tokio::test]
+    async fn a_torrent_routes_to_weaver_and_past_a_weaver_without_torrents() {
+        for weaver_has_torrents in [true, false] {
+            let server = wiremock::MockServer::start().await;
+            let probe = if weaver_has_torrents {
+                serde_json::json!({"data": {"queueItems": []}})
+            } else {
+                serde_json::json!({"errors": [{
+                    "message": "Unknown field \"protocol\" on type \"QueueItem\"."
+                }]})
+            };
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::body_string_contains(
+                    "query TorrentSupport",
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(probe))
+                .expect(1)
+                .mount(&server)
+                .await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::body_string_contains(
+                    "mutation SubmitTorrent",
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"data": {"submitTorrent": {
+                        "accepted": true, "status": "ACCEPTED", "clientRequestId": null,
+                        "torrent": { "id": 91, "infohashV1": null }
+                    }}}),
+                ))
+                .expect(u64::from(weaver_has_torrents))
+                .mount(&server)
+                .await;
+            let fallback = Arc::new(MockDownloadClient::default());
+            let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+                Arc::new(MockDownloadClientPluginProvider {
+                    accepted_inputs: vec!["magnet_uri".to_string()],
+                    clients: vec![("fallback".to_string(), fallback.clone())],
+                });
+            let router = PrioritizedDownloadClientRouter::new(
+                Arc::new(MockDownloadClientConfigRepository {
+                    configs: vec![
+                        weaver_config_for(&server, "weaver", 0),
+                        test_config("fallback", "Fallback", "qbittorrent", 1),
+                    ],
+                }),
+                Arc::new(MockSettingsRepository::default()),
+                null_staged_nzb_store(),
+                test_pipeline_limit(),
+                Some(plugin_provider),
+            );
+
+            let result = router
+                .submit_download(&magnet_add_request())
+                .await
+                .expect("a client takes the torrent");
+
+            let fallback_submissions = fallback.submissions.lock().unwrap().len();
+            if weaver_has_torrents {
+                assert_eq!(result.client_type, "weaver");
+                assert_eq!(result.job_id, "91");
+                assert_eq!(fallback_submissions, 0);
+            } else {
+                assert_eq!(fallback_submissions, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn only_torbox_and_weaver_rows_skip_the_release_folder_probe() {
+        assert!(!completed_import_dir_may_be_parent(
+            super::super::torbox::client::CLIENT_TYPE
+        ));
+        // Weaver reports each job's own folder, NZB and torrent alike, and its
+        // NZB rows were never probed before it took torrents.
+        assert!(!completed_import_dir_may_be_parent("weaver"));
+        for client_type in ["qbittorrent", "transmission", "any-torrent-client"] {
+            assert!(
+                completed_import_dir_may_be_parent(client_type),
+                "{client_type}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn torrent_client_completed_parent_is_resolved_before_import() {
         let root = tempfile::tempdir().unwrap();
@@ -9247,6 +9511,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "torrent-client".to_string(),
                 client_id: String::new(),
@@ -9325,6 +9590,7 @@ mod tests {
             .lock()
             .unwrap()
             .push(scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),
@@ -9377,6 +9643,7 @@ mod tests {
         // recent activity, so they arrive on the snapshot, unconditioned.
         *client.prefetched_completed.lock().unwrap() =
             Some(vec![scryer_domain::CompletedDownload {
+                client_job_protocol: None,
                 subtitle_paths: Vec::new(),
                 client_type: "qbittorrent".to_string(),
                 client_id: String::new(),

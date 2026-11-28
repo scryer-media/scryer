@@ -67,7 +67,9 @@ not run them.
    - `ARCHIVE_EXTRACTION_WAITING`: an extraction failed; the next of its
      three attempts is not due yet. `ARCHIVE_EXTRACTION_BLOCKED`: all three
      failed. Operator retries the import from the queue item once the archive
-     is fixed.
+     is fixed. A torrent Scryer grabbed does not wait here: it is marked
+     FAILED, its release is blocklisted and searched again, and it seeds to
+     its goal before the client removes it.
    - `attentionReasonCode` `IMPORT_RETRY_LIMIT_REACHED`: six passes in a row
      made no progress. Read the import's last `skipReason` and error (step 3)
      for the cause; operator retries from the queue item once it is fixed.
@@ -77,7 +79,19 @@ not run them.
    import actions in the web UI.
 4. Logs: `log-search.sh $B 'import' WARN`.
 5. Hardlinks: `same_filesystem_pairs` empty while operator expects hardlinks
-   = download and library roots on different filesystems.
+   = download and library roots on different filesystems. For files already
+   imported, `TitleHistory.graphql` with `eventTypes: ["IMPORTED"]` shows
+   `filePlacements` per file. `placement` `COPY` with `linkFallback.cause`
+   `FAILED` = the hard link call failed and the file was copied; `reason` and
+   `osErrorCode` carry the error, and the log has a WARN
+   `hard link failed; handing import to copy lane` for it. `NOT_POSSIBLE` =
+   the disk refused the link as not possible here: another volume, a
+   filesystem without hard links, or one that answers a link with an
+   invalid-argument error. `osErrorCode` carries the error when the disk gave
+   one, and the log has an INFO
+   `hard link is not possible here; handing import to copy lane` with the
+   error and both paths; search for it with
+   `log-search.sh $B 'hard link is not possible' INFO`. Imports recorded before placements were kept have no `filePlacements`.
 
 ## Wrong release chosen
 

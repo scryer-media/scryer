@@ -572,15 +572,43 @@ async fn graphql_one_shot_search_releases_requires_a_title() {
     let body = gql(
         &ctx,
         r#"query($input: SearchReleasesInput!) { searchReleases(input: $input) { title } }"#,
-        json!({ "input": { "query": "paperman" } }),
+        json!({ "input": { "season": "1", "episode": "1" } }),
     )
     .await;
-    let errors = body["errors"].as_array().expect("expected graphql errors");
-    assert!(
-        errors[0]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("searchReleases requires a title id"),
+    assert_eq!(
+        body["errors"][0]["extensions"]["reason"], "INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED",
+        "unexpected error: {body}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_one_shot_search_releases_refuses_a_query() {
+    let ctx = TestContext::new().await;
+    for input in [
+        json!({ "query": "paperman" }),
+        json!({ "titleId": "synthetic-title", "query": "paperman" }),
+    ] {
+        let body = gql(
+            &ctx,
+            r#"query($input: SearchReleasesInput!) { searchReleases(input: $input) { title } }"#,
+            json!({ "input": input }),
+        )
+        .await;
+        assert_eq!(
+            body["errors"][0]["extensions"]["reason"], "INTERFACE_RELEASE_SEARCH_QUERY_UNSUPPORTED",
+            "unexpected error: {body}"
+        );
+    }
+
+    // A blank query is no query: the search still needs its title.
+    let body = gql(
+        &ctx,
+        r#"query($input: SearchReleasesInput!) { searchReleases(input: $input) { title } }"#,
+        json!({ "input": { "query": "  " } }),
+    )
+    .await;
+    assert_eq!(
+        body["errors"][0]["extensions"]["reason"], "INTERFACE_RELEASE_SEARCH_TITLE_REQUIRED",
         "unexpected error: {body}"
     );
 }

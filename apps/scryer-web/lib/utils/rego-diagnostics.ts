@@ -53,6 +53,7 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_QUALITY_PROFILE_AMBIGUOUS: "error.ruleQualityProfileAmbiguous",
   RULE_MONITOR_UNSUPPORTED: "error.ruleMonitorUnsupported",
   RULE_AUDIO_LANGUAGE_UNKNOWN: "error.ruleAudioLanguageUnknown",
+  RULE_MIXES_REPORT_AND_REQUEST_HEADS: "error.ruleMixesReportAndRequestHeads",
   // Lifecycle's live checks, reported by validation and by a refused save.
   CATALOG_NOT_DEFINED_TAG: "error.reason.CATALOG_NOT_DEFINED_TAG",
   LIFECYCLE_QUALITY_PROFILE_NOT_FOUND:

@@ -64,6 +64,8 @@ pub struct LibrarySettingsPayload {
     pub default_monitor_type: String,
     /// Saved library choice; null uses the built-in facet default.
     pub default_monitor_type_override: Option<String>,
+    /// Tag labels every title added to this library is given; empty when none.
+    pub default_title_tags: Vec<String>,
     /// Library override quality-profile ID; null means inherit.
     pub quality_profile_id_override: Option<ID>,
     /// Effective quality-profile ID.
@@ -558,6 +560,11 @@ pub struct StorageRootUsagePayload {
     pub used_bytes: Option<Long>,
     /// Total bytes on the backing filesystem; null when it cannot be inspected.
     pub total_bytes: Option<Long>,
+    /// Bytes of the tracked media files of the library that owns this root
+    /// folder, across all of its root folders: the managed bytes its catalog
+    /// reports. Read from the catalog, not the filesystem, and only when
+    /// selected.
+    pub library_bytes: Option<Long>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -760,6 +767,18 @@ pub struct CancelLibraryScanPayload {
     pub session_id: ID,
     /// True when cancellation was accepted; false when the scan was already terminal.
     pub accepted: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What approving a bad-file report's recycle-and-search would move.
+pub struct MediaIssueRecyclePreviewPayload {
+    /// The files the recycle moves, and the fingerprint approval must send.
+    pub preview: DeletePreviewPayload,
+    /// `MEDIA_RECYCLE_HARDLINKED_DOWNLOAD_COPY` when the reported file's only
+    /// other name is its copy in the download folder: approval must then set
+    /// `recycleBothNames` to recycle both names, or be cancelled. Null
+    /// otherwise.
+    pub hard_link_reason: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1351,6 +1370,15 @@ pub struct SetEpisodeMonitoredInput {
 }
 
 #[derive(InputObject, Clone)]
+/// Monitoring state change for several episodes at once.
+pub struct SetEpisodesMonitoredInput {
+    /// Episode identities to update. A repeated id counts once.
+    pub episode_ids: Vec<ID>,
+    /// Whether the episodes are monitored.
+    pub monitored: bool,
+}
+
+#[derive(InputObject, Clone)]
 /// Monitoring state change for a series-movie link.
 pub struct SetSeriesMovieMonitoredInput {
     /// Series-movie link identity to update.
@@ -1439,6 +1467,11 @@ pub struct LibrarySettingsInput {
     pub use_season_folders: Option<bool>,
     /// Initial monitoring choice for new Add/Request dialogs; null restores the built-in default.
     pub default_monitor_type: Option<String>,
+    /// Defined tag labels every title added to this library is given, by hand,
+    /// from a list or by approving a request; null or empty clears them. A
+    /// label the registry does not define is refused with
+    /// `CATALOG_NOT_DEFINED_TAG`.
+    pub default_title_tags: Option<Vec<String>>,
     /// Default quality profile identity.
     pub quality_profile_id: Option<ID>,
     /// Quality profile identities allowed for requests.

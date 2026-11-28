@@ -1330,6 +1330,7 @@ mod tests {
 
     fn item(id: &str, state: DownloadQueueState, is_scryer_origin: bool) -> DownloadQueueItem {
         DownloadQueueItem {
+            client_job_protocol: None,
             id: id.to_string(),
             title_id: None,
             episode_id: None,

@@ -1201,6 +1201,7 @@ impl MediaFileRepository for NullMediaFileRepository {
     async fn list_title_episode_progress_summaries(
         &self,
         _title_ids: &[String],
+        _aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
         Ok(Vec::new())
     }
@@ -1208,6 +1209,7 @@ impl MediaFileRepository for NullMediaFileRepository {
     async fn list_collection_episode_progress_summaries(
         &self,
         _title_ids: &[String],
+        _aired_through: chrono::NaiveDate,
     ) -> AppResult<Vec<CollectionEpisodeProgressSummary>> {
         Ok(Vec::new())
     }
@@ -4271,6 +4273,7 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
+        current.hidden_facets = settings.hidden_facets;
         current.language = settings.language.flatten();
         current.table_columns = settings.table_columns.unwrap_or_default();
         Ok(current)

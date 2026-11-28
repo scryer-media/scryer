@@ -1,7 +1,10 @@
 import * as React from "react";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { Release } from "@/lib/types";
+import { formatUiDateTime } from "@/lib/utils/date-format";
+import { indexerSkipReasonText } from "@/lib/utils/indexer-skip-reason";
 import type { InteractiveSearchPresentation } from "@/lib/utils/interactive-search-presentation";
 import { unroutableResultsKey } from "@/lib/utils/unroutable-results";
 
@@ -21,6 +24,7 @@ export function ReleaseSearchSummary({
   dataUi: string;
 }) {
   const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
   const description = React.useMemo(() => {
     if (presentation.showProgress) {
       return t("title.contextReleaseSearchProgress", {
@@ -83,16 +87,43 @@ export function ReleaseSearchSummary({
         <p
           className="mt-0.5 truncate text-[11.5px] text-[var(--scry-faint)]"
           title={presentation.skippedIndexers
-            .map((indexer) =>
-              indexer.reason
-                ? `${indexer.name}: ${indexer.reason}`
-                : indexer.name,
-            )
+            .map((indexer) => {
+              const reason = indexerSkipReasonText(
+                { ...indexer, failureReason: indexer.reason },
+                t,
+                (instant) => formatUiDateTime(instant, dateTimeFormat),
+              );
+              return reason ? `${indexer.name}: ${reason}` : indexer.name;
+            })
             .join("\n")}
         >
           {t("title.contextReleaseSearchIndexerSkipped", {
             count: presentation.skippedIndexers.length,
             names: presentation.skippedIndexers
+              .map((indexer) => indexer.name)
+              .join(", "),
+          })}
+        </p>
+      ) : null}
+      {presentation.showFinalSummary &&
+      presentation.partlySearchedIndexers.length > 0 ? (
+        <p
+          className="mt-0.5 truncate text-[11.5px] text-[var(--scry-faint)]"
+          data-ui={`${dataUi}-partly-searched`}
+          title={presentation.partlySearchedIndexers
+            .map((indexer) =>
+              indexer.retryAfterSeconds !== null
+                ? t("title.contextReleaseSearchIndexerRetryAfter", {
+                    name: indexer.name,
+                    seconds: indexer.retryAfterSeconds,
+                  })
+                : indexer.name,
+            )
+            .join("\n")}
+        >
+          {t("title.contextReleaseSearchIndexerPartlySearched", {
+            count: presentation.partlySearchedIndexers.length,
+            names: presentation.partlySearchedIndexers
               .map((indexer) => indexer.name)
               .join(", "),
           })}

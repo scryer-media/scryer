@@ -1184,7 +1184,7 @@ pub struct PendingReleasesPageQuery {
 }
 
 /// Parsed media properties from media analysis — application-layer DTO.
-/// A single audio stream, mirroring `scryer_mediainfo::AudioStreamDetail`.
+/// One audio stream of the stored summary, built by `media::analysis_summary`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioStreamDetail {
     pub codec: Option<String>,
@@ -1195,7 +1195,7 @@ pub struct AudioStreamDetail {
     pub bitrate_kbps: Option<i32>,
 }
 
-/// A single subtitle stream, mirroring `scryer_mediainfo::SubtitleStreamDetail`.
+/// One subtitle stream of the stored summary, built by `media::analysis_summary`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubtitleStreamDetail {
     pub codec: Option<String>,
@@ -1205,7 +1205,8 @@ pub struct SubtitleStreamDetail {
     pub default: bool,
 }
 
-/// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
+/// Scryer's stored media summary: the parser's details plus the flat fields
+/// `media::analysis_summary` derives from them.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MediaFileAnalysis {
@@ -1493,6 +1494,60 @@ pub struct NewBlocklistEntry {
     pub reason: Option<String>,
 }
 
+/// A bad-file report to record.
+#[derive(Clone, Debug)]
+pub struct NewMediaIssue {
+    pub library_id: String,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub file_path_snapshot: String,
+    pub file_version: String,
+    pub content: scryer_domain::BlocklistContentIdentity,
+    pub reporter_user_id: String,
+    pub reason: scryer_domain::MediaIssueReason,
+    pub details: Option<String>,
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+}
+
+/// Mark a reported file bad.
+pub struct ConfirmMediaIssue<'a> {
+    pub issue_id: &'a str,
+    /// `None` when a rule confirmed the report.
+    pub reviewer_user_id: Option<&'a str>,
+    /// What the confirmation authorizes.
+    pub remediation: scryer_domain::MediaIssueRemediation,
+    pub title_id: &'a str,
+    pub content: &'a scryer_domain::BlocklistContentIdentity,
+    /// The grab the file came from, when known. Its entry gains the content
+    /// identity instead of a second entry being written.
+    pub release: Option<&'a NewBlocklistEntry>,
+    pub reason: &'a str,
+    /// Whether the import gate refuses this content for the title. False for
+    /// a wrong-content report, whose content may be right elsewhere.
+    pub blocks_imports: bool,
+    pub recycle_fingerprint: Option<&'a str>,
+    /// The title's files whose content matches. Each is stamped.
+    pub matching_media_file_ids: &'a [String],
+}
+
+/// A report whose bad-file mark was taken off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnmarkedMediaIssue {
+    pub issue_id: String,
+    pub library_id: String,
+    pub title_id: String,
+}
+
+/// An operator-confirmed recycle to resume after a restart.
+#[derive(Clone, Debug)]
+pub struct MediaIssueRecycleIntent {
+    pub issue_id: String,
+    pub actor_id: String,
+    pub preview_fingerprint: String,
+}
+
 /// The key of one blocklist row, as a search-time exclusion reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlocklistMatch {
@@ -1574,6 +1629,10 @@ pub struct DownloadClientAddRequest {
     pub info_hash_hint: Option<String>,
     pub seed_goal_ratio: Option<f64>,
     pub seed_goal_seconds: Option<i64>,
+    /// The resolved seeding profile never lets the torrent be removed. Set by
+    /// the router beside the goals; `false` when no profile resolved. Host
+    /// side only: it is not sent to plugin download clients.
+    pub seed_never_remove: bool,
     /// Tracker-declared minimums carried by the release (`minimum_seed_ratio` /
     /// `minimum_seed_time_minutes` and the season-pack twins in the indexer
     /// `extra` map). The grab-time resolver clamps profile goals up to these
@@ -1710,6 +1769,7 @@ impl DownloadClientAddRequest {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,

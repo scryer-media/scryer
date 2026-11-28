@@ -1771,6 +1771,12 @@ fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlAr
         args.extend(library_ids.iter().cloned().map(SqlArg::Text));
     }
 
+    // Served by `idx_media_requests_created_title`: a title has few requests.
+    if let Some(created_title_id) = &query.created_title_id {
+        sql.push_str(" AND created_title_id = {}");
+        args.push(SqlArg::Text(created_title_id.clone()));
+    }
+
     if let Some(requester_user_id) = &query.requester_user_id {
         sql.push_str(
             " AND id IN (

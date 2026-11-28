@@ -17,10 +17,45 @@ use scryer_outbound_http::{
 };
 
 const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
-/// Most pixels source artwork may declare before it is decoded. Provider
-/// artwork tops out around 3840x2160; this leaves an order of magnitude more
-/// while keeping one decode, its RGBA copy and its resize buffer bounded.
+/// Most pixels source artwork may have on any host. Provider artwork tops out
+/// around 3840x2160; this leaves an order of magnitude more.
 const MAX_SOURCE_PIXELS: u64 = 100_000_000;
+/// Fewest pixels the memory-scaled limit goes down to: about 64 MiB of RGBA,
+/// still twice the largest provider artwork.
+const MIN_SOURCE_PIXELS: u64 = 16_000_000;
+/// Bytes per source pixel one image holds at its peak: its RGBA copy (4) and
+/// the premultiplied linear-light copy the resize reads (16).
+const PEAK_BYTES_PER_SOURCE_PIXEL: u64 = 20;
+/// One image may use this fraction of the memory available to Scryer, so the
+/// four artwork workers together stay within a quarter of it.
+const MEMORY_DIVISOR_PER_IMAGE: u64 = 16;
+/// The largest decoded sample an accepted format produces: 16-bit RGBA PNG.
+const MAX_DECODED_BYTES_PER_PIXEL: u64 = 8;
+
+/// Most pixels source artwork may have, scaled to the memory available to
+/// Scryer: never above [`MAX_SOURCE_PIXELS`], never below
+/// [`MIN_SOURCE_PIXELS`], and [`MAX_SOURCE_PIXELS`] when memory is unknown.
+fn source_pixel_limit_for_memory(memory_bytes: Option<u64>) -> u64 {
+    memory_bytes.map_or(MAX_SOURCE_PIXELS, |bytes| {
+        (bytes / MEMORY_DIVISOR_PER_IMAGE / PEAK_BYTES_PER_SOURCE_PIXEL)
+            .clamp(MIN_SOURCE_PIXELS, MAX_SOURCE_PIXELS)
+    })
+}
+
+/// [`source_pixel_limit_for_memory`] for this host, read once per process.
+fn source_pixel_limit() -> u64 {
+    static LIMIT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let memory_bytes = scryer_application::host_memory::memory_available_to_process_bytes();
+        let limit = source_pixel_limit_for_memory(memory_bytes);
+        tracing::info!(
+            memory_bytes,
+            max_pixels = limit,
+            "artwork source pixel limit set"
+        );
+        limit
+    })
+}
 const AVIF_SPEED: u8 = 4;
 const AVIF_QUALITY: u8 = 85;
 const PROXY_AVIF_SPEED: u8 = 10;
@@ -226,16 +261,13 @@ impl HttpTitleImageProcessor {
                     "unsupported image format".to_string(),
                 )
             })?;
-        refuse_oversized_dimensions(bytes, guessed_format)?;
-        let decoded =
-            image::load_from_memory_with_format(bytes, guessed_format).map_err(|err| {
-                AppError::validation_refused(
-                    crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
-                    format!("failed to decode image: {err}"),
-                )
-            })?;
-        let oriented = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1));
-        let rgba = oriented.to_rgba8();
+        let max_pixels = source_pixel_limit();
+        refuse_oversized_dimensions(bytes, guessed_format, max_pixels)?;
+        let decoded = decode_source_image(bytes, guessed_format, max_pixels)?;
+        // Converting by value frees the decoded buffer as soon as the RGBA
+        // copy exists, and costs nothing when the decode is RGBA already.
+        let rgba =
+            apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1)).into_rgba8();
         let (source_width, source_height) = rgba.dimensions();
 
         if source_width == 0 || source_height == 0 {
@@ -298,28 +330,76 @@ async fn read_title_image_body(
         })
 }
 
-/// Refuses artwork whose header declares more than [`MAX_SOURCE_PIXELS`]
-/// before any pixel buffer is allocated. A header the reader cannot parse is
-/// left to the full decode, which reports it the way it always has.
-fn refuse_oversized_dimensions(bytes: &[u8], format: ImageFormat) -> AppResult<()> {
+/// Refuses artwork whose header declares more than `max_pixels` before any
+/// pixel buffer is allocated. A header the reader cannot parse is left to
+/// [`decode_source_image`], whose decoder limit still bounds it.
+fn refuse_oversized_dimensions(
+    bytes: &[u8],
+    format: ImageFormat,
+    max_pixels: u64,
+) -> AppResult<()> {
     let Ok((width, height)) =
         image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions()
     else {
         return Ok(());
     };
-    if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
-        return Err(AppError::validation_refused_with_facts(
-            crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_TOO_LARGE,
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > max_pixels {
+        return Err(oversized_image(
             format!(
-                "image is {width}x{height}, more than the {MAX_SOURCE_PIXELS} pixels artwork may have"
+                "image is {width}x{height}, more than the {max_pixels} pixels artwork may have"
             ),
-            vec![scryer_application::RefusalFact::new(
-                "maxPixels",
-                MAX_SOURCE_PIXELS.to_string(),
-            )],
+            max_pixels,
+            Some(pixels),
         ));
     }
     Ok(())
+}
+
+/// Decodes source artwork with the decoder's own allocation limit set to what
+/// `max_pixels` of the widest accepted sample needs, so a header the
+/// dimension check could not read is still refused before its pixels are
+/// allocated.
+fn decode_source_image(
+    bytes: &[u8],
+    format: ImageFormat,
+    max_pixels: u64,
+) -> AppResult<DynamicImage> {
+    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(max_pixels.saturating_mul(MAX_DECODED_BYTES_PER_PIXEL));
+    reader.limits(limits);
+    reader.decode().map_err(|err| match err {
+        image::ImageError::Limits(_) => oversized_image(
+            format!(
+                "image needs more memory to decode than {max_pixels} pixels of artwork may use"
+            ),
+            max_pixels,
+            None,
+        ),
+        err => AppError::validation_refused(
+            crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
+            format!("failed to decode image: {err}"),
+        ),
+    })
+}
+
+fn oversized_image(message: String, max_pixels: u64, pixels: Option<u64>) -> AppError {
+    let mut facts = vec![scryer_application::RefusalFact::new(
+        "maxPixels",
+        max_pixels.to_string(),
+    )];
+    if let Some(pixels) = pixels {
+        facts.push(scryer_application::RefusalFact::new(
+            "pixels",
+            pixels.to_string(),
+        ));
+    }
+    AppError::validation_refused_with_facts(
+        crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_TOO_LARGE,
+        message,
+        facts,
+    )
 }
 
 fn title_image_scope(source_url: &str) -> String {
@@ -744,39 +824,34 @@ mod tests {
 
     #[test]
     fn no_resize_variant_encodes_the_source_unchanged() {
-        artwork_pool(2)
-            .expect("artwork pool")
-            .install(|| {
-                let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
-                let direct =
-                    encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode");
+        artwork_pool(2).expect("artwork pool").install(|| {
+            let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
+            let direct = encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode");
 
-                // Target wider than the source: no upscaling, and the encoded
-                // bytes must be exactly what encoding the shared source gives.
-                let variant = build_width_variant(&source, "w128", 128).expect("variant encode");
-                assert_eq!((variant.width, variant.height), (64, 96));
-                assert_eq!(variant.bytes, direct);
-                assert_eq!(variant.digest, title_image_blob_digest(&direct));
+            // Target wider than the source: no upscaling, and the encoded
+            // bytes must be exactly what encoding the shared source gives.
+            let variant = build_width_variant(&source, "w128", 128).expect("variant encode");
+            assert_eq!((variant.width, variant.height), (64, 96));
+            assert_eq!(variant.bytes, direct);
+            assert_eq!(variant.digest, title_image_blob_digest(&direct));
 
-                // Equal width takes the same no-resize path.
-                let exact = build_width_variant(&source, "w64", 64).expect("variant encode");
-                assert_eq!(exact.bytes, direct);
-            });
+            // Equal width takes the same no-resize path.
+            let exact = build_width_variant(&source, "w64", 64).expect("variant encode");
+            assert_eq!(exact.bytes, direct);
+        });
     }
 
     #[test]
     fn resize_variant_still_downscales_to_the_target_width() {
-        artwork_pool(2)
-            .expect("artwork pool")
-            .install(|| {
-                let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
-                let variant = build_width_variant(&source, "w32", 32).expect("variant encode");
-                assert_eq!((variant.width, variant.height), (32, 48));
-                assert_ne!(
-                    variant.bytes,
-                    encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode")
-                );
-            });
+        artwork_pool(2).expect("artwork pool").install(|| {
+            let source = RgbaImage::from_pixel(64, 96, image::Rgba([12, 34, 56, 255]));
+            let variant = build_width_variant(&source, "w32", 32).expect("variant encode");
+            assert_eq!((variant.width, variant.height), (32, 48));
+            assert_ne!(
+                variant.bytes,
+                encode_avif(&source, AVIF_SPEED, AVIF_QUALITY).expect("direct encode")
+            );
+        });
     }
 
     #[test]
@@ -1118,21 +1193,93 @@ mod tests {
         );
         assert_eq!(
             refused.refusal_facts(),
-            [scryer_application::RefusalFact::new(
-                "maxPixels",
-                MAX_SOURCE_PIXELS.to_string()
-            )]
+            [
+                scryer_application::RefusalFact::new("maxPixels", source_pixel_limit().to_string()),
+                scryer_application::RefusalFact::new("pixels", "400000000".to_string()),
+            ]
         );
 
         // Exactly the limit passes the check; one more row does not.
-        assert!(
-            refuse_oversized_dimensions(&jpeg_claiming(10_000, 10_000), ImageFormat::Jpeg).is_ok()
+        let check = |width, height, max_pixels| {
+            refuse_oversized_dimensions(
+                &jpeg_claiming(width, height),
+                ImageFormat::Jpeg,
+                max_pixels,
+            )
+        };
+        assert!(check(10_000, 10_000, MAX_SOURCE_PIXELS).is_ok());
+        assert!(check(10_000, 10_001, MAX_SOURCE_PIXELS).is_err());
+        // A lower, memory-scaled limit refuses what the ceiling allows.
+        let refused = check(5_000, 5_000, MIN_SOURCE_PIXELS).expect_err("25 MP over a 16 MP limit");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_TOO_LARGE)
         );
-        assert!(
-            refuse_oversized_dimensions(&jpeg_claiming(10_000, 10_001), ImageFormat::Jpeg).is_err()
+        assert_eq!(
+            refused.refusal_facts(),
+            [
+                scryer_application::RefusalFact::new("maxPixels", "16000000".to_string()),
+                scryer_application::RefusalFact::new("pixels", "25000000".to_string()),
+            ]
         );
+        assert!(check(4_000, 4_000, MIN_SOURCE_PIXELS).is_ok());
         // A header the reader cannot parse is left to the decode, as before.
-        assert!(refuse_oversized_dimensions(b"not an image", ImageFormat::Jpeg).is_ok());
+        assert!(
+            refuse_oversized_dimensions(b"not an image", ImageFormat::Jpeg, MAX_SOURCE_PIXELS)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_pixel_limit_follows_memory_between_its_floor_and_ceiling() {
+        const GIB: u64 = 1 << 30;
+        // Unknown memory keeps the ceiling; no figure ever raises it.
+        assert_eq!(source_pixel_limit_for_memory(None), MAX_SOURCE_PIXELS);
+        for memory in [64 * GIB, 1 << 50, u64::MAX] {
+            assert_eq!(
+                source_pixel_limit_for_memory(Some(memory)),
+                MAX_SOURCE_PIXELS
+            );
+        }
+        // A tiny figure stops at the floor.
+        for memory in [0, 1, 256 << 20, 2 * GIB, 4 * GIB] {
+            assert_eq!(
+                source_pixel_limit_for_memory(Some(memory)),
+                MIN_SOURCE_PIXELS
+            );
+        }
+        // In between it scales: a sixteenth of 8 GiB at 20 bytes a pixel.
+        assert_eq!(source_pixel_limit_for_memory(Some(8 * GIB)), 26_843_545);
+        assert!(source_pixel_limit() <= MAX_SOURCE_PIXELS);
+        assert!(source_pixel_limit() >= MIN_SOURCE_PIXELS);
+    }
+
+    #[test]
+    fn the_decoder_limit_refuses_before_allocating_and_passes_what_fits() {
+        let bytes = encode_test_image(ImageFormat::Png);
+        // 800x1200 needs more than a 1,000-pixel allowance; the decoder
+        // refuses it before reserving the output buffer.
+        let refused = match decode_source_image(&bytes, ImageFormat::Png, 1_000) {
+            Ok(_) => panic!("the decoder limit holds"),
+            Err(refused) => refused,
+        };
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_TOO_LARGE)
+        );
+        assert_eq!(
+            refused.refusal_facts(),
+            [scryer_application::RefusalFact::new(
+                "maxPixels",
+                "1000".to_string()
+            )]
+        );
+        for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::WebP] {
+            let decoded =
+                decode_source_image(&encode_test_image(format), format, MIN_SOURCE_PIXELS)
+                    .unwrap_or_else(|_| panic!("{format:?} under the floor decodes"));
+            assert_eq!((decoded.width(), decoded.height()), (800, 1200));
+        }
     }
 
     #[test]

@@ -76,6 +76,7 @@ export const PosterGrid = React.memo(function PosterGrid({
     ready: catalogInitialLoadComplete,
     storageKeySuffix: "poster-grid",
     scrollRef: gridRef,
+    anchorAttribute: "data-catalog-title-id",
   });
 
   React.useEffect(() => {
@@ -135,6 +136,7 @@ export const PosterGrid = React.memo(function PosterGrid({
   return (
     <div
       ref={gridRef}
+      data-catalog-poster-grid="true"
       data-catalog-scroll-root={scrollContainer ? "true" : undefined}
       className={
         scrollContainer
@@ -207,7 +209,7 @@ const PosterCard = React.memo(function PosterCard({
   ]);
 
   return (
-    <div className="cv-auto-poster">
+    <div className="cv-auto-poster" data-catalog-title-id={title.id}>
       <TitleCard
         title={title.name}
         year={title.year ?? null}

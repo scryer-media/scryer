@@ -177,6 +177,8 @@ pub struct GeneralSettingsPayload {
     pub api_explorer_enabled: bool,
     /// Whether surfaces that are still being finished are shown on this instance.
     pub experimental_features_enabled: bool,
+    /// Facets turned off for the whole instance. They are hidden for every user and their background work does not run; their titles and files stay.
+    pub disabled_facets: Vec<MediaFacetValue>,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
     pub personalized_discovery_enabled: bool,
     /// Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames.
@@ -548,6 +550,8 @@ pub struct UiSettingsPayload {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area opened by default.
     pub default_landing_view: UiDefaultLandingViewValue,
+    /// Facets the caller hid from navigation, discovery and pickers; never every facet.
+    pub hidden_facets: Vec<UiSettingsFacetValue>,
     /// Interface language code saved on the caller's profile, or null to follow the browser.
     pub language: Option<String>,
     /// Persisted table-column settings.
@@ -692,6 +696,8 @@ pub struct SetMyUiSettingsInput {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area to open by default.
     pub default_landing_view: UiDefaultLandingViewValue,
+    /// Facets to hide from navigation, discovery and pickers; omitted or null preserves the saved list and an empty list shows every facet. At least one facet must stay visible.
+    pub hidden_facets: Option<Vec<UiSettingsFacetValue>>,
     /// Optional interface language code; null preserves the saved value and an empty string clears it.
     pub language: Option<String>,
     /// Optional complete table-column setting list; null preserves the saved columns and an empty list clears them.
@@ -1522,6 +1528,8 @@ pub struct UpdateGeneralSettingsInput {
     pub api_explorer_enabled: Option<bool>,
     /// Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
     pub experimental_features_enabled: Option<bool>,
+    /// Facets to turn off for the whole instance; at least one must stay on. Omission preserves the saved list.
+    pub disabled_facets: Option<Vec<MediaFacetValue>>,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
     pub personalized_discovery_enabled: Option<bool>,
     /// Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames. Omission preserves the saved setting.

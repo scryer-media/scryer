@@ -10,13 +10,11 @@ import { RequestMediaDialog } from "@/components/root/request-media-dialog";
 import type { TitleMoreLikeThisStripActions } from "@/components/views/title-more-like-this-strip";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useSearchContext } from "@/lib/context/search-context";
+import { useDiscoveryItemFacet, useFacets } from "@/lib/facets/use-facets";
 import { useTranslate } from "@/lib/context/translate-context";
 import { titleRouteTargetQuery } from "@/lib/graphql/queries";
 import type { CatalogDiscoveryItem, Facet } from "@/lib/types";
-import {
-  discoveryItemFacet,
-  metadataResultForDiscoveryItem,
-} from "@/lib/utils/discovery-actions";
+import { metadataResultForDiscoveryItem } from "@/lib/utils/discovery-actions";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
 import type { ViewId } from "@/components/root/types";
 
@@ -83,6 +81,16 @@ export function useTitleMoreLikeThisActions({
   const search = useSearchContext();
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
+  const { hidden: hiddenFacets } = useFacets();
+  const discoveryFacet = useDiscoveryItemFacet();
+  // A hidden facet is not offered: its titles get no add or request action.
+  const itemFacet = React.useCallback(
+    (item: CatalogDiscoveryItem) => {
+      const facet = discoveryFacet(item);
+      return facet && !hiddenFacets.has(facet) ? facet : null;
+    },
+    [discoveryFacet, hiddenFacets],
+  );
   const [addDialogTarget, setAddDialogTarget] =
     React.useState<DiscoveryDialogTarget | null>(null);
   const [requestDialogTarget, setRequestDialogTarget] =
@@ -90,23 +98,23 @@ export function useTitleMoreLikeThisActions({
 
   const canAddItem = React.useCallback(
     (item: CatalogDiscoveryItem) => {
-      const facet = discoveryItemFacet(item);
+      const facet = itemFacet(item);
       return facet
         ? canAddItems || (search.librariesByFacet[facet] ?? []).length > 0
         : false;
     },
-    [canAddItems, search.librariesByFacet],
+    [canAddItems, itemFacet, search.librariesByFacet],
   );
 
   const canRequestItem = React.useCallback(
     (item: CatalogDiscoveryItem) => {
-      const facet = discoveryItemFacet(item);
+      const facet = itemFacet(item);
       return facet
         ? canRequestItems ||
             (search.requestableLibrariesByFacet[facet] ?? []).length > 0
         : false;
     },
-    [canRequestItems, search.requestableLibrariesByFacet],
+    [canRequestItems, itemFacet, search.requestableLibrariesByFacet],
   );
 
   const handleAction = React.useCallback(
@@ -114,7 +122,7 @@ export function useTitleMoreLikeThisActions({
       if (item.ownedInInput) {
         return;
       }
-      const facet = discoveryItemFacet(item);
+      const facet = itemFacet(item);
       if (!facet) {
         setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
@@ -141,7 +149,7 @@ export function useTitleMoreLikeThisActions({
         );
       }
     },
-    [search, setGlobalStatus, t],
+    [itemFacet, search, setGlobalStatus, t],
   );
 
   const handleOpenResolved = React.useCallback(
@@ -208,6 +216,7 @@ export function useTitleMoreLikeThisActions({
           )}
           manageableLibraries={search.librariesByFacet[addFacet] ?? []}
           rootFolderOptions={search.rootFoldersByFacet[addFacet] ?? []}
+          animeMonitorSpecials={search.animeCatalogDefaults.monitorSpecials}
           onAdd={async (result, facet, options) => {
             const titleId = await search.addMetadataSearchResultToCatalog(
               result,

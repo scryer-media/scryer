@@ -36,6 +36,7 @@ pub mod network_bind;
 pub mod public_url;
 pub mod rate_limit_proxy_policy;
 pub mod title_delete;
+pub mod torbox_refusal;
 
 /// Completed-history rows the poller considers each cycle.
 ///
@@ -80,6 +81,7 @@ pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
+pub mod host_memory;
 mod image_proxy;
 mod import;
 mod indexer_category;
@@ -117,6 +119,7 @@ pub use lists::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
 pub mod lifecycle_rules;
 pub mod location;
 mod media;
+pub mod media_issues;
 pub(crate) mod media_references;
 mod media_requests;
 pub mod media_server_signals;
@@ -272,10 +275,10 @@ pub use ports::{
     EpisodeWrite, LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
     LibraryGraphRunRecord, LibraryGraphSnapshotRecord, MediaRequestQualityProfileReferenceCounts,
     MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
-    MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SubtitleSyncClient,
-    SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, TitleExternalIdPresence, TitleExternalIdPresenceLookup,
-    UserUiSettingsRepository,
+    MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SeriesMovieTmdbMatch,
+    SubtitleSyncClient, SubtitleSyncJob, TitleArtworkUrlUpdate, TitleDeletePreviewInfo,
+    TitleExternalIdLookup, TitleExternalIdLookupMatch, TitleExternalIdPresence,
+    TitleExternalIdPresenceLookup, UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
 pub use acquisition::submission::describe_acquisition_metrics;
@@ -435,35 +438,37 @@ pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;
 pub use catalog::workflow::{
     DeleteEpisodeFilesJobAccepted, DeleteTitlesJobAccepted, DeleteTitlesJobItem,
-    DeleteTitlesJobRequest,
+    DeleteTitlesJobRequest, SameFilmPairing,
 };
 pub use contracts::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeStatesQuery,
     AcquisitionScopeStatusTally, ActivityWindowCounts, AudioStreamDetail, BlocklistMatch,
     CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator, CollectionUpdate,
-    DashboardActivityStats, DeleteExecutionConfirmation, DownloadClientAddRequest,
-    DownloadClientBindingRecord, DownloadClientConfigUpdate, DownloadClientMarkImportedRequest,
-    DownloadClientRetryOutcome, DownloadClientStatus, DownloadOrigin, DownloadPasswordCandidates,
-    DownloadRecord, DownloadSubmission, DownloadSubmissionActorSnapshot,
-    DownloadSubmissionIdentity, DownloadSubmissionPurpose, EpisodeFileReassignOutcome,
-    EpisodeFileReassignRequest, EpisodeFileReassignment, EpisodeLinkReplacement, EpisodeUpdate,
-    FileEpisodeLinkRecord, ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
-    IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
-    IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
-    IndexerDownloadClientProviderCompatibility, IndexerRoutingEntry, IndexerRoutingPlan,
-    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
-    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
-    MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
-    NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
-    PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
-    PreparedIndexerArtifact, ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome,
-    QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery,
-    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StandbyQueueChoice,
-    StandbyQueueOutcome, StorageRootUsage, SubmissionConflictPolicy, SubmissionScope,
-    SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
-    SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
-    TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
-    UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
+    ConfirmMediaIssue, DashboardActivityStats, DeleteExecutionConfirmation,
+    DownloadClientAddRequest, DownloadClientBindingRecord, DownloadClientConfigUpdate,
+    DownloadClientMarkImportedRequest, DownloadClientRetryOutcome, DownloadClientStatus,
+    DownloadOrigin, DownloadPasswordCandidates, DownloadRecord, DownloadSubmission,
+    DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity, DownloadSubmissionPurpose,
+    EpisodeFileReassignOutcome, EpisodeFileReassignRequest, EpisodeFileReassignment,
+    EpisodeLinkReplacement, EpisodeUpdate, FileEpisodeLinkRecord, ImportArtifact,
+    IndexerArtifactLease, IndexerArtifactResolutionRequest, IndexerConfigSyncResult,
+    IndexerConfigUpdate, IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
+    IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
+    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
+    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
+    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    MediaFileCatalogDisposition, MediaFileRole, MediaIssueRecycleIntent, NewBlocklistEntry,
+    NewMediaIssue, NewProxyConfig, NewSeedingProfile, NotificationScopeIdUpdate,
+    ObservationResolution, ObservedClientJob, PendingReleasePageSort, PendingReleasesPageQuery,
+    PendingStagedNzb, PersistedSeedGoals, PreparedIndexerArtifact, ProxyConfigUpdate,
+    ProxyTestResult, QueueDownloadOutcome, QueuedDownloadResult, QueuedManualImport,
+    QueuedReleaseSelection, ReleaseDecisionsQuery, ResolvedDownloadArtifact, SearchMode,
+    SeedingProfileUpdate, StagedNzbRef, StandbyQueueChoice, StandbyQueueOutcome, StorageRootUsage,
+    SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
+    SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
+    SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
+    UnconfirmedDownloadSubmission, UnmarkedMediaIssue, WantedSearchOutcome,
+    indexer_search_eligibility,
 };
 pub use disk::capacity::start_storage_capacity_sampler;
 pub use domain_events::DomainEventActor;
@@ -486,11 +491,14 @@ pub use events::activity_api::{
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
     HeldDownloadClientPolicy, HeldSourcesReason, HeldSourcesRelease, HeldSourcesReleaseOffer,
-    HeldSourcesSettlement, HeldWorkspacePreserved, ManualImportCandidateMapping,
+    HeldSourcesSettlement, HeldWorkspacePreserved, MANUAL_IMPORT_VERDICT_MAX_EPISODES_PER_ROW,
+    MANUAL_IMPORT_VERDICT_MAX_ROWS, ManualImportCandidateMapping, ManualImportCurrentFile,
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
-    ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
+    ManualImportRequestPayload, ManualImportVerdict, ManualImportVerdictRequest,
+    ManualImportVerdictRow, begin_manual_import_selection, execute_manual_import,
     execute_queued_manual_import, import_completed_download, import_staging_path,
-    release_held_import_sources, retry_failed_import, start_background_manual_import_poller,
+    manual_import_verdicts, release_held_import_sources, retry_failed_import,
+    start_background_manual_import_poller,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;
 pub(crate) use integration::integration::ManualImportSourceResolution;
@@ -549,6 +557,10 @@ pub use request_rules::{
     RequestRuleSample, RequestRuleScope, RequestRuleSetDetail, RequestRuleValidation,
     RequestRulesEngineCache, RequestRulesEngineHandle, ResolvedShaping, ScopedError, ScopedVote,
     ShapedValue, ShapingRefusal, arbitrate, validate_lease_days, validate_tag_list,
+};
+pub use request_rules::{
+    FALLBACK_REPORT_CONFLICT, MEDIA_ISSUE_DECISION_REQUEST_ID_PREFIX, ReportArbitration,
+    ReportVerdict, RequestRuleKind, RequestRuleReportSample, arbitrate_report,
 };
 pub use security::backup::{AutoBackupRunOutcome, start_background_auto_backup_scheduler};
 pub use security::backup_bundle::{
@@ -728,16 +740,16 @@ pub use ports::{
     ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
     ImportFileExecutionContext, ImportFilePermissions, ImportFileTransferProgress,
     ImportFileTransferProgressSender, ImportRepository, ImportRetryClaim, ImportRetryClaimOutcome,
-    ImportRetryFinishOutcome, IndexerAccountingContext, IndexerArtifactResolver,
-    IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository, IndexerDispatchGate,
-    IndexerGrabClient, IndexerGrabSelection, IndexerLoginChallenge, IndexerManagementClient,
-    IndexerPluginProvider, IndexerSearchCandidateWrite, IndexerSearchLearningBatch,
-    IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
-    IndexerSearchLearningRepository, IndexerSearchListing, IndexerSearchListingClaim,
-    IndexerSearchListingReader, IndexerSearchListingScope, IndexerSearchListingStrategy,
-    IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
-    JobRunRepository, LIBRARY_HOLDS_PAYLOAD_KEY, LibraryProbeRepository, LibraryRepository,
-    LibraryScanUnmatchedItemRepository, LifecycleActionJobReceiptClaim,
+    ImportRetryFinishOutcome, ImportedMediaFileSource, IndexerAccountingContext,
+    IndexerArtifactResolver, IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository,
+    IndexerDispatchGate, IndexerGrabClient, IndexerGrabSelection, IndexerLoginChallenge,
+    IndexerManagementClient, IndexerPluginProvider, IndexerSearchCandidateWrite,
+    IndexerSearchLearningBatch, IndexerSearchLearningContext, IndexerSearchLearningKey,
+    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchListing,
+    IndexerSearchListingClaim, IndexerSearchListingReader, IndexerSearchListingScope,
+    IndexerSearchListingStrategy, IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff,
+    JellyfinServerUser, JobRunRepository, LIBRARY_HOLDS_PAYLOAD_KEY, LibraryProbeRepository,
+    LibraryRepository, LibraryScanUnmatchedItemRepository, LifecycleActionJobReceiptClaim,
     LifecycleActionJobReceiptTransition, LifecycleActionRunRepository,
     LifecycleActionStepCandidateKey, LifecycleActionStepClaim, LifecycleActionStepRepository,
     LifecycleCandidateMatch, LifecycleCandidateQuery, LifecycleCandidateRepository,
@@ -829,8 +841,8 @@ pub use settings::keys::{
     DEFAULT_RECAP_POLICY, DEFAULT_RENAME_COLLISION_POLICY, DEFAULT_RENAME_MISSING_METADATA_POLICY,
     DEFAULT_RENAME_TEMPLATE_ANIME, DEFAULT_RENAME_TEMPLATE_MOVIE, DEFAULT_RENAME_TEMPLATE_SERIES,
     DEFAULT_SEASON_FOLDER_TEMPLATE, DEFAULT_SEEDING_PROFILE_SETTING_KEY,
-    DEFAULT_SERIES_LIBRARY_PATH, DEFAULT_SPECIALS_FOLDER_TEMPLATE,
-    DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY,
+    DEFAULT_SERIES_LIBRARY_PATH, DEFAULT_SPECIALS_FOLDER_TEMPLATE, DEFAULT_TITLE_TAGS_KEY,
+    DISABLED_FACETS_KEY, DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY,
     DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
     EXPERIMENTAL_FEATURES_ENABLED_KEY, FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY,
     FORM_LOGIN_ENABLED_KEY, FULL_HASH_BACKFILL_CURSOR_KEY, HISTORY_KEEP_FOREVER_KEY,
@@ -891,20 +903,20 @@ pub use types::{
     DownloadQueuePage, DownloadSourceKind, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
     EpisodeMediaSizeSummary, EpisodeScopedMediaFile, FixTitleMatchResult, HealthCheckResult,
     HealthCheckStatus, HousekeepingReport, IgnorePendingImportResult, IgnorePendingImportsResult,
-    IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass, LoginVerificationChallengeRecord,
-    LoginVerificationMethod, LoginVerificationRequirement, LoginVerificationSatisfied,
-    ManualImportSelection, ManualImportSelectionCandidate, MdblistSummary, MediaFileAssociations,
-    MediaFileCutoffSummary, MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
-    MissingSeriesMovieLinkCandidate, MissingTitleCandidate, MovieAvailabilityDecision,
-    MovieAvailabilityProjection, MovieAvailabilityStatus, OAuthAuthorizationCodeRecord,
-    OAuthAuthorizationSource, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,
-    OAuthRefreshGrantRecord, OAuthRefreshRotation, OAuthRefreshRotationOutcome,
-    OAuthRefreshTokenRecord, PasskeySummary, PendingImportBindingFilePreview,
-    PendingImportBindingPreview, PendingImportConnection, PendingImportCounts, PendingImportItem,
-    PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus,
-    PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation, PendingReleaseRole,
-    PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
+    IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryManagedBytes, LibraryRootDraft,
+    LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass,
+    LoginVerificationChallengeRecord, LoginVerificationMethod, LoginVerificationRequirement,
+    LoginVerificationSatisfied, ManualImportSelection, ManualImportSelectionCandidate,
+    MdblistSummary, MediaFileAssociations, MediaFileCutoffSummary, MediaRequestCounts,
+    MissingEpisodeCandidate, MissingScopeCandidates, MissingSeriesMovieLinkCandidate,
+    MissingTitleCandidate, MovieAvailabilityDecision, MovieAvailabilityProjection,
+    MovieAvailabilityStatus, OAuthAuthorizationCodeRecord, OAuthAuthorizationSource,
+    OAuthClientRegistrationRecord, OAuthConnectedAppRecord, OAuthRefreshGrantRecord,
+    OAuthRefreshRotation, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, PasskeySummary,
+    PendingImportBindingFilePreview, PendingImportBindingPreview, PendingImportConnection,
+    PendingImportCounts, PendingImportItem, PendingImportReasonClass, PendingImportSearchAttempt,
+    PendingImportStatus, PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation,
+    PendingReleaseRole, PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
     PrimaryCollectionSummary, ReassignEpisodeFileResult, RecycleBinBatchJobAccepted,
     RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
     RecycleRestorePreviewItem, RecycledItem, RecycledItemHistory, ReleaseDecision,

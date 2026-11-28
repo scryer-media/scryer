@@ -870,7 +870,10 @@ async fn reconcile_unclaimed_terminal_cleanup(
     let (library_id, resolved_facet) =
         cleanup_routing_scope_for_title_id_cached(app, tracked.title_id.as_deref(), cache).await;
     let facet = resolved_facet.or_else(|| facet_from_tracked_label(tracked.facet.as_deref()));
-    let precomputed_should_remove = if state == TrackedDownloadState::Failed
+    let precomputed_should_remove = if rejected_torrent_goes_to_seeding_gate(app, tracked, state) {
+        // The seeding gate decides, not "Remove failed".
+        Some(true)
+    } else if state == TrackedDownloadState::Failed
         && !tracked.burned_by_import_gate
         && !tracked.manual_failure_cleanup
     {
@@ -898,6 +901,7 @@ async fn reconcile_unclaimed_terminal_cleanup(
         &tracked.client_id,
         &tracked.client_type,
         &tracked.client_item.download_client_item_id,
+        tracked.job_protocol,
         library_id.as_deref(),
         facet.as_ref(),
         state,
@@ -1000,18 +1004,33 @@ pub(crate) async fn run_claimed_download_cleanup(
         let library_id = title.as_ref().map(|title| title.library_id.as_str());
         let facet = title.as_ref().map(|title| title.facet.clone())
             .or_else(|| facet_from_tracked_label(record.facet.as_deref()));
-        let manual_cleanup = state == TrackedDownloadState::Failed && matches!(
+        let failure_reason = if state == TrackedDownloadState::Failed {
             app.services.workflow.download_submissions.get_identity_tracked_state_reason_for_download(
                 Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(), Some(&locator),
-            ).await?.as_deref(),
+            ).await?
+        } else {
+            None
+        };
+        let manual_cleanup = matches!(
+            failure_reason.as_deref(),
             Some(crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
                 | crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON)
         );
+        let import_rejected = failure_reason.as_deref()
+            == Some(crate::tracked_downloads::IMPORT_GATE_REJECTED_TRACKED_STATE_REASON);
+        // A torrent whose import was refused goes to the seeding gate whatever
+        // "Remove failed" says, the same as on the live path.
+        let rejected_torrent = import_rejected
+            && crate::seeding_gate::download_job_is_torrent(
+                app,
+                &record.client_type,
+                crate::seeding_gate::DownloadJobProtocol::Unknown,
+            );
         // An ignored download keeps its client entry and its data: ignoring
         // only stops Scryer tracking it, so its cleanup settles as retained.
         let remove = if state == TrackedDownloadState::Ignored {
             false
-        } else if manual_cleanup {
+        } else if manual_cleanup || rejected_torrent {
             true
         } else {
             let facet = facet.as_ref().ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::CLEANUP_ATTRIBUTION_MISSING, CLEANUP_UNATTRIBUTED))?;
@@ -1150,11 +1169,19 @@ pub(crate) async fn run_claimed_download_cleanup(
         // the client accepted was not kept) still names the client's own item
         // id, which a hash-addressed client sets to the torrent hash. Item ids
         // that are not a hash (a numeric id) leave identity to the name check.
+        // On a client carrying both protocols, a submission recorded as usenet
+        // has no torrent identity to compare, so it too is left to the name
+        // check.
         let torrent_hash_matches = if crate::seeding_gate::client_type_is_torrent(app, &record.client_type)
             && let Some(observed) = crate::normalize_torrent_info_hash(Some(&item.download_client_item_id))
         {
             app.services.workflow.download_submissions
                 .find_by_canonical_download_id(&record.download_id).await?
+                .filter(|submission| crate::seeding_gate::download_job_is_torrent(
+                    app,
+                    &record.client_type,
+                    crate::seeding_gate::DownloadJobProtocol::from_submission(submission),
+                ))
                 .and_then(|submission| crate::normalize_torrent_info_hash(submission.info_hash.as_deref())
                     .or_else(|| crate::normalize_torrent_info_hash(Some(&submission.download_client_item_id))))
                 .map(|expected| expected == observed)
@@ -1191,6 +1218,7 @@ pub(crate) async fn run_claimed_download_cleanup(
         tracked.source_title = record.source_title.clone();
         tracked.state = state;
         tracked.manual_failure_cleanup = manual_cleanup;
+        tracked.burned_by_import_gate = import_rejected;
         let cleanup = reconcile_unclaimed_terminal_cleanup(app, &tracked, state, cache, Some(&record)).await;
         let complete = terminal_download_cleanup_is_complete(cleanup.outcome);
         let outcome = match cleanup.outcome {

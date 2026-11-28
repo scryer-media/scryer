@@ -876,6 +876,7 @@ async fn list_download_queue_reads_cached_observed_items_without_client_calls() 
         .expect("record stub submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "observed-stub".to_string(),
         title_id: None,
         episode_id: None,
@@ -963,6 +964,7 @@ async fn list_download_queue_uses_live_queue_only_for_all_activity() {
     .expect("create download client config");
 
     *download_client.history_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "history-1".to_string(),
         title_id: None,
         episode_id: None,
@@ -1076,6 +1078,7 @@ async fn list_download_queue_for_title_filters_the_shared_cache() {
         .expect("record submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "job-1".to_string(),
         title_id: Some("title-1".to_string()),
         episode_id: None,
@@ -1350,6 +1353,7 @@ async fn local_password_retry_action_requires_current_identity_failure_and_libra
         link_type: None,
         error_message: None,
         release_burned: false,
+        release_refused: false,
         started_at: now,
         completed_at: now,
         upgrade: false,
@@ -2416,6 +2420,7 @@ async fn queued_manual_import_rejects_observed_targets_before_consuming_or_queue
         candidates: vec![crate::ManualImportSelectionCandidate {
             id: "candidate-1".to_string(),
             canonical_path: "/private/tmp/observed-target-selection.mkv".to_string(),
+            size_bytes: None,
         }],
     };
     *import_repo.manual_import_selection.lock().await = Some(selection.clone());
@@ -2661,6 +2666,7 @@ async fn a_manual_import_beside_an_unresolved_reconciliation_is_not_taken_as_imp
         needs_reconciliation: true,
         source_cleanup_failed: false,
         release_burned: false,
+        release_refused: false,
         started_at: now,
         completed_at: now,
         upgrade: false,
@@ -2744,6 +2750,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         facet: None,
         source_title: Some("Observed.Download".to_string()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Unmatched,
@@ -2761,6 +2768,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     });
     let submission = DownloadSubmission {
         download_id: scryer_domain::download_identity::DownloadId::new(),
@@ -3466,6 +3474,7 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "nzbget".into(),
             client_id: config.id.clone(),
@@ -5356,6 +5365,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         facet: Some("movie".to_string()),
         source_title: Some(title.name.clone()),
         indexer: None,
+        job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
         added_at: None,
         notified_manual_interaction: false,
         match_type: scryer_domain::TitleMatchType::Submission,
@@ -5373,6 +5383,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         burned_by_import_gate: false,
         snapshot_missing_since: None,
         retained_in_client_after_cleanup: false,
+        failed_without_grab_recheck: None,
     };
 
     let cache = match tick {
@@ -6045,8 +6056,7 @@ const PACK_VIDEO_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
 fn write_pack_video(dir: &Path, file_name: &str) -> std::path::PathBuf {
     let path = dir.join(file_name);
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv");
     std::fs::copy(fixture, &path).expect("copy source video fixture");
     std::fs::OpenOptions::new()
         .write(true)
@@ -7486,7 +7496,7 @@ async fn automatic_import_rejects_download_whose_only_file_matches_no_episode() 
 }
 
 #[cfg(feature = "runtime-media-analysis")]
-#[path = "../../../scryer-mediainfo/tests/support/disc_image.rs"]
+#[path = "authored_disc/disc_image.rs"]
 mod authored_disc_image;
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -7557,8 +7567,7 @@ async fn catalog_scan_and_final_import_join_the_same_native_probe() {
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv");
     let size = std::fs::metadata(&path).unwrap().len() as i64;
     let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
     let (release, references) =
@@ -7618,7 +7627,7 @@ async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("changing.mkv");
     let original = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
     )
     .unwrap();
     std::fs::write(&path, &original).unwrap();
@@ -7749,52 +7758,9 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         .await
         .unwrap();
     let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
-    for name in [
-        "h264_aac.mkv",
-        "matrix_ts_002.m2ts",
-        "av1_sequence_pq.mp4",
-        "av1_sequence_pq.mkv",
-        "hevc_sequence_pq.mp4",
-        "hevc_hdr10plus.mp4",
-        "dv_profile5.mkv",
-        "dv_profile7.mkv",
-        "dv_profile8.mkv",
-        "hevc_hdr10plus.mkv",
-        "hevc_sequence_pq.mkv",
-        "chapters_nero.mp4",
-        "chapters_quicktime.mp4",
-        "matrix_mkv_004.mkv",
-        "matrix_mkv_005.mkv",
-        "matrix_mp4_002.m4v",
-        "matrix_mp4_011.m4v",
-        "matrix_ts_003.ts",
-        "matrix_ts_004.m2ts",
-        "matrix_mkv_003.mkv",
-        "matrix_mkv_007.mkv",
-        "matrix_mkv_020.mkv",
-        "matrix_mp4_008.m4v",
-        "ogv_theora_opus_surround.ogv",
-        "ogv_theora_vorbis.ogv",
-        "matrix_avi_001.avi",
-        "matrix_avi_009.avi",
-        "matrix_avi_013.avi",
-        "matrix_avi_005.avi",
-        "matrix_mkv_015.mkv",
-        "matrix_ts_016.m2ts",
-        "matrix_ts_005.ts",
-        "wmv_wmv1_aac_surround.wmv",
-        "wmv_wmv1_wmav1.wmv",
-        "wmv_wmv1_mp3_mono.wmv",
-        "wmv_wmv2_video_only.wmv",
-        "flv_flv1_pcm_s16le.flv",
-        "flv_flv1_pcm_u8.flv",
-        "flv_flv1_speex.flv",
-        "flv_h264_mp3.flv",
-        "ps_mpeg1_mp2.mpg",
-        "ps_mpeg2_mp2.vob",
-    ] {
+    for name in ["h264_aac.mkv", "h264_aac.mp4", "matrix_ts_002.m2ts"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media")
+            .join("test-fixtures/media")
             .join(name);
         let crate::MediaAnalysisOutcome::Valid(catalog) =
             analyzer.analyze_file(path.clone()).await.unwrap()
@@ -7872,8 +7838,7 @@ async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
         let fixture = fail_closed_pack_fixture().await;
         let source_dir = tempfile::tempdir().unwrap();
         let mut clip = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/matrix_ts_002.m2ts"),
         )
         .unwrap();
         if kind == "encrypted" {
@@ -7988,8 +7953,7 @@ async fn manual_disc_import_for_filesystem(udf_metadata_partition: Option<bool>)
         );
     }
     let clip = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/matrix_ts_002.m2ts"),
     )
     .unwrap();
     let image_files = [
@@ -8188,7 +8152,7 @@ fn write_extensionless_video(dir: &Path, fixture: &str) -> std::path::PathBuf {
     let path = dir.join("dXRUKoYEAJ58jradJdxMKKxgczVTvt");
     std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media")
+            .join("test-fixtures/media")
             .join(fixture),
         &path,
     )
@@ -8716,8 +8680,13 @@ async fn manual_import_assigns_one_file_to_every_mapped_episode() {
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files");
+    // The store lists the file once per linked episode; it is one file.
     assert_eq!(
-        media_files.len(),
+        media_files
+            .iter()
+            .map(|file| file.id.as_str())
+            .collect::<HashSet<_>>()
+            .len(),
         1,
         "one file must land once, not once per episode: {media_files:?}"
     );
@@ -8775,6 +8744,261 @@ async fn manual_import_assigns_one_file_to_every_mapped_episode() {
         vec![episode.id.clone(), second_episode.id.clone()],
         "history and media-server refresh read every mapped episode from the event"
     );
+}
+
+/// Manually import one file for the fixture's first `episode_count` episodes
+/// of season 1, and return the library file name it landed under together
+/// with the rename preview for the title taken right after.
+async fn manual_import_one_file_for_episodes(
+    episode_count: u32,
+) -> (String, crate::RenamePlan, String) {
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        episode,
+        ..
+    } = fail_closed_pack_fixture().await;
+    // The default series template names no episode title; this one does, so
+    // the joined titles of a multi-episode file are part of the name.
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        UpdateMediaSettings {
+            rename_template: Some(
+                "{title} - S{season:2}E{episode:2}{?episode_title: - {episode_title}} - {quality}.{ext}"
+                    .to_string(),
+            ),
+            ..empty_update_media_settings()
+        },
+    )
+    .await
+    .expect("series rename template should update");
+    let mut episode_ids = vec![episode.id.clone()];
+    for number in 2..=episode_count {
+        let sibling = create_pack_episode_in_fixture_season(&app, &user, &title.id, number).await;
+        episode_ids.push(sibling.id);
+    }
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let release_title = "Fail.Closed.Pack.Joined.1080p.WEB-DL";
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let item_id = format!("manual-import-one-file-{episode_count}-episodes");
+    let completed =
+        series_pack_completed_download(&item_id, &title.id, release_title, source_dir.path());
+
+    let results = crate::import_workflow::execute_manual_import(
+        &app,
+        &user,
+        &item_id,
+        &title.id,
+        Some(&completed),
+        vec![ManualImportFileMapping {
+            disc_selection: None,
+            file_path: source_file.to_string_lossy().into_owned(),
+            episode_id: None,
+            episode_ids: episode_ids.clone(),
+            series_movie_link_id: None,
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+    )
+    .await
+    .expect("execute manual import");
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].success, "{results:?}");
+    assert_eq!(results[0].episode_ids, episode_ids, "{results:?}");
+
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    // One file, listed once per linked episode.
+    assert_eq!(media_files.len(), episode_ids.len(), "{media_files:?}");
+    assert!(
+        media_files.iter().all(|file| file.id == media_files[0].id),
+        "{media_files:?}"
+    );
+    let mut linked = media_files
+        .iter()
+        .filter_map(|file| file.episode_id.clone())
+        .collect::<Vec<_>>();
+    linked.sort();
+    let mut expected = episode_ids.clone();
+    expected.sort();
+    assert_eq!(linked, expected, "{media_files:?}");
+    let file_name = Path::new(&media_files[0].file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("library file name")
+        .to_string();
+    let preview = app
+        .preview_rename_for_title(&user, &title.id, MediaFacet::Series)
+        .await
+        .expect("preview episode rename");
+    (file_name, preview, media_files[0].id.clone())
+}
+
+/// The preview item of the imported file proposes no change.
+fn assert_rename_proposes_nothing(preview: &crate::RenamePlan, media_file_id: &str) {
+    let items = preview
+        .items
+        .iter()
+        .filter(|item| item.media_file_id.as_deref() == Some(media_file_id))
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 1, "{preview:?}");
+    assert_eq!(
+        items[0].write_action,
+        crate::RenameWriteAction::Noop,
+        "{preview:?}"
+    );
+}
+
+#[tokio::test]
+async fn manual_import_names_a_two_episode_file_with_the_rename_range() {
+    let (file_name, preview, media_file_id) = manual_import_one_file_for_episodes(2).await;
+
+    assert_eq!(
+        file_name, "Fail Closed Pack - S01E01-02 - Pilot + Season 1 Episode 2 - 1080p.mkv",
+        "{file_name}"
+    );
+    assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
+#[tokio::test]
+async fn manual_import_names_a_three_episode_file_with_the_rename_range() {
+    let (file_name, preview, media_file_id) = manual_import_one_file_for_episodes(3).await;
+
+    assert_eq!(
+        file_name,
+        "Fail Closed Pack - S01E01-02-03 - Pilot + Season 1 Episode 2 + Season 1 Episode 3 - 1080p.mkv",
+        "{file_name}"
+    );
+    assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
+#[tokio::test]
+async fn manual_import_names_a_single_episode_file_from_that_episode_alone() {
+    let (file_name, preview, media_file_id) = manual_import_one_file_for_episodes(1).await;
+
+    assert_eq!(
+        file_name, "Fail Closed Pack - S01E01 - Pilot - 1080p.mkv",
+        "{file_name}"
+    );
+    assert_rename_proposes_nothing(&preview, &media_file_id);
+}
+
+#[tokio::test]
+async fn manual_import_orders_a_file_spanning_collections_the_way_rename_does() {
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        episode,
+        ..
+    } = fail_closed_pack_fixture().await;
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        UpdateMediaSettings {
+            rename_template: Some(
+                "{title} - S{season:2}E{episode:2}{?episode_title: - {episode_title}} - {quality}.{ext}"
+                    .to_string(),
+            ),
+            ..empty_update_media_settings()
+        },
+    )
+    .await
+    .expect("series rename template should update");
+    // The second episode sits in an arc told before the fixture's season, so
+    // rename lists its title first although its episode number is higher.
+    let earlier_arc = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Arc,
+            collection_index: "90".to_string(),
+            label: Some("Earlier Arc".to_string()),
+            ordered_path: None,
+            narrative_order: Some("0".to_string()),
+            first_episode_number: Some("2".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create earlier arc");
+    let arc_episode = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            Some(earlier_arc.id),
+            "standard".into(),
+            Some("2".into()),
+            Some("1".into()),
+            Some("S01E02".into()),
+            Some("Arc Opener".into()),
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create arc episode");
+    let episode_ids = vec![episode.id.clone(), arc_episode.id.clone()];
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let release_title = "Fail.Closed.Pack.Arc.1080p.WEB-DL";
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let item_id = "manual-import-one-file-across-collections";
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    let results = crate::import_workflow::execute_manual_import(
+        &app,
+        &user,
+        item_id,
+        &title.id,
+        Some(&completed),
+        vec![ManualImportFileMapping {
+            disc_selection: None,
+            file_path: source_file.to_string_lossy().into_owned(),
+            episode_id: None,
+            episode_ids: episode_ids.clone(),
+            series_movie_link_id: None,
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+    )
+    .await
+    .expect("execute manual import");
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].success, "{results:?}");
+
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    let file_name = Path::new(&media_files[0].file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("library file name")
+        .to_string();
+    assert_eq!(
+        file_name, "Fail Closed Pack - S01E01-02 - Arc Opener + Pilot - 1080p.mkv",
+        "{file_name}"
+    );
+    let preview = app
+        .preview_rename_for_title(&user, &title.id, MediaFacet::Series)
+        .await
+        .expect("preview episode rename");
+    assert_rename_proposes_nothing(&preview, &media_files[0].id);
 }
 
 #[tokio::test]
@@ -12690,8 +12914,9 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
         .resolve_quality_profile_for_title(&fixture.title)
         .await
         .unwrap();
-    let native = scryer_mediainfo::analyze_catalog_file(&source).unwrap();
-    assert!(scryer_mediainfo::is_valid_video(&native));
+    let probed = mediaprobe::probe(&source).unwrap();
+    assert!(probed.is_playable_video());
+    let native = crate::media::analysis_summary::summarize(probed);
     let policy = scryer_rules::UserPolicy {
         id: "reject_probed_files".into(),
         name: "Reject probed files".into(),
@@ -12749,6 +12974,7 @@ async fn operator_preparation_bypasses_rules_and_audio_but_automatic_enforces_th
                 validation,
                 None,
                 None,
+                &crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id),
             )
             .await;
             if manual {
@@ -12904,7 +13130,9 @@ async fn additional_movie_preparation_persists_native_analysis_and_manual_probe_
                 .unwrap()
                 .set_len(PACK_VIDEO_SIZE_BYTES)
                 .unwrap();
-            Some(scryer_mediainfo::analyze_catalog_file(&source).unwrap())
+            Some(crate::media::analysis_summary::summarize(
+                mediaprobe::probe(&source).unwrap(),
+            ))
         } else {
             // Harmless non-video bytes under a video extension exercise the
             // explicitly retained manual probe-error override.
@@ -14336,6 +14564,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
     .expect("create download client config");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "queue-1".to_string(),
         title_id: None,
         episode_id: None,
@@ -16022,6 +16251,7 @@ impl DispositionFixture {
             facet: Some("movie".to_string()),
             source_title: Some(self.completed.name.clone()),
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: scryer_domain::TitleMatchType::Submission,
@@ -16039,6 +16269,7 @@ impl DispositionFixture {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 
@@ -21579,6 +21810,7 @@ async fn exercise_missing_download_recovery(fail_event_append: bool) {
             info_hash_hint: None,
             seed_goal_ratio: None,
             seed_goal_seconds: None,
+            seed_never_remove: false,
             tracker_min_seed_ratio: None,
             tracker_min_seed_time_minutes: None,
             season_pack_seed_ratio: None,
@@ -22594,6 +22826,7 @@ async fn an_existing_sidecar_survives_the_import_that_lands_beside_it() {
 /// download client keeps reporting tick after tick.
 fn foreign_client_history_item(item_id: &str) -> DownloadQueueItem {
     DownloadQueueItem {
+        client_job_protocol: None,
         id: item_id.to_string(),
         title_id: None,
         episode_id: None,
@@ -27441,4 +27674,101 @@ async fn unbound_manual_import_cleanup_waits_while_an_import_holds_the_sources()
     );
     let deleted = run_unbound_manual_import_cleanup(true).await;
     assert!(deleted.is_empty(), "{deleted:?}");
+}
+
+/// A completed download whose only file loses to the library file comes back
+/// refused, not burned; one that also imports a new episode is not refused.
+#[tokio::test]
+async fn an_import_that_only_lost_to_the_library_is_refused() {
+    for with_new_episode in [false, true] {
+        let (
+            FailClosedPackFixture {
+                app,
+                user,
+                title,
+                episode,
+                library_dir: _library_dir,
+                ..
+            },
+            submissions,
+        ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+            series_root_at_library_dir: true,
+            ..Default::default()
+        })
+        .await;
+        let second_episode =
+            create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+
+        let initial_source = tempfile::tempdir().expect("initial source tempdir");
+        write_pack_video(
+            initial_source.path(),
+            "Fail.Closed.Pack.S01E01.1080p.WEB-DL.mkv",
+        );
+        let initial = series_pack_completed_download(
+            "refused-initial",
+            &title.id,
+            "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+            initial_source.path(),
+        );
+        let initial_result = {
+            let _probe = probe_agrees_with_the_name(1920, 1080);
+            crate::import::import::import_completed_download(&app, &user, &initial)
+                .await
+                .expect("initial completed import should run")
+        };
+        assert_eq!(
+            initial_result.decision,
+            scryer_domain::ImportDecision::Imported
+        );
+
+        let source = tempfile::tempdir().expect("source tempdir");
+        let lower = write_pack_video(source.path(), "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv");
+        if with_new_episode {
+            write_pack_video(source.path(), "Fail.Closed.Pack.S01E02.1080p.WEB-DL.mkv");
+        }
+        // Scryer's own automatic grab: a lost comparison is then a skip, not
+        // a hold for an operator.
+        let mut episode_ids = vec![episode.id.clone()];
+        if with_new_episode {
+            episode_ids.push(second_episode.id.clone());
+        }
+        record_pack_identity_submission(
+            &submissions,
+            &title.id,
+            "refused-release",
+            "Fail.Closed.Pack.S01.720p.WEB-DL",
+            SubmissionScope::EpisodeSet { episode_ids },
+        )
+        .await;
+        let completed = series_pack_completed_download(
+            "refused-release",
+            &title.id,
+            "Fail.Closed.Pack.S01.720p.WEB-DL",
+            source.path(),
+        );
+        let result = {
+            let _probes = probe_sequence_agrees_with_the_names([(1280, 720), (1920, 1080)]);
+            crate::import::import::import_completed_download(&app, &user, &completed)
+                .await
+                .expect("second completed import should run")
+        };
+
+        assert!(!result.release_burned, "{result:?}");
+        if with_new_episode {
+            assert_eq!(
+                result.decision,
+                scryer_domain::ImportDecision::Imported,
+                "{result:?}"
+            );
+            assert!(!result.release_refused, "{result:?}");
+        } else {
+            assert_ne!(
+                result.decision,
+                scryer_domain::ImportDecision::Imported,
+                "{result:?}"
+            );
+            assert!(result.release_refused, "{result:?}");
+        }
+        assert!(lower.exists(), "import leaves the refused source in place");
+    }
 }

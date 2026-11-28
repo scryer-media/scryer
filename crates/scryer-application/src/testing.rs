@@ -57,6 +57,19 @@ fn import_source_snapshot_for_test(
     })
 }
 
+/// Whether the import gate's bad-file check refuses the file at `path` for
+/// the title, read the way an import reads it.
+pub async fn bad_file_gate_refuses_for_test(
+    app: &AppUseCase,
+    title_id: &str,
+    path: &Path,
+) -> crate::AppResult<bool> {
+    let proof = crate::fs_integrity::import_content_proof_async(path).await?;
+    crate::post_download_gate::TitleBadFiles::for_title(title_id)
+        .matches(app, title_id, &proof)
+        .await
+}
+
 pub async fn execute_upgrade_for_test(
     app: &AppUseCase,
     input: UpgradeForTestInput<'_>,
@@ -123,6 +136,7 @@ pub async fn execute_upgrade_for_test_with_import_mode(
         import_mode,
         None,
         None,
+        &crate::post_download_gate::TitleBadFiles::for_title(&title.id),
     )
     .await?;
     if let crate::upgrade::UpgradeResult::Upgraded(outcome) = &result {

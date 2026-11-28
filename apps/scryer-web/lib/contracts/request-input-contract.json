@@ -263,6 +263,110 @@
       ]
     },
     {
+      "titleKey": "settings.refReqSectionReport",
+      "path": "input.report",
+      "fields": [
+        {
+          "field": "reason",
+          "type": "string",
+          "descKey": "settings.refReqReportReason"
+        },
+        {
+          "field": "remediation",
+          "type": "string",
+          "descKey": "settings.refReqReportRemediation"
+        },
+        {
+          "field": "provenance",
+          "type": "string",
+          "descKey": "settings.refReqReportProvenance"
+        },
+        {
+          "field": "has_details",
+          "type": "bool",
+          "descKey": "settings.refReqReportHasDetails"
+        },
+        {
+          "field": "title_id",
+          "type": "string",
+          "descKey": "settings.refReqReportTitleId"
+        },
+        {
+          "field": "media_file_id",
+          "type": "string",
+          "descKey": "settings.refReqReportMediaFileId"
+        },
+        {
+          "field": "affected_episode_ids",
+          "type": "string[]",
+          "descKey": "settings.refReqReportAffectedEpisodeIds"
+        },
+        {
+          "field": "affected_series_movie_link_ids",
+          "type": "string[]",
+          "descKey": "settings.refReqReportAffectedSeriesMovieLinkIds"
+        },
+        {
+          "field": "facts",
+          "type": "object",
+          "descKey": "settings.refReqSectionReportFacts"
+        },
+        {
+          "field": "observations",
+          "type": "object",
+          "descKey": "settings.refReqSectionReportObservations"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionReportFacts",
+      "path": "input.report.facts",
+      "fields": [
+        {
+          "field": "reporter_requested_media",
+          "type": "bool",
+          "descKey": "settings.refReqReportFactsReporterRequestedMedia"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionReportObservations",
+      "path": "input.report.observations",
+      "fields": [
+        {
+          "field": "reporter_requested_media",
+          "type": "object",
+          "descKey": "settings.refReqReportFactsReporterRequestedMedia"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqReportFactsReporterRequestedMedia",
+      "path": "input.report.observations.reporter_requested_media",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refReqReportFactsReporterRequestedMediaValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refReqSectionFacts",
       "path": "input.facts",
       "fields": [

@@ -72,6 +72,7 @@ const SUBSCRIPTION_INITIAL_DRAFT: NotificationSubscriptionDraft = {
   isEnabled: true,
 };
 
+// eslint-disable-next-line no-restricted-syntax -- stored scope order; the picker filters with useFacets().values
 const FACET_SCOPE_ORDER = ["movie", "series", "anime"] as const;
 
 function isFacetScopeId(

@@ -94,6 +94,52 @@ const zh_CN: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "带宽限制（KB/s）",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "由此客户端的所有下载共享。留空或 0 表示不限制。",
+  "settings.downloadClientTorboxApiKey": "API 令牌",
+  "settings.downloadClientTorboxApiKeyHelp": "TorBox 账户的 API 令牌。",
+  "settings.downloadClientTorboxCachedOnly": "仅限已缓存",
+  "settings.downloadClientTorboxCachedOnlyHelp": "拒绝 TorBox 尚未缓存的下载。",
+  "httpRelease.refusal.filePathInvalid":
+    "此下载中有文件的路径无法保存到其下载文件夹内。",
+  "httpRelease.refusal.tooManyFiles":
+    "此下载的文件数量超过单个下载可容纳的数量。",
+  "httpRelease.refusal.linkKeyInvalid": "此下载中有文件没有可用的链接引用。",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "此下载中有文件需要此下载器无法获取的链接。",
+  "httpRelease.refusal.linkRefused": "服务器一再拒绝某个文件的下载链接。",
+  "httpRelease.refusal.linkUnavailable": "某个文件始终没有可用的下载链接。",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox 拒绝了 API 令牌。",
+  "error.reason.TORBOX_PLAN_RESTRICTED": "TorBox 套餐不包含此功能。",
+  "error.reason.TORBOX_ACTIVE_LIMIT": "TorBox 账户已达到活动下载数量上限。",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox 账户处于冷却期，暂不接受新的下载。",
+  "error.reason.TORBOX_MONTHLY_LIMIT": "TorBox 账户已达到每月下载上限。",
+  "error.reason.TORBOX_HOURLY_LIMIT": "已达到每小时新增 TorBox 下载的上限。",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "此下载超过 TorBox 套餐允许的大小。",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox 没有缓存此下载，而此客户端只接受已缓存的下载。",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox 无法读取该种子。",
+  "error.reason.TORBOX_INVALID_NZB": "无法读取 NZB。",
+  "error.reason.TORBOX_DUPLICATE_ITEM": "此下载已在 TorBox 账户中。",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox 没有此项目。",
+  "error.reason.TORBOX_LINK_OFFLINE": "TorBox 下载链接已离线。",
+  "error.reason.TORBOX_RATE_LIMITED": "TorBox 正在限制接受请求的频率。",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox 不可用。",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox 将此下载中的一个文件标记为已感染。",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox 只以 zip 压缩包形式提供此下载中的一个文件。",
+  "error.reason.TORBOX_NO_VIDEO_FILE": "此 TorBox 下载中没有视频文件。",
+  "error.reason.TORBOX_REMOTE_FAILED": "TorBox 报告此下载失败。",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox 中已不再有此下载。",
+  "error.reason.TORBOX_STALLED": "此下载在 TorBox 上停滞。",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "此 TorBox 下载中的文件名无法在此系统上保存。",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "此发布没有可发送到 TorBox 的磁力链接、种子文件或 NZB。",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED": "TorBox 不支持对此下载执行此操作。",
+  "error.reason.TORBOX_JOB_NOT_FOUND": "此 TorBox 客户端没有该下载。",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "TorBox 客户端没有 API 令牌。",
   "settings.publicUrlTitle": "公共 URL",
   "settings.publicUrlHelp":
     "用户和服务访问 Scryer 所用的地址，例如 https://scryer.example.com。账户关联和 OAuth 会立即使用更改；通行密钥在 Scryer 重启后才使用。",
@@ -770,6 +816,8 @@ const zh_CN: LocaleDictionary = {
   "settings.downloadClientPriority": "优先级",
   "settings.downloadClientRemoveCompleted": "移除已完成",
   "settings.downloadClientRemoveFailed": "移除失败项",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "“移除失败项”适用于在客户端中失败的下载。Scryer 拒绝导入的种子始终按已导入的方式处理：做种到目标后由客户端移除。",
   "settings.downloadClientUseSslInfo": "连接此下载客户端时使用 SSL/TLS。",
   "settings.downloadClientEnabledInfo":
     "禁用后，此客户端在下载路由中将被跳过。",
@@ -1357,6 +1405,20 @@ const zh_CN: LocaleDictionary = {
   "queue.manualImportMultipleEpisodes": "此文件包含多集",
   "queue.manualImportMultipleEpisodesLabel": "为此文件分配多集",
   "queue.manualImportApplySuggestions": "全部应用建议",
+  "queue.manualImportApplySuggestionsSelected": "对所选项应用建议",
+  "queue.manualImportSelectAll": "全选",
+  "queue.manualImportSelectNone": "全不选",
+  "queue.manualImportSelectInvert": "反选",
+  "queue.manualImportSelectMatching": "选择匹配项",
+  "queue.manualImportSelectMatchingLabel": "文件名包含…",
+  "queue.manualImportSelectedCount": "已选择 {{count}} 项",
+  "queue.manualImportSkipSelected": "跳过所选项",
+  "queue.manualImportAssignSelected": "为所选项指定目标…",
+  "queue.manualImportVerdict.UPGRADE": "升级",
+  "queue.manualImportVerdict.EQUAL": "质量相同",
+  "queue.manualImportVerdict.DOWNGRADE": "降级",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "新文件",
+  "queue.manualImportVerdictEstimated": "估计",
   "queue.removeFailed": "移除失败",
   "queue.manualImportTooltip": "手动导入可用于需要关注的队列项。",
   "queue.releaseTitle": "发布资源",
@@ -2051,7 +2113,7 @@ const zh_CN: LocaleDictionary = {
   "settings.notificationNoProviders":
     "未安装通知插件。请先在插件页面安装通知插件。",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "已抓取发布",
   "settings.notificationEvent.download": "下载失败",
   "settings.notificationEvent.upgrade": "升级进口",
@@ -2214,6 +2276,10 @@ const zh_CN: LocaleDictionary = {
   "history.rematched": "重新匹配",
   "history.seedingStarted": "做种中",
   "history.seedingCompleted": "做种完成",
+  "history.subtitleDownloaded": "字幕已下载",
+  "history.subtitleFailed": "字幕失败",
+  "history.subtitleDeleted": "字幕已删除",
+  "history.subtitleBlocklisted": "字幕已屏蔽",
   "history.downloadIgnored": "已忽略",
   "history.downloadMissing": "客户端中不可见",
   "history.facet": "分类",
@@ -3605,10 +3671,10 @@ const zh_CN: LocaleDictionary = {
     "规则为发布打分，让 Scryer 优先选择你想要的，跳过你不想要的。",
   "tours.onboarding.mediaServers.title": "媒体服务器",
   "tours.onboarding.mediaServers.body":
-    "连接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看过什么。若要在 Scryer 导入后刷新服务器，还需在“插件”中安装该服务器的插件。",
+    "连接 Jellyfin / Silo、Plex 或 Emby，Scryer 就能知道你看过什么。若要在 Scryer 导入后刷新服务器，还需在“插件”中安装该服务器的插件。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你希望的地方获知抓取、导入以及需要处理的事项。服务可从这个“插件”面板添加。Jellyfin、Plex 和 Emby 也在这里：即使已在“媒体服务器”中连接，也要从这个面板安装该服务器的插件，导入后服务器才会刷新。",
+    "在你希望的地方获知抓取、导入以及需要处理的事项。服务可从这个“插件”面板添加。Jellyfin / Silo、Plex 和 Emby 也在这里：即使已在“媒体服务器”中连接，也要从这个面板安装该服务器的插件，导入后服务器才会刷新。",
   "tours.onboarding.plugins.title": "插件",
   "tours.onboarding.plugins.body":
     "插件可添加索引器、下载客户端和通知服务。在这里安装和更新它们。",

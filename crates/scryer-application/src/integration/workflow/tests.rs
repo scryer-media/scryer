@@ -158,7 +158,7 @@ mod tests {
     }
 
     fn item(id: &str, state: DownloadQueueState) -> DownloadQueueItem {
-        DownloadQueueItem {
+        DownloadQueueItem { client_job_protocol: None,
             id: id.to_string(),
             title_id: None,
             episode_id: None,
@@ -217,6 +217,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: Some("Example.Release".to_string()),
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -234,6 +235,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 
@@ -841,6 +843,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -858,6 +861,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);
 
@@ -923,6 +927,7 @@ mod tests {
             facet: Some("movie".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -940,6 +945,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);
 
@@ -976,6 +982,7 @@ mod tests {
             facet: Some("series".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::TitleParse,
@@ -993,6 +1000,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);
 
@@ -1037,6 +1045,7 @@ mod tests {
                 facet: Some("series".to_string()),
                 source_title: None,
                 indexer: None,
+                job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
                 added_at: None,
                 notified_manual_interaction: false,
                 match_type: TitleMatchType::TitleParse,
@@ -1054,6 +1063,7 @@ mod tests {
                 burned_by_import_gate: false,
                 snapshot_missing_since: None,
                 retained_in_client_after_cleanup: false,
+                failed_without_grab_recheck: None,
             }
         }
 
@@ -1251,6 +1261,7 @@ mod tests {
             facet: Some("movie".to_string()),
             source_title: None,
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -1268,6 +1279,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         }
     }
 
@@ -1784,6 +1796,7 @@ mod tests {
             facet: Some("movie".to_string()),
             source_title: Some("Ironclad.1997.2160p.UHD.BluRay.x265-GRP".to_string()),
             indexer: None,
+            job_protocol: crate::tracked_downloads::DownloadJobProtocol::Unknown,
             added_at: None,
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
@@ -1801,6 +1814,7 @@ mod tests {
             burned_by_import_gate: false,
             snapshot_missing_since: None,
             retained_in_client_after_cleanup: false,
+            failed_without_grab_recheck: None,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);
 
@@ -2609,7 +2623,7 @@ mod tests {
             let files = tempfile::tempdir().unwrap();
             let sentinel = files.path().join("payload.mkv");
             std::fs::write(&sentinel, b"synthetic fixture payload").unwrap();
-            row.completed_source = Some(scryer_domain::CompletedDownload {
+            row.completed_source = Some(scryer_domain::CompletedDownload { client_job_protocol: None,
                 client_type: row.client_type.clone(), client_id: row.client_id.clone(),
                 download_client_item_id: row.client_item.download_client_item_id.clone(),
                 download_id: Some(row.download_id.to_string()), name: "synthetic payload".into(),

@@ -18,7 +18,7 @@ async fn reused_episode_destination(
         .map(|file| (destination, file.id)))
 }
 
-fn expected_runtime_seconds_for_episode_import(
+pub(crate) fn expected_runtime_seconds_for_episode_import(
     title: &scryer_domain::Title,
     target_episodes: &[scryer_domain::Episode],
 ) -> Option<i32> {
@@ -100,7 +100,26 @@ async fn execute_resolved_episode_import(
     // Library files earlier passes of this same download placed; never
     // replaced by this pass.
     placed_files: &DownloadPlacedFiles,
+    // The title's bad files, read once for the whole download.
+    bad_files: &crate::post_download_gate::TitleBadFiles,
 ) -> AppResult<EpisodeImportOutcome> {
+    // One file for several episodes is named the way rename names a file
+    // linked to all of them, so a rename right after the import changes
+    // nothing. A single-episode file keeps the caller's tokens.
+    let span_collections =
+        crate::library::rename::multi_episode_rename_collections(app, target_episodes).await?;
+    let span =
+        crate::library::rename::multi_episode_rename_tokens(target_episodes, &span_collections);
+    let span = span.as_ref();
+    let rename_episode_number = span
+        .and_then(|span| span.episode.as_deref())
+        .unwrap_or(rename_episode_number);
+    let rename_absolute_number = span
+        .and_then(|span| span.absolute_episode.as_deref())
+        .or(rename_absolute_number);
+    let rename_episode_title = span
+        .and_then(|span| span.episode_title.as_deref())
+        .or(rename_episode_title);
     let use_season_folders = app.resolve_use_season_folders(title).await?;
     let source_size = import_source_size(source_video).await?;
     let target_episode_ids = target_episodes
@@ -169,6 +188,7 @@ async fn execute_resolved_episode_import(
                 ),
                 disc_selection,
                 release_listing_json,
+                bad_files,
             )
             .await
             {
@@ -228,6 +248,7 @@ async fn execute_resolved_episode_import(
                 &prior.file.file_path,
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
@@ -273,6 +294,7 @@ async fn execute_resolved_episode_import(
                 .await
         {
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: reason,
                 reason_code: Some(code.as_str().to_string()),
@@ -374,6 +396,7 @@ async fn execute_resolved_episode_import(
             imported_media_file_id: Some(media_file_id),
             reason_code: Some("additional_file".to_string()),
             link_type: Some(link_type),
+            placement: file_result.file_placement(path_to_stored_string(&dest_path)),
             source_cleanup: file_result.source_cleanup.clone().map(Box::new),
             destination_permit: file_result.destination_permit(),
             size_bytes: Some(file_result.size_bytes as i64),
@@ -449,6 +472,7 @@ async fn execute_resolved_episode_import(
     {
         tracing::debug!(file = %precheck_dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message: reason,
             reason_code: Some(code.as_str().to_string()),
@@ -514,6 +538,7 @@ async fn execute_resolved_episode_import(
         runtime_sample_validation,
         disc_selection,
         release_listing_json,
+        bad_files,
     )
     .await
     {
@@ -524,6 +549,7 @@ async fn execute_resolved_episode_import(
             // must stay grabbable after review.
             if rejection.requires_review() {
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -608,6 +634,7 @@ async fn execute_resolved_episode_import(
             "holding episode replacement for manual resolution"
         );
         return Ok(EpisodeImportOutcome::Skipped {
+            refused: false,
             blocklist: None,
             message,
             reason_code: Some(
@@ -719,6 +746,7 @@ async fn execute_resolved_episode_import(
                     .iter()
                     .all(|episode_id| own.episode_ids.contains(episode_id));
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -745,6 +773,7 @@ async fn execute_resolved_episode_import(
                 // least as well, so the episodes are in place and the file has
                 // nothing to add. The existing file is left exactly as it is.
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: true,
                     blocklist,
                     message: rejection.message,
                     reason_code,
@@ -804,6 +833,7 @@ async fn execute_resolved_episode_import(
                 "import source would replace a library file this download placed; leaving the library file in place"
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                refused: false,
                 blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
@@ -844,6 +874,7 @@ async fn execute_resolved_episode_import(
                     "import source is identical to the library file it would replace; leaving the library file in place"
                 );
                 return Ok(EpisodeImportOutcome::Skipped {
+                    refused: false,
                     blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -855,6 +886,26 @@ async fn execute_resolved_episode_import(
                     )),
                 });
             }
+        }
+        // The upgrade itself holds over a marked primary incumbent; the
+        // other files it supersedes are checked here, before anything moves.
+        if let Some(rejection) = bad_files
+            .upgrade_refusal(
+                app,
+                &additional_superseded
+                    .iter()
+                    .map(|incumbent| &incumbent.media_file)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+        {
+            return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
+                rejection,
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: None,
+                episode_ids: target_episode_ids.clone(),
+            });
         }
         let replacement_media_root = title_folder_path
             .parent()
@@ -893,6 +944,7 @@ async fn execute_resolved_episode_import(
             import_mode,
             announced_size_bytes,
             completed,
+            bad_files,
         )
         .await
         {
@@ -931,6 +983,7 @@ async fn execute_resolved_episode_import(
                     reason_code: Some("upgrade".to_string()),
                     link_type: (import_mode == scryer_domain::ImportMode::Move)
                         .then_some(scryer_domain::ImportStrategy::Move),
+                    placement: outcome.placement.clone(),
                     source_cleanup: outcome.source_cleanup.clone(),
                     destination_permit: outcome.destination_permit.clone(),
                     size_bytes: Some(outcome.new_size_bytes),
@@ -1104,6 +1157,7 @@ async fn execute_resolved_episode_import(
         imported_media_file_id: Some(media_file_id),
         reason_code: None,
         link_type: Some(link_type),
+        placement: file_result.file_placement(path_to_stored_string(&dest_path)),
         source_cleanup: file_result.source_cleanup.clone().map(Box::new),
         destination_permit: file_result.destination_permit(),
         size_bytes: Some(file_result.size_bytes as i64),

@@ -160,7 +160,7 @@ mod tests {
     }
 
     fn completed_download_with_parameters(parameters: Vec<(&str, &str)>) -> CompletedDownload {
-        CompletedDownload {
+        CompletedDownload { client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "sabnzbd".to_string(),
             client_id: "client-1".to_string(),
@@ -1169,6 +1169,7 @@ mod tests {
             link_type: None,
             error_message: None,
             release_burned: false,
+            release_refused: false,
             started_at: Utc::now(),
             completed_at: Utc::now(),
             upgrade: false,
@@ -1342,6 +1343,7 @@ mod tests {
             link_type: None,
             error_message: Some(message),
             release_burned: false,
+            release_refused: false,
             started_at: Utc::now(),
             completed_at: Utc::now(),
             upgrade: false,
@@ -1380,6 +1382,7 @@ mod tests {
             link_type: None,
             error_message: None,
             release_burned: false,
+            release_refused: false,
             started_at: Utc::now(),
             completed_at: Utc::now(),
             upgrade: false,
@@ -1443,7 +1446,7 @@ mod tests {
     #[cfg(feature = "runtime-media-analysis")]
     fn copy_mediainfo_fixture(destination: &std::path::Path) {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
+            .join("test-fixtures/media/h264_aac.mkv");
         std::fs::copy(fixture, destination).expect("copy MediaInfo fixture");
     }
 
@@ -1469,7 +1472,7 @@ mod tests {
         assert_eq!(candidate.canonical_path, trusted_root);
         let facts = candidate.video_facts.expect("video facts");
         assert_eq!(facts.container_format.as_deref(), Some("matroska"));
-        assert_eq!(facts.video_codec.as_deref(), Some("hevc"));
+        assert_eq!(facts.video_codec.as_deref(), Some("h264"));
         assert!(facts.duration_seconds.is_some_and(|duration| duration > 0));
     }
 

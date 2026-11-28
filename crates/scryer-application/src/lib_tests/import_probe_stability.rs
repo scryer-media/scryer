@@ -10,8 +10,7 @@ async fn probe_stability_metadata_matrix() {
             .await
             .unwrap();
         let mut original = std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
         )
         .unwrap();
         original.extend_from_slice(&[0; 16]);
@@ -36,6 +35,7 @@ async fn probe_stability_metadata_matrix() {
             let before = std::fs::metadata(&path).unwrap();
             let (release, references) =
                 crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+            let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id);
             let (decision, ()) = tokio::join!(
                 crate::post_download_gate::prepare_import_candidate_with_disc_selection(
                     &fixture.app,
@@ -50,6 +50,7 @@ async fn probe_stability_metadata_matrix() {
                     crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
                     None,
                     None,
+                    &bad_files,
                 ),
                 async {
                     while references() < 3 {
@@ -139,6 +140,7 @@ async fn probe_stability_metadata_matrix() {
                 crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
                 None,
                 None,
+                &crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id),
             )
             .await;
             assert!(retried.is_ok(), "{case}: stable retry should pass");
@@ -173,6 +175,7 @@ async fn probe_stability_missing_source_has_distinct_retryable_reason() {
         crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
         None,
         None,
+        &crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id),
     )
     .await;
     let Err(rejection) = result else {
@@ -460,8 +463,7 @@ async fn probe_stability_second_validation_still_enforces_runtime_policy() {
         let source = tempfile::tempdir().unwrap();
         let path = source.path().join("source.mkv");
         std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
             &path,
         )
         .unwrap();
@@ -483,6 +485,7 @@ async fn probe_stability_second_validation_still_enforces_runtime_policy() {
             crate::post_download_gate::RuntimeSampleValidation::automatic(Some(1500)),
             None,
             None,
+            &crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id),
         )
         .await;
         let Err(rejection) = result else {
@@ -547,7 +550,7 @@ async fn probe_stability_preserves_inner_rejection_when_outer_snapshots_match() 
         let source = tempfile::tempdir().unwrap();
         let path = source.path().join("source.mkv");
         std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
             &path,
         ).unwrap();
         let before = CopyingFileImporter.snapshot_import_source(&path).await.unwrap();
@@ -562,11 +565,12 @@ async fn probe_stability_preserves_inner_rejection_when_outer_snapshots_match() 
         }).await;
         let profile = fixture.app.resolve_quality_profile_for_title(&fixture.title).await.unwrap();
         let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+        let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id);
         let (release, references) = crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
         let (result, ()) = tokio::join!(
             crate::post_download_gate::prepare_import_candidate_with_disc_selection(
                 &fixture.app, &fixture.title, &parsed, &profile, &path, before.identity.file.len as i64,
-                false, None, false, crate::post_download_gate::RuntimeSampleValidation::manual_override(None), None, None,
+                false, None, false, crate::post_download_gate::RuntimeSampleValidation::manual_override(None), None, None, &bad_files,
             ),
             async {
                 while references() < 3 { tokio::task::yield_now().await; }
@@ -586,4 +590,135 @@ async fn probe_stability_preserves_inner_rejection_when_outer_snapshots_match() 
         assert_eq!(CopyingFileImporter.snapshot_import_source(&path).await.unwrap(), before);
         assert_eq!(importer.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }).await.expect("bounded inner-rejection preservation");
+}
+
+/// The fixture video as an import source in its own temp directory.
+fn bad_file_gate_source() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.mkv");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/media/h264_aac.mkv"),
+        &path,
+    )
+    .unwrap();
+    (directory, path)
+}
+
+async fn prepare_against_bad_files(
+    fixture: &FailClosedPackFixture,
+    path: &Path,
+    bad_files: &crate::post_download_gate::TitleBadFiles,
+) -> Result<
+    crate::post_download_gate::PreparedImportCandidate,
+    crate::post_download_gate::ImportedFileRejection,
+> {
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    crate::post_download_gate::prepare_import_candidate_with_disc_selection(
+        &fixture.app,
+        &fixture.title,
+        &parsed,
+        &profile,
+        path,
+        std::fs::metadata(path).unwrap().len() as i64,
+        false,
+        None,
+        false,
+        crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+        None,
+        None,
+        bad_files,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_import_matching_a_bad_file_is_refused_and_left_in_place() {
+    let mut fixture = fail_closed_pack_fixture().await;
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    fixture.app.services.workflow.blocklist_repo = blocklist.clone();
+    let (_directory, path) = bad_file_gate_source();
+    let proof = crate::fs_integrity::import_content_proof_async(&path)
+        .await
+        .unwrap();
+    blocklist.entries.lock().await.push(BlocklistEntry {
+        id: "bad-file-entry".to_string(),
+        title_id: fixture.title.id.clone(),
+        release_name: String::new(),
+        normalized_release_name: String::new(),
+        indexer_id: String::new(),
+        info_hash: None,
+        reason: None,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        content: Some(crate::media_issues::content_identity(&proof)),
+    });
+
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id);
+    let Err(rejection) = prepare_against_bad_files(&fixture, &path, &bad_files).await else {
+        panic!("a copy of a bad file must not import");
+    };
+    assert_eq!(
+        rejection.recycle_reason,
+        crate::error_reasons::media::IMPORT_MATCHES_BAD_FILE
+    );
+    // Not a review hold: the release is refused like any other rejection.
+    assert!(!rejection.requires_review());
+    assert!(path.exists(), "the refused file stays where it is");
+}
+
+#[tokio::test]
+async fn a_failed_bad_file_lookup_holds_the_import() {
+    let mut fixture = fail_closed_pack_fixture().await;
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    blocklist
+        .fail_reads
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    fixture.app.services.workflow.blocklist_repo = blocklist.clone();
+    let (_directory, path) = bad_file_gate_source();
+
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id);
+    let Err(rejection) = prepare_against_bad_files(&fixture, &path, &bad_files).await else {
+        panic!("an unchecked file must not import");
+    };
+    assert_eq!(
+        rejection.recycle_reason,
+        crate::error_reasons::media::BAD_FILE_LOOKUP_FAILED
+    );
+    assert!(rejection.requires_review());
+    assert_eq!(
+        rejection.review_hold_skip_reason(),
+        scryer_domain::ImportSkipReason::SourceUnavailable
+    );
+    assert!(path.exists());
+}
+
+#[tokio::test]
+async fn the_bad_file_entries_are_read_once_per_unit_of_work() {
+    let mut fixture = fail_closed_pack_fixture().await;
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    fixture.app.services.workflow.blocklist_repo = blocklist.clone();
+    let (_first_directory, first) = bad_file_gate_source();
+    let (_second_directory, second) = bad_file_gate_source();
+
+    let bad_files = crate::post_download_gate::TitleBadFiles::for_title(&fixture.title.id);
+    assert!(
+        prepare_against_bad_files(&fixture, &first, &bad_files)
+            .await
+            .is_ok()
+    );
+    assert!(
+        prepare_against_bad_files(&fixture, &second, &bad_files)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        blocklist
+            .title_reads
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
 }

@@ -108,6 +108,67 @@ const de: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Bandbreitenlimit (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Gilt gemeinsam für alle Downloads dieses Clients. Leer oder 0 bedeutet unbegrenzt.",
+  "settings.downloadClientTorboxApiKey": "API-Token",
+  "settings.downloadClientTorboxApiKeyHelp": "Das API-Token des TorBox-Kontos.",
+  "settings.downloadClientTorboxCachedOnly": "Nur zwischengespeicherte",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Downloads ablehnen, die TorBox nicht bereits im Cache hat.",
+  "httpRelease.refusal.filePathInvalid":
+    "Eine Datei dieses Downloads hat einen Pfad, der nicht in ihrem Download-Ordner gespeichert werden kann.",
+  "httpRelease.refusal.tooManyFiles":
+    "Dieser Download hat mehr Dateien, als ein Download enthalten darf.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Eine Datei dieses Downloads hat keinen verwendbaren Link-Verweis.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Eine Datei dieses Downloads braucht einen Link, den dieser Downloader nicht beschaffen kann.",
+  "httpRelease.refusal.linkRefused":
+    "Der Server hat die Download-Links für eine Datei wiederholt abgelehnt.",
+  "httpRelease.refusal.linkUnavailable":
+    "Für eine Datei wurde kein Download-Link verfügbar.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox hat das API-Token abgelehnt.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Der TorBox-Tarif enthält diese Funktion nicht.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Das TorBox-Konto hat sein Limit aktiver Downloads erreicht.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Das TorBox-Konto befindet sich in einer Wartezeit und nimmt noch keine neuen Downloads an.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Das TorBox-Konto hat sein monatliches Download-Limit erreicht.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "Das stündliche Limit neuer TorBox-Downloads ist erreicht.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Dieser Download ist größer, als der TorBox-Tarif erlaubt.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox hat diesen Download nicht im Cache, und dieser Client nimmt nur zwischengespeicherte Downloads an.",
+  "error.reason.TORBOX_INVALID_TORRENT":
+    "TorBox konnte den Torrent nicht lesen.",
+  "error.reason.TORBOX_INVALID_NZB": "Die NZB konnte nicht gelesen werden.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Dieser Download ist bereits im TorBox-Konto.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox hat dieses Element nicht.",
+  "error.reason.TORBOX_LINK_OFFLINE": "Der TorBox-Download-Link ist offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox begrenzt, wie oft es Anfragen annimmt.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox ist nicht verfügbar.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox hat eine Datei dieses Downloads als infiziert markiert.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox bietet eine Datei dieses Downloads nur als ZIP-Archiv an.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Dieser TorBox-Download enthält keine Videodatei.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox meldet, dass dieser Download fehlgeschlagen ist.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox hat diesen Download nicht mehr.",
+  "error.reason.TORBOX_STALLED": "Dieser Download stockt bei TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "Die Dateinamen dieses TorBox-Downloads können auf diesem System nicht gespeichert werden.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Dieses Release hat keinen Magnet-Link, keine Torrent-Datei und keine NZB, die an TorBox gesendet werden könnte.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox unterstützt diese Aktion für diesen Download nicht.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Dieser TorBox-Client hat keinen solchen Download.",
+  "error.reason.TORBOX_TOKEN_REQUIRED": "Der TorBox-Client hat kein API-Token.",
   "settings.publicUrlTitle": "Öffentliche URL",
   "settings.publicUrlHelp":
     "Die Adresse, über die Personen und Dienste Scryer erreichen, etwa https://scryer.example.com. Kontoverknüpfung und OAuth übernehmen eine Änderung sofort; Passkeys erst nach einem Neustart von Scryer.",
@@ -838,6 +899,8 @@ const de: LocaleDictionary = {
   "settings.downloadClientPriority": "Priorität",
   "settings.downloadClientRemoveCompleted": "Abgeschlossene entfernen",
   "settings.downloadClientRemoveFailed": "Fehlgeschlagene entfernen",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "„Fehlgeschlagene entfernen“ gilt für Downloads, die im Client fehlgeschlagen sind. Ein Torrent, dessen Import Scryer abgelehnt hat, wird immer wie ein importierter behandelt: Er seedet bis zu seinem Ziel, dann entfernt ihn der Client.",
   "settings.downloadClientUseSslInfo":
     "SSL/TLS beim Verbinden mit diesem Download-Client verwenden.",
   "settings.downloadClientEnabledInfo":
@@ -1493,6 +1556,20 @@ const de: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Dieser Datei mehrere Episoden zuweisen",
   "queue.manualImportApplySuggestions": "Vorschläge auf alle anwenden",
+  "queue.manualImportApplySuggestionsSelected": "Vorschläge auf Auswahl anwenden",
+  "queue.manualImportSelectAll": "Alle auswählen",
+  "queue.manualImportSelectNone": "Keine auswählen",
+  "queue.manualImportSelectInvert": "Auswahl umkehren",
+  "queue.manualImportSelectMatching": "Passende auswählen",
+  "queue.manualImportSelectMatchingLabel": "Dateiname enthält…",
+  "queue.manualImportSelectedCount": "{{count}} ausgewählt",
+  "queue.manualImportSkipSelected": "Auswahl überspringen",
+  "queue.manualImportAssignSelected": "Ziel für Auswahl festlegen…",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Gleiche Qualität",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Neue Datei",
+  "queue.manualImportVerdictEstimated": "geschätzt",
   "queue.removeFailed": "Entfernen fehlgeschlagen",
   "queue.manualImportTooltip":
     "Manueller Import ist für Warteschlangenelemente verfügbar, die Aufmerksamkeit erfordern.",
@@ -2266,7 +2343,7 @@ const de: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Keine Benachrichtigungs-Plugins installiert. Installiere zuerst ein Benachrichtigungs-Plugin auf der Plugins-Seite.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "Release geholt",
   "settings.notificationEvent.download": "Download gescheitert",
   "settings.notificationEvent.upgrade": "Upgrade importiert",
@@ -2451,6 +2528,10 @@ const de: LocaleDictionary = {
   "history.rematched": "Neu zugeordnet",
   "history.seedingStarted": "Seedet",
   "history.seedingCompleted": "Seeding beendet",
+  "history.subtitleDownloaded": "Untertitel geladen",
+  "history.subtitleFailed": "Untertitel fehlgeschlagen",
+  "history.subtitleDeleted": "Untertitel gelöscht",
+  "history.subtitleBlocklisted": "Untertitel gesperrt",
   "history.downloadIgnored": "Ignoriert",
   "history.downloadMissing": "Im Client nicht sichtbar",
   "history.facet": "Kategorie",
@@ -3972,10 +4053,10 @@ const de: LocaleDictionary = {
     "Regeln bewerten Releases, damit Scryer die bevorzugt, die du willst, und die übergeht, die du nicht willst.",
   "tours.onboarding.mediaServers.title": "Medienserver",
   "tours.onboarding.mediaServers.body":
-    "Verbinde Jellyfin, Plex oder Emby, damit Scryer weiß, was du gesehen hast. Damit sich dein Server nach jedem Import von Scryer aktualisiert, installiere zusätzlich das Plugin dieses Servers unter Plugins.",
+    "Verbinde Jellyfin / Silo, Plex oder Emby, damit Scryer weiß, was du gesehen hast. Damit sich dein Server nach jedem Import von Scryer aktualisiert, installiere zusätzlich das Plugin dieses Servers unter Plugins.",
   "tours.onboarding.notifications.title": "Benachrichtigungen",
   "tours.onboarding.notifications.body":
-    "Erfahre von Grabs, Importen und allem, was Aufmerksamkeit braucht, dort, wo du es möchtest. Dienste fügst du über diese Plugin-Leiste hinzu. Auch Jellyfin, Plex und Emby sind hier: Dein Server aktualisiert sich nach einem Import erst, wenn sein Plugin aus dieser Leiste installiert ist, selbst wenn er unter Medienserver schon verbunden ist.",
+    "Erfahre von Grabs, Importen und allem, was Aufmerksamkeit braucht, dort, wo du es möchtest. Dienste fügst du über diese Plugin-Leiste hinzu. Auch Jellyfin / Silo, Plex und Emby sind hier: Dein Server aktualisiert sich nach einem Import erst, wenn sein Plugin aus dieser Leiste installiert ist, selbst wenn er unter Medienserver schon verbunden ist.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins fügen Indexer, Download-Clients und Benachrichtigungsdienste hinzu. Hier installierst und aktualisierst du sie.",

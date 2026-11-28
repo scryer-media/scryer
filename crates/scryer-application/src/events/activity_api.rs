@@ -14,7 +14,7 @@ use scryer_domain::{
     DownloadQueueItemCommandIssuedEventData, ImportRequestKind, ImportRequestedEventData,
     LibraryPermission, MediaFacet, MetadataHydrationState, MetadataHydrationUpdatedEventData,
     PostProcessingCompletedEventData, PostProcessingResult, SubtitleDownloadedEventData,
-    SubtitleSearchFailedEventData, TitleUpdatedEventData,
+    SubtitleRemovedEventData, SubtitleSearchFailedEventData, TitleUpdatedEventData,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -249,18 +249,28 @@ async fn prefetch_event_title_libraries(
     Ok(())
 }
 
-async fn actor_can_view_titleless_operational_event(
-    app: &AppUseCase,
-    actor: &User,
-) -> AppResult<bool> {
-    app.has_app_permission(actor, AppPermission::ManageSystemSettings)
-        .await
-}
-
 async fn require_actor_view_library(app: &AppUseCase, actor: &User) -> AppResult<()> {
     if app
         .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
         .await?
+    {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized_reason(
+            crate::error_reasons::events::LIBRARY_ACCESS_DENIED,
+            "You do not have access to this library".to_string(),
+        ))
+    }
+}
+
+/// Entry to the activity feed and its live signals: `View` or `Resolve
+/// Imports` on some library. Rows stay scoped by [`EventVisibility`], so the
+/// wider entry shows a member nothing from a library they hold no grant on.
+async fn require_actor_activity_feed(app: &AppUseCase, actor: &User) -> AppResult<()> {
+    if app
+        .library_permission_context(actor, None)
+        .await?
+        .has_any_library_with_any(&[LibraryPermission::View, LibraryPermission::ResolveImports])
     {
         Ok(())
     } else {
@@ -326,26 +336,53 @@ fn catalog_refresh_signal(activity: ActivityEvent) -> ActivityEvent {
     }
 }
 
-/// Library ids an actor may read events for: `view` for catalog-level events,
-/// `privileged` for everything that describes acquisition or files.
+/// The import lifecycle a `Resolve Imports` holder acts on: an import was
+/// asked for, finished, or was refused. A title event of one of these kinds is
+/// readable in a library where the actor resolves imports, on top of every
+/// library they hold privileged access to.
+fn title_event_is_import_lifecycle(payload: &DomainEventPayload) -> bool {
+    matches!(
+        payload,
+        DomainEventPayload::ImportRequested(_)
+            | DomainEventPayload::ImportCompleted(_)
+            | DomainEventPayload::ImportRejected(_)
+    )
+}
+
+/// What an actor may read in the event log, read once per request: library
+/// ids for catalog-level events (`view`), for acquisition and file events
+/// (`privileged`), and for import lifecycle events (`imports`, the privileged
+/// libraries plus those where the actor resolves imports), and the app
+/// permissions that open titleless events.
 struct EventVisibility {
     view: HashSet<String>,
     privileged: HashSet<String>,
+    imports: HashSet<String>,
+    titleless_operational: bool,
+    manage_lists: bool,
 }
 
 impl EventVisibility {
     async fn load(app: &AppUseCase, actor: &User) -> AppResult<Self> {
+        let context = app.library_permission_context(actor, None).await?;
+        let privileged: HashSet<String> = app
+            .privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect();
+        let mut imports = privileged.clone();
+        imports.extend(context.library_ids(LibraryPermission::ResolveImports));
+        let authorization = app.authorization_for_actor(actor).await?;
         Ok(Self {
-            view: app
-                .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-                .await?
+            view: context
+                .library_ids(LibraryPermission::View)
                 .into_iter()
                 .collect(),
-            privileged: app
-                .privileged_library_ids(actor, None)
-                .await?
-                .into_iter()
-                .collect(),
+            privileged,
+            imports,
+            titleless_operational: authorization
+                .has_app_permission(AppPermission::ManageSystemSettings),
+            manage_lists: authorization.has_app_permission(AppPermission::ManageLists),
         })
     }
 }
@@ -364,6 +401,8 @@ async fn event_allowed(
     if event.title_id.is_some() {
         let library_ids = if title_event_is_catalog_level(&event.payload) {
             &visibility.view
+        } else if title_event_is_import_lifecycle(&event.payload) {
+            &visibility.imports
         } else {
             &visibility.privileged
         };
@@ -395,10 +434,7 @@ async fn event_allowed(
                 .resource_type
                 .starts_with(crate::lists::public::LIST_CONFIGURATION_RESOURCE_PREFIX) =>
         {
-            Ok(app
-                .has_app_permission(actor, AppPermission::ManageLists)
-                .await?
-                || actor_can_view_titleless_operational_event(app, actor).await?)
+            Ok(visibility.manage_lists || visibility.titleless_operational)
         }
         DomainEventPayload::MediaRequestSubmitted(data) => {
             Ok(allowed_library_ids.contains(&data.library_id))
@@ -432,7 +468,7 @@ async fn event_allowed(
             )
             .await
         }
-        _ => actor_can_view_titleless_operational_event(app, actor).await,
+        _ => Ok(visibility.titleless_operational),
     }
 }
 
@@ -457,6 +493,10 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
     TitleHistoryEventType::Rematched,
     TitleHistoryEventType::SeedingStarted,
     TitleHistoryEventType::SeedingCompleted,
+    TitleHistoryEventType::SubtitleDownloaded,
+    TitleHistoryEventType::SubtitleFailed,
+    TitleHistoryEventType::SubtitleDeleted,
+    TitleHistoryEventType::SubtitleBlocklisted,
 ];
 
 const TITLE_HISTORY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
@@ -478,6 +518,10 @@ const TITLE_HISTORY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
     DomainEventType::DownloadMissing,
     DomainEventType::SeedingStarted,
     DomainEventType::SeedingCompleted,
+    DomainEventType::SubtitleDownloaded,
+    DomainEventType::SubtitleSearchFailed,
+    DomainEventType::SubtitleDeleted,
+    DomainEventType::SubtitleBlocklisted,
 ];
 
 pub fn supported_title_history_event_types() -> &'static [TitleHistoryEventType] {
@@ -980,6 +1024,7 @@ fn media_request_title_history_records(
             dest_path: None,
             // A media request predates any file, so there are no bytes to report.
             size_bytes: None,
+            file_placements: Vec::new(),
             data_json: data_json.clone(),
             occurred_at: event.occurred_at.to_rfc3339(),
             created_at: event.occurred_at.to_rfc3339(),
@@ -1475,23 +1520,23 @@ impl AppUseCase {
         }
     }
 
+    /// Records a subtitle download. `actor` is the user for a manual
+    /// download and `None` for the automatic search.
     pub(crate) async fn emit_subtitle_downloaded_event(
         &self,
+        actor: Option<&User>,
         title: &Title,
-        subtitle_path: Option<String>,
-        language: Option<String>,
-        provider: Option<String>,
+        data: SubtitleDownloadedEventData,
     ) {
+        let actor: DomainEventActor = match actor {
+            Some(user) => user.into(),
+            None => None::<String>.into(),
+        };
         if let Err(error) = self
             .append_domain_event(new_title_domain_event(
-                None,
+                actor,
                 title,
-                DomainEventPayload::SubtitleDownloaded(SubtitleDownloadedEventData {
-                    title: title_context_snapshot(title),
-                    subtitle_path,
-                    language,
-                    provider,
-                }),
+                DomainEventPayload::SubtitleDownloaded(data),
             ))
             .await
         {
@@ -1502,22 +1547,38 @@ impl AppUseCase {
     pub(crate) async fn emit_subtitle_search_failed_event(
         &self,
         title: &Title,
-        language: Option<String>,
-        reason: Option<String>,
+        data: SubtitleSearchFailedEventData,
     ) {
         if let Err(error) = self
             .append_domain_event(new_title_domain_event(
-                None,
+                None::<String>,
                 title,
-                DomainEventPayload::SubtitleSearchFailed(SubtitleSearchFailedEventData {
-                    title: title_context_snapshot(title),
-                    language,
-                    reason,
-                }),
+                DomainEventPayload::SubtitleSearchFailed(data),
             ))
             .await
         {
             tracing::warn!(title_id = %title.id, error = %error, "failed to append subtitle search failed domain event");
+        }
+    }
+
+    /// Records a user deleting a subtitle, or deleting and blocklisting it.
+    pub(crate) async fn emit_subtitle_removed_event(
+        &self,
+        actor: &User,
+        title: &Title,
+        blocklisted: bool,
+        data: SubtitleRemovedEventData,
+    ) {
+        let payload = if blocklisted {
+            DomainEventPayload::SubtitleBlocklisted(data)
+        } else {
+            DomainEventPayload::SubtitleDeleted(data)
+        };
+        if let Err(error) = self
+            .append_domain_event(new_title_domain_event(actor, title, payload))
+            .await
+        {
+            tracing::warn!(title_id = %title.id, error = %error, "failed to append subtitle removed domain event");
         }
     }
 
@@ -1596,7 +1657,7 @@ impl AppUseCase {
             )
             .await?;
         } else {
-            require_actor_view_library(self, actor).await?;
+            require_actor_activity_feed(self, actor).await?;
         }
         let offset = offset.max(0) as usize;
         let limit = limit.max(1) as usize;
@@ -1643,7 +1704,7 @@ impl AppUseCase {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<ActivityEvent>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let offset = offset.max(0) as usize;
         let limit = limit.max(1) as usize;
         let user_facing_event_types = user_facing_domain_event_types();
@@ -1690,7 +1751,7 @@ impl AppUseCase {
         filter: &DomainEventFilter,
         source_page_budget: Option<usize>,
     ) -> AppResult<DomainEventFeedPage> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let target_len = if filter.limit == 0 {
             100
         } else {
@@ -1803,7 +1864,7 @@ impl AppUseCase {
     /// The current tail of the event log; subscriptions start from here so a
     /// fresh client only sees events that happen after it connected.
     pub async fn latest_domain_event_sequence(&self, actor: &User) -> AppResult<i64> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         self.services.events.domain_events.latest_sequence().await
     }
 
@@ -1813,7 +1874,7 @@ impl AppUseCase {
         after_sequence: i64,
         limit: usize,
     ) -> AppResult<Vec<(i64, ActivityEvent)>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let target_len = limit.clamp(1, 500);
         let visibility = EventVisibility::load(self, actor).await?;
         let mut title_library_cache = HashMap::new();
@@ -1877,7 +1938,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<ActivityEvent>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         let (tx, rx) = broadcast::channel(128);
         let app = self.clone();
         let actor = actor.clone();
@@ -1926,7 +1987,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<i64>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         Ok(self.runtime.events.domain_event_broadcast.subscribe())
     }
 
@@ -1934,7 +1995,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<()>> {
-        require_actor_view_library(self, actor).await?;
+        require_actor_activity_feed(self, actor).await?;
         Ok(self.runtime.events.import_history_broadcast.subscribe())
     }
 

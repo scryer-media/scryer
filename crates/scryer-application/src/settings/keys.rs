@@ -54,6 +54,8 @@ pub const TITLE_SCOPED_SETTING_KEYS: &[&str] = &[
 pub const USE_SEASON_FOLDERS_KEY: &str = "rename.use_season_folders";
 /// Per-library initial monitoring choice in the Add and Request dialogs.
 pub const DEFAULT_MONITOR_TYPE_KEY: &str = "catalog.default_monitor_type";
+/// Per-library tag labels every new title in the library is given.
+pub const DEFAULT_TITLE_TAGS_KEY: &str = "catalog.default_title_tags";
 // Discovery region seam. Read like metadata_language; a future
 // preferences UI only has to write this key (defaults to "US" -> unchanged).
 pub const DISCOVERY_REGION_KEY: &str = "discovery.region";
@@ -61,6 +63,9 @@ pub const DISCOVERY_REGION_KEY: &str = "discovery.region";
 // means disabled, so existing installs keep the unfinished surfaces hidden.
 pub const EXPERIMENTAL_FEATURES_ENABLED_KEY: &str = "ui.experimental_features_enabled";
 pub const API_EXPLORER_ENABLED_KEY: &str = "ui.api_explorer_enabled";
+// Facets an administrator turned off for the whole instance. Absent row or an
+// empty list means every facet is on.
+pub const DISABLED_FACETS_KEY: &str = "ui.disabled_facets";
 // Instance-wide opt out for sending the library context to the metadata
 // gateway. Stored in the positive sense; absent row means enabled, so existing
 // installs keep personalized discovery working with no data change.

@@ -758,9 +758,25 @@ impl AppUseCase {
         Ok(recovery_admin)
     }
 
+    /// The Users & Access listing: open to account managers and to permission
+    /// managers, who grant access to the accounts it lists. Every other user
+    /// operation keeps its own guard.
     pub async fn list_users(&self, actor: &User) -> AppResult<Vec<User>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
-            .await?;
+        if !self
+            .has_any_app_permission(
+                actor,
+                scryer_domain::AppPermissionMask::from_permissions([
+                    scryer_domain::AppPermission::ManageUsers,
+                    scryer_domain::AppPermission::ManagePermissions,
+                ]),
+            )
+            .await?
+        {
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::ACTION_PERMISSION_DENIED,
+                "You do not have permission to perform this action".to_string(),
+            ));
+        }
         self.services.identity.users.list_all().await
     }
 

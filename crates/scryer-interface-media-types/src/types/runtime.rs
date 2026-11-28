@@ -1,4 +1,4 @@
-use super::{JobRunPayload, Long, RuntimePathStyleValue};
+use super::{JobRunPayload, Long, MediaFacetValue, RuntimePathStyleValue};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
@@ -312,6 +312,11 @@ pub struct InstanceFeaturesPayload {
     pub experimental_features_enabled: bool,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
     pub personalized_discovery_enabled: bool,
+    /// Facets an administrator turned off for the whole instance.
+    pub disabled_facets: Vec<MediaFacetValue>,
+    /// Facets the current user can view, request into, add titles to or
+    /// manage a library of.
+    pub viewable_facets: Vec<MediaFacetValue>,
 }
 
 #[derive(SimpleObject, Clone)]

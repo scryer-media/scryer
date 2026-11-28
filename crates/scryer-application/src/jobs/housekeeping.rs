@@ -153,9 +153,23 @@ struct RecycleRootLibrary {
 struct RestoreRecycledItemContext {
     entry_dir: PathBuf,
     manifest: crate::recycle_bin::RecycleManifest,
+    /// The recycled payload's size from the regular-file check, when known.
+    payload_size: Option<u64>,
     library_id: String,
     library_roots: Vec<PathBuf>,
     recycle_config: crate::recycle_bin::RecycleBinConfig,
+}
+
+/// The bad-file content identities of each title a unit of restore work has
+/// read, keyed by title id.
+type RestoreBadFileIdentities =
+    HashMap<String, Vec<(String, scryer_domain::BlocklistContentIdentity)>>;
+
+/// Whether a restore still has to look for a bad-file match, or a start
+/// already did and settled which entry, if any, the restore clears.
+enum RestoreBadFileCheck {
+    Unchecked { clear: bool },
+    Checked { clear_entry: Option<String> },
 }
 
 #[derive(Clone, Debug)]
@@ -1818,6 +1832,7 @@ impl AppUseCase {
         &self,
         actor: &scryer_domain::User,
         entry_id: &str,
+        clear_bad_file: bool,
     ) -> AppResult<RestoreRecycledItemJobAccepted> {
         let guard_key = format!("recycle-entry:{entry_id}");
         let restore_guard = self
@@ -1832,7 +1847,16 @@ impl AppUseCase {
                     format!("a recycle restore is already running for {entry_id}"),
                 )
             })?;
-        let library_id = self.validate_restore_recycled_item(actor, entry_id).await?;
+        let context = self.resolve_restore_recycled_item(actor, entry_id).await?;
+        let library_id = context.library_id.clone();
+        let clear_entry = self
+            .require_restore_bad_file_confirmation(
+                actor,
+                &context,
+                clear_bad_file,
+                &mut RestoreBadFileIdentities::new(),
+            )
+            .await?;
 
         let now = chrono::Utc::now();
         let mut run = JobRunRecord {
@@ -1885,8 +1909,15 @@ impl AppUseCase {
         let actor = actor.clone();
         let entry_id = entry_id.to_string();
         self.restore_coordinator().spawn_task(async move {
-            app.run_restore_recycled_item_job(run, actor_event, actor, entry_id, restore_guard)
-                .await;
+            app.run_restore_recycled_item_job(
+                run,
+                actor_event,
+                actor,
+                entry_id,
+                clear_entry,
+                restore_guard,
+            )
+            .await;
         });
 
         Ok(RestoreRecycledItemJobAccepted { job_run })
@@ -1900,10 +1931,14 @@ impl AppUseCase {
         let entry_ids = normalize_recycle_batch_ids(entry_ids)?;
         let mut items = Vec::with_capacity(entry_ids.len());
         let mut fingerprint_parts = Vec::with_capacity(entry_ids.len());
+        let mut identities = RestoreBadFileIdentities::new();
         for entry_id in entry_ids {
             let context = self.resolve_restore_recycled_item(actor, &entry_id).await?;
             let original_path = context.manifest.original_path_buf();
             let target_state = restore_target_fingerprint(restore_target(&original_path).await?);
+            let bad_file_entry_id = self
+                .restore_bad_file_match(&context, &mut identities)
+                .await?;
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
                 entry_id,
@@ -1914,6 +1949,7 @@ impl AppUseCase {
                 id: entry_id,
                 original_path: context.manifest.original_path,
                 destination_occupied: target_state != "missing",
+                bad_file_entry_id,
             });
         }
         Ok(crate::RecycleRestorePreview {
@@ -1928,6 +1964,7 @@ impl AppUseCase {
         entry_ids: Vec<String>,
         conflict_policy: crate::RecycleRestoreConflictPolicy,
         preview_fingerprint: &str,
+        clear_bad_files: bool,
     ) -> AppResult<crate::RecycleBinBatchJobAccepted> {
         let entry_ids = normalize_recycle_batch_ids(entry_ids)?;
         let mut guards = self.acquire_recycle_entry_guards(&entry_ids).await?;
@@ -1935,9 +1972,22 @@ impl AppUseCase {
         let mut fingerprint_parts = Vec::with_capacity(entry_ids.len());
         let mut destination_keys = HashSet::new();
         let mut expected_target_states = HashMap::with_capacity(entry_ids.len());
+        let mut clear_entries = HashMap::new();
         let mut library_ids = HashSet::new();
+        let mut identities = RestoreBadFileIdentities::new();
         for entry_id in &entry_ids {
             let context = self.resolve_restore_recycled_item(actor, entry_id).await?;
+            if let Some(clear_entry) = self
+                .require_restore_bad_file_confirmation(
+                    actor,
+                    &context,
+                    clear_bad_files,
+                    &mut identities,
+                )
+                .await?
+            {
+                clear_entries.insert(entry_id.clone(), clear_entry);
+            }
             let original_path = context.manifest.original_path_buf();
             let target = restore_target(&original_path).await?;
             let target_state = restore_target_fingerprint(target);
@@ -2025,6 +2075,7 @@ impl AppUseCase {
                 actor,
                 job_entry_ids,
                 conflict_policy,
+                clear_entries,
                 expected_target_states,
                 guards,
             )
@@ -2280,29 +2331,114 @@ impl AppUseCase {
         Ok((run, job_run, actor_event))
     }
 
-    /// Restore a single recycled item back to its original path.
+    /// Restore a single recycled item back to its original path. An item that
+    /// matches one of its title's bad files is refused.
     pub async fn restore_recycled_item(
         &self,
         actor: &scryer_domain::User,
         entry_id: &str,
+    ) -> AppResult<bool> {
+        self.restore_recycled_item_clearing_bad_file(actor, entry_id, false)
+            .await
+    }
+
+    /// [`Self::restore_recycled_item`], where `clear_bad_file` confirms
+    /// restoring an item that matches one of its title's bad files and clears
+    /// that entry.
+    pub async fn restore_recycled_item_clearing_bad_file(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+        clear_bad_file: bool,
     ) -> AppResult<bool> {
         let context = self.resolve_restore_recycled_item(actor, entry_id).await?;
         self.restore_recycled_item_from_context(
             actor,
             context,
             crate::RecycleRestoreConflictPolicy::KeepBoth,
+            RestoreBadFileCheck::Unchecked {
+                clear: clear_bad_file,
+            },
         )
         .await
     }
 
-    async fn validate_restore_recycled_item(
+    /// The title bad-file entry a recycled item matches, if any.
+    ///
+    /// One indexed read of each title's bad-file identities per unit of work,
+    /// kept in `identities` across the items of a batch. The recycled copy is
+    /// sampled only when an identity has its size, so a restore on a title
+    /// with no bad file of that size reads nothing more from disk.
+    async fn restore_bad_file_match(
+        &self,
+        context: &RestoreRecycledItemContext,
+        identities: &mut RestoreBadFileIdentities,
+    ) -> AppResult<Option<String>> {
+        let Some(title_id) = context.manifest.title_id.as_deref() else {
+            return Ok(None);
+        };
+        if !identities.contains_key(title_id) {
+            let loaded = self
+                .services
+                .workflow
+                .blocklist_repo
+                .list_content_identities_for_title(title_id)
+                .await?;
+            identities.insert(title_id.to_string(), loaded);
+        }
+        let identities = &identities[title_id];
+        let size_can_match = |size: u64| {
+            identities
+                .iter()
+                .any(|(_, identity)| identity.size_bytes == size)
+        };
+        if identities.is_empty()
+            || context
+                .payload_size
+                .is_some_and(|size| !size_can_match(size))
+        {
+            return Ok(None);
+        }
+        let recycled_file =
+            crate::recycle_bin::recycled_payload_path(&context.entry_dir, &context.manifest)
+                .await?;
+        let proof = crate::fs_integrity::import_content_proof_async(&recycled_file).await?;
+        Ok(identities
+            .iter()
+            .find(|(_, identity)| crate::media_issues::content_matches_proof(identity, &proof))
+            .map(|(id, _)| id.clone()))
+    }
+
+    /// Refuse restoring an item that matches a bad file unless the operator
+    /// confirmed clearing it. Returns the entry to clear.
+    async fn require_restore_bad_file_confirmation(
         &self,
         actor: &scryer_domain::User,
-        entry_id: &str,
-    ) -> AppResult<String> {
-        self.resolve_restore_recycled_item(actor, entry_id)
-            .await
-            .map(|context| context.library_id)
+        context: &RestoreRecycledItemContext,
+        clear_bad_file: bool,
+        identities: &mut RestoreBadFileIdentities,
+    ) -> AppResult<Option<String>> {
+        let Some(entry_id) = self.restore_bad_file_match(context, identities).await? else {
+            return Ok(None);
+        };
+        if !clear_bad_file {
+            return Err(AppError::validation_refused_with_facts(
+                crate::error_reasons::media::RESTORE_MATCHES_BAD_FILE,
+                "this recycled file was marked bad for its title; confirm to restore it and clear the mark",
+                vec![crate::RefusalFact::new(
+                    crate::media_issues::BAD_FILE_ENTRY_ID_FACT,
+                    entry_id,
+                )],
+            ));
+        }
+        // Clearing the mark is a title change as well as a restore.
+        self.require_library_permission(
+            actor,
+            &context.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        Ok(Some(entry_id))
     }
 
     async fn resolve_restore_recycled_item(
@@ -2359,12 +2495,14 @@ impl AppUseCase {
                 .await?;
                 let recycled_file =
                     crate::recycle_bin::recycled_payload_path(&entry_dir, &manifest).await?;
-                crate::recycle_bin::ensure_recycled_restore_source_is_regular(&recycled_file)
-                    .await?;
+                let payload_size =
+                    crate::recycle_bin::ensure_recycled_restore_source_is_regular(&recycled_file)
+                        .await?;
 
                 return Ok(RestoreRecycledItemContext {
                     entry_dir,
                     manifest,
+                    payload_size,
                     library_id: library.id,
                     library_roots,
                     recycle_config: config,
@@ -2383,6 +2521,7 @@ impl AppUseCase {
         actor: &scryer_domain::User,
         context: RestoreRecycledItemContext,
         conflict_policy: crate::RecycleRestoreConflictPolicy,
+        bad_file: RestoreBadFileCheck,
     ) -> AppResult<bool> {
         // Restoring writes a file back into the title's folder, which an
         // in-flight operation is copying out of (FR-084).
@@ -2393,6 +2532,21 @@ impl AppUseCase {
             )
             .await?;
         }
+        // The confirmation is checked before anything moves. The mark itself
+        // is cleared only once the file is back, so a restore that fails
+        // leaves the file in the bin and still marked bad.
+        let clear_entry = match bad_file {
+            RestoreBadFileCheck::Unchecked { clear } => {
+                self.require_restore_bad_file_confirmation(
+                    actor,
+                    &context,
+                    clear,
+                    &mut RestoreBadFileIdentities::new(),
+                )
+                .await?
+            }
+            RestoreBadFileCheck::Checked { clear_entry } => clear_entry,
+        };
         let original_path = context.manifest.original_path_buf();
         crate::folder_ownership::ensure_restore_ownership(
             self,
@@ -2435,6 +2589,10 @@ impl AppUseCase {
                 "failed to remove recycle entry directory after restore"
             );
         }
+        // Cleared before the title is rescanned, so the restored file is not
+        // stamped bad again. A failed clear keeps the mark and is returned
+        // once the file is tracked.
+        let cleared = self.clear_restored_bad_file(actor, clear_entry).await;
         if let Some(title_id) = context.manifest.title_id.as_deref() {
             self.track_restored_recycled_file(
                 actor,
@@ -2446,7 +2604,34 @@ impl AppUseCase {
             )
             .await;
         }
-        Ok(true)
+        cleared.map(|()| true)
+    }
+
+    /// Clear the bad-file entry a confirmed restore matched, recording
+    /// `MediaIssueUnmarked` through the blocklist clear's own path.
+    async fn clear_restored_bad_file(
+        &self,
+        actor: &scryer_domain::User,
+        clear_entry: Option<String>,
+    ) -> AppResult<()> {
+        let Some(blocklist_id) = clear_entry else {
+            return Ok(());
+        };
+        let Some(entry) = self
+            .services
+            .workflow
+            .blocklist_repo
+            .get(&blocklist_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        self.remove_blocklist_entry_and_unmark(
+            actor,
+            &entry,
+            scryer_domain::MediaIssueUnmarkRoute::RecycleRestore,
+        )
+        .await
     }
 
     /// Rescans a restored file's title so the file is tracked again, puts back
@@ -2809,6 +2994,7 @@ impl AppUseCase {
         actor: scryer_domain::User,
         entry_ids: Vec<String>,
         conflict_policy: crate::RecycleRestoreConflictPolicy,
+        clear_entries: HashMap<String, String>,
         expected_target_states: HashMap<String, String>,
         _guards: Vec<tokio::sync::OwnedMutexGuard<()>>,
     ) {
@@ -2824,8 +3010,15 @@ impl AppUseCase {
                     return Err(AppError::validation_refused(crate::error_reasons::jobs::RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION, "restore destination changed after confirmation; preview and retry this item"
                             .to_string()));
                 }
-                self.restore_recycled_item_from_context(&actor, context, conflict_policy)
-                    .await
+                self.restore_recycled_item_from_context(
+                    &actor,
+                    context,
+                    conflict_policy,
+                    RestoreBadFileCheck::Checked {
+                        clear_entry: clear_entries.get(entry_id).cloned(),
+                    },
+                )
+                .await
             }
             .await;
             match result {
@@ -3019,9 +3212,22 @@ impl AppUseCase {
         actor_event: DomainEventActor,
         actor: scryer_domain::User,
         entry_id: String,
+        clear_entry: Option<String>,
         _restore_guard: tokio::sync::OwnedMutexGuard<()>,
     ) {
-        let result = self.restore_recycled_item(&actor, &entry_id).await;
+        let result = async {
+            let context = self
+                .resolve_restore_recycled_item(&actor, &entry_id)
+                .await?;
+            self.restore_recycled_item_from_context(
+                &actor,
+                context,
+                crate::RecycleRestoreConflictPolicy::KeepBoth,
+                RestoreBadFileCheck::Checked { clear_entry },
+            )
+            .await
+        }
+        .await;
         let (status, summary_text, error_text) = match result {
             Ok(_) => (
                 JobRunStatus::Completed,

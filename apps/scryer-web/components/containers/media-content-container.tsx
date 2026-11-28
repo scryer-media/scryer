@@ -88,10 +88,8 @@ import type {
   ViewId,
 } from "@/components/root/types";
 import { toProfileOptions } from "@/lib/utils/quality-profiles";
-import {
-  discoveryItemFacet,
-  metadataResultForDiscoveryItem,
-} from "@/lib/utils/discovery-actions";
+import { metadataResultForDiscoveryItem } from "@/lib/utils/discovery-actions";
+import { useDiscoveryItemFacet, useFacets } from "@/lib/facets/use-facets";
 import {
   normalizeLibraryFilterSelection,
   singleSelectedLibraryId,
@@ -184,7 +182,17 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
-import { catalogDeletionRefresh } from "@/lib/utils/catalog-deletion-refresh";
+import {
+  catalogDeletionRefresh,
+  deletedTitleIdsOfSettledRuns,
+  titleDeletionFailedTitleIds,
+  titleDeletionRunPending,
+  titleDeletionRunsSettled,
+  type TitleDeletionRuns,
+  withPendingDeletedTitleIds,
+  withQueuedTitleDeletionRun,
+  withSettledTitleDeletionRun,
+} from "@/lib/utils/catalog-deletion-refresh";
 import {
   reactiveRefreshEpoch,
   useReactiveRefresh,
@@ -369,7 +377,6 @@ const defaultTitleCatalogSortState: TitleCatalogSortState = {
 
 const CATALOG_DISCOVERY_LIMIT_PER_GROUP = 12;
 const CATALOG_DISCOVERY_MAX_GROUPS = 6;
-const DISCOVERY_FACETS: Facet[] = ["MOVIE", "SERIES", "ANIME"];
 
 function mergeCatalogTitlesPreservingImages(
   currentTitles: TitleRecord[],
@@ -613,6 +620,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   onCloseOverview,
 }: MediaContentContainerProps) {
   const searchState = useSearchContext();
+  const { ids: visibleFacetIds } = useFacets();
+  const itemFacet = useDiscoveryItemFacet();
   const {
     addMetadataSearchResultToCatalog,
     catalogConfigLoading,
@@ -624,6 +633,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     requestMetadataSearchResult,
     resolveDefaultQualityProfileIdForFacet,
     rootFoldersByFacet,
+    animeCatalogDefaults,
     runTvdbSearch,
     setQueueFacet,
     tvdbCandidates,
@@ -654,7 +664,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   React.useLayoutEffect(() => {
     pendingDeletedTitleIdsRef.current = pendingDeletedTitleIds;
   }, [pendingDeletedTitleIds]);
-  const deletionJobIdsRef = React.useRef(new Set<string>());
+  // The deletion runs being followed, each with its own titles and outcome.
+  const deletionRunsRef = React.useRef<TitleDeletionRuns>(new Map());
   const deletionFallbackTimersRef = React.useRef<
     ReturnType<typeof setTimeout>[]
   >([]);
@@ -688,17 +699,17 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     (requestableLibrariesByFacet[activeFacet] ?? []).length > 0;
   const manageableDiscoveryFacets = React.useMemo(
     () =>
-      DISCOVERY_FACETS.filter(
+      visibleFacetIds.filter(
         (facet) => (librariesByFacet[facet] ?? []).length > 0,
       ),
-    [librariesByFacet],
+    [librariesByFacet, visibleFacetIds],
   );
   const requestableDiscoveryFacets = React.useMemo(
     () =>
-      DISCOVERY_FACETS.filter(
+      visibleFacetIds.filter(
         (facet) => (requestableLibrariesByFacet[facet] ?? []).length > 0,
       ),
-    [requestableLibrariesByFacet],
+    [requestableLibrariesByFacet, visibleFacetIds],
   );
   const {
     selectedLibraryIds,
@@ -989,16 +1000,18 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
-    if (effectiveViewMode === "poster" || effectiveViewMode === "graph") {
+    if (effectiveViewMode === "graph") {
       return defaultTitleCatalogSortState;
     }
     if (titleCatalogSort.key === "name") {
       return titleCatalogSort;
     }
     const columnKey = titleCatalogSort.key as TitleTableColumnKey;
+    // The poster view has no columns: it sorts by any supported key.
     if (
       !isTitleTableColumnSupportedForView(columnKey, view) ||
-      visibleTitleTableColumns[columnKey] !== true
+      (effectiveViewMode !== "poster" &&
+        visibleTitleTableColumns[columnKey] !== true)
     ) {
       return defaultTitleCatalogSortState;
     }
@@ -1476,6 +1489,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     enabled: shouldLoadCatalogTitles && effectiveViewMode === "poster",
     ready: !titleLoading && visibleTitles.length > 0,
     storageKeySuffix: "window",
+    // Narrow screens scroll the page instead of the grid.
+    anchorAttribute: "data-catalog-title-id",
+    anchorRootSelector: "[data-catalog-poster-grid='true']",
   });
 
   React.useLayoutEffect(() => {
@@ -2163,7 +2179,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (item.ownedInInput) {
         return;
       }
-      const facet = discoveryItemFacet(item);
+      const facet = itemFacet(item);
       if (!facet) {
         setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
@@ -2205,7 +2221,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         const detailItem =
           (data?.discoveryItemDetail as
             CatalogDiscoveryItem | null | undefined) ?? item;
-        const detailFacet = discoveryItemFacet(detailItem);
+        const detailFacet = itemFacet(detailItem);
         if (!detailFacet || detailFacet !== facet) {
           throw new Error(t("status.permissionDenied"));
         }
@@ -2236,6 +2252,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       authorizationSignature,
       client,
       ensureCatalogConfigReady,
+      itemFacet,
       librariesByFacet,
       requestableLibrariesByFacet,
       setGlobalStatus,
@@ -2391,24 +2408,33 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (
         !run ||
         run.jobKey !== "TITLE_DELETION" ||
-        !deletionJobIdsRef.current.has(run.id) ||
+        !titleDeletionRunPending(deletionRunsRef.current, run.id) ||
         !isTerminalJobRunStatus(run.status)
       ) {
         return false;
       }
 
-      deletionJobIdsRef.current.delete(run.id);
-      if (deletionJobIdsRef.current.size === 0) {
+      deletionRunsRef.current = withSettledTitleDeletionRun(
+        deletionRunsRef.current,
+        run.id,
+        titleDeletionFailedTitleIds(run),
+      );
+      if (titleDeletionRunsSettled(deletionRunsRef.current)) {
         clearDeletionFallbackTimers();
+        // Only titles a run actually deleted leave the list. A title whose
+        // deletion failed, or whose run did not report, shows again once the
+        // pending filter is dropped.
+        const deletedIds = deletedTitleIdsOfSettledRuns(
+          deletionRunsRef.current,
+          pendingDeletedTitleIdsRef.current,
+        );
+        deletionRunsRef.current = new Map();
         // Physically remove the deleted titles from the context overlay before
         // dropping the pending-id render filter, or the union with
         // titleContextTitles resurrects their cards after the delete completes.
         setTitleContextTitles((current) =>
-          current.filter(
-            (title) => !pendingDeletedTitleIdsRef.current.has(title.id),
-          ),
+          current.filter((title) => !deletedIds.has(title.id)),
         );
-        const deletedIds = new Set(pendingDeletedTitleIdsRef.current);
         setMonitoredTitles((current) =>
           current.filter((title) => !deletedIds.has(title.id)),
         );
@@ -2434,7 +2460,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
 
   const refreshTrackedDeletionJobs = React.useCallback(async () => {
-    if (deletionJobIdsRef.current.size === 0) {
+    if (titleDeletionRunsSettled(deletionRunsRef.current)) {
       return;
     }
 
@@ -2472,6 +2498,31 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       );
   }, [clearDeletionFallbackTimers, refreshTrackedDeletionJobs]);
 
+  /**
+   * Hides titles whose deletion was just queued and follows the deletion job,
+   * so their rows leave the list even when the event feed cannot say which
+   * titles were deleted. Every delete action in this catalog reports here.
+   */
+  const trackQueuedTitleDeletion = React.useCallback(
+    (acceptedTitleIds: readonly string[], run: JobRun | null) => {
+      if (acceptedTitleIds.length > 0) {
+        recordCriticalCatalogMutation();
+      }
+      if (run) {
+        deletionRunsRef.current = withQueuedTitleDeletionRun(
+          deletionRunsRef.current,
+          run.id,
+          acceptedTitleIds,
+        );
+        scheduleDeletionJobFallbackChecks();
+      }
+      setPendingDeletedTitleIds((current) =>
+        withPendingDeletedTitleIds(current, acceptedTitleIds),
+      );
+    },
+    [recordCriticalCatalogMutation, scheduleDeletionJobFallbackChecks],
+  );
+
   React.useEffect(
     () => clearDeletionFallbackTimers,
     [clearDeletionFallbackTimers],
@@ -2479,7 +2530,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
   React.useEffect(() => {
     const refreshIfTrackingDeletion = () => {
-      if (deletionJobIdsRef.current.size > 0) {
+      if (!titleDeletionRunsSettled(deletionRunsRef.current)) {
         void refreshTrackedDeletionJobs();
       }
     };
@@ -2524,12 +2575,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     client,
     t,
     setGlobalStatus,
-    recordCriticalCatalogMutation,
     registerInteractiveJobRun,
-    scheduleDeletionJobFallbackChecks,
-    setPendingDeletedTitleIds,
+    trackQueuedTitleDeletion,
     setSelectedTitleIds,
-    deletionJobIdsRef,
     batchFailureDetail,
     withFailureDetail,
     aggregateDeletePreviews,
@@ -3214,7 +3262,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
     return catalogDiscoveryGroups.flatMap((group) => {
       const items = group.items.filter(
-        (item) => discoveryItemFacet(item) === activeFacet,
+        (item) => itemFacet(item) === activeFacet,
       );
       if (items.length === 0) {
         return [];
@@ -3235,6 +3283,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     canManageCatalogDiscovery,
     canRequestCatalogDiscovery,
     catalogDiscoveryGroups,
+    itemFacet,
   ]);
 
   const loadSelectedOverviewExternalSubtitles = React.useCallback(
@@ -3565,12 +3614,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                 ...(queueFacet === "MOVIE"
                   ? {}
                   : { useSeasonFolders: seasonFoldersForQueue }),
-                ...(queueFacet === "ANIME"
-                  ? {
-                      monitorSpecials: false,
-                      interSeasonMovies: true,
-                    }
-                  : {}),
               },
               externalIds,
               smgId: candidate.smgId ?? undefined,
@@ -4429,22 +4472,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         .toPromise();
       if (result.error) throw result.error;
       const acceptedIds = result.data?.deleteTitles?.acceptedTitleIds ?? [];
-      if (acceptedIds.length > 0) {
-        recordCriticalCatalogMutation();
-      }
       const run = normalizeJobRun(result.data?.deleteTitles?.jobRun);
+      trackQueuedTitleDeletion(acceptedIds, run);
       if (run) {
-        deletionJobIdsRef.current.add(run.id);
         registerInteractiveJobRun(run);
-        scheduleDeletionJobFallbackChecks();
       }
-      setPendingDeletedTitleIds((current) => {
-        const next = new Set(current);
-        for (const id of acceptedIds) {
-          next.add(id);
-        }
-        return next;
-      });
       if (
         routeOverviewTitleId !== null &&
         acceptedIds.includes(routeOverviewTitleId)
@@ -4497,13 +4529,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     deleteFilesOnDisk,
     client,
     handleCloseOverview,
-    recordCriticalCatalogMutation,
     registerInteractiveJobRun,
-    scheduleDeletionJobFallbackChecks,
     titleDeletePreview,
     titleDeleteTypedConfirmation,
     t,
     titleToDelete,
+    trackQueuedTitleDeletion,
     routeOverviewTitleId,
     setGlobalStatus,
     setDeleteTitleLoadingById,
@@ -5507,6 +5538,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           titleFilter,
           setTitleFilter,
           refreshTitles,
+          refetchCatalogTitles: refetchCatalogTitlesById,
           titleLoading,
           catalogTotalTitleCount: catalogPaginationState.totalCount,
           catalogBulkLoadedCount,
@@ -5618,6 +5650,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           clearSelectedOverviewTitle,
           scanLibrary: handleLibraryScan,
           deleteCatalogTitle: requestDeleteTitle,
+          trackQueuedTitleDeletion,
           isDeletingCatalogTitleById: deleteTitleLoadingById,
           isMobile,
           viewMode: effectiveViewMode,
@@ -5650,6 +5683,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           )}
           manageableLibraries={librariesByFacet[addDiscoveryFacet] ?? []}
           rootFolderOptions={rootFoldersByFacet[addDiscoveryFacet] ?? []}
+          animeMonitorSpecials={animeCatalogDefaults.monitorSpecials}
           onAdd={(result, facet, options) =>
             // The catalog reload rides the catalog-titles event, same as an add
             // made from global search.

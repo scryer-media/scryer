@@ -303,6 +303,16 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "false",
             is_sensitive: false,
         },
+        // Facets turned off for the whole instance. Seeded empty so every
+        // facet stays on.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::DISABLED_FACETS_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
@@ -1065,6 +1075,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: "catalog.default_monitor_type",
             data_type: "string",
             default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::DEFAULT_TITLE_TAGS_KEY,
+            data_type: "json",
+            default_value_json: "[]",
             is_sensitive: false,
         },
         // Movie availability gate, set on the Movie facet and per library

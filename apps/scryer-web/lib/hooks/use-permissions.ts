@@ -2,6 +2,8 @@ import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  canManageCatalogSettingsPages,
+  canManageLibrarySettingsPage,
   hasAnyLibraryPermission,
   hasAnyPrivilegedLibraryAccess,
   hasAppPermission,
@@ -58,13 +60,10 @@ export function usePermissions(authenticatedUser: AuthUser) {
     personalListsRefused,
   );
   const canManageUsers = canManageUserAccounts || canManagePermissions;
-  const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
+  // A facet's settings pages follow what their saves need on the server.
+  const canManageConfig = canManageCatalogSettingsPages(authenticatedUser);
   const canManageLibrarySettings =
-    canManageConfig ||
-    hasAnyLibraryPermission(
-      authenticatedUser,
-      LIBRARY_PERMISSIONS.manageLibrary,
-    );
+    canManageLibrarySettingsPage(authenticatedUser);
   return {
     canViewCatalog,
     canManageTitle,

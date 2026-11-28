@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { catalogDeletionRefresh } from "./catalog-deletion-refresh.ts";
+import {
+  catalogDeletionRefresh,
+  deletedTitleIdsOfSettledRuns,
+  titleDeletionFailedTitleIds,
+  titleDeletionRunPending,
+  titleDeletionRunsSettled,
+  type TitleDeletionRuns,
+  withPendingDeletedTitleIds,
+  withQueuedTitleDeletionRun,
+  withSettledTitleDeletionRun,
+} from "./catalog-deletion-refresh.ts";
 import {
   createReactiveRefreshEngine,
   type DomainEvent,
@@ -63,4 +73,94 @@ test("a degraded refresh reports unknown deletions instead of a title list", () 
   engine.flush();
   assert.equal(unknown, 1);
   assert.deepEqual(removed, []);
+});
+
+test("a queued deletion hides its titles until the deletion settles", () => {
+  const current = new Set(["title-earlier"]);
+
+  const next = withPendingDeletedTitleIds(current, ["title-queued"]);
+  assert.deepEqual([...next].sort(), ["title-earlier", "title-queued"]);
+  assert.deepEqual([...current], ["title-earlier"]);
+
+  // Nothing new to hide keeps the same set, so the list does not re-render.
+  assert.equal(withPendingDeletedTitleIds(next, ["title-queued"]), next);
+  assert.equal(withPendingDeletedTitleIds(next, []), next);
+});
+
+test("a finished deletion run names the titles it left in place", () => {
+  assert.deepEqual(
+    titleDeletionFailedTitleIds({ status: "COMPLETED", summaryJson: null }),
+    [],
+  );
+  const summary = {
+    succeededTitleIds: ["title-1"],
+    failures: [{ titleId: "title-2", error: "refused" }],
+  };
+  assert.deepEqual(
+    titleDeletionFailedTitleIds({ status: "WARNING", summaryJson: summary }),
+    ["title-2"],
+  );
+  assert.deepEqual(
+    titleDeletionFailedTitleIds({
+      status: "FAILED",
+      summaryJson: JSON.stringify(summary),
+    }),
+    ["title-2"],
+  );
+});
+
+test("a failed deletion run that lists no titles leaves the outcome unknown", () => {
+  for (const summaryJson of [
+    null,
+    "not json",
+    {},
+    { failures: [] },
+    { failures: [{ error: "refused" }] },
+  ]) {
+    assert.equal(
+      titleDeletionFailedTitleIds({ status: "FAILED", summaryJson }),
+      null,
+    );
+  }
+});
+
+test("one run's unreported outcome leaves another run's deletions in place", () => {
+  let runs: TitleDeletionRuns = new Map();
+  runs = withQueuedTitleDeletionRun(runs, "run-confirmed", ["title-alder"]);
+  runs = withQueuedTitleDeletionRun(runs, "run-unreported", ["title-birch"]);
+  const pending = new Set(["title-alder", "title-birch"]);
+
+  runs = withSettledTitleDeletionRun(runs, "run-confirmed", []);
+  assert.equal(titleDeletionRunPending(runs, "run-confirmed"), false);
+  assert.equal(titleDeletionRunPending(runs, "run-unreported"), true);
+  assert.equal(titleDeletionRunsSettled(runs), false);
+
+  runs = withSettledTitleDeletionRun(runs, "run-unreported", null);
+  assert.equal(titleDeletionRunsSettled(runs), true);
+  assert.deepEqual(
+    [...deletedTitleIdsOfSettledRuns(runs, pending)],
+    ["title-alder"],
+  );
+});
+
+test("a run's failures keep only that run's titles", () => {
+  let runs: TitleDeletionRuns = new Map();
+  runs = withQueuedTitleDeletionRun(runs, "run-partial", [
+    "title-cedar",
+    "title-dogwood",
+  ]);
+  runs = withQueuedTitleDeletionRun(runs, "run-complete", ["title-elm"]);
+  runs = withSettledTitleDeletionRun(runs, "run-complete", []);
+  runs = withSettledTitleDeletionRun(runs, "run-partial", ["title-dogwood"]);
+
+  assert.deepEqual(
+    [
+      ...deletedTitleIdsOfSettledRuns(
+        runs,
+        new Set(["title-cedar", "title-dogwood", "title-elm", "title-fir"]),
+      ),
+    ].sort(),
+    ["title-cedar", "title-elm", "title-fir"],
+  );
+  assert.equal(withSettledTitleDeletionRun(runs, "run-unknown", null), runs);
 });

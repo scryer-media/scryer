@@ -13,9 +13,44 @@ struct SeededSeries {
     episode_ids: Vec<String>,
     shows: Arc<MockShowRepo>,
     media_files: Arc<MockMediaFileRepo>,
+    user: User,
 }
 
 impl SeededSeries {
+    /// Give `episode_ids` one primary file of `quality`, linked to every one
+    /// of them, and return its id.
+    async fn seed_primary_file(&self, quality: &str, episode_ids: &[&str]) -> String {
+        let name = format!("Read.Budget.Series.{quality}.WEB-DL.H.264-GRP");
+        let file_id = self
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: self.title.id.clone(),
+                file_path: format!("/fixture/{name}-{}.mkv", Id::new().0),
+                size_bytes: 1_500_000_000,
+                role: MediaFileRole::Primary,
+                quality_label: Some(quality.to_string()),
+                scene_name: Some(name),
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        {
+            let mut store = self.media_files.store.lock().await;
+            let row = store
+                .iter_mut()
+                .find(|entry| entry.id == file_id)
+                .expect("inserted row");
+            row.episode_id = Some(episode_ids[0].to_string());
+            row.role = MediaFileRole::Primary;
+        }
+        for episode_id in &episode_ids[1..] {
+            self.media_files
+                .link_additional_episode(&file_id, episode_id)
+                .await;
+        }
+        file_id
+    }
+
     fn scopes(&self) -> Vec<crate::SubmissionScope> {
         let mut scopes = self
             .episode_ids
@@ -150,7 +185,282 @@ async fn seed_series() -> SeededSeries {
         episode_ids,
         shows,
         media_files,
+        user,
     }
+}
+
+/// What a scoped read answers, in a form two answers can be compared by.
+fn scoped_answer(files: &[EpisodeScopedMediaFile]) -> Vec<String> {
+    files
+        .iter()
+        .map(|file| {
+            format!(
+                "{} {:?} {:?} {:?}",
+                file.media_file.id,
+                file.media_file.role,
+                file.episode_ids,
+                file.primary_episode_ids
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn primed_episode_sets_answer_like_fresh_reads_from_one_store_read() {
+    let series = seed_series().await;
+    let [e1, e2, e3, e4] = std::array::from_fn(|index| series.episode_ids[index].as_str());
+    series.seed_primary_file("1080p", &[e1]).await;
+    series.seed_primary_file("720p", &[e2, e3]).await;
+    let sets = vec![
+        vec![e1.to_string()],
+        vec![e2.to_string(), e3.to_string()],
+        vec![e3.to_string()],
+        vec![e4.to_string()],
+        vec![e1.to_string(), e2.to_string()],
+    ];
+
+    let mut fresh = Vec::new();
+    for set in &sets {
+        let reads = TitleCatalogReads::new(&series.title.id);
+        fresh.push(scoped_answer(
+            &reads
+                .live_media_files_for_episode_ids(&series.app, set)
+                .await
+                .expect("fresh read"),
+        ));
+    }
+
+    let reads = TitleCatalogReads::new(&series.title.id);
+    let before = series.media_files.scoped_file_reads.load(Ordering::SeqCst);
+    reads
+        .prime_live_media_files_for_episode_sets(&series.app, &sets)
+        .await
+        .expect("prime");
+    assert_eq!(
+        series.media_files.scoped_file_reads.load(Ordering::SeqCst) - before,
+        1,
+        "every set is answered from one read of their union"
+    );
+    for (set, expected) in sets.iter().zip(&fresh) {
+        let primed = reads
+            .live_media_files_for_episode_ids(&series.app, set)
+            .await
+            .expect("primed read");
+        assert_eq!(&scoped_answer(&primed), expected, "set {set:?}");
+    }
+    assert_eq!(
+        series.media_files.scoped_file_reads.load(Ordering::SeqCst) - before,
+        1,
+        "primed sets cost no further reads"
+    );
+}
+
+/// A manual-import selection of `files` (name, size) for the seeded series,
+/// with the built-in 4K profile as the global profile when `with_profile`.
+async fn seed_verdict_selection(
+    series: &SeededSeries,
+    files: &[(&str, Option<i64>)],
+    with_profile: bool,
+) -> (AppUseCase, String) {
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let mut app = series
+        .app
+        .with_test_overrides(|services| services.with_imports(import_repo.clone()));
+    if with_profile {
+        let profile = crate::builtin_4k_profile();
+        let profiles = Arc::new(StoredQualityProfileRepo::default());
+        profiles.set_profiles(vec![profile.clone()]).await;
+        app.services.config.quality_profiles = profiles;
+        app.services
+            .config
+            .settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                QUALITY_PROFILE_ID_KEY,
+                None,
+                serde_json::to_string(&profile.id).expect("profile id json"),
+                "test",
+                None,
+            )
+            .await
+            .expect("select the global profile");
+    }
+    let selection = crate::ManualImportSelection {
+        id: Id::new().0,
+        actor_user_id: series.user.id.clone(),
+        title_id: series.title.id.clone(),
+        source_identity: ClientJobLocator {
+            client_id: Some("qbittorrent-primary".to_string()),
+            client_type: "qbittorrent".to_string(),
+            item_id: "verdict-selection".to_string(),
+        },
+        canonical_download_id: None,
+        release_evidence_json: Some(
+            serde_json::to_string(
+                &crate::import_workflow::ReleaseEvidence::DownloaderObservation {
+                    release_name: None,
+                },
+            )
+            .expect("evidence json"),
+        ),
+        trusted_source_root: "/fixture/download".to_string(),
+        archive_workspace_root: None,
+        candidates: files
+            .iter()
+            .enumerate()
+            .map(
+                |(index, (name, size_bytes))| crate::ManualImportSelectionCandidate {
+                    id: format!("candidate-{index}"),
+                    canonical_path: format!("/fixture/download/{name}.mkv"),
+                    size_bytes: *size_bytes,
+                },
+            )
+            .collect(),
+    };
+    let selection_id = selection.id.clone();
+    *import_repo.manual_import_selection.lock().await = Some(selection);
+    (app, selection_id)
+}
+
+fn verdict_request(candidate: usize, episode_ids: &[&str]) -> crate::ManualImportVerdictRequest {
+    crate::ManualImportVerdictRequest {
+        candidate_id: format!("candidate-{candidate}"),
+        episode_ids: episode_ids.iter().map(|id| id.to_string()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn manual_import_verdicts_compare_each_mapping_with_what_its_episodes_hold() {
+    let series = seed_series().await;
+    let [e1, e2, e3, _] = std::array::from_fn(|index| series.episode_ids[index].as_str());
+    series.seed_primary_file("2160p", &[e1]).await;
+    series.seed_primary_file("480p", &[e2]).await;
+    let size = Some(1_500_000_000);
+    let (app, selection_id) = seed_verdict_selection(
+        &series,
+        &[
+            ("Read.Budget.Series.S01E01.1080p.WEB-DL.H.264-GRP", size),
+            ("Read.Budget.Series.S01E02.1080p.WEB-DL.H.264-GRP", size),
+            ("Read.Budget.Series.S01E03.1080p.WEB-DL.H.264-GRP", size),
+            ("Read.Budget.Series.S01E01.1080p.WEB-DL.H.264-OLD", None),
+            ("Read.Budget.Series.S01E01E02.1080p.WEB-DL.H.264-GRP", size),
+        ],
+        true,
+    )
+    .await;
+
+    let before = series.media_files.scoped_file_reads.load(Ordering::SeqCst);
+    let rows = crate::manual_import_verdicts(
+        &app,
+        &series.user,
+        &selection_id,
+        vec![
+            verdict_request(0, &[e1]),
+            verdict_request(1, &[e2]),
+            verdict_request(2, &[e3]),
+            verdict_request(3, &[e1]),
+            verdict_request(4, &[e1, e2]),
+            verdict_request(1, &["not-an-episode-of-this-title"]),
+            verdict_request(9, &[e2]),
+        ],
+    )
+    .await
+    .expect("verdicts");
+    assert_eq!(
+        series.media_files.scoped_file_reads.load(Ordering::SeqCst) - before,
+        1,
+        "the whole request reads incumbents once"
+    );
+
+    use crate::ManualImportVerdict::*;
+    let verdicts = rows.iter().map(|row| row.verdict).collect::<Vec<_>>();
+    assert_eq!(
+        verdicts,
+        vec![
+            Some(Downgrade),
+            Some(Upgrade),
+            Some(NoCurrentFile),
+            // A selection row without a stored size is not estimated.
+            None,
+            // A span is judged against everything it would displace, so the
+            // better file on one episode decides it.
+            Some(Downgrade),
+            None,
+            None,
+        ]
+    );
+    assert_eq!(
+        rows[0]
+            .current_file
+            .as_ref()
+            .and_then(|file| file.quality.as_deref()),
+        Some("2160p")
+    );
+    assert!(rows[2].current_file.is_none());
+    assert_eq!(rows[4].episode_ids, vec![e1.to_string(), e2.to_string()]);
+    assert!(
+        rows[5].episode_ids.is_empty(),
+        "episodes of another title are dropped, not read"
+    );
+}
+
+#[tokio::test]
+async fn manual_import_verdicts_refuse_an_oversized_request_and_another_members_selection() {
+    let series = seed_series().await;
+    let e1 = series.episode_ids[0].as_str();
+    let (app, selection_id) = seed_verdict_selection(
+        &series,
+        &[("Read.Budget.Series.S01E01.1080p.WEB-DL.H.264-GRP", Some(1))],
+        false,
+    )
+    .await;
+
+    // Without a profile to score against there is no estimate, and the
+    // preview is not refused for it.
+    let rows = crate::manual_import_verdicts(
+        &app,
+        &series.user,
+        &selection_id,
+        vec![verdict_request(0, &[e1])],
+    )
+    .await
+    .expect("no profile leaves the rows unestimated");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].verdict, None);
+
+    let too_many_rows = (0..=crate::MANUAL_IMPORT_VERDICT_MAX_ROWS)
+        .map(|_| verdict_request(0, &[e1]))
+        .collect();
+    let too_many_episodes = vec![crate::ManualImportVerdictRequest {
+        candidate_id: "candidate-0".to_string(),
+        episode_ids: (0..=crate::MANUAL_IMPORT_VERDICT_MAX_EPISODES_PER_ROW)
+            .map(|index| format!("episode-{index}"))
+            .collect(),
+    }];
+    for requests in [too_many_rows, too_many_episodes] {
+        let error = crate::manual_import_verdicts(&app, &series.user, &selection_id, requests)
+            .await
+            .expect_err("oversized request");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::import::MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE)
+        );
+    }
+
+    let mut stranger = series.user.clone();
+    stranger.id = Id::new().0;
+    let error = crate::manual_import_verdicts(
+        &app,
+        &stranger,
+        &selection_id,
+        vec![verdict_request(0, &[e1])],
+    )
+    .await
+    .expect_err("another member's selection");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::integration::MANUAL_IMPORT_SELECTION_UNAVAILABLE)
+    );
 }
 
 #[tokio::test]
@@ -312,6 +622,57 @@ fn compact_cutoff_facts_preserve_every_scope_decision() {
         assert_eq!(
             analyzed_cutoff_quality_for_scope(&files, &scope, &criteria),
             analyzed_cutoff_quality_for_scope(&compact, &scope, &criteria)
+        );
+    }
+}
+
+#[test]
+fn cutoff_falls_back_to_the_scanned_resolution_when_a_file_has_no_quality() {
+    use crate::acquisition::decision_helpers::{CutoffScope, analyzed_cutoff_quality_for_scope};
+    let file = |episode: &str, quality: Option<&str>, resolution: Option<&str>| TitleMediaFile {
+        episode_id: Some(episode.into()),
+        quality_label: quality.map(Into::into),
+        resolution: resolution.map(Into::into),
+        created_at: "2026-01-01".into(),
+        ..Default::default()
+    };
+    let files = vec![
+        // Scanned, never labelled: judged at its resolution.
+        file("scanned", None, Some("1080p")),
+        file("blank-label", Some("  "), Some(" 720p ")),
+        // Labelled: the label decides, as before.
+        file("labelled", Some("720p"), Some("2160p")),
+        // Neither: no quality reached, as before.
+        file("unknown", None, None),
+        file("blank", Some(""), Some(" ")),
+        // A resolution the profile does not rank leaves no quality, as before.
+        file("unranked", None, Some("1080i")),
+        file("unparsed", None, Some("odd-scan")),
+    ];
+    let compact: Vec<_> = files
+        .iter()
+        .map(crate::MediaFileCutoffSummary::from)
+        .collect();
+    let criteria = crate::QualityProfileCriteria::default();
+    for (episode, expected) in [
+        ("scanned", Some("1080p")),
+        ("blank-label", Some("720p")),
+        ("labelled", Some("720p")),
+        ("unknown", None),
+        ("blank", None),
+        ("unranked", None),
+        ("unparsed", None),
+    ] {
+        let scope = CutoffScope::Episode(episode.into());
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(&files, &scope, &criteria),
+            expected,
+            "{episode}"
+        );
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(&compact, &scope, &criteria),
+            expected,
+            "{episode}: compact rows"
         );
     }
 }

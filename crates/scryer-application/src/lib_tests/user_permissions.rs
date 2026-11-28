@@ -909,3 +909,46 @@ async fn self_library_permission_edit_is_allowed() {
         scryer_domain::LibraryPermission::ManageTitles,
     ));
 }
+
+#[tokio::test]
+async fn a_manage_titles_grant_read_back_shadowed_saves_the_same_mask() {
+    let (app, actor) = bootstrap();
+    let admin = create_full_admin(&app, &actor, "grant-round-trip-admin").await;
+    let created = create_user_with_permissions(
+        &app,
+        &admin,
+        "grant-round-trip-member",
+        "password123",
+        vec![TestPermissionPreset::CatalogView],
+    )
+    .await
+    .expect("create user");
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let stored = scryer_domain::LibraryPermissionMask::from_permissions([
+        scryer_domain::LibraryPermission::ManageTitles,
+    ]);
+    let grant = |permissions| scryer_domain::LibraryGrant {
+        user_id: created.id.clone(),
+        library_id: library_id.clone(),
+        permissions,
+    };
+    app.set_user_library_permissions(&admin, &created.id, vec![grant(stored)])
+        .await
+        .expect("store the grant");
+
+    // The API hands the grant out with its implied bits; the editor saves it
+    // back as read.
+    app.set_user_library_permissions(
+        &admin,
+        &created.id,
+        vec![grant(stored.with_request_shadowing())],
+    )
+    .await
+    .expect("save the grant unchanged");
+
+    let authorization = app
+        .load_user_authorization(&created)
+        .await
+        .expect("load authorization");
+    assert_eq!(authorization.libraries.get(&library_id), Some(&stored));
+}

@@ -17,8 +17,10 @@ Drop ones Scryer already has (`TitlesByExternalIds.graphql`, `source` `tvdb`
 or `tmdb`, 100 values per call). Show count and first ten names. After a yes,
 `AddTitle.graphql` once per title: `facet` `SERIES` (`ANIME` when
 `seriesType` is `anime`) or `MOVIE`, `libraryId`, `monitored`, `tags: []`, and
-`tvdbId` (string) or `tmdbId` (integer). One line per result to a file; report
-counts. `reusedExistingTitle: true` is not an error.
+`tvdbId` (string) or `tmdbId` (integer). For `SERIES` and `ANIME` also send
+`options: {"monitorType": "ALL_EPISODES"}`, so the series monitors every
+episode the way arr did; without it the series takes the library's default
+monitoring. One line per result to a file; report counts. `reusedExistingTitle: true` is not an error.
 
 ## Quality profiles
 

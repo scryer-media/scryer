@@ -633,6 +633,64 @@ fn has_library_permission_honours_manage_subtitles_shadowing() {
 }
 
 #[test]
+fn manage_titles_implies_view_and_a_shadowed_grant_stores_unchanged() {
+    let title_manager = LibraryPermissionMask::from_permissions([LibraryPermission::ManageTitles]);
+    assert!(
+        title_manager
+            .with_request_shadowing()
+            .contains(LibraryPermissionMask::VIEW)
+    );
+    // The API hands out shadowed masks; saving one back stores what was read.
+    assert_eq!(
+        title_manager
+            .with_request_shadowing()
+            .normalized_for_storage(),
+        title_manager
+    );
+    let both = LibraryPermissionMask::from_permissions([
+        LibraryPermission::View,
+        LibraryPermission::ManageTitles,
+    ]);
+    assert_eq!(both.normalized_for_storage(), title_manager);
+    // Without Manage Titles, View is the grant itself and stays.
+    let viewer = LibraryPermissionMask::from_permissions([LibraryPermission::View]);
+    assert_eq!(viewer.normalized_for_storage(), viewer);
+
+    let authorization = UserAuthorization {
+        libraries: std::collections::HashMap::from([
+            ("library-managed".to_string(), title_manager),
+            (
+                "library-resolver".to_string(),
+                LibraryPermissionMask::from_permissions([LibraryPermission::ResolveImports]),
+            ),
+        ]),
+        loaded: true,
+        ..Default::default()
+    };
+    assert!(authorization.has_library_permission("library-managed", LibraryPermission::View));
+    assert!(!authorization.has_library_permission("library-resolver", LibraryPermission::View));
+    assert!(!authorization.has_library_permission("library-unknown", LibraryPermission::View));
+    assert!(authorization.has_any_library_permission(LibraryPermission::View));
+    // The implied View widens nothing else the mask does not hold.
+    assert!(
+        !authorization.has_library_permission("library-managed", LibraryPermission::ManageLibrary)
+    );
+    assert!(
+        !authorization.has_library_permission("library-managed", LibraryPermission::ResolveImports)
+    );
+
+    let resolver_only = UserAuthorization {
+        libraries: std::collections::HashMap::from([(
+            "library-resolver".to_string(),
+            LibraryPermissionMask::from_permissions([LibraryPermission::ResolveImports]),
+        )]),
+        loaded: true,
+        ..Default::default()
+    };
+    assert!(!resolver_only.has_any_library_permission(LibraryPermission::View));
+}
+
+#[test]
 fn full_admin_holds_manage_subtitles() {
     assert!(
         UserAuthorization::full_admin()

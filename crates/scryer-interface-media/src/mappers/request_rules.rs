@@ -86,6 +86,8 @@ pub fn request_action_head_value(head: RequestActionHead) -> RequestActionHeadVa
         }
         RequestActionHead::AddTags => RequestActionHeadValue::AddTags,
         RequestActionHead::Notify => RequestActionHeadValue::Notify,
+        RequestActionHead::MarkBad => RequestActionHeadValue::MarkBad,
+        RequestActionHead::RejectReport => RequestActionHeadValue::RejectReport,
     }
 }
 
@@ -485,6 +487,23 @@ pub fn from_request_rule_preview_result(
         input_document: async_graphql::Json(
             serde_json::from_str(&result.input_json).unwrap_or(serde_json::Value::Null),
         ),
+        report_vote: result.report_vote.map(|vote| match vote {
+            scryer_rules::request::RequestReportVote::Abstain => RequestReportVoteValue::Abstain,
+            scryer_rules::request::RequestReportVote::MarkBad => RequestReportVoteValue::MarkBad,
+            scryer_rules::request::RequestReportVote::Reject => RequestReportVoteValue::Reject,
+            scryer_rules::request::RequestReportVote::Conflict => RequestReportVoteValue::Conflict,
+        }),
+        report_outcome: result.report_outcome.map(|outcome| match outcome {
+            scryer_application::request_rules::ReportVerdict::Review => {
+                RequestReportOutcomeValue::Review
+            }
+            scryer_application::request_rules::ReportVerdict::Reject => {
+                RequestReportOutcomeValue::Reject
+            }
+            scryer_application::request_rules::ReportVerdict::MarkBad => {
+                RequestReportOutcomeValue::MarkBad
+            }
+        }),
     }
 }
 
@@ -722,6 +741,20 @@ pub fn request_rule_sample_into_application(
         lease_days,
         required_audio_languages: sample.required_audio_languages,
         preferred_audio_languages: sample.preferred_audio_languages,
+        report: sample
+            .report
+            .map(|report| -> Result<_, scryer_application::AppError> {
+                Ok(scryer_application::RequestRuleReportSample {
+                    reason: scryer_application::media_issues::parse_media_issue_reason(
+                        &report.reason_code,
+                    )?,
+                    remediation: report.remediation.into(),
+                    grabbed: report.grabbed.unwrap_or(true),
+                    has_details: report.has_details.unwrap_or(true),
+                    reporter_requested_media: report.reporter_requested_media,
+                })
+            })
+            .transpose()?,
     })
 }
 

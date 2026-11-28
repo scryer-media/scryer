@@ -111,6 +111,12 @@ pub(crate) struct HttpJobFile {
     pub skipped_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_reason: Option<String>,
+    /// The owner's opaque key for a file whose URL a link source resolves
+    /// each time the file starts, resumes or is refused. Such a file's
+    /// `resource.url` stays empty: the resolved URL is held in memory for
+    /// the one transfer that uses it and is never recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_key: Option<String>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -230,6 +236,20 @@ impl HttpJob {
         self.files
             .iter()
             .find(|file| file.role == HttpFileRole::Media)
+    }
+
+    /// Whether the finished job is reported as its folder, the way a torrent
+    /// client reports a completed multi-file download, rather than as its one
+    /// media file. Jobs whose files come from a link source, and jobs with
+    /// more than one media file, are folders.
+    pub(crate) fn reports_folder(&self) -> bool {
+        self.files.iter().any(|file| file.link_key.is_some())
+            || self
+                .files
+                .iter()
+                .filter(|file| file.role == HttpFileRole::Media)
+                .nth(1)
+                .is_some()
     }
 
     /// Bytes written so far, counting finished files at their full length.
@@ -625,7 +645,7 @@ impl HttpStateStore {
 }
 
 /// A file-name stem that cannot leave its directory.
-fn safe_file_stem(raw: &str) -> String {
+pub(crate) fn safe_file_stem(raw: &str) -> String {
     let safe: String = raw
         .chars()
         .map(|ch| {

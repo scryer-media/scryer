@@ -97,7 +97,10 @@ pub const PERSON_TARGETED_REQUEST_ROOT: &str = "input.requester";
 ///
 /// Everything under `requester`, `library`, `request`, and `now` is always
 /// known: it is the draft the requester is looking at, and the account they are
-/// signed in as. Everything under `facts` is an [`Observation`] and may be
+/// signed in as. A bad-file report carries `report` in place of `request`,
+/// with the reporter as `requester`; its own facts sit under
+/// `report.facts` and `report.observations`, and every top-level fact is
+/// unknown, so a rule that reads one holds the report for review. Everything under `facts` is an [`Observation`] and may be
 /// unknown — which holds the rule — or absent, which is a real answer. The fact
 /// snapshot serializes into two namespaces exactly as lifecycle's does:
 /// `observations` is the envelope map verbatim, `facts` is derived from it by
@@ -109,8 +112,66 @@ pub struct RequestInput {
     pub now: RequestClockDoc,
     pub requester: RequestRequesterDoc,
     pub library: RequestLibraryDoc,
-    pub request: RequestDoc,
+    /// The draft request; absent for a bad-file report.
+    pub request: Option<RequestDoc>,
+    /// The bad-file report; absent for a media request.
+    pub report: Option<RequestReportDoc>,
     pub facts: RequestFactsDoc,
+}
+
+/// The sections of the request input that carry their own facts beside the
+/// top-level ones: `input.report.facts.<name>` and
+/// `input.report.observations.<name>`.
+pub const REQUEST_NESTED_FACT_SECTIONS: &[&str] = &["report"];
+
+/// A bad-file report, as a report rule reads it under `input.report`.
+#[derive(Debug, Clone)]
+pub struct RequestReportDoc {
+    /// `corrupted`, `wrong_content`, `wrong_language`, `audio_out_of_sync`,
+    /// `poor_quality` or `other`.
+    pub reason: String,
+    /// What the reporter asked for: `mark_bad` or `recycle_and_search`. A rule
+    /// can only mark the file bad; a recycle waits for an operator.
+    pub remediation: String,
+    /// `grabbed` when the file came from a known grab, otherwise `unknown`.
+    pub provenance: String,
+    /// Whether the reporter described the problem.
+    pub has_details: bool,
+    pub title_id: String,
+    pub media_file_id: String,
+    pub affected_episode_ids: Vec<String>,
+    pub affected_series_movie_link_ids: Vec<String>,
+    pub facts: RequestReportFactsDoc,
+}
+
+/// The facts of a bad-file report.
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestReportFactsDoc {
+    /// Whether an approved request of the reporter's created the title and
+    /// covered the reported media.
+    pub reporter_requested_media: Observation<bool>,
+}
+
+impl Serialize for RequestReportDoc {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let namespaces =
+            serialize_fact_namespaces(&self.facts).map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("RequestReportDoc", 10)?;
+        state.serialize_field("reason", &self.reason)?;
+        state.serialize_field("remediation", &self.remediation)?;
+        state.serialize_field("provenance", &self.provenance)?;
+        state.serialize_field("has_details", &self.has_details)?;
+        state.serialize_field("title_id", &self.title_id)?;
+        state.serialize_field("media_file_id", &self.media_file_id)?;
+        state.serialize_field("affected_episode_ids", &self.affected_episode_ids)?;
+        state.serialize_field(
+            "affected_series_movie_link_ids",
+            &self.affected_series_movie_link_ids,
+        )?;
+        state.serialize_field("facts", &namespaces.facts)?;
+        state.serialize_field("observations", &namespaces.observations)?;
+        state.end()
+    }
 }
 
 impl Serialize for RequestInput {
@@ -123,7 +184,14 @@ impl Serialize for RequestInput {
         state.serialize_field("now", &self.now)?;
         state.serialize_field("requester", &self.requester)?;
         state.serialize_field("library", &self.library)?;
-        state.serialize_field("request", &self.request)?;
+        match &self.request {
+            Some(request) => state.serialize_field("request", request)?,
+            None => state.skip_field("request")?,
+        }
+        match &self.report {
+            Some(report) => state.serialize_field("report", report)?,
+            None => state.skip_field("report")?,
+        }
         state.serialize_field("facts", &namespaces.facts)?;
         state.serialize_field("observations", &namespaces.observations)?;
         state.end()
@@ -422,6 +490,74 @@ pub struct RequestFactsDoc {
     pub storage_available_percent: Observation<f64>,
 }
 
+impl RequestFactsDoc {
+    /// Every fact unknown for `reason`. A bad-file report carries this, so a
+    /// rule that reads a title or requester fact holds the report for review.
+    pub fn all_unknown(reason: &str) -> Self {
+        Self {
+            age_rating: Observation::unknown(reason),
+            certifications: Observation::unknown(reason),
+            certification_label: Observation::unknown(reason),
+            certification_rank: Observation::unknown(reason),
+            commonsense_recommended: Observation::unknown(reason),
+            genres: Observation::unknown(reason),
+            canonical_tag_keys: Observation::unknown(reason),
+            themes: Observation::unknown(reason),
+            is_adult: Observation::unknown(reason),
+            rating: Observation::unknown(reason),
+            ratings_by_source: Observation::unknown(reason),
+            tmdb_vote_average: Observation::unknown(reason),
+            tmdb_vote_count: Observation::unknown(reason),
+            popularity: Observation::unknown(reason),
+            runtime_minutes: Observation::unknown(reason),
+            original_language: Observation::unknown(reason),
+            country: Observation::unknown(reason),
+            network: Observation::unknown(reason),
+            studio: Observation::unknown(reason),
+            content_status: Observation::unknown(reason),
+            release_date: Observation::unknown(reason),
+            first_aired: Observation::unknown(reason),
+            release_age_days: Observation::unknown(reason),
+            award_count: Observation::unknown(reason),
+            awards: Observation::unknown(reason),
+            quality_profile_tiers: Observation::unknown(reason),
+            quality_profile_max_resolution: Observation::unknown(reason),
+            quality_profile_allows_upgrades: Observation::unknown(reason),
+            exists_in_library_ids: Observation::unknown(reason),
+            previous_request_count: Observation::unknown(reason),
+            previously_denied: Observation::unknown(reason),
+            previously_approved: Observation::unknown(reason),
+            pending_request_count: Observation::unknown(reason),
+            approved_last_30d: Observation::unknown(reason),
+            denied_last_30d: Observation::unknown(reason),
+            total_approved: Observation::unknown(reason),
+            active_lease_count: Observation::unknown(reason),
+            days_since_last_request: Observation::unknown(reason),
+            library_title_count: Observation::unknown(reason),
+            season_count: Observation::unknown(reason),
+            episode_count: Observation::unknown(reason),
+            aired_episode_count: Observation::unknown(reason),
+            unaired_episode_count: Observation::unknown(reason),
+            next_episode_air_date: Observation::unknown(reason),
+            theatrical_release_date: Observation::unknown(reason),
+            digital_release_date: Observation::unknown(reason),
+            physical_release_date: Observation::unknown(reason),
+            home_release_available: Observation::unknown(reason),
+            days_until_release: Observation::unknown(reason),
+            other_requester_count: Observation::unknown(reason),
+            pending_by_other_requester: Observation::unknown(reason),
+            on_requester_watchlist: Observation::unknown(reason),
+            requester_watchlist_days: Observation::unknown(reason),
+            list_excluded: Observation::unknown(reason),
+            requester_titles_in_library_count: Observation::unknown(reason),
+            storage_root_id: Observation::unknown(reason),
+            storage_available_bytes: Observation::unknown(reason),
+            storage_total_bytes: Observation::unknown(reason),
+            storage_available_percent: Observation::unknown(reason),
+        }
+    }
+}
+
 // ── Contract helpers ────────────────────────────────────────────────────────
 
 /// Place a certification label on the host's 0–4 ladder.
@@ -492,6 +628,20 @@ pub fn max_resolution_for_quality_tiers(tiers: &[String]) -> Option<i64> {
 
 // ── Output contract ─────────────────────────────────────────────────────────
 
+/// What one rule said about a bad-file report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestReportVote {
+    /// The rule did not decide the report.
+    Abstain,
+    /// `mark_bad` fired.
+    MarkBad,
+    /// `reject_report` fired.
+    Reject,
+    /// Both fired; the report goes to review.
+    Conflict,
+}
+
 /// What one rule said about the request.
 ///
 /// `Abstain` is not a vote: a rule that abstains ran and had no opinion, which
@@ -518,6 +668,8 @@ pub struct RequestRuleDecision {
     pub shaping: RequestShaping,
     /// The text `notify` produced, if it fired; never on a held rule.
     pub notify: Option<String>,
+    /// What the rule said about a bad-file report; `Abstain` on a held rule.
+    pub report_vote: RequestReportVote,
     /// True when the host held this rule because a fact it reads was
     /// unobservable, rather than the rule declaring `manual` itself. Both
     /// arbitrate the same way; only the trace tells them apart.
@@ -622,6 +774,7 @@ impl PolicyFamily for RequestFamily {
     /// reading one it could not observe must reach a human, not read the missing
     /// key as a decisive answer.
     const TRACKS_REFERENCED_FACTS: bool = true;
+    const NESTED_FACT_SECTIONS: &'static [&'static str] = REQUEST_NESTED_FACT_SECTIONS;
 
     type Policy = RequestPolicy;
     type Input = RequestInput;
@@ -684,6 +837,7 @@ impl PolicyFamily for RequestFamily {
             tags: Vec::new(),
             shaping: RequestShaping::default(),
             notify: None,
+            report_vote: RequestReportVote::Abstain,
             held: true,
         }
     }
@@ -778,8 +932,20 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
     let manual = *value["manual"]
         .as_bool()
         .map_err(|_| "'manual' must be a boolean".to_string())?;
+    let mark_bad = *value["mark_bad"]
+        .as_bool()
+        .map_err(|_| "'mark_bad' must be a boolean".to_string())?;
+    let reject_report = *value["reject_report"]
+        .as_bool()
+        .map_err(|_| "'reject_report' must be a boolean".to_string())?;
     let reason_codes = decode_reasons(&value["reasons"])?;
     let actions = decode_request_actions(value)?;
+    let report_vote = match (mark_bad, reject_report) {
+        (true, true) => RequestReportVote::Conflict,
+        (true, false) => RequestReportVote::MarkBad,
+        (false, true) => RequestReportVote::Reject,
+        (false, false) => RequestReportVote::Abstain,
+    };
 
     // Most restrictive wins inside one rule, and `manual` is the least
     // committed answer rather than the least permissive one: a rule saying both
@@ -804,6 +970,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
         tags: actions.add_tags,
         shaping: actions.shaping,
         notify: actions.notify,
+        report_vote,
         held: false,
     })
 }
@@ -892,7 +1059,20 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             facet: "movie".to_string(),
             is_default: true,
         },
-        request: RequestDoc {
+        report: Some(RequestReportDoc {
+            reason: "corrupted".to_string(),
+            remediation: "mark_bad".to_string(),
+            provenance: "grabbed".to_string(),
+            has_details: true,
+            title_id: "title-1".to_string(),
+            media_file_id: "media-file-1".to_string(),
+            affected_episode_ids: Vec::new(),
+            affected_series_movie_link_ids: Vec::new(),
+            facts: RequestReportFactsDoc {
+                reporter_requested_media: Observation::known(true),
+            },
+        }),
+        request: Some(RequestDoc {
             origin: "public_list".to_string(),
             title: "Test Movie".to_string(),
             year: Some(2024),
@@ -921,7 +1101,7 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
                 is_watchlist: false,
                 source_type: "list".to_string(),
             }),
-        },
+        }),
         facts: RequestFactsDoc {
             age_rating: Observation::known(13),
             certifications: Observation::known(vec![RequestCertificationDoc {
@@ -1830,8 +2010,8 @@ mod tests {
         );
 
         let mut forever = bob.clone();
-        forever.request.lease_forever = true;
-        forever.request.lease_days = None;
+        forever.request.as_mut().unwrap().lease_forever = true;
+        forever.request.as_mut().unwrap().lease_days = None;
         assert_eq!(
             only_decision(&evaluate_against(
                 &[policy("example_2", EXAMPLE_SHORT_LEASE)],
@@ -1883,8 +2063,8 @@ mod tests {
         let held = evaluate(&[policy("example_6", EXAMPLE_HOLD_APPROVAL_POLICY_LISTS)]);
         assert_eq!(only_decision(&held).vote, RequestVote::Manual);
         let mut manual = synthetic_request_input();
-        manual.request.origin = "manual".to_string();
-        manual.request.list = None;
+        manual.request.as_mut().unwrap().origin = "manual".to_string();
+        manual.request.as_mut().unwrap().list = None;
         assert_eq!(
             only_decision(&evaluate_against(
                 &[policy("example_6", EXAMPLE_HOLD_APPROVAL_POLICY_LISTS)],
@@ -1905,7 +2085,7 @@ mod tests {
             RequestVote::Abstain
         );
         let mut personal = synthetic_request_input();
-        if let Some(list) = personal.request.list.as_mut() {
+        if let Some(list) = personal.request.as_mut().unwrap().list.as_mut() {
             list.scope = "personal".to_string();
             list.name = None;
         }

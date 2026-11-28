@@ -1070,29 +1070,18 @@ async fn graphql_introspection_exposes_calendar_dates_as_date_scalar() {
         assert_eq!(field["type"]["kind"], "SCALAR", "{type_alias}.{name}");
         assert_eq!(field["type"]["name"], "Date", "{type_alias}.{name}");
     };
-    let assert_non_null_date_field = |type_alias: &str, name: &str| {
-        let field = field(type_alias, name);
-        assert_eq!(field["type"]["kind"], "NON_NULL", "{type_alias}.{name}");
-        assert_eq!(
-            field["type"]["ofType"]["name"], "Date",
-            "{type_alias}.{name}"
-        );
-    };
 
     for (type_alias, name) in [
         ("title", "firstAired"),
         ("episode", "airDate"),
         ("calendarEpisode", "airDate"),
         ("metadataMovie", "tmdbReleaseDate"),
-    ] {
-        assert_optional_date_field(type_alias, name);
-    }
-
-    for (type_alias, name) in [
+        // A series premiere or episode air date SMG leaves blank is served
+        // as null, not as an invalid date.
         ("metadataSeries", "firstAired"),
         ("metadataEpisode", "aired"),
     ] {
-        assert_non_null_date_field(type_alias, name);
+        assert_optional_date_field(type_alias, name);
     }
 }
 
@@ -2665,6 +2654,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
     let source_dir = tempfile::tempdir().expect("source tempdir");
     std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let item = DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: item_id.to_string(),
         title_id: None,
@@ -2709,6 +2699,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
         seeding: None,
     };
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "weaver".to_string(),
         client_id: "graphql-weaver-client".to_string(),
@@ -3847,6 +3838,7 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
     let source_dir = tempfile::tempdir().expect("source tempdir");
     std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let item = DownloadQueueItem {
+        client_job_protocol: None,
         attention_reason_code: None,
         id: item_id.to_string(),
         title_id: None,
@@ -3888,6 +3880,7 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
         seeding: None,
     };
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "weaver".to_string(),
         client_id: client_id.to_string(),

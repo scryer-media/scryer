@@ -22,7 +22,60 @@ const SQLITE_SLOW_STATEMENT_MS: u64 = 2000;
 /// WAL frames into the main database.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 16_384;
 const MAX_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 262_144;
-const SQLITE_CACHE_SIZE_PRAGMA: i64 = -20_000;
+/// SQLite page cache per connection, in KiB.
+///
+/// The cache is per connection, so its memory cost is this value times the
+/// pool size. With a 16-connection pool on a 1.6 GB database (30,000 titles,
+/// 250,000 files, 1,000,000 history rows), 20 MiB per connection peaked near
+/// 200 MiB of page cache, 4 MiB near 76 MiB, and 2 MiB near 39 MiB.
+///
+/// Larger caches gave no measurable speedup on catalog, history, progress,
+/// import or search reads; the hit rate was about 98% at every size. The one
+/// cost of the small sizes is a slower concurrent wanted walk: about 10-18%
+/// slower at 4 MiB, and about 36% slower from cold at 2 MiB.
+///
+/// Do not raise this value, make it configurable, or scale it up with host
+/// memory without new measurements of both memory and latency at pool
+/// concurrency.
+const SQLITE_CACHE_SIZE_KIB: i64 = 4 * 1024;
+/// Page cache per connection on a low-powered host, in KiB.
+const SQLITE_LOW_POWER_CACHE_SIZE_KIB: i64 = 2 * 1024;
+/// A host whose process may use at most this much memory is low-powered.
+const LOW_POWER_MAX_MEMORY_BYTES: u64 = 2 << 30;
+/// A host with at most this many CPUs is low-powered.
+const LOW_POWER_MAX_CPUS: usize = 2;
+
+/// The page cache per connection, in KiB, for a host whose process may use
+/// `memory_bytes` (`None` when it cannot be read) and has `cpus` CPUs. An
+/// unreadable memory size does not make a host low-powered.
+fn sqlite_cache_size_kib_for(memory_bytes: Option<u64>, cpus: usize) -> i64 {
+    let low_memory = memory_bytes.is_some_and(|bytes| bytes <= LOW_POWER_MAX_MEMORY_BYTES);
+    if low_memory || cpus <= LOW_POWER_MAX_CPUS {
+        SQLITE_LOW_POWER_CACHE_SIZE_KIB
+    } else {
+        SQLITE_CACHE_SIZE_KIB
+    }
+}
+
+/// The page cache per connection, in KiB, decided once per process from the
+/// memory and CPUs it may use.
+#[doc(hidden)]
+pub fn sqlite_cache_size_kib() -> i64 {
+    static DECIDED: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *DECIDED.get_or_init(|| {
+        let cpus = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let kib = sqlite_cache_size_kib_for(
+            scryer_application::host_memory::memory_available_to_process_bytes(),
+            cpus,
+        );
+        tracing::debug!(
+            cache_size_kib = kib,
+            cpus,
+            "sqlite page cache per connection"
+        );
+        kib
+    })
+}
 
 fn sqlite_max_connections_from_env() -> u32 {
     std::env::var("SCRYER_SQLITE_MAX_CONNECTIONS")
@@ -201,8 +254,8 @@ impl SqliteServices {
                 // but never corrupts the database.
                 .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
                 .busy_timeout(std::time::Duration::from_millis(10_000))
-                // Negative means KiB: 20 MB of page cache per connection.
-                .pragma("cache_size", SQLITE_CACHE_SIZE_PRAGMA.to_string())
+                // Negative means KiB.
+                .pragma("cache_size", (-sqlite_cache_size_kib()).to_string())
                 .pragma(
                     "wal_autocheckpoint",
                     sqlite_wal_autocheckpoint_pages_from_env().to_string(),
@@ -278,5 +331,49 @@ impl SqliteServices {
             }
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod cache_size_tests {
+    use super::*;
+
+    const GIB: u64 = 1 << 30;
+
+    #[test]
+    fn a_host_with_memory_and_cpus_to_spare_gets_the_standard_cache() {
+        assert_eq!(sqlite_cache_size_kib_for(Some(16 * GIB), 8), 4096);
+        assert_eq!(sqlite_cache_size_kib_for(Some(2 * GIB + 1), 3), 4096);
+    }
+
+    #[test]
+    fn little_memory_or_few_cpus_make_a_host_low_powered() {
+        assert_eq!(sqlite_cache_size_kib_for(Some(2 * GIB), 8), 2048);
+        assert_eq!(sqlite_cache_size_kib_for(Some(512 << 20), 16), 2048);
+        assert_eq!(sqlite_cache_size_kib_for(Some(16 * GIB), 2), 2048);
+        assert_eq!(sqlite_cache_size_kib_for(Some(16 * GIB), 1), 2048);
+    }
+
+    #[test]
+    fn unreadable_memory_leaves_the_decision_to_the_cpu_count() {
+        assert_eq!(sqlite_cache_size_kib_for(None, 8), 4096);
+        assert_eq!(sqlite_cache_size_kib_for(None, 2), 2048);
+    }
+
+    #[test]
+    fn the_cache_stays_between_two_and_four_mib() {
+        for memory in [
+            None,
+            Some(0),
+            Some(GIB),
+            Some(2 * GIB),
+            Some(64 * GIB),
+            Some(u64::MAX),
+        ] {
+            for cpus in [0, 1, 2, 3, 4, 64, usize::MAX] {
+                let kib = sqlite_cache_size_kib_for(memory, cpus);
+                assert!((2048..=4096).contains(&kib), "{memory:?} {cpus}: {kib}");
+            }
+        }
     }
 }

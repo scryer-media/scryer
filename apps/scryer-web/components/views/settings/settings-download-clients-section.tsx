@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useFacets } from "@/lib/facets/use-facets";
 import {
   ChevronDown,
   ChevronRight,
@@ -243,253 +244,269 @@ function DownloadClientRoutingDisclosure({
   ) => Promise<void> | void;
 }) {
   const t = useTranslate();
+  const { filter: visibleFacetItems } = useFacets();
   const { options: seedingProfileOptions } = useSeedingProfileOptions();
   const supportsSeedingProfile = supportsDownloadClientRoutingSeedingProfile(
     downloadClient.clientType,
   );
 
   return (
-    <Table
-      overflow="auto"
-      layout="fixed"
-      density="dense"
-      wrapperClassName="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
-      className="min-w-[1080px] [&_td]:align-middle [&_th]:align-middle"
-    >
-      <TableHeader>
-        <TableRow>
-          <TableHead className="w-28">{t("label.name")}</TableHead>
-          <TableHead className="w-24 text-center">
-            {t("settings.downloadClientRoutingEnabled")}
-          </TableHead>
-          <TableHead>{t("settings.downloadClientCategory")}</TableHead>
-          <TableHead className="w-36">
-            {t("settings.downloadClientRecentPriority")}
-          </TableHead>
-          <TableHead className="w-36">
-            {t("settings.downloadClientOlderPriority")}
-          </TableHead>
-          <TableHead className="w-28 text-center">
-            {t("settings.downloadClientRemoveCompleted")}
-          </TableHead>
-          <TableHead className="w-28 text-center">
-            {t("settings.downloadClientRemoveFailed")}
-          </TableHead>
-          {supportsSeedingProfile ? (
-            <TableHead className="w-44">
-              {t("settings.seedingProfileColumn")}
+    <>
+      <Table
+        overflow="auto"
+        layout="fixed"
+        density="dense"
+        wrapperClassName="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
+        className="min-w-[1080px] [&_td]:align-middle [&_th]:align-middle"
+      >
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-28">{t("label.name")}</TableHead>
+            <TableHead className="w-24 text-center">
+              {t("settings.downloadClientRoutingEnabled")}
             </TableHead>
-          ) : null}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {DOWNLOAD_CLIENT_ROUTING_FACETS.map(({ scope, labelKey }) => {
-          const routing =
-            routingByScope[scope]?.[downloadClient.id] ??
-            DOWNLOAD_CLIENT_ROUTING_EMPTY;
-          const isPending = isLoading || mutatingScopes.has(scope);
-          const facetLabel = t(labelKey);
+            <TableHead>{t("settings.downloadClientCategory")}</TableHead>
+            <TableHead className="w-36">
+              {t("settings.downloadClientRecentPriority")}
+            </TableHead>
+            <TableHead className="w-36">
+              {t("settings.downloadClientOlderPriority")}
+            </TableHead>
+            <TableHead className="w-28 text-center">
+              {t("settings.downloadClientRemoveCompleted")}
+            </TableHead>
+            <TableHead className="w-28 text-center">
+              {t("settings.downloadClientRemoveFailed")}
+            </TableHead>
+            {supportsSeedingProfile ? (
+              <TableHead className="w-44">
+                {t("settings.seedingProfileColumn")}
+              </TableHead>
+            ) : null}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {visibleFacetItems(
+            DOWNLOAD_CLIENT_ROUTING_FACETS,
+            (item) => item.scope,
+          ).map(({ scope, labelKey }) => {
+            const routing =
+              routingByScope[scope]?.[downloadClient.id] ??
+              DOWNLOAD_CLIENT_ROUTING_EMPTY;
+            const isPending = isLoading || mutatingScopes.has(scope);
+            const facetLabel = t(labelKey);
 
-          return (
-            <TableRow
-              key={scope}
-              data-ui="settings-table-row"
-              data-subtable-row="download-client-routing"
-            >
-              <TableCell className="font-medium">{facetLabel}</TableCell>
-              <TableCell className="text-center">
-                <Checkbox
-                  id={selectorId(
-                    "settings-download-client-routing-enabled",
-                    downloadClient.id,
-                    scope,
-                  )}
-                  size="large"
-                  checked={routing.enabled}
-                  disabled={isPending}
-                  aria-label={`${t("settings.downloadClientRoutingEnabled")}: ${facetLabel}`}
-                  onCheckedChange={(checked) =>
-                    void onChange(scope, downloadClient.id, {
-                      enabled: checked === true,
-                    })
-                  }
-                />
-              </TableCell>
-              <TableCell>
-                <Input
-                  id={selectorId(
-                    "settings-download-client-routing-category",
-                    downloadClient.id,
-                    scope,
-                  )}
-                  value={routing.category}
-                  disabled={isPending}
-                  placeholder={t("settings.downloadClientCategoryPlaceholder")}
-                  onChange={(event) =>
-                    void onChange(
-                      scope,
-                      downloadClient.id,
-                      { category: event.target.value },
-                      { save: false },
-                    )
-                  }
-                  onBlur={(event) =>
-                    void onChange(scope, downloadClient.id, {
-                      category: event.target.value,
-                    })
-                  }
-                />
-              </TableCell>
-              <TableCell>
-                <Select
-                  value={normalizeDownloadClientRoutingPriority(
-                    routing.recentQueuePriority,
-                  )}
-                  disabled={isPending}
-                  onValueChange={(value) =>
-                    void onChange(scope, downloadClient.id, {
-                      recentQueuePriority: value,
-                    })
-                  }
-                >
-                  <SelectTrigger
+            return (
+              <TableRow
+                key={scope}
+                data-ui="settings-table-row"
+                data-subtable-row="download-client-routing"
+              >
+                <TableCell className="font-medium">{facetLabel}</TableCell>
+                <TableCell className="text-center">
+                  <Checkbox
                     id={selectorId(
-                      "settings-download-client-routing-recent-priority",
+                      "settings-download-client-routing-enabled",
                       downloadClient.id,
                       scope,
                     )}
-                    className="w-full"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DOWNLOAD_CLIENT_PRIORITY_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {t(option.label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </TableCell>
-              <TableCell>
-                <Select
-                  value={normalizeDownloadClientRoutingPriority(
-                    routing.olderQueuePriority,
-                  )}
-                  disabled={isPending}
-                  onValueChange={(value) =>
-                    void onChange(scope, downloadClient.id, {
-                      olderQueuePriority: value,
-                    })
-                  }
-                >
-                  <SelectTrigger
+                    size="large"
+                    checked={routing.enabled}
+                    disabled={isPending}
+                    aria-label={`${t("settings.downloadClientRoutingEnabled")}: ${facetLabel}`}
+                    onCheckedChange={(checked) =>
+                      void onChange(scope, downloadClient.id, {
+                        enabled: checked === true,
+                      })
+                    }
+                  />
+                </TableCell>
+                <TableCell>
+                  <Input
                     id={selectorId(
-                      "settings-download-client-routing-older-priority",
+                      "settings-download-client-routing-category",
                       downloadClient.id,
                       scope,
                     )}
-                    className="w-full"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DOWNLOAD_CLIENT_PRIORITY_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {t(option.label)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </TableCell>
-              <TableCell className="text-center">
-                <Checkbox
-                  id={selectorId(
-                    "settings-download-client-routing-remove-completed",
-                    downloadClient.id,
-                    scope,
-                  )}
-                  size="large"
-                  checked={routing.removeCompleted}
-                  disabled={isPending}
-                  aria-label={`${t("settings.downloadClientRemoveCompleted")}: ${facetLabel}`}
-                  onCheckedChange={(checked) =>
-                    void onChange(scope, downloadClient.id, {
-                      removeCompleted: checked === true,
-                    })
-                  }
-                />
-              </TableCell>
-              <TableCell className="text-center">
-                <Checkbox
-                  id={selectorId(
-                    "settings-download-client-routing-remove-failed",
-                    downloadClient.id,
-                    scope,
-                  )}
-                  size="large"
-                  checked={routing.removeFailed}
-                  disabled={isPending}
-                  aria-label={`${t("settings.downloadClientRemoveFailed")}: ${facetLabel}`}
-                  onCheckedChange={(checked) =>
-                    void onChange(scope, downloadClient.id, {
-                      removeFailed: checked === true,
-                    })
-                  }
-                />
-              </TableCell>
-              {supportsSeedingProfile ? (
+                    value={routing.category}
+                    disabled={isPending}
+                    placeholder={t(
+                      "settings.downloadClientCategoryPlaceholder",
+                    )}
+                    onChange={(event) =>
+                      void onChange(
+                        scope,
+                        downloadClient.id,
+                        { category: event.target.value },
+                        { save: false },
+                      )
+                    }
+                    onBlur={(event) =>
+                      void onChange(scope, downloadClient.id, {
+                        category: event.target.value,
+                      })
+                    }
+                  />
+                </TableCell>
                 <TableCell>
                   <Select
-                    value={seedingProfileSelectValue(routing.seedingProfileId)}
+                    value={normalizeDownloadClientRoutingPriority(
+                      routing.recentQueuePriority,
+                    )}
                     disabled={isPending}
                     onValueChange={(value) =>
                       void onChange(scope, downloadClient.id, {
-                        seedingProfileId: seedingProfileSelectValueToId(value),
+                        recentQueuePriority: value,
                       })
                     }
                   >
                     <SelectTrigger
                       id={selectorId(
-                        "settings-download-client-routing-seeding-profile",
+                        "settings-download-client-routing-recent-priority",
                         downloadClient.id,
                         scope,
                       )}
                       className="w-full"
-                      aria-label={t("settings.seedingProfileRoutingLabel", {
-                        name: `${downloadClient.name} ${facetLabel}`,
-                      })}
                     >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={SEEDING_PROFILE_INHERIT_VALUE}>
-                        {t("settings.seedingProfileRoutingInherit")}
-                      </SelectItem>
-                      {routing.seedingProfileId &&
-                      !seedingProfileOptions.some(
-                        (option) => option.id === routing.seedingProfileId,
-                      ) ? (
-                        <SelectItem value={routing.seedingProfileId}>
-                          {t("settings.seedingProfileMissing", {
-                            id: routing.seedingProfileId,
-                          })}
-                        </SelectItem>
-                      ) : null}
-                      {seedingProfileOptions.map((option) => (
-                        <SelectItem key={option.id} value={option.id}>
-                          {option.name}
+                      {DOWNLOAD_CLIENT_PRIORITY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {t(option.label)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </TableCell>
-              ) : null}
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+                <TableCell>
+                  <Select
+                    value={normalizeDownloadClientRoutingPriority(
+                      routing.olderQueuePriority,
+                    )}
+                    disabled={isPending}
+                    onValueChange={(value) =>
+                      void onChange(scope, downloadClient.id, {
+                        olderQueuePriority: value,
+                      })
+                    }
+                  >
+                    <SelectTrigger
+                      id={selectorId(
+                        "settings-download-client-routing-older-priority",
+                        downloadClient.id,
+                        scope,
+                      )}
+                      className="w-full"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DOWNLOAD_CLIENT_PRIORITY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {t(option.label)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className="text-center">
+                  <Checkbox
+                    id={selectorId(
+                      "settings-download-client-routing-remove-completed",
+                      downloadClient.id,
+                      scope,
+                    )}
+                    size="large"
+                    checked={routing.removeCompleted}
+                    disabled={isPending}
+                    aria-label={`${t("settings.downloadClientRemoveCompleted")}: ${facetLabel}`}
+                    onCheckedChange={(checked) =>
+                      void onChange(scope, downloadClient.id, {
+                        removeCompleted: checked === true,
+                      })
+                    }
+                  />
+                </TableCell>
+                <TableCell className="text-center">
+                  <Checkbox
+                    id={selectorId(
+                      "settings-download-client-routing-remove-failed",
+                      downloadClient.id,
+                      scope,
+                    )}
+                    size="large"
+                    checked={routing.removeFailed}
+                    disabled={isPending}
+                    aria-label={`${t("settings.downloadClientRemoveFailed")}: ${facetLabel}`}
+                    onCheckedChange={(checked) =>
+                      void onChange(scope, downloadClient.id, {
+                        removeFailed: checked === true,
+                      })
+                    }
+                  />
+                </TableCell>
+                {supportsSeedingProfile ? (
+                  <TableCell>
+                    <Select
+                      value={seedingProfileSelectValue(
+                        routing.seedingProfileId,
+                      )}
+                      disabled={isPending}
+                      onValueChange={(value) =>
+                        void onChange(scope, downloadClient.id, {
+                          seedingProfileId:
+                            seedingProfileSelectValueToId(value),
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        id={selectorId(
+                          "settings-download-client-routing-seeding-profile",
+                          downloadClient.id,
+                          scope,
+                        )}
+                        className="w-full"
+                        aria-label={t("settings.seedingProfileRoutingLabel", {
+                          name: `${downloadClient.name} ${facetLabel}`,
+                        })}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SEEDING_PROFILE_INHERIT_VALUE}>
+                          {t("settings.seedingProfileRoutingInherit")}
+                        </SelectItem>
+                        {routing.seedingProfileId &&
+                        !seedingProfileOptions.some(
+                          (option) => option.id === routing.seedingProfileId,
+                        ) ? (
+                          <SelectItem value={routing.seedingProfileId}>
+                            {t("settings.seedingProfileMissing", {
+                              id: routing.seedingProfileId,
+                            })}
+                          </SelectItem>
+                        ) : null}
+                        {seedingProfileOptions.map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
+                            {option.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                ) : null}
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      {supportsSeedingProfile ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("settings.downloadClientRemoveFailedTorrentHelp")}
+        </p>
+      ) : null}
+    </>
   );
 }
 

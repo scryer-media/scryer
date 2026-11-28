@@ -95,6 +95,68 @@ const nl: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "Bandbreedtelimiet (KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "Gedeeld door alle downloads van deze client. Leeg of 0 betekent onbeperkt.",
+  "settings.downloadClientTorboxApiKey": "API-token",
+  "settings.downloadClientTorboxApiKeyHelp":
+    "Het API-token van het TorBox-account.",
+  "settings.downloadClientTorboxCachedOnly": "Alleen gecachet",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "Downloads weigeren die TorBox nog niet in de cache heeft.",
+  "httpRelease.refusal.filePathInvalid":
+    "Een bestand in deze download heeft een pad dat niet in de downloadmap kan worden opgeslagen.",
+  "httpRelease.refusal.tooManyFiles":
+    "Deze download bevat meer bestanden dan één download mag bevatten.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "Een bestand in deze download heeft geen bruikbare linkverwijzing.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "Een bestand in deze download heeft een link nodig die deze downloader niet kan verkrijgen.",
+  "httpRelease.refusal.linkRefused":
+    "De server bleef de downloadlinks voor een bestand weigeren.",
+  "httpRelease.refusal.linkUnavailable":
+    "Er kwam geen downloadlink beschikbaar voor een bestand.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox heeft het API-token geweigerd.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "Het TorBox-abonnement bevat deze functie niet.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "Het TorBox-account heeft zijn limiet van actieve downloads bereikt.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "Het TorBox-account zit in een wachtperiode en accepteert nog geen nieuwe downloads.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "Het TorBox-account heeft zijn maandelijkse downloadlimiet bereikt.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "De limiet per uur voor nieuwe TorBox-downloads is bereikt.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "Deze download is groter dan het TorBox-abonnement toestaat.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox heeft deze download niet in de cache, en deze client accepteert alleen gecachete downloads.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox kon de torrent niet lezen.",
+  "error.reason.TORBOX_INVALID_NZB": "De NZB kon niet worden gelezen.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "Deze download staat al in het TorBox-account.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox heeft dit item niet.",
+  "error.reason.TORBOX_LINK_OFFLINE": "De TorBox-downloadlink is offline.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox beperkt hoe vaak het verzoeken accepteert.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox is niet beschikbaar.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox heeft een bestand in deze download als geïnfecteerd gemarkeerd.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox biedt een bestand in deze download alleen als zip-archief aan.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "Deze TorBox-download bevat geen videobestand.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox meldt dat deze download is mislukt.",
+  "error.reason.TORBOX_ITEM_MISSING": "TorBox heeft deze download niet meer.",
+  "error.reason.TORBOX_STALLED": "Deze download staat stil bij TorBox.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "De bestandsnamen in deze TorBox-download kunnen op dit systeem niet worden opgeslagen.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "Deze release heeft geen magnetlink, torrentbestand of NZB om naar TorBox te sturen.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox ondersteunt deze actie niet voor deze download.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "Deze TorBox-client heeft zo'n download niet.",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "De TorBox-client heeft geen API-token.",
   "settings.publicUrlTitle": "Openbare URL",
   "settings.publicUrlHelp":
     "Het adres waarmee mensen en diensten Scryer bereiken, zoals https://scryer.example.com. Accountkoppeling en OAuth gebruiken een wijziging meteen; passkeys pas nadat Scryer opnieuw is gestart.",
@@ -364,6 +426,9 @@ const nl: LocaleDictionary = {
   "dashboard.storageFree": "{{size}} vrij",
   "dashboard.storageUnavailable": "Gebruik niet beschikbaar",
   "dashboard.storageUsage": "{{used}}/{{total}} TB",
+  "dashboard.storageLibrarySize": "{{size}} in deze bibliotheek",
+  "dashboard.storageLibraryUsageHint":
+    "Deze bibliotheek beslaat {{library}} TB; {{used}} TB van het volume is in gebruik",
   "dashboard.storageLegend": "OK · 65%+ · 80%+ · 90%+",
   "dashboard.tagLow": "LAAG",
   "dashboard.tagCrit": "KRITIEK",
@@ -1051,6 +1116,12 @@ const nl: LocaleDictionary = {
   "settings.mediaServerAuthCapabilities": "Rechten",
   "settings.mediaServerAutoAddEnabled":
     "Nieuwe geverifieerde gebruikers automatisch toevoegen",
+  "settings.mediaServerRefreshOffer":
+    "De bibliotheek van deze server vernieuwen wanneer Scryer media importeert, hernoemt, verwijdert of verplaatst",
+  "settings.mediaServerRefreshOfferHelp":
+    "Abonneert deze verbinding onder Meldingen op: {{events}}. Je kunt dit daar wijzigen of verwijderen.",
+  "settings.mediaServerRefreshPluginMissing":
+    "Bibliotheekvernieuwing na imports heeft de meldingsplugin van deze server nodig, die niet is geïnstalleerd. Open om hem te installeren",
   "settings.mediaServerPathMappings": "Padmappings",
   "settings.mediaServerPathMappingsHelp":
     "Elke regel wordt opgeslagen als serverpad => Scryer-pad.",
@@ -1095,6 +1166,8 @@ const nl: LocaleDictionary = {
   "settings.downloadClientPriority": "Prioriteit",
   "settings.downloadClientRemoveCompleted": "Voltooide verwijderen",
   "settings.downloadClientRemoveFailed": "Mislukte verwijderen",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "'Mislukte verwijderen' geldt voor downloads die in de client zijn mislukt. Een torrent waarvan Scryer de import weigerde, wordt altijd opgeruimd als een geïmporteerde: hij seedt tot zijn doel en daarna verwijdert de client hem.",
   "settings.downloadClientUseSslInfo":
     "Gebruik SSL/TLS bij verbinden met deze downloadclient.",
   "settings.downloadClientEnabledInfo":
@@ -1200,6 +1273,10 @@ const nl: LocaleDictionary = {
   "settings.folderValidationIllegalCharacter":
     "Maptemplate bevat een ongeldig teken: {{character}}",
   "settings.renameTemplateLabel": "Template voor hernoemen",
+  "settings.renameTemplateNoExtensionTitle": "Opslaan zonder {ext}?",
+  "settings.renameTemplateNoExtensionDescription":
+    "Deze template voor hernoemen bevat geen {ext}-token. Scryer voegt de extensie van elk bestand toe aan het einde van de naam.",
+  "settings.renameTemplateNoExtensionConfirm": "Toch opslaan",
   "settings.renameTemplatePlaceholder": "Voorbeeld",
   "settings.renameTemplateRequired": "Template voor hernoemen is verplicht.",
   "settings.renameCollisionPolicyLabel": "Conflictbeleid",
@@ -1523,6 +1600,13 @@ const nl: LocaleDictionary = {
   "title.contextTitleList": "Titellijst",
   "title.contextListDisclosure": "Lijst",
   "title.showTitleList": "Lijst tonen",
+  "title.sortBy": "Sorteren op",
+  "title.sortAscending": "Oplopend",
+  "title.sortDescending": "Aflopend",
+  "title.sameFilmAsSeriesMovie": "Wordt ook gevolgd als film van de serie {{titles}}.",
+  "title.sameFilmAsMovieTitle": "Wordt ook gevolgd als film: {{titles}}.",
+  "title.sameFilmBeforeAdd": "Wordt al gevolgd als film van de serie {{titles}}.",
+  "title.sameFilmMarker": "Wordt ook gevolgd als film",
   "title.hideTitleList": "Lijst verbergen",
   "title.contextForYouTitle": "Ontdekken",
   "title.contextForYouTop": "Top",
@@ -1565,8 +1649,8 @@ const nl: LocaleDictionary = {
   "title.table.runtime": "Speelduur",
   "title.table.avgRuntime": "Gem. speelduur",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} afleveringen",
-  "title.table.episodeProgressTooltipWithTotal":
-    "{{owned}} / {{total}} afleveringen ({{monitored}} gemonitord)",
+  "title.table.episodeProgressExpectedTooltip":
+    "{{onDisk}} / {{expected}} afleveringen (totaal: {{total}})",
   "title.table.status": "Status",
   "title.table.root": "Root",
   "title.table.popularity": "Populariteit",
@@ -1674,6 +1758,17 @@ const nl: LocaleDictionary = {
     "{{count}} indexer(s) mislukt: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) overgeslagen: {{names}}",
+  "title.contextReleaseSearchIndexerPartlySearched":
+    "{{count}} indexer(s) deels doorzocht, boven hun querylimiet: {{names}}",
+  "title.contextReleaseSearchIndexerRetryAfter":
+    "{{name}}: kan over {{seconds}} s opnieuw worden gevraagd",
+  "indexerSearch.skipReason.queryBudget": "Boven de querylimiet",
+  "indexerSearch.skipReason.queryBudgetUntil":
+    "Boven de querylimiet tot {{time}}",
+  "indexerSearch.skipReason.queryBudgetRetryAfter":
+    "Boven de querylimiet, opnieuw over {{seconds}} s",
+  "indexerSearch.queryBudget.partlySearched":
+    "Deels doorzocht: de querylimiet hield de overige verzoeken tegen. Resultaten van de verzonden verzoeken blijven behouden.",
   "title.noReleasesFound": "Geen releases gevonden voor {{name}}.",
   "title.searchNeedsDownloadClientTitle": "Zoeken vereist een downloadclient",
   "title.searchNeedsDownloadClientDescription":
@@ -1877,6 +1972,20 @@ const nl: LocaleDictionary = {
   "queue.manualImportMultipleEpisodesLabel":
     "Meerdere afleveringen aan dit bestand toewijzen",
   "queue.manualImportApplySuggestions": "Suggesties op alles toepassen",
+  "queue.manualImportApplySuggestionsSelected": "Suggesties op selectie toepassen",
+  "queue.manualImportSelectAll": "Alles selecteren",
+  "queue.manualImportSelectNone": "Niets selecteren",
+  "queue.manualImportSelectInvert": "Selectie omkeren",
+  "queue.manualImportSelectMatching": "Overeenkomende selecteren",
+  "queue.manualImportSelectMatchingLabel": "Bestandsnaam bevat…",
+  "queue.manualImportSelectedCount": "{{count}} geselecteerd",
+  "queue.manualImportSkipSelected": "Selectie overslaan",
+  "queue.manualImportAssignSelected": "Doel toewijzen aan selectie…",
+  "queue.manualImportVerdict.UPGRADE": "Upgrade",
+  "queue.manualImportVerdict.EQUAL": "Zelfde kwaliteit",
+  "queue.manualImportVerdict.DOWNGRADE": "Downgrade",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "Nieuw bestand",
+  "queue.manualImportVerdictEstimated": "geschat",
   "queue.removeFailed": "Mislukte verwijderen",
   "queue.manualImportTooltip":
     "Handmatige import is beschikbaar voor wachtrijitems die aandacht vereisen.",
@@ -2145,6 +2254,10 @@ const nl: LocaleDictionary = {
     "Authenticatiefactoren resetten voor {{name}}? Alle actieve sessies en geregistreerde authenticatiefactoren worden ingetrokken. Ze hebben hun primaire credentials opnieuw nodig. Als het loginbeleid MFA vereist, moeten ze een nieuwe passkey of authenticator registreren; anders slaagt hun volgende wachtwoordlogin zonder registratie.",
   "settings.loginEnabled": "Login ingeschakeld",
   "settings.loginDisabled": "Login uitgeschakeld",
+  "settings.accountOrigin.scryer": "Scryer-account",
+  "settings.accountOrigin.mediaServerLogin": "Aangemaakt via {{provider}}-login",
+  "settings.accountOrigin.mediaServerLoginUnknown": "Aangemaakt via mediaserver-login",
+  "settings.linkedMediaServer": "Gekoppeld aan {{provider}}",
   "settings.enableLogin": "Login inschakelen",
   "settings.disableLogin": "Login uitschakelen",
   "settings.disableLoginConfirm":
@@ -3115,6 +3228,8 @@ const nl: LocaleDictionary = {
   "status.editingRule": "Regel {{name}} bewerken",
   "status.deletingRule": "Regel {{name}} verwijderen?",
   "status.mediaServerCreated": "Mediaserververbinding opgeslagen.",
+  "status.mediaServerRefreshSubscriptionFailed":
+    "Mediaserververbinding opgeslagen, maar deze abonnementen voor bibliotheekvernieuwing zijn niet aangemaakt: {{events}}. {{reason}}",
   "status.mediaServerUpdated": "Mediaserververbinding bijgewerkt.",
   "status.mediaServerDeleted": "Mediaserver {{name}} verwijderd.",
   "status.plexServersDiscovered": "Plex-servers geladen.",
@@ -3230,7 +3345,7 @@ const nl: LocaleDictionary = {
   "profile.linkedAccountConnection": "Verbinding",
   "profile.linkedAccountUnknownConnection": "Onbekende verbinding",
   "profile.linkedAccountStatus": "Status",
-  "profile.linkJellyfinAccount": "Jellyfin koppelen",
+  "profile.linkJellyfinAccount": "Jellyfin / Silo koppelen",
   "profile.linkPlexAccount": "Plex koppelen",
   "profile.linkAccountConnection": "Verbinding",
   "profile.linkAccountUsername": "Gebruikersnaam",
@@ -3260,7 +3375,7 @@ const nl: LocaleDictionary = {
     "Te veel inlogpogingen. Wacht even en probeer het opnieuw.",
   "auth.signInWithScryerPassword": "Inloggen met Scryer-wachtwoord",
   "auth.signInWithPasskey": "Inloggen met passkey",
-  "auth.signInWithJellyfin": "Inloggen met Jellyfin",
+  "auth.signInWithJellyfin": "Inloggen met Jellyfin / Silo",
   "auth.jellyfinFailed": "Jellyfin-inloggen mislukt.",
   "auth.signInWithPlex": "Inloggen met Plex",
   "auth.plexFailed": "Plex-inloggen mislukt.",
@@ -3459,7 +3574,7 @@ const nl: LocaleDictionary = {
   "settings.notificationNoProviders":
     "Geen meldingsplugins geïnstalleerd. Installeer eerst een meldingsplugin via de pagina Plugins.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import voltooid is de gebruikelijke Jellyfin-scantrigger na import. Alleen Jellyfin-gebeurtenissen die de bibliotheek kunnen verversen zijn hier beschikbaar.",
+    "Import voltooid is de gebruikelijke Jellyfin / Silo-scantrigger na import. Alleen Jellyfin / Silo-gebeurtenissen die de bibliotheek kunnen verversen zijn hier beschikbaar.",
   "settings.notificationEvent.grab": "Release opgehaald",
   "settings.notificationEvent.download": "Download mislukt",
   "settings.notificationEvent.upgrade": "Upgrade geïmporteerd",
@@ -3852,6 +3967,10 @@ const nl: LocaleDictionary = {
   "history.rematched": "Opnieuw gematcht",
   "history.seedingStarted": "Seeden",
   "history.seedingCompleted": "Seeden voltooid",
+  "history.subtitleDownloaded": "Ondertitel gedownload",
+  "history.subtitleFailed": "Ondertitel mislukt",
+  "history.subtitleDeleted": "Ondertitel verwijderd",
+  "history.subtitleBlocklisted": "Ondertitel geblokkeerd",
   "history.downloadIgnored": "Genegeerd",
   "history.downloadMissing": "Niet zichtbaar in client",
   "history.facet": "Facet",
@@ -4737,10 +4856,10 @@ const nl: LocaleDictionary = {
     "Regels geven releases een score, zodat Scryer kiest wat je wilt en overslaat wat je niet wilt.",
   "tours.onboarding.mediaServers.title": "Mediaservers",
   "tours.onboarding.mediaServers.body":
-    "Koppel Jellyfin, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
+    "Koppel Jellyfin / Silo, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
   "tours.onboarding.notifications.title": "Meldingen",
   "tours.onboarding.notifications.body":
-    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt. Diensten voeg je toe vanuit dit Plugins-paneel. Ook Jellyfin, Plex en Emby staan hier: je server vernieuwt na een import pas als je de plugin ervan uit dit paneel installeert, ook als hij al gekoppeld is onder Mediaservers.",
+    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt. Diensten voeg je toe vanuit dit Plugins-paneel. Ook Jellyfin / Silo, Plex en Emby staan hier: je server vernieuwt na een import pas als je de plugin ervan uit dit paneel installeert, ook als hij al gekoppeld is onder Mediaservers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins voegen indexers, downloadclients en meldingsdiensten toe. Installeer en werk ze hier bij.",

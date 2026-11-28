@@ -1044,5 +1044,81 @@
         "expected": false
       }
     ]
+  },
+  {
+    "id": "report-mark-bad",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "request",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.request.lease_forever",
+          "operator": "IS_FALSE",
+          "value": ""
+        }
+      ],
+      "outputs": {
+        "MARK_BAD": true
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.lease_forever == false\n}\n\nmark_bad if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "request": {
+            "lease_forever": false
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "request": {
+            "lease_forever": true
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "report-reject",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "request",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.request.lease_forever",
+          "operator": "IS_TRUE",
+          "value": ""
+        }
+      ],
+      "outputs": {
+        "REJECT_REPORT": true
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.lease_forever == true\n}\n\nreject_report if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "request": {
+            "lease_forever": true
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "request": {
+            "lease_forever": false
+          }
+        },
+        "expected": false
+      }
+    ]
   }
 ]

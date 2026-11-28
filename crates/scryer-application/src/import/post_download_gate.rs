@@ -66,6 +66,109 @@ pub(crate) struct PostDownloadAcquisitionDecision {
     pub scoring_log: Option<String>,
 }
 
+/// The title's bad-file content identities for one import unit of work.
+///
+/// Only entries that gate imports: content a wrong-content report marked may
+/// be right for another episode, so it still imports. Read at most once, by the first file the gate prepares, so a season pack
+/// costs one indexed read rather than one per episode. A failed read is not
+/// kept: that file is held, and the next file tries again.
+pub(crate) struct TitleBadFiles {
+    title_id: String,
+    identities: tokio::sync::OnceCell<Vec<scryer_domain::BlocklistContentIdentity>>,
+}
+
+impl TitleBadFiles {
+    pub(crate) fn for_title(title_id: &str) -> Self {
+        Self {
+            title_id: title_id.to_string(),
+            identities: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Whether the proven content matches one of the title's bad files.
+    pub(crate) async fn matches(
+        &self,
+        app: &AppUseCase,
+        title_id: &str,
+        proof: &scryer_domain::ImportContentProof,
+    ) -> crate::AppResult<bool> {
+        if title_id != self.title_id {
+            // A caller handed another title's set; never judge one title's
+            // file by another's entries.
+            let identity = crate::media_issues::content_identity(proof);
+            return Ok(app
+                .services
+                .workflow
+                .blocklist_repo
+                .find_content_block(title_id, &identity)
+                .await?
+                .is_some());
+        }
+        Ok(self
+            .identities(app)
+            .await?
+            .iter()
+            .any(|identity| crate::media_issues::content_matches_proof(identity, proof)))
+    }
+
+    async fn identities<'a>(
+        &'a self,
+        app: &AppUseCase,
+    ) -> crate::AppResult<&'a [scryer_domain::BlocklistContentIdentity]> {
+        Ok(self
+            .identities
+            .get_or_try_init(|| async {
+                app.services
+                    .workflow
+                    .blocklist_repo
+                    .list_import_blocking_identities_for_title(&self.title_id)
+                    .await
+                    .map(|rows| rows.into_iter().map(|(_, identity)| identity).collect())
+            })
+            .await?
+            .as_slice())
+    }
+
+    /// Hold an upgrade that would replace a file marked bad.
+    ///
+    /// `incumbents` are the files the upgrade would retire. A title with no
+    /// bad-file entries has no marked files, so this costs nothing beyond the
+    /// read the gate already made. A failed read holds the upgrade.
+    pub(crate) async fn upgrade_refusal(
+        &self,
+        app: &AppUseCase,
+        incumbents: &[&crate::TitleMediaFile],
+    ) -> Option<ImportedFileRejection> {
+        let Some(first) = incumbents.first() else {
+            return None;
+        };
+        let first_path = crate::stored_paths::stored_path_to_path_buf(&first.file_path);
+        match self.identities(app).await {
+            Ok(identities) if identities.is_empty() => return None,
+            Ok(_) => {}
+            Err(error) => return Some(content_block_lookup_rejection(&first_path, error)),
+        }
+        let ids: Vec<String> = incumbents.iter().map(|file| file.id.clone()).collect();
+        match app
+            .services
+            .workflow
+            .blocklist_repo
+            .marked_bad_file_ids(&ids)
+            .await
+        {
+            Ok(marked) => incumbents
+                .iter()
+                .find(|file| marked.contains(&file.id))
+                .map(|file| {
+                    bad_incumbent_rejection(&crate::stored_paths::stored_path_to_path_buf(
+                        &file.file_path,
+                    ))
+                }),
+            Err(error) => Some(content_block_lookup_rejection(&first_path, error)),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ImportedFileRejection {
     pub message: String,
@@ -90,6 +193,8 @@ impl ImportedFileRejection {
                 | DISC_REVIEW_REQUIRED_CODE
                 | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
                 | POST_DOWNLOAD_RULE_ERROR_CODE
+                | crate::error_reasons::media::BAD_FILE_LOOKUP_FAILED
+                | crate::error_reasons::media::UPGRADE_REPLACES_BAD_FILE
                 | crate::error_reasons::media::UNVERIFIED_REPLACEMENT
                 | crate::error_reasons::media::REFERENCES_REQUIRE_REVIEW
                 | crate::error_reasons::media::PROBE_IO_FAILED
@@ -122,7 +227,10 @@ pub(crate) fn review_hold_skip_reason_for_code(code: &str) -> ImportSkipReason {
         SOURCE_CHANGED_AFTER_PROBE_CODE | IMPORT_SOURCE_CHANGED_AFTER_PROBE_CODE
     ) {
         ImportSkipReason::SourceChanged
-    } else if code == SOURCE_SNAPSHOT_UNAVAILABLE_CODE {
+    } else if matches!(
+        code,
+        SOURCE_SNAPSHOT_UNAVAILABLE_CODE | crate::error_reasons::media::BAD_FILE_LOOKUP_FAILED
+    ) {
         ImportSkipReason::SourceUnavailable
     } else {
         ImportSkipReason::PolicyMismatch
@@ -165,6 +273,56 @@ fn import_source_snapshot_unavailable_rejection(
         recycle_reason: SOURCE_SNAPSHOT_UNAVAILABLE_CODE,
         skip_reason: Some(ImportSkipReason::SourceUnavailable),
         blocking_rule_codes: vec![SOURCE_SNAPSHOT_UNAVAILABLE_CODE.to_string()],
+    }
+}
+
+/// The file is a copy of one the operator confirmed bad. The import is refused
+/// and the file left where it is; the release is blocklisted when its name is
+/// known.
+fn content_block_rejection(path: &Path) -> ImportedFileRejection {
+    use crate::error_reasons::media;
+    ImportedFileRejection {
+        message: format!(
+            "import content matches a file confirmed bad for this title: {}",
+            path.display()
+        ),
+        recycle_reason: media::IMPORT_MATCHES_BAD_FILE,
+        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        blocking_rule_codes: vec![media::IMPORT_MATCHES_BAD_FILE.to_string()],
+    }
+}
+
+/// The bad-file entries could not be read, so the import is held rather than
+/// let through unchecked.
+fn content_block_lookup_rejection(
+    path: &Path,
+    detail: impl std::fmt::Display,
+) -> ImportedFileRejection {
+    use crate::error_reasons::media;
+    ImportedFileRejection {
+        message: format!(
+            "could not check {} against the title's bad files: {detail}",
+            path.display()
+        ),
+        recycle_reason: media::BAD_FILE_LOOKUP_FAILED,
+        skip_reason: Some(ImportSkipReason::SourceUnavailable),
+        blocking_rule_codes: vec![media::BAD_FILE_LOOKUP_FAILED.to_string()],
+    }
+}
+
+/// The upgrade would replace a file marked bad. A marked file leaves the
+/// library only through the operator's confirmed recycle, so the upgrade is
+/// held and both files stay where they are.
+fn bad_incumbent_rejection(path: &Path) -> ImportedFileRejection {
+    use crate::error_reasons::media;
+    ImportedFileRejection {
+        message: format!(
+            "the upgrade would replace a file marked bad for this title: {}",
+            path.display()
+        ),
+        recycle_reason: media::UPGRADE_REPLACES_BAD_FILE,
+        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        blocking_rule_codes: vec![media::UPGRADE_REPLACES_BAD_FILE.to_string()],
     }
 }
 
@@ -714,75 +872,6 @@ fn finalize_post_download_rule_scores(
     blocking_codes
 }
 
-#[cfg(feature = "runtime-media-analysis")]
-pub(crate) fn build_media_file_analysis(
-    analysis: &scryer_mediainfo::MediaAnalysis,
-) -> crate::MediaFileAnalysis {
-    let audio_languages = crate::normalize_detected_audio_languages(
-        analysis.audio_languages.iter().map(String::as_str),
-    );
-    let subtitle_languages = crate::normalize_detected_subtitle_languages(
-        analysis.subtitle_languages.iter().map(String::as_str),
-    );
-
-    crate::MediaFileAnalysis {
-        details: analysis.details.clone(),
-        video_codec: analysis
-            .video_codec
-            .as_deref()
-            .and_then(crate::release_parser::VideoCodec::parse),
-        video_width: analysis.video_width,
-        video_height: analysis.video_height,
-        video_bitrate_kbps: analysis.video_bitrate_kbps,
-        video_bit_depth: analysis.video_bit_depth,
-        video_hdr_format: analysis.video_hdr_format.clone(),
-        dovi_profile: analysis.dovi_profile,
-        dovi_bl_compat_id: analysis.dovi_bl_compat_id,
-        video_frame_rate: analysis.video_frame_rate.clone(),
-        video_profile: analysis.video_profile.clone(),
-        audio_codec: analysis.audio_codec.clone(),
-        audio_profile: analysis.audio_profile.clone(),
-        audio_channels: analysis.audio_channels,
-        audio_bitrate_kbps: analysis.audio_bitrate_kbps,
-        audio_languages,
-        audio_streams: analysis
-            .audio_streams
-            .iter()
-            .map(|stream| crate::AudioStreamDetail {
-                codec: stream.codec.clone(),
-                profile: stream.profile.clone(),
-                channels: stream.channels,
-                language: stream
-                    .language
-                    .as_deref()
-                    .and_then(crate::normalize_detected_audio_language_code),
-                name: stream.name.clone(),
-                bitrate_kbps: stream.bitrate_kbps,
-            })
-            .collect(),
-        subtitle_languages,
-        subtitle_codecs: analysis.subtitle_codecs.clone(),
-        subtitle_streams: analysis
-            .subtitle_streams
-            .iter()
-            .map(|stream| crate::SubtitleStreamDetail {
-                codec: stream.codec.clone(),
-                language: stream
-                    .language
-                    .as_deref()
-                    .and_then(crate::normalize_detected_subtitle_language_code),
-                name: stream.name.clone(),
-                forced: stream.forced,
-                default: stream.default,
-            })
-            .collect(),
-        has_multiaudio: analysis.has_multiaudio,
-        duration_seconds: analysis.duration_seconds,
-        num_chapters: analysis.num_chapters,
-        container_format: analysis.container_format.clone(),
-    }
-}
-
 pub(crate) fn build_stream_pointer_media_file_analysis() -> crate::MediaFileAnalysis {
     crate::MediaFileAnalysis {
         details: Default::default(),
@@ -965,10 +1054,13 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
         // An uncoded failure (a metadata read through a mount symlink, a probe
         // worker that died) is an I/O failure of the probe, handled below.
-        Err(error) => Err(scryer_mediainfo::MediaInfoError::Io(error.to_string())),
+        Err(error) => Err(mediaprobe::ProbeError::Io {
+            kind: std::io::ErrorKind::Other,
+            message: error.to_string(),
+        }),
     };
-    let mut analysis = match probe {
-        Ok(analysis) => analysis,
+    let mut details = match probe {
+        Ok(details) => details,
         Err(error) => {
             warn!(error = %error, path = %path.display(), "media analysis failed");
             if scryer_domain::is_disc_image(path) {
@@ -977,20 +1069,18 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 )));
             }
             if handling == Some(MediaHandling::Playlist)
-                && matches!(
-                    error,
-                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)
-                )
+                && matches!(error, mediaprobe::ProbeError::Unsupported(_))
             {
                 return media_review_hold(reasons::REFERENCES_REQUIRE_REVIEW, error.to_string());
             }
             if runtime_sample_validation.mode == RuntimeSampleValidationMode::EnforceAutomatic {
                 let code = match &error {
-                    scryer_mediainfo::MediaInfoError::Io(_) => reasons::PROBE_IO_FAILED,
-                    scryer_mediainfo::MediaInfoError::Parse(_) => reasons::PROBE_MALFORMED,
-                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_) => {
-                        MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+                    mediaprobe::ProbeError::Io { .. } | mediaprobe::ProbeError::SourceChanged => {
+                        reasons::PROBE_IO_FAILED
                     }
+                    mediaprobe::ProbeError::Malformed(_) => reasons::PROBE_MALFORMED,
+                    // Unsupported, and any kind this version does not know.
+                    _ => MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
                 };
                 return media_review_hold(code, error.to_string());
             }
@@ -1012,8 +1102,9 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
             }));
         }
     };
+    use crate::media::analysis_summary as summary;
     use scryer_media_types::ProbeStatus;
-    match analysis.details.report.status {
+    match details.report.status {
         ProbeStatus::Encrypted => {
             return media_review_hold(reasons::PROBE_ENCRYPTED, "encrypted media requires review");
         }
@@ -1022,7 +1113,11 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }
         _ => {}
     }
-    let unavailable = analysis.details.report.status == ProbeStatus::Unsupported;
+    let unavailable = details.report.status == ProbeStatus::Unsupported;
+    let has_video_codec = details
+        .selected_video()
+        .is_some_and(|video| video.codec.is_some());
+    let duration_seconds = summary::duration_seconds(&details);
     // A replacement needs the facts the probe actually resolved, not a complete
     // inventory: an MKV prefix inventory stops at its coverage limit
     // (`budget_exhausted`) on every real file while still resolving duration and
@@ -1031,9 +1126,8 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
     // check, so it needs only the codec, as release-0.22.0 allowed.
     let operator_override =
         runtime_sample_validation.mode == RuntimeSampleValidationMode::BypassRuntimeSampleCheck;
-    let unverified = unavailable
-        || analysis.video_codec.is_none()
-        || (analysis.duration_seconds.is_none() && !operator_override);
+    let unverified =
+        unavailable || !has_video_codec || (duration_seconds.is_none() && !operator_override);
     if unverified && has_existing_file {
         return media_review_hold(
             reasons::UNVERIFIED_REPLACEMENT,
@@ -1041,18 +1135,17 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         );
     }
 
-    if analysis.container_format.as_deref() == Some("iso") {
-        if analysis.details.report.status != scryer_media_types::ProbeStatus::Complete
-            || !scryer_mediainfo::is_valid_video(&analysis)
+    if details.container_format.as_deref() == Some("iso") {
+        if details.report.status != scryer_media_types::ProbeStatus::Complete
+            || !details.is_playable_video()
         {
             return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
                 "disc inspection requires review ({:?}); the source image has been preserved",
-                analysis.details.report.status
+                details.report.status
             )));
         }
         if title.facet != MediaFacet::Movie
-            && analysis
-                .details
+            && details
                 .disc
                 .as_ref()
                 .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
@@ -1061,20 +1154,20 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 "episodic disc imports require explicit disc-title-to-episode mappings",
             ));
         }
-        if let Some(disc) = &mut analysis.details.disc
+        if let Some(disc) = &mut details.disc
             && let Err(error) = app.validate_disc_episode_mappings(title, disc).await
         {
             return ImportedFileGateDecision::Rejected(disc_review_rejection(error.to_string()));
         }
     }
 
-    if analysis.video_codec.is_none() && !unavailable {
+    if !has_video_codec && !unavailable {
         // A video stream whose codec the probe could not resolve is held, not
         // imported as if it were verified.
-        if analysis.details.selected_video_id.is_some()
-            || analysis.details.report.budget_exhausted
+        if details.selected_video_id.is_some()
+            || details.report.budget_exhausted
             || matches!(
-                analysis.details.report.status,
+                details.report.status,
                 scryer_media_types::ProbeStatus::Unsupported
                     | scryer_media_types::ProbeStatus::Encrypted
             )
@@ -1094,19 +1187,19 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         });
     }
 
-    let accepted_analysis = build_media_file_analysis(&analysis);
-    let (parsed_from_probe, _) = rescore_parsed_from_analysis(parsed, Some(&accepted_analysis));
-    if analysis
-        .details
+    let without_episode_mappings = details
         .disc
         .as_ref()
-        .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
+        .is_none_or(|disc| disc.selection.episode_mappings.is_empty());
+    let accepted_analysis = summary::summarize(details);
+    let (parsed_from_probe, _) = rescore_parsed_from_analysis(parsed, Some(&accepted_analysis));
+    if without_episode_mappings
         && let Some(rejection) = sample_rejection(
             runtime_sample_validation,
             &title.facet,
             &parsed_from_probe,
             size_bytes,
-            analysis.duration_seconds,
+            duration_seconds,
         )
     {
         warn!(
@@ -1264,7 +1357,7 @@ async fn evaluate_import_analysis(
     // same `MediaFileAnalysis` this import persists on the row — so the document
     // a rule sees at import is byte-for-byte the one it sees when the bar is
     // re-derived from that row. The import path used to build its doc straight
-    // from `scryer_mediainfo::MediaAnalysis`, whose `video_codec` is the raw
+    // from the parser's output, whose video codec is the raw
     // probe string (`"h264"`), while re-derivation goes through
     // `VideoCodec::as_str()` (`"H.264"`): any rule reading
     // `input.file.video_codec` scored differently on the two sides, permanently.
@@ -1562,6 +1655,7 @@ pub(crate) async fn prepare_import_candidate(
     is_filler: bool,
     runtime_sample_validation: RuntimeSampleValidation,
     release_listing_json: Option<&str>,
+    bad_files: &TitleBadFiles,
 ) -> Result<PreparedImportCandidate, ImportedFileRejection> {
     prepare_import_candidate_with_disc_selection(
         app,
@@ -1576,6 +1670,7 @@ pub(crate) async fn prepare_import_candidate(
         runtime_sample_validation,
         None,
         release_listing_json,
+        bad_files,
     )
     .await
 }
@@ -1597,6 +1692,7 @@ pub(crate) async fn prepare_import_candidate_with_disc_selection(
     runtime_sample_validation: RuntimeSampleValidation,
     disc_selection: Option<&scryer_media_types::DiscSelection>,
     release_listing_json: Option<&str>,
+    bad_files: &TitleBadFiles,
 ) -> Result<PreparedImportCandidate, ImportedFileRejection> {
     if disc_selection.is_some() && !scryer_domain::is_disc_image(path) {
         return Err(disc_review_rejection(
@@ -1675,6 +1771,16 @@ pub(crate) async fn prepare_import_candidate_with_disc_selection(
             ));
         }
         let accepted = accepted?;
+        // The proof is the stable snapshot's own sample; no extra read of the
+        // file. The entries are read once per unit of work.
+        match bad_files
+            .matches(app, &title.id, &source_snapshot_after.proof)
+            .await
+        {
+            Ok(true) => return Err(content_block_rejection(path)),
+            Ok(false) => {}
+            Err(error) => return Err(content_block_lookup_rejection(path, error)),
+        }
 
         let (parsed, rescore_changes) = rescore_from_mediainfo(parsed, accepted.as_ref());
         if !rescore_changes.is_empty() {
@@ -2451,6 +2557,16 @@ async fn finalize_import_rejection(
         }
         None => reset_scopes_for_retry(app, &title.id, attribution, &coverage).await,
     }
+    // A download that matched a file marked bad carries its code in its own
+    // field, and its reason is the explanation alone.
+    let reason_code = (rejection.recycle_reason
+        == crate::error_reasons::media::IMPORT_MATCHES_BAD_FILE)
+        .then(|| rejection.recycle_reason.to_string());
+    let reason = if reason_code.is_some() {
+        Some(rejection.message.clone())
+    } else {
+        reason
+    };
     let _ = app
         .append_domain_event(new_title_domain_event(
             actor,
@@ -2471,6 +2587,7 @@ async fn finalize_import_rejection(
                 // load-bearing for whoever reads the event.
                 skip_reason: rejection.skip_reason.clone(),
                 episode_ids: episode_ids.to_vec(),
+                reason_code,
             }),
         ))
         .await;
@@ -2632,6 +2749,7 @@ async fn reopen_series_movie_link_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scryer_domain::Episode;
 
     #[cfg(feature = "runtime-media-analysis")]
     #[tokio::test]
@@ -2741,8 +2859,7 @@ mod tests {
     /// inventory walks, as every real-size MKV does.
     #[cfg(feature = "runtime-media-analysis")]
     fn coverage_limited_mkv(path: &Path) {
-        let mut bytes =
-            include_bytes!("../../../scryer-mediainfo/tests/media/h264_aac.mkv").to_vec();
+        let mut bytes = include_bytes!("../../test-fixtures/media/h264_aac.mkv").to_vec();
         // Segment header at 0x28: ID 18 53 80 67, then an 8-byte size vint.
         assert_eq!(&bytes[0x28..0x2c], &[0x18, 0x53, 0x80, 0x67]);
         assert_eq!(bytes[0x2c], 0x01);
@@ -2766,14 +2883,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let candidate = directory.path().join("Coverage.Limit.2024.mkv");
         coverage_limited_mkv(&candidate);
-        let probed = scryer_mediainfo::analyze_catalog_file(&candidate).unwrap();
+        let probed = mediaprobe::probe(&candidate).unwrap();
+        assert!(probed.report.budget_exhausted, "{:?}", probed.report);
         assert!(
-            probed.details.report.budget_exhausted,
-            "{:?}",
-            probed.details.report
+            probed
+                .selected_video()
+                .is_some_and(|video| video.codec.is_some())
         );
-        assert!(probed.video_codec.is_some());
-        let duration = probed.duration_seconds.expect("fixture duration resolves");
+        let duration = crate::media::analysis_summary::duration_seconds(&probed)
+            .expect("fixture duration resolves");
 
         let decision = gate_decision(
             &app,
@@ -3809,6 +3927,190 @@ mod tests {
             rejection.message,
             "video file could not be read to verify its duration; it may be incomplete or corrupted. Download it again and retry the import"
         );
+    }
+
+    fn runtime_episode(id: &str, season: &str, duration_seconds: Option<i64>) -> Episode {
+        Episode {
+            id: id.into(),
+            title_id: "title-short-form".into(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some(id.trim_start_matches("episode-").into()),
+            season_number: Some(season.into()),
+            episode_label: None,
+            title: None,
+            air_date: None,
+            duration_seconds,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    async fn short_form_series(runtime_minutes: Option<i32>) -> Title {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                crate::NewTitle {
+                    name: "Pocket Lantern Tales".into(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        Title {
+            runtime_minutes,
+            ..title
+        }
+    }
+
+    /// The runtime check for a file mapped to `episodes`, the way an automatic
+    /// episode import runs it.
+    fn mapped_file_rejection(
+        title: &Title,
+        episodes: &[Episode],
+        probed_seconds: i32,
+    ) -> Option<ImportedFileRejection> {
+        let expected =
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(title, episodes);
+        let parsed = crate::release_parser::parse_release_metadata(
+            "Pocket.Lantern.Tales.S01E01E02.1080p.WEB-DL.H264-GRP",
+        );
+        sample_rejection(
+            automatic(expected),
+            &MediaFacet::Series,
+            &parsed,
+            // Well above any bitrate floor, so only the runtime decides.
+            2_000_000_000,
+            Some(probed_seconds),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_file_mapped_to_several_episodes_is_held_to_their_summed_runtime() {
+        let title = short_form_series(Some(5)).await;
+        let two = [
+            runtime_episode("episode-1", "1", Some(300)),
+            runtime_episode("episode-2", "1", Some(310)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &two),
+            Some(610)
+        );
+        // Two five-minute episodes in one 10:09 file pass; against one of them
+        // alone the same file is too long.
+        assert!(mapped_file_rejection(&title, &two, 609).is_none());
+        let one = mapped_file_rejection(&title, &two[..1], 609)
+            .expect("a 10:09 file is too long for one five-minute episode");
+        assert_eq!(one.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+
+        // Outside the band around the sum still rejects, both ways.
+        let long = mapped_file_rejection(&title, &two, 1221).expect("past twice the sum");
+        assert_eq!(long.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+        let short = mapped_file_rejection(&title, &two, 304).expect("under half the sum");
+        assert_eq!(short.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+        // Band endpoints pass.
+        assert!(mapped_file_rejection(&title, &two, 1220).is_none());
+        assert!(mapped_file_rejection(&title, &two, 305).is_none());
+
+        let three = [
+            runtime_episode("episode-1", "1", Some(300)),
+            runtime_episode("episode-2", "1", Some(300)),
+            runtime_episode("episode-3", "1", Some(300)),
+        ];
+        assert!(mapped_file_rejection(&title, &three, 15 * 60 + 2).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_mapped_file_without_every_episode_runtime_uses_the_series_runtime_per_episode() {
+        let title = short_form_series(Some(5)).await;
+        let partly_known = [
+            runtime_episode("episode-1", "1", Some(900)),
+            runtime_episode("episode-2", "1", None),
+        ];
+        // One missing duration falls back to the series runtime times the
+        // number of mapped episodes, never to the one known duration.
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(
+                &title,
+                &partly_known
+            ),
+            Some(600)
+        );
+        assert!(mapped_file_rejection(&title, &partly_known, 609).is_none());
+        let long = mapped_file_rejection(&title, &partly_known, 1201)
+            .expect("past twice two series runtimes");
+        assert_eq!(long.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+
+        let zero = [
+            runtime_episode("episode-1", "1", Some(0)),
+            runtime_episode("episode-2", "1", Some(0)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &zero),
+            Some(600)
+        );
+
+        // Without a series runtime either, nothing is expected and the file
+        // only has to clear the unknown-runtime sample floor.
+        let unknown = short_form_series(None).await;
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(
+                &unknown,
+                &partly_known
+            ),
+            None
+        );
+        assert!(mapped_file_rejection(&unknown, &partly_known, 609).is_none());
+    }
+
+    #[tokio::test]
+    async fn specials_use_their_own_runtimes_and_never_the_series_runtime() {
+        let title = short_form_series(Some(5)).await;
+        let specials = [
+            runtime_episode("episode-1", "0", Some(1500)),
+            runtime_episode("episode-2", "0", Some(1500)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &specials),
+            Some(3000)
+        );
+        assert!(mapped_file_rejection(&title, &specials, 3000).is_none());
+        let long = mapped_file_rejection(&title, &specials, 6001).expect("past twice the sum");
+        assert_eq!(long.recycle_reason, RUNTIME_OUT_OF_BAND_CODE);
+
+        // A special without its own runtime is not held to the series runtime,
+        // alone or mapped together with a regular episode.
+        let unknown_special = [runtime_episode("episode-1", "0", None)];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(
+                &title,
+                &unknown_special
+            ),
+            None
+        );
+        assert!(mapped_file_rejection(&title, &unknown_special, 45 * 60).is_none());
+        let mixed = [
+            runtime_episode("episode-1", "0", None),
+            runtime_episode("episode-2", "1", Some(300)),
+        ];
+        assert_eq!(
+            crate::import_workflow::expected_runtime_seconds_for_episode_import(&title, &mixed),
+            None
+        );
+        assert!(mapped_file_rejection(&title, &mixed, 45 * 60).is_none());
     }
 
     #[test]

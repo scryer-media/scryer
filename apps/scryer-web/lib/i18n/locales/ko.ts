@@ -106,6 +106,68 @@ const ko: LocaleDictionary = {
   "settings.downloadClientHttpBandwidthLimit": "대역폭 제한(KB/s)",
   "settings.downloadClientHttpBandwidthLimitHelp":
     "이 클라이언트의 모든 다운로드가 함께 사용합니다. 비워 두거나 0이면 제한이 없습니다.",
+  "settings.downloadClientTorboxApiKey": "API 토큰",
+  "settings.downloadClientTorboxApiKeyHelp": "TorBox 계정의 API 토큰입니다.",
+  "settings.downloadClientTorboxCachedOnly": "캐시된 항목만",
+  "settings.downloadClientTorboxCachedOnlyHelp":
+    "TorBox에 아직 캐시되지 않은 다운로드를 거부합니다.",
+  "httpRelease.refusal.filePathInvalid":
+    "이 다운로드의 파일 경로를 다운로드 폴더 안에 저장할 수 없습니다.",
+  "httpRelease.refusal.tooManyFiles":
+    "이 다운로드의 파일 수가 한 다운로드에 담을 수 있는 수를 넘습니다.",
+  "httpRelease.refusal.linkKeyInvalid":
+    "이 다운로드의 파일에 사용할 수 있는 링크 참조가 없습니다.",
+  "httpRelease.refusal.linkSourceUnavailable":
+    "이 다운로드의 파일에 이 다운로더가 얻을 수 없는 링크가 필요합니다.",
+  "httpRelease.refusal.linkRefused":
+    "서버가 파일의 다운로드 링크를 계속 거부했습니다.",
+  "httpRelease.refusal.linkUnavailable":
+    "파일의 다운로드 링크를 사용할 수 있게 되지 않았습니다.",
+  "error.reason.TORBOX_TOKEN_REJECTED": "TorBox가 API 토큰을 거부했습니다.",
+  "error.reason.TORBOX_PLAN_RESTRICTED":
+    "TorBox 요금제에 이 기능이 포함되어 있지 않습니다.",
+  "error.reason.TORBOX_ACTIVE_LIMIT":
+    "TorBox 계정이 활성 다운로드 한도에 도달했습니다.",
+  "error.reason.TORBOX_COOLDOWN_LIMIT":
+    "TorBox 계정이 대기 기간 중이라 아직 새 다운로드를 받지 않습니다.",
+  "error.reason.TORBOX_MONTHLY_LIMIT":
+    "TorBox 계정이 월간 다운로드 한도에 도달했습니다.",
+  "error.reason.TORBOX_HOURLY_LIMIT":
+    "TorBox 새 다운로드의 시간당 한도에 도달했습니다.",
+  "error.reason.TORBOX_DOWNLOAD_TOO_LARGE":
+    "이 다운로드는 TorBox 요금제가 허용하는 크기보다 큽니다.",
+  "error.reason.TORBOX_NOT_CACHED":
+    "TorBox에 이 다운로드의 캐시가 없으며, 이 클라이언트는 캐시된 다운로드만 받습니다.",
+  "error.reason.TORBOX_INVALID_TORRENT": "TorBox가 토렌트를 읽지 못했습니다.",
+  "error.reason.TORBOX_INVALID_NZB": "NZB를 읽을 수 없습니다.",
+  "error.reason.TORBOX_DUPLICATE_ITEM":
+    "이 다운로드는 이미 TorBox 계정에 있습니다.",
+  "error.reason.TORBOX_ITEM_NOT_FOUND": "TorBox에 이 항목이 없습니다.",
+  "error.reason.TORBOX_LINK_OFFLINE": "TorBox 다운로드 링크가 오프라인입니다.",
+  "error.reason.TORBOX_RATE_LIMITED":
+    "TorBox가 요청을 받는 빈도를 제한하고 있습니다.",
+  "error.reason.TORBOX_UNAVAILABLE": "TorBox를 사용할 수 없습니다.",
+  "error.reason.TORBOX_FILE_INFECTED":
+    "TorBox가 이 다운로드의 파일을 감염된 것으로 표시했습니다.",
+  "error.reason.TORBOX_FILE_ZIPPED":
+    "TorBox가 이 다운로드의 파일을 zip 압축 파일로만 제공합니다.",
+  "error.reason.TORBOX_NO_VIDEO_FILE":
+    "이 TorBox 다운로드에는 동영상 파일이 없습니다.",
+  "error.reason.TORBOX_REMOTE_FAILED":
+    "TorBox가 이 다운로드가 실패했다고 보고합니다.",
+  "error.reason.TORBOX_ITEM_MISSING":
+    "TorBox에 더 이상 이 다운로드가 없습니다.",
+  "error.reason.TORBOX_STALLED": "이 다운로드가 TorBox에서 멈춰 있습니다.",
+  "error.reason.TORBOX_FILE_PATHS_UNUSABLE":
+    "이 TorBox 다운로드의 파일 이름을 이 시스템에 저장할 수 없습니다.",
+  "error.reason.TORBOX_SOURCE_MISSING":
+    "이 릴리스에는 TorBox로 보낼 마그넷 링크, 토렌트 파일 또는 NZB가 없습니다.",
+  "error.reason.TORBOX_ACTION_UNSUPPORTED":
+    "TorBox는 이 다운로드에 대해 이 작업을 지원하지 않습니다.",
+  "error.reason.TORBOX_JOB_NOT_FOUND":
+    "이 TorBox 클라이언트에는 그런 다운로드가 없습니다.",
+  "error.reason.TORBOX_TOKEN_REQUIRED":
+    "TorBox 클라이언트에 API 토큰이 없습니다.",
   "settings.publicUrlTitle": "공개 URL",
   "settings.publicUrlHelp":
     "사용자와 서비스가 Scryer에 접속할 때 쓰는 주소입니다(예: https://scryer.example.com). 계정 연결과 OAuth에는 변경 사항이 즉시 적용되고, 패스키에는 Scryer를 다시 시작한 후 적용됩니다.",
@@ -815,6 +877,8 @@ const ko: LocaleDictionary = {
   "settings.downloadClientPriority": "우선순위",
   "settings.downloadClientRemoveCompleted": "완료 시 제거",
   "settings.downloadClientRemoveFailed": "실패 시 제거",
+  "settings.downloadClientRemoveFailedTorrentHelp":
+    "'실패 시 제거'는 클라이언트에서 실패한 다운로드에 적용됩니다. Scryer가 가져오기를 거부한 토런트는 항상 가져온 토런트처럼 정리됩니다. 목표까지 시드한 뒤 클라이언트가 제거합니다.",
   "settings.downloadClientUseSslInfo":
     "이 다운로드 클라이언트에 연결할 때 SSL/TLS를 사용합니다.",
   "settings.downloadClientEnabledInfo":
@@ -1437,6 +1501,20 @@ const ko: LocaleDictionary = {
   "queue.manualImportMultipleEpisodes": "이 파일에 여러 에피소드",
   "queue.manualImportMultipleEpisodesLabel": "이 파일에 여러 에피소드 지정",
   "queue.manualImportApplySuggestions": "모두에 제안 적용",
+  "queue.manualImportApplySuggestionsSelected": "선택 항목에 제안 적용",
+  "queue.manualImportSelectAll": "모두 선택",
+  "queue.manualImportSelectNone": "선택 해제",
+  "queue.manualImportSelectInvert": "선택 반전",
+  "queue.manualImportSelectMatching": "일치 항목 선택",
+  "queue.manualImportSelectMatchingLabel": "파일 이름에 포함…",
+  "queue.manualImportSelectedCount": "{{count}}개 선택됨",
+  "queue.manualImportSkipSelected": "선택 항목 건너뛰기",
+  "queue.manualImportAssignSelected": "선택 항목에 대상 지정…",
+  "queue.manualImportVerdict.UPGRADE": "업그레이드",
+  "queue.manualImportVerdict.EQUAL": "동일한 품질",
+  "queue.manualImportVerdict.DOWNGRADE": "다운그레이드",
+  "queue.manualImportVerdict.NO_CURRENT_FILE": "새 파일",
+  "queue.manualImportVerdictEstimated": "추정",
   "queue.removeFailed": "제거 실패",
   "queue.manualImportTooltip":
     "수동 가져오기는 주의가 필요한 대기열 항목에서 사용할 수 있습니다.",
@@ -2170,7 +2248,7 @@ const ko: LocaleDictionary = {
   "settings.notificationNoProviders":
     "알림 플러그인이 설치되지 않았습니다. 먼저 플러그인 페이지에서 알림 플러그인을 설치하세요.",
   "settings.notificationJellyfinSubscriptionHint":
-    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+    "Import Complete is the usual post-import Jellyfin / Silo scan trigger. Only Jellyfin / Silo events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "릴리스 가져옴",
   "settings.notificationEvent.download": "다운로드 실패함",
   "settings.notificationEvent.upgrade": "업그레이드 가져옴",
@@ -2343,6 +2421,10 @@ const ko: LocaleDictionary = {
   "history.rematched": "재매칭",
   "history.seedingStarted": "시딩 중",
   "history.seedingCompleted": "시딩 완료",
+  "history.subtitleDownloaded": "자막 다운로드됨",
+  "history.subtitleFailed": "자막 실패",
+  "history.subtitleDeleted": "자막 삭제됨",
+  "history.subtitleBlocklisted": "자막 차단됨",
   "history.downloadIgnored": "무시됨",
   "history.downloadMissing": "클라이언트에 표시되지 않음",
   "history.facet": "분류",
@@ -3821,10 +3903,10 @@ const ko: LocaleDictionary = {
     "규칙은 릴리스에 점수를 매겨 Scryer가 원하는 것은 우선하고 원하지 않는 것은 건너뛰게 합니다.",
   "tours.onboarding.mediaServers.title": "미디어 서버",
   "tours.onboarding.mediaServers.body":
-    "Jellyfin, Plex 또는 Emby를 연결하면 Scryer가 시청한 항목을 알 수 있습니다. Scryer가 가져올 때 서버가 새로 고쳐지게 하려면 플러그인에서 해당 서버의 플러그인도 설치하세요.",
+    "Jellyfin / Silo, Plex 또는 Emby를 연결하면 Scryer가 시청한 항목을 알 수 있습니다. Scryer가 가져올 때 서버가 새로 고쳐지게 하려면 플러그인에서 해당 서버의 플러그인도 설치하세요.",
   "tours.onboarding.notifications.title": "알림",
   "tours.onboarding.notifications.body":
-    "가져오기, 다운로드 시작, 확인이 필요한 일을 원하는 곳에서 알려 드립니다. 서비스는 이 플러그인 패널에서 추가합니다. Jellyfin, Plex, Emby도 여기 있습니다. 미디어 서버에 이미 연결되어 있어도, 이 패널에서 해당 서버의 플러그인을 설치해야 가져온 뒤 서버가 새로 고쳐집니다.",
+    "가져오기, 다운로드 시작, 확인이 필요한 일을 원하는 곳에서 알려 드립니다. 서비스는 이 플러그인 패널에서 추가합니다. Jellyfin / Silo, Plex, Emby도 여기 있습니다. 미디어 서버에 이미 연결되어 있어도, 이 패널에서 해당 서버의 플러그인을 설치해야 가져온 뒤 서버가 새로 고쳐집니다.",
   "tours.onboarding.plugins.title": "플러그인",
   "tours.onboarding.plugins.body":
     "플러그인은 인덱서, 다운로드 클라이언트, 알림 서비스를 추가합니다. 여기서 설치하고 업데이트하세요.",

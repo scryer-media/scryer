@@ -1959,6 +1959,7 @@ pub(super) fn empty_library_settings_override() -> LibrarySettingsOverrideDraft 
         metadata_language: None,
         use_season_folders: None,
         default_monitor_type: None,
+        default_title_tags: None,
         quality_profile_id: None,
         request_quality_profile_ids: None,
         scoring_persona: None,
@@ -2079,6 +2080,7 @@ pub(super) fn queue_history_fixture_item(
     last_updated_at: i64,
 ) -> DownloadQueueItem {
     DownloadQueueItem {
+        client_job_protocol: None,
         id: download_client_item_id.to_string(),
         title_id: Some("title-1".to_string()),
         episode_id: None,
@@ -2128,6 +2130,7 @@ pub(super) fn completed_download_fixture_item(
     dest_dir: &str,
 ) -> CompletedDownload {
     CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "primary".to_string(),
@@ -2235,6 +2238,7 @@ pub(super) fn failed_history_item(
     title_name: &str,
 ) -> DownloadQueueItem {
     DownloadQueueItem {
+        client_job_protocol: None,
         id: download_client_item_id.to_string(),
         title_id: None,
         episode_id: None,

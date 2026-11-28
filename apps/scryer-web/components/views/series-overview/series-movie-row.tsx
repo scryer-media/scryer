@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   Eye,
   EyeOff,
   Film,
@@ -35,6 +36,11 @@ import {
   EMPTY_EPISODE_FILES,
 } from "./season-section-utils";
 import { LoadingMark } from "@/components/common/loading-mark";
+import {
+  SAME_FILM_TITLES_SLOT,
+  SameFilmNotice,
+} from "@/components/common/same-film-notice";
+import type { SameFilmPlace } from "@/lib/utils/same-film";
 
 export type SeriesMovieTimelineContentProps = {
   link: SeriesMovieLink;
@@ -72,6 +78,8 @@ export type SeriesMovieTimelineContentProps = {
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   primaryMovieFileUpdatingId?: string | null;
   autoSearchSeriesMovieLoadingByLink: Record<string, boolean>;
+  /** Movie titles that track the same film as this series movie. */
+  sameFilmPlaces?: readonly SameFilmPlace[];
 };
 
 function SeriesMovieTimelineContent({
@@ -85,6 +93,7 @@ function SeriesMovieTimelineContent({
   onMakePrimaryFile,
   primaryMovieFileUpdatingId = null,
   onSeriesMovieTagsChanged,
+  sameFilmPlaces = [],
 }: SeriesMovieTimelineContentProps) {
   const t = useTranslate();
   const mediaFiles = getSeriesMovieMediaFiles(
@@ -95,6 +104,12 @@ function SeriesMovieTimelineContent({
 
   return (
     <div className="space-y-3">
+      <SameFilmNotice
+        places={sameFilmPlaces}
+        sentence={t("title.sameFilmAsMovieTitle", {
+          titles: SAME_FILM_TITLES_SLOT,
+        })}
+      />
       <SeriesMoviePanel
         link={link}
         hasFile={mediaFiles.length > 0}
@@ -342,10 +357,20 @@ export function SeriesMovieTimelineSection(
           </button>
           <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
           <Film className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
             <p className="truncate text-sm font-semibold text-foreground">
               {link.movie.title}
             </p>
+            {(props.sameFilmPlaces?.length ?? 0) > 0 ? (
+              <span
+                data-ui="same-film-marker"
+                className="inline-flex shrink-0 text-muted-foreground"
+                title={t("title.sameFilmMarker")}
+              >
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="sr-only">{t("title.sameFilmMarker")}</span>
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-2">

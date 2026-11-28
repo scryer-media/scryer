@@ -451,6 +451,7 @@ const FALLBACK_REASON_LABEL_KEYS: Record<string, string> = {
   library_permission: "requests.fallbackLibraryPermission",
   shaping_conflict: "requests.fallbackShapingConflict",
   shaping_invalid: "requests.fallbackShapingInvalid",
+  report_conflict: "requests.fallbackReportConflict",
 };
 
 export function requestFallbackReasonLabelKey(reason: string): string | null {

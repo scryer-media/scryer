@@ -440,3 +440,73 @@ async fn probe_scoped_ownership_reads_through_the_0328_indexes() {
         "no branch scans a catalog table: {plan:#?}"
     );
 }
+
+#[tokio::test]
+async fn series_movie_links_are_found_by_their_movie_tmdb_id() {
+    let datastore = datastore().await;
+    insert_library(&datastore, READABLE_ANIME, "anime").await;
+    insert_title(
+        &datastore,
+        "series-tmdb-a",
+        READABLE_ANIME,
+        "anime",
+        None,
+        &[],
+    )
+    .await;
+    insert_title(
+        &datastore,
+        "series-tmdb-b",
+        READABLE_ANIME,
+        "anime",
+        None,
+        &[],
+    )
+    .await;
+    link_movie(
+        &datastore,
+        "series-tmdb-a",
+        "movie-tmdb-a",
+        [None, None, Some("880101"), None, None],
+    )
+    .await;
+    link_movie(
+        &datastore,
+        "series-tmdb-b",
+        "movie-tmdb-b",
+        [None, None, Some("880202"), None, None],
+    )
+    .await;
+    link_movie(
+        &datastore,
+        "series-tmdb-b",
+        "movie-tmdb-blank",
+        [None, None, Some(""), None, None],
+    )
+    .await;
+    let shows = ShowStore::new(datastore.clone());
+
+    let found = shows
+        .list_series_movie_links_by_movie_tmdb_ids(&[
+            " 880101 ".to_string(),
+            "880303".to_string(),
+            String::new(),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        found,
+        vec![scryer_application::SeriesMovieTmdbMatch {
+            series_movie_link_id: "link-movie-tmdb-a".into(),
+            series_title_id: "series-tmdb-a".into(),
+            tmdb_id: "880101".into(),
+        }]
+    );
+    assert!(
+        shows
+            .list_series_movie_links_by_movie_tmdb_ids(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
