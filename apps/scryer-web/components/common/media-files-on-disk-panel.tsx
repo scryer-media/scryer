@@ -31,6 +31,7 @@ import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { useAuth } from "@/lib/hooks/use-auth";
 import {
   canManageLibrarySubtitles,
+  canReportMediaIssue,
   hasLibraryPermission,
   hasPrivilegedLibraryAccess,
   LIBRARY_PERMISSIONS,
@@ -145,11 +146,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const { user } = useAuth();
-  const canReport = hasLibraryPermission(
-    user,
-    libraryId,
-    LIBRARY_PERMISSIONS.request,
-  );
+  const canReport = canReportMediaIssue(user, libraryId);
   const canViewPaths = hasPrivilegedLibraryAccess(user, libraryId);
   const [reportedFile, setReportedFile] = React.useState<{
     id: string;

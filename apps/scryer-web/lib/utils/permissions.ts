@@ -193,6 +193,21 @@ export function hasLibraryPermission(
 }
 
 /**
+ * Mirror the server's rule for bad-file reports: reporting takes the access
+ * requesting does, and Manage Titles holds it although the strict Request
+ * check leaves a title manager out.
+ */
+export function canReportMediaIssue(
+  user: PermissionUser | null | undefined,
+  libraryId: string | null | undefined,
+): boolean {
+  return (
+    hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.request) ||
+    hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageTitles)
+  );
+}
+
+/**
  * Mirror the server's `effective_library_permission` for Manage Subtitles: the
  * catalog-settings app permission overrides the library grant, so a catalog
  * administrator manages subtitles in every library even with no grant, or with

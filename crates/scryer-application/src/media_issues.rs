@@ -413,6 +413,30 @@ fn request_covers_series_scopes(
 }
 
 impl AppUseCase {
+    /// Reporting a file takes the access requesting does. Manage Titles
+    /// holds that access, though the strict Request check leaves it out
+    /// because a title manager adds titles instead of requesting them.
+    async fn require_media_issue_reporter(&self, actor: &User, library_id: &str) -> AppResult<()> {
+        let authorization = self.authorization_for_actor(actor).await?;
+        if [LibraryPermission::Request, LibraryPermission::ManageTitles]
+            .into_iter()
+            .any(|permission| {
+                crate::authorization::effective_library_permission(
+                    &authorization,
+                    library_id,
+                    permission,
+                )
+            })
+        {
+            Ok(())
+        } else {
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                "You do not have access to this library".to_string(),
+            ))
+        }
+    }
+
     async fn resolve_media_issue_target(
         &self,
         actor: &User,
@@ -442,7 +466,7 @@ impl AppUseCase {
                     "title not found",
                 )
             })?;
-        self.require_library_permission(actor, &title.library_id, LibraryPermission::Request)
+        self.require_media_issue_reporter(actor, &title.library_id)
             .await?;
         let library = self
             .services

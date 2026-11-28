@@ -67,6 +67,67 @@ async fn media_issue_graphql_permissions_and_stale_identity() {
     assert_eq!(std::fs::read(path).unwrap(), vec![b'x'; len]);
 }
 
+/// A member with Manage Titles reports a file wherever a member with Request
+/// can; a member who can only view the library still cannot.
+#[tokio::test]
+async fn a_title_manager_can_report_a_file_and_a_viewer_cannot() {
+    use scryer_infrastructure_library::media::libraries::state_store::BlocklistStore;
+
+    let ctx = TestContext::new().await;
+    let fixture = reassign_fixture(&ctx, "Manager Report Fixture", "97110").await;
+    let (file_id, _path) =
+        seed_primary_file(&ctx, &fixture, "synthetic.mkv", &fixture.episodes[0]).await;
+    let store = std::sync::Arc::new(BlocklistStore::new(ctx.db.datastore()));
+    let app = ctx
+        .app
+        .with_test_overrides(|builder| builder.with_blocklist_repo(store));
+    let schema = scryer_interface::build_schema(app.clone(), ctx.auth_runtime.clone());
+    let operator = app.find_or_create_default_user().await.expect("operator");
+    let member = |permissions: &[LibraryPermission]| {
+        let mut actor = operator.clone();
+        actor.authorization = scryer_domain::UserAuthorization {
+            app: scryer_domain::AppPermissionMask::NONE,
+            libraries: std::collections::HashMap::from([(
+                fixture.title.library_id.clone(),
+                scryer_domain::LibraryPermissionMask::from_permissions(permissions.iter().copied()),
+            )]),
+            loaded: true,
+            ..Default::default()
+        };
+        actor
+    };
+    let submit = |actor: User| {
+        schema.execute(
+            async_graphql::Request::new(
+                "mutation($input: SubmitMediaIssueInput!) {
+                    submitMediaIssue(input: $input) { id status }
+                }",
+            )
+            .variables(async_graphql::Variables::from_json(json!({
+                "input": {"mediaFileId": file_id, "reasonCode": "corrupted", "remediation": "MARK_BAD"}
+            })))
+            .data(actor),
+        )
+    };
+
+    let viewer = serde_json::to_value(submit(member(&[LibraryPermission::View])).await).unwrap();
+    assert_eq!(
+        viewer["errors"][0]["extensions"]["reason"], "AUTHORIZATION_LIBRARY_ACCESS_DENIED",
+        "{viewer}"
+    );
+
+    let manager = serde_json::to_value(
+        submit(member(&[
+            LibraryPermission::View,
+            LibraryPermission::ManageTitles,
+        ]))
+        .await,
+    )
+    .unwrap();
+    assert_no_errors(&manager);
+    assert_eq!(manager["data"]["submitMediaIssue"]["status"], "PENDING");
+}
+
 /// A file marked bad stays the scope's file: the wanted pass does not count
 /// the scope as missing, and an upgrade import for the scope is held rather
 /// than recycling the marked file.
