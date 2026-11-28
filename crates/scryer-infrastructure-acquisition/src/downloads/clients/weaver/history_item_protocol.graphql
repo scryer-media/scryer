@@ -1,0 +1,28 @@
+# One history row for a Weaver with torrents: `history_item.graphql` plus the
+# job's protocol. A Weaver without torrents refuses `protocol`, and the read
+# falls back to `history_item.graphql`.
+query HistoryItemWithProtocol($id: Int!) {
+  historyItem(id: $id) {
+    id
+    name
+    originalTitle
+    state
+    error
+    progressPercent
+    totalBytes
+    category
+    outputDir
+    createdAt
+    completedAt
+    clientRequestId
+    attributes {
+      key
+      value
+    }
+    attention {
+      code
+      message
+    }
+    protocol
+  }
+}

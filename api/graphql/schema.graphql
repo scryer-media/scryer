@@ -10456,6 +10456,11 @@ type InstanceFeaturesPayload {
 	Facets an administrator turned off for the whole instance.
 	"""
 	disabledFacets: [MediaFacetValue!]!
+	"""
+	Facets the current user can view, request into, add titles to or
+	manage a library of.
+	"""
+	viewableFacets: [MediaFacetValue!]!
 }
 
 """
@@ -17263,6 +17268,24 @@ input ManualImportCandidateMappingInput {
 }
 
 """
+The best file already holding the episodes a manual-import candidate is mapped to.
+"""
+type ManualImportCurrentFilePayload {
+	"""
+	Quality label of the file, or null when unavailable.
+	"""
+	quality: String
+	"""
+	Release group of the file, or null when unavailable.
+	"""
+	releaseGroup: String
+	"""
+	Score the file holds the episodes at.
+	"""
+	score: Int!
+}
+
+"""
 Candidate file details used to preview a manual import selection.
 """
 type ManualImportFilePreviewPayload {
@@ -17358,6 +17381,68 @@ type ManualImportSeriesMovieTargetPayload {
 	Runtime in minutes, or null when unavailable.
 	"""
 	runtimeMinutes: Int
+}
+
+"""
+Estimated upgrade verdict for one manual-import candidate. Display only: the import decides again on the landed file.
+"""
+type ManualImportVerdictPayload {
+	"""
+	Candidate ID the estimate is for.
+	"""
+	candidateId: ID!
+	"""
+	Episodes of the title the estimate covers; a multi-episode file is judged across all of them.
+	"""
+	episodeIds: [ID!]!
+	"""
+	Estimated verdict, or null when the candidate cannot be estimated.
+	"""
+	verdict: ManualImportVerdictValue
+	"""
+	Estimated score of the candidate, or null when it cannot be estimated.
+	"""
+	estimatedScore: Int
+	"""
+	Best file already holding the episodes, or null when none does or it cannot be estimated.
+	"""
+	currentFile: ManualImportCurrentFilePayload
+}
+
+"""
+One manual-import candidate and the episodes to estimate it against.
+"""
+input ManualImportVerdictRequestInput {
+	"""
+	Candidate ID from the persisted manual-import selection.
+	"""
+	candidateId: ID!
+	"""
+	Episode IDs the candidate is mapped to; IDs outside the selection's title are ignored.
+	"""
+	episodeIds: [ID!]!
+}
+
+"""
+Estimated comparison of a manual-import file with the files already holding the episodes it is mapped to.
+"""
+enum ManualImportVerdictValue {
+	"""
+	The file would be an upgrade over what the episodes hold.
+	"""
+	UPGRADE
+	"""
+	The file ties what the episodes hold.
+	"""
+	EQUAL
+	"""
+	What the episodes hold is better than the file.
+	"""
+	DOWNGRADE
+	"""
+	None of the episodes holds a file.
+	"""
+	NO_CURRENT_FILE
 }
 
 """
@@ -27091,6 +27176,19 @@ type QueryRoot {
 		"""
 		input: LibraryGraphInput!
 	): LibraryGraph
+	"""
+	Estimate whether each manual-import candidate would upgrade the episodes it is mapped to; requires the selection's owner with import resolution on its library. Read-only: nothing is queued or imported.
+	"""
+	manualImportVerdicts(
+		"""
+		Selection ID from beginManualImportSelection.
+		"""
+		selectionId: ID!,
+		"""
+		Candidates and the episodes each is mapped to; at most 2000 candidates and 500 episodes per candidate.
+		"""
+		files: [ManualImportVerdictRequestInput!]!
+	): [ManualImportVerdictPayload!]!
 	"""
 	Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
 	"""

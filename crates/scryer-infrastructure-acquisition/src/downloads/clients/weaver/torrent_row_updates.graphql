@@ -1,0 +1,23 @@
+# Changes to the torrents the bridge tracks (at most 500 ids): their seeding
+# numbers move without a queue event.
+subscription TorrentRowUpdates($ids: [Int!]!) {
+  torrentRowUpdates(ids: $ids) {
+    removedIds
+    torrents {
+      ...WeaverTorrentRow
+    }
+  }
+}
+
+fragment WeaverTorrentRow on Torrent {
+  id
+  infohashV1
+  private
+  ratio
+  uploadedBytes
+  seedingSeconds
+  completedAt
+  storageDir
+  seedingGoalMet
+  contentReady
+}

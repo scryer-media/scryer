@@ -27,8 +27,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::weaver::{
-    WeaverDownloadClient, WeaverQueueItem, WeaverQueueState, weaver_item_to_queue_item,
+    WeaverDownloadClient, WeaverProtocol, WeaverQueueItem, WeaverQueueState, WeaverTorrent,
+    weaver_item_to_queue_item, weaver_torrent_to_completed_download,
+    weaver_ws_error_lacks_torrents,
 };
+use crate::graphql::weaver as graphql_docs;
+
+/// `torrentRowUpdates` takes at most this many ids. Torrents past it are
+/// still read by every snapshot, event and reconcile tick; only their pushed
+/// seeding numbers wait for those.
+const TORRENT_ROW_UPDATES_MAX_IDS: usize = 500;
+const TORRENT_ROWS_SUBSCRIPTION_ID: &str = "torrents";
 
 const QUEUE_SNAPSHOTS_QUERY: &str = r#"
     subscription {
@@ -107,7 +116,24 @@ struct QueueEventsPayload {
 struct QueueEventPayload {
     cursor: String,
     kind: String,
+    #[serde(default)]
+    item_id: Option<u64>,
     item: Option<WeaverQueueItem>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TorrentRowUpdatesPayload {
+    torrent_row_updates: TorrentRowUpdatePayload,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TorrentRowUpdatePayload {
+    #[serde(default)]
+    torrents: Vec<WeaverTorrent>,
+    #[serde(default)]
+    removed_ids: Vec<u64>,
 }
 
 /// Number of consecutive WebSocket failures before falling back to HTTP polling.
@@ -262,7 +288,7 @@ pub async fn start_weaver_subscription_bridge(
     let mut backoff_secs: u64 = 5;
     let max_backoff: u64 = 60;
     let mut consecutive_failures: u32 = 0;
-    let mut last_cursor: Option<String> = None;
+    let mut stream_state = BridgeStreamState::default();
     // Token used to stop fallback polling when WS reconnects.
     let mut poll_cancel: Option<CancellationToken> = None;
 
@@ -293,7 +319,7 @@ pub async fn start_weaver_subscription_bridge(
             "connecting to weaver WebSocket"
         );
 
-        match run_subscription(&bridge_client, &ingest, &token, &mut last_cursor).await {
+        match run_subscription(&bridge_client, &ingest, &token, &mut stream_state).await {
             SubscriptionOutcome::Shutdown => {
                 stop_fallback_poller(&mut poll_cancel);
                 info!("weaver subscription bridge stopped cleanly");
@@ -373,8 +399,14 @@ async fn run_fallback_poller(
             }
             _ = interval.tick() => {
                 match collect_weaver_fallback_items(&bridge_client).await {
-                    Ok(items) => {
-                        publish_authoritative_weaver_snapshot(&bridge_client, &ingest, items).await;
+                    Ok((items, prefetched)) => {
+                        publish_authoritative_weaver_snapshot(
+                            &bridge_client,
+                            &ingest,
+                            items,
+                            prefetched,
+                        )
+                        .await;
                     }
                     Err(error) => {
                         warn!(error = %error, "weaver fallback poll failed");
@@ -451,10 +483,15 @@ async fn publish_weaver_reconcile_delta(
     }
 }
 
+/// The fallback poller's read: the queue, with the completed rows of its
+/// content-ready torrents, plus the recent history.
 async fn collect_weaver_fallback_items(
     bridge_client: &WeaverSubscriptionBridgeClient,
-) -> AppResult<Vec<DownloadQueueItem>> {
-    let mut items = bridge_client.download_client.list_queue().await?;
+) -> AppResult<(Vec<DownloadQueueItem>, Vec<CompletedDownload>)> {
+    let (mut items, mut completed) = bridge_client
+        .download_client
+        .list_queue_with_torrent_completions()
+        .await?;
     let mut recent_items = bridge_client
         .download_client
         .list_recent_activity(POLL_FALLBACK_RECENT_ACTIVITY_LIMIT)
@@ -463,7 +500,10 @@ async fn collect_weaver_fallback_items(
     for item in &mut items {
         bridge_client.stamp_queue_item(item);
     }
-    Ok(items)
+    for download in &mut completed {
+        bridge_client.stamp_completed_download(download);
+    }
+    Ok((items, completed))
 }
 
 /// The reconcile loop's read: the queue, plus ONE history page that answers
@@ -478,7 +518,10 @@ async fn collect_weaver_fallback_items(
 async fn collect_weaver_reconcile_snapshot(
     bridge_client: &WeaverSubscriptionBridgeClient,
 ) -> AppResult<(Vec<DownloadQueueItem>, Vec<CompletedDownload>)> {
-    let mut items = bridge_client.download_client.list_queue().await?;
+    let (mut items, mut torrent_completed) = bridge_client
+        .download_client
+        .list_queue_with_torrent_completions()
+        .await?;
     let (mut recent_items, completed) = bridge_client
         .download_client
         .list_recent_activity_with_completed_with_feedback_scope(
@@ -491,6 +534,7 @@ async fn collect_weaver_reconcile_snapshot(
         bridge_client.stamp_queue_item(item);
     }
     let mut completed = completed.unwrap_or_default();
+    completed.append(&mut torrent_completed);
     for download in &mut completed {
         bridge_client.stamp_completed_download(download);
     }
@@ -511,15 +555,154 @@ enum SubscriptionOutcome {
     Disconnected(String),
 }
 
+/// What the bridge keeps across reconnects.
+#[derive(Default)]
+struct BridgeStreamState {
+    last_cursor: Option<String>,
+    /// Set once this Weaver refused a queue subscription's torrent selection:
+    /// it has no torrents, and the bridge subscribes with the NZB-only
+    /// documents from then on.
+    nzb_only: bool,
+}
+
+/// What one connection keeps: the torrent jobs its queue stream holds, so a
+/// pushed torrent row can be applied to its job, and the ids the torrent row
+/// subscription is open for.
 struct WsMessageState<'a> {
-    last_cursor: &'a mut Option<String>,
+    stream: &'a mut BridgeStreamState,
+    torrent_jobs: HashMap<u64, WeaverQueueItem>,
+    subscribed_torrent_ids: Vec<u64>,
+}
+
+impl<'a> WsMessageState<'a> {
+    fn new(stream: &'a mut BridgeStreamState) -> Self {
+        Self {
+            stream,
+            torrent_jobs: HashMap::new(),
+            subscribed_torrent_ids: Vec::new(),
+        }
+    }
+
+    /// Replace the held torrent jobs with a snapshot's.
+    fn replace_torrent_jobs(&mut self, jobs: &[WeaverQueueItem]) {
+        self.torrent_jobs = jobs
+            .iter()
+            .filter(|job| job.torrent.is_some())
+            .map(|job| (job.id, job.clone()))
+            .collect();
+    }
+
+    /// Apply one queue event; true when the set of held torrent jobs changed.
+    fn apply_event(
+        &mut self,
+        kind: &str,
+        item_id: Option<u64>,
+        item: Option<&WeaverQueueItem>,
+    ) -> bool {
+        if kind == "ITEM_REMOVED" {
+            let id = item.map(|item| item.id).or(item_id);
+            return id.is_some_and(|id| self.torrent_jobs.remove(&id).is_some());
+        }
+        let Some(item) = item else {
+            return false;
+        };
+        if item.torrent.is_some() {
+            self.torrent_jobs.insert(item.id, item.clone()).is_none()
+        } else {
+            self.torrent_jobs.remove(&item.id).is_some()
+        }
+    }
+
+    /// The ids the torrent row subscription should be open for.
+    fn wanted_torrent_ids(&self) -> Vec<u64> {
+        let mut ids = self.torrent_jobs.keys().copied().collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.truncate(TORRENT_ROW_UPDATES_MAX_IDS);
+        ids
+    }
+}
+
+fn snapshot_subscribe_message(nzb_only: bool) -> Value {
+    json!({
+        "id": "snapshot",
+        "type": "subscribe",
+        "payload": {
+            "query": if nzb_only {
+                QUEUE_SNAPSHOTS_QUERY
+            } else {
+                graphql_docs::QUEUE_SNAPSHOTS_WITH_TORRENTS_SUBSCRIPTION
+            },
+        }
+    })
+}
+
+fn events_subscribe_message(nzb_only: bool, after: Option<&str>) -> Value {
+    json!({
+        "id": "events",
+        "type": "subscribe",
+        "payload": {
+            "query": if nzb_only {
+                QUEUE_EVENTS_QUERY
+            } else {
+                graphql_docs::QUEUE_EVENTS_WITH_TORRENTS_SUBSCRIPTION
+            },
+            "variables": {
+                "after": after,
+            }
+        }
+    })
+}
+
+/// Open, move or close the torrent row subscription so it covers the torrent
+/// jobs the queue stream holds.
+async fn sync_torrent_row_subscription<S>(
+    write: &mut futures_util::stream::SplitSink<S, Message>,
+    state: &mut WsMessageState<'_>,
+) -> Result<(), String>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let wanted = state.wanted_torrent_ids();
+    if wanted == state.subscribed_torrent_ids {
+        return Ok(());
+    }
+    if !state.subscribed_torrent_ids.is_empty() {
+        write
+            .send(Message::Text(
+                json!({"id": TORRENT_ROWS_SUBSCRIPTION_ID, "type": "complete"})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .map_err(|e| format!("failed to close torrentRowUpdates: {e}"))?;
+    }
+    if !wanted.is_empty() {
+        write
+            .send(Message::Text(
+                json!({
+                    "id": TORRENT_ROWS_SUBSCRIPTION_ID,
+                    "type": "subscribe",
+                    "payload": {
+                        "query": graphql_docs::TORRENT_ROW_UPDATES_SUBSCRIPTION,
+                        "variables": { "ids": &wanted },
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .map_err(|e| format!("failed to subscribe to torrentRowUpdates: {e}"))?;
+    }
+    state.subscribed_torrent_ids = wanted;
+    Ok(())
 }
 
 async fn run_subscription(
     bridge_client: &WeaverSubscriptionBridgeClient,
     ingest: &TrackedDownloadSnapshotIngestHandle,
     token: &CancellationToken,
-    last_cursor: &mut Option<String>,
+    stream_state: &mut BridgeStreamState,
 ) -> SubscriptionOutcome {
     let uri: tokio_tungstenite::tungstenite::http::Uri = match bridge_client.ws_url.parse() {
         Ok(uri) => uri,
@@ -602,13 +785,7 @@ async fn run_subscription(
     debug!("weaver WebSocket connection_ack received");
 
     // --- Subscribe to queueSnapshots ---
-    let snapshot_subscribe_msg = json!({
-        "id": "snapshot",
-        "type": "subscribe",
-        "payload": {
-            "query": QUEUE_SNAPSHOTS_QUERY,
-        }
-    });
+    let snapshot_subscribe_msg = snapshot_subscribe_message(stream_state.nzb_only);
     if let Err(e) = write
         .send(Message::Text(snapshot_subscribe_msg.to_string().into()))
         .await
@@ -618,16 +795,8 @@ async fn run_subscription(
         ));
     }
 
-    let events_subscribe_msg = json!({
-        "id": "events",
-        "type": "subscribe",
-        "payload": {
-            "query": QUEUE_EVENTS_QUERY,
-            "variables": {
-                "after": last_cursor,
-            }
-        }
-    });
+    let events_subscribe_msg =
+        events_subscribe_message(stream_state.nzb_only, stream_state.last_cursor.as_deref());
     if let Err(e) = write
         .send(Message::Text(events_subscribe_msg.to_string().into()))
         .await
@@ -641,6 +810,7 @@ async fn run_subscription(
 
     // ── From here on the subscription is live; any failure is a Disconnected. ──
 
+    let mut message_state = WsMessageState::new(stream_state);
     loop {
         let msg = tokio::select! {
             _ = token.cancelled() => return SubscriptionOutcome::Shutdown,
@@ -655,9 +825,6 @@ async fn run_subscription(
 
         match msg {
             Message::Text(text) => {
-                let mut message_state = WsMessageState {
-                    last_cursor: &mut *last_cursor,
-                };
                 if let Err(e) = handle_ws_message(
                     text.as_ref(),
                     &mut write,
@@ -704,22 +871,68 @@ where
             if let Some(payload) = payload {
                 match subscription_id {
                     "snapshot" => {
-                        let parsed: QueueSnapshotsPayload = serde_json::from_value(payload)
+                        let mut parsed: QueueSnapshotsPayload = serde_json::from_value(payload)
                             .map_err(|e| format!("invalid queueSnapshots payload: {e}"))?;
-                        let items = map_weaver_items(bridge_client, &parsed.queue_snapshots.items);
-                        publish_authoritative_weaver_snapshot(bridge_client, ingest, items).await;
+                        if state.stream.nzb_only {
+                            parsed
+                                .queue_snapshots
+                                .items
+                                .iter_mut()
+                                .for_each(mark_nzb_only);
+                        }
+                        let jobs = &parsed.queue_snapshots.items;
+                        let items = map_weaver_items(bridge_client, jobs);
+                        let prefetched = torrent_completed_downloads(bridge_client, jobs);
+                        publish_authoritative_weaver_snapshot(
+                            bridge_client,
+                            ingest,
+                            items,
+                            prefetched,
+                        )
+                        .await;
+                        state.replace_torrent_jobs(jobs);
+                        sync_torrent_row_subscription(write, state).await?;
                     }
                     "events" => {
-                        let parsed: QueueEventsPayload = serde_json::from_value(payload)
+                        let mut parsed: QueueEventsPayload = serde_json::from_value(payload)
                             .map_err(|e| format!("invalid queueEvents payload: {e}"))?;
-                        *state.last_cursor = Some(parsed.queue_events.cursor.clone());
-                        if let Some(item) = parsed.queue_events.item.as_ref()
-                            && should_publish_weaver_terminal_delta(
-                                parsed.queue_events.kind.as_str(),
-                                item,
-                            )
+                        if state.stream.nzb_only
+                            && let Some(item) = parsed.queue_events.item.as_mut()
+                        {
+                            mark_nzb_only(item);
+                        }
+                        state.stream.last_cursor = Some(parsed.queue_events.cursor.clone());
+                        let kind = parsed.queue_events.kind.as_str();
+                        let item = parsed.queue_events.item.as_ref();
+                        if let Some(item) = item
+                            && should_publish_weaver_terminal_delta(kind, item)
                         {
                             publish_weaver_terminal_delta(bridge_client, ingest, item).await;
+                        }
+                        if state.apply_event(kind, parsed.queue_events.item_id, item) {
+                            sync_torrent_row_subscription(write, state).await?;
+                        }
+                    }
+                    TORRENT_ROWS_SUBSCRIPTION_ID => {
+                        let parsed: TorrentRowUpdatesPayload = serde_json::from_value(payload)
+                            .map_err(|e| format!("invalid torrentRowUpdates payload: {e}"))?;
+                        let update = parsed.torrent_row_updates;
+                        let changed = update
+                            .torrents
+                            .into_iter()
+                            .filter_map(|torrent| {
+                                let job = state.torrent_jobs.get_mut(&torrent.id)?;
+                                job.torrent = Some(torrent);
+                                Some(job.clone())
+                            })
+                            .collect::<Vec<_>>();
+                        publish_weaver_torrent_rows(bridge_client, ingest, &changed).await;
+                        let mut removed_any = false;
+                        for id in update.removed_ids {
+                            removed_any |= state.torrent_jobs.remove(&id).is_some();
+                        }
+                        if removed_any {
+                            sync_torrent_row_subscription(write, state).await?;
                         }
                     }
                     _ => {
@@ -734,11 +947,44 @@ where
                 .await;
         }
         "error" => {
+            let subscription_id = json.get("id").and_then(Value::as_str).unwrap_or("");
             let payload = json.get("payload");
+            if subscription_id == TORRENT_ROWS_SUBSCRIPTION_ID {
+                // The queue stream still carries every torrent row; the next
+                // change to the held torrent jobs opens this one again.
+                warn!(?payload, "weaver torrentRowUpdates subscription refused");
+                state.subscribed_torrent_ids.clear();
+                return Ok(());
+            }
+            if matches!(subscription_id, "snapshot" | "events")
+                && weaver_ws_error_lacks_torrents(payload)
+            {
+                // A Weaver without torrents: subscribe with the NZB-only
+                // document, as every bridge did before torrents.
+                info!(
+                    subscription_id,
+                    "weaver has no torrents; subscribing with the NZB-only queue documents"
+                );
+                state.stream.nzb_only = true;
+                let message = if subscription_id == "snapshot" {
+                    snapshot_subscribe_message(true)
+                } else {
+                    events_subscribe_message(true, state.stream.last_cursor.as_deref())
+                };
+                write
+                    .send(Message::Text(message.to_string().into()))
+                    .await
+                    .map_err(|e| format!("failed to resubscribe {subscription_id}: {e}"))?;
+                return Ok(());
+            }
             warn!(?payload, "weaver subscription error");
             return Err("subscription error from server".into());
         }
         "complete" => {
+            if json.get("id").and_then(Value::as_str) == Some(TORRENT_ROWS_SUBSCRIPTION_ID) {
+                state.subscribed_torrent_ids.clear();
+                return Ok(());
+            }
             return Err("subscription completed by server".into());
         }
         _ => {
@@ -749,9 +995,60 @@ where
     Ok(())
 }
 
+/// A row pushed by a Weaver without torrents: every job it holds is an NZB.
+fn mark_nzb_only(item: &mut WeaverQueueItem) {
+    item.protocol = Some(WeaverProtocol::Nzb);
+}
+
+/// A torrent whose content is ready is complete for import while it seeds,
+/// so its state changes publish like a completion.
 fn should_publish_weaver_terminal_delta(kind: &str, item: &WeaverQueueItem) -> bool {
     kind == "ITEM_COMPLETED"
-        || (kind == "ITEM_STATE_CHANGED" && item.state == WeaverQueueState::Failed)
+        || (kind == "ITEM_STATE_CHANGED"
+            && (item.state == WeaverQueueState::Failed
+                || item
+                    .torrent
+                    .as_ref()
+                    .is_some_and(|torrent| torrent.content_ready)))
+}
+
+/// The stamped completed rows of the content-ready torrents among `jobs`.
+fn torrent_completed_downloads(
+    bridge_client: &WeaverSubscriptionBridgeClient,
+    jobs: &[WeaverQueueItem],
+) -> Vec<CompletedDownload> {
+    jobs.iter()
+        .filter_map(weaver_torrent_to_completed_download)
+        .map(|mut download| {
+            bridge_client.stamp_completed_download(&mut download);
+            download
+        })
+        .collect()
+}
+
+/// Publish torrent jobs whose pushed torrent rows changed, as a delta. A
+/// content-ready torrent carries its completed row from the queue.
+async fn publish_weaver_torrent_rows(
+    bridge_client: &WeaverSubscriptionBridgeClient,
+    ingest: &TrackedDownloadSnapshotIngestHandle,
+    jobs: &[WeaverQueueItem],
+) {
+    if jobs.is_empty() {
+        return;
+    }
+    let items = map_weaver_items(bridge_client, jobs);
+    let prefetched = torrent_completed_downloads(bridge_client, jobs);
+    let completed_downloads =
+        load_completed_downloads_with_prefetch(bridge_client, &items, prefetched).await;
+    let update = TrackedDownloadSnapshotUpdate {
+        scope: TrackedDownloadSnapshotScope::Delta,
+        items,
+        completed_downloads,
+        actor_id: None,
+    };
+    if let Err(error) = ingest.publish(update).await {
+        warn!(error = %error, "weaver: failed to publish torrent row delta");
+    }
 }
 
 fn map_weaver_items(
@@ -767,8 +1064,10 @@ async fn publish_authoritative_weaver_snapshot(
     bridge_client: &WeaverSubscriptionBridgeClient,
     ingest: &TrackedDownloadSnapshotIngestHandle,
     items: Vec<DownloadQueueItem>,
+    prefetched: Vec<CompletedDownload>,
 ) {
-    let completed_downloads = load_completed_downloads_for_import(bridge_client, &items).await;
+    let completed_downloads =
+        load_completed_downloads_with_prefetch(bridge_client, &items, prefetched).await;
     let update = TrackedDownloadSnapshotUpdate {
         scope: TrackedDownloadSnapshotScope::AuthoritativeForClient {
             client_id: Some(bridge_client.client_id.clone()),
@@ -786,11 +1085,16 @@ async fn publish_authoritative_weaver_snapshot(
 async fn publish_weaver_terminal_delta(
     bridge_client: &WeaverSubscriptionBridgeClient,
     ingest: &TrackedDownloadSnapshotIngestHandle,
-    item: &WeaverQueueItem,
+    job: &WeaverQueueItem,
 ) {
-    let item = bridge_client.map_queue_item(item);
-    let completed_downloads =
-        load_completed_downloads_for_import(bridge_client, std::slice::from_ref(&item)).await;
+    let item = bridge_client.map_queue_item(job);
+    let prefetched = torrent_completed_downloads(bridge_client, std::slice::from_ref(job));
+    let completed_downloads = load_completed_downloads_with_prefetch(
+        bridge_client,
+        std::slice::from_ref(&item),
+        prefetched,
+    )
+    .await;
     let update = TrackedDownloadSnapshotUpdate {
         scope: TrackedDownloadSnapshotScope::Delta,
         items: vec![item],
@@ -800,13 +1104,6 @@ async fn publish_weaver_terminal_delta(
     if let Err(error) = ingest.publish(update).await {
         warn!(error = %error, "weaver: failed to publish terminal delta");
     }
-}
-
-async fn load_completed_downloads_for_import(
-    bridge_client: &WeaverSubscriptionBridgeClient,
-    completed_items: &[DownloadQueueItem],
-) -> Vec<CompletedDownload> {
-    load_completed_downloads_with_prefetch(bridge_client, completed_items, Vec::new()).await
 }
 
 /// Completed rows for the completed observations in `completed_items`.
@@ -943,6 +1240,8 @@ mod tests {
             completed_at: None,
             attention: None,
             posted_file_names: Vec::new(),
+            protocol: None,
+            torrent: None,
         }
     }
 
@@ -957,6 +1256,7 @@ mod tests {
             &bridge,
             &ingest,
             vec![bridge.map_queue_item(&queue_item(42, WeaverQueueState::Queued))],
+            Vec::new(),
         )
         .await;
 
@@ -1274,6 +1574,7 @@ mod tests {
         let on_page = bridge.map_queue_item(&queue_item(42, WeaverQueueState::Completed));
         let off_page = bridge.map_queue_item(&queue_item(99, WeaverQueueState::Completed));
         let mut prefetched = CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: String::new(),
             client_id: String::new(),
@@ -1301,5 +1602,304 @@ mod tests {
             .collect::<Vec<_>>();
         ids.sort();
         assert_eq!(ids, vec!["42".to_string(), "99".to_string()]);
+    }
+
+    // ── Torrents ────────────────────────────────────────────────────────
+
+    /// A socket that records what the bridge sends and never yields a frame.
+    #[derive(Clone, Default)]
+    struct RecordingSocket {
+        sent: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    }
+
+    impl RecordingSocket {
+        fn sent(&self) -> Vec<Value> {
+            self.sent.lock().expect("sent frames").clone()
+        }
+    }
+
+    impl futures_util::Sink<Message> for RecordingSocket {
+        type Error = std::convert::Infallible;
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn start_send(self: std::pin::Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            if let Message::Text(text) = item {
+                let frame = serde_json::from_str(text.as_ref()).expect("a JSON frame");
+                self.sent.lock().expect("sent frames").push(frame);
+            }
+            Ok(())
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    impl futures_util::Stream for RecordingSocket {
+        type Item = ();
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<()>> {
+            std::task::Poll::Ready(None)
+        }
+    }
+
+    fn torrent_row(id: u64, goal_met: bool, content_ready: bool) -> Value {
+        json!({
+            "id": id,
+            "infohashV1": "0123456789abcdef0123456789abcdef01234567",
+            "private": true,
+            "ratio": 0.5,
+            "uploadedBytes": 10,
+            "seedingSeconds": 60,
+            "completedAt": "2026-01-01T01:00:00Z",
+            "storageDir": format!("/downloads/torrents/job-{id}"),
+            "seedingGoalMet": goal_met,
+            "contentReady": content_ready
+        })
+    }
+
+    fn torrent_queue_json(id: u64, goal_met: bool, content_ready: bool) -> Value {
+        json!({
+            "id": id,
+            "name": format!("Synthetic Torrent {id}"),
+            "state": if content_ready { "SEEDING" } else { "DOWNLOADING" },
+            "error": null,
+            "progressPercent": 100.0,
+            "totalBytes": 100_u64,
+            "category": "movie",
+            "attributes": [],
+            "clientRequestId": null,
+            "outputDir": null,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "completedAt": null,
+            "attention": null,
+            "protocol": "TORRENT",
+            "torrent": torrent_row(id, goal_met, content_ready)
+        })
+    }
+
+    fn torrent_queue_item(id: u64, content_ready: bool) -> WeaverQueueItem {
+        serde_json::from_value(torrent_queue_json(id, false, content_ready)).expect("torrent row")
+    }
+
+    #[test]
+    fn the_torrent_row_set_follows_queue_events_and_is_capped() {
+        let mut stream = BridgeStreamState::default();
+        let mut state = WsMessageState::new(&mut stream);
+        assert!(state.apply_event("ITEM_ADDED", None, Some(&torrent_queue_item(9, false))));
+        // The same torrent again does not change the set.
+        assert!(!state.apply_event(
+            "ITEM_STATE_CHANGED",
+            None,
+            Some(&torrent_queue_item(9, true))
+        ));
+        // NZB jobs never enter it.
+        assert!(!state.apply_event(
+            "ITEM_ADDED",
+            None,
+            Some(&queue_item(10, WeaverQueueState::Queued))
+        ));
+        // A removal carries the id alone.
+        assert!(state.apply_event("ITEM_REMOVED", Some(9), None));
+        assert!(state.wanted_torrent_ids().is_empty());
+
+        let jobs = (1..=600)
+            .rev()
+            .map(|id| torrent_queue_item(id, false))
+            .collect::<Vec<_>>();
+        state.replace_torrent_jobs(&jobs);
+        let wanted = state.wanted_torrent_ids();
+        assert_eq!(wanted.len(), TORRENT_ROW_UPDATES_MAX_IDS);
+        assert_eq!(wanted.first(), Some(&1));
+        assert_eq!(wanted.last(), Some(&500));
+    }
+
+    #[test]
+    fn a_content_ready_torrent_state_change_publishes_like_a_completion() {
+        assert!(should_publish_weaver_terminal_delta(
+            "ITEM_STATE_CHANGED",
+            &torrent_queue_item(9, true)
+        ));
+        assert!(!should_publish_weaver_terminal_delta(
+            "ITEM_STATE_CHANGED",
+            &torrent_queue_item(9, false)
+        ));
+    }
+
+    // A snapshot holding a seeding torrent publishes its completed row from
+    // the queue, with no history lookup, and opens the torrent row
+    // subscription for it. A pushed row then updates that torrent's seeding
+    // observation.
+    #[tokio::test]
+    async fn a_seeding_torrent_is_imported_from_the_queue_and_followed_by_row_updates() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let bridge = WeaverSubscriptionBridgeClient::from_config(&test_config_for_server(&server))
+            .expect("bridge client should parse");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let ingest = TrackedDownloadSnapshotIngestHandle::new(tx);
+        let socket = RecordingSocket::default();
+        let (mut write, _read) = socket.clone().split();
+        let mut stream = BridgeStreamState::default();
+        let mut state = WsMessageState::new(&mut stream);
+
+        let snapshot = json!({
+            "id": "snapshot",
+            "type": "next",
+            "payload": { "data": { "queueSnapshots": {
+                "items": [torrent_queue_json(91, false, true)],
+                "latestCursor": "5"
+            }}}
+        });
+        handle_ws_message(
+            &snapshot.to_string(),
+            &mut write,
+            &bridge,
+            &ingest,
+            &mut state,
+        )
+        .await
+        .expect("snapshot handled");
+
+        let update = rx.recv().await.expect("authoritative snapshot");
+        assert_eq!(update.items.len(), 1);
+        assert_eq!(update.items[0].state, DownloadQueueState::Completed);
+        let seeding = update.items[0]
+            .seeding
+            .clone()
+            .expect("seeding observation");
+        assert_eq!(seeding.can_remove, Some(false));
+        assert_eq!(seeding.can_move_files, Some(false));
+        assert_eq!(seeding.is_private, Some(true));
+        assert_eq!(update.completed_downloads.len(), 1);
+        assert_eq!(
+            update.completed_downloads[0].dest_dir,
+            "/downloads/torrents/job-91"
+        );
+        assert_eq!(update.completed_downloads[0].client_id, "weaver-client");
+        let sent = socket.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["id"], TORRENT_ROWS_SUBSCRIPTION_ID);
+        assert_eq!(sent[0]["type"], "subscribe");
+        assert_eq!(sent[0]["payload"]["variables"]["ids"], json!([91]));
+        assert!(
+            sent[0]["payload"]["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("subscription TorrentRowUpdates"))
+        );
+
+        let row = json!({
+            "id": TORRENT_ROWS_SUBSCRIPTION_ID,
+            "type": "next",
+            "payload": { "data": { "torrentRowUpdates": {
+                "removedIds": [],
+                "torrents": [torrent_row(91, true, true)]
+            }}}
+        });
+        handle_ws_message(&row.to_string(), &mut write, &bridge, &ingest, &mut state)
+            .await
+            .expect("row handled");
+        let update = rx.recv().await.expect("torrent row delta");
+        assert!(matches!(update.scope, TrackedDownloadSnapshotScope::Delta));
+        assert_eq!(
+            update.items[0].seeding.as_ref().and_then(|s| s.can_remove),
+            Some(true)
+        );
+
+        // The torrent leaves: the row subscription closes.
+        let removed = json!({
+            "id": TORRENT_ROWS_SUBSCRIPTION_ID,
+            "type": "next",
+            "payload": { "data": { "torrentRowUpdates": {
+                "removedIds": [91],
+                "torrents": []
+            }}}
+        });
+        handle_ws_message(
+            &removed.to_string(),
+            &mut write,
+            &bridge,
+            &ingest,
+            &mut state,
+        )
+        .await
+        .expect("removal handled");
+        let sent = socket.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1]["id"], TORRENT_ROWS_SUBSCRIPTION_ID);
+        assert_eq!(sent[1]["type"], "complete");
+    }
+
+    // A Weaver without torrents refuses the torrent selection of the queue
+    // subscriptions: the bridge resubscribes that one id with the NZB-only
+    // document, keeps the connection, and remembers it for reconnects.
+    #[tokio::test]
+    async fn an_older_weaver_gets_the_nzb_only_subscriptions() {
+        let bridge = WeaverSubscriptionBridgeClient::from_config(&test_config())
+            .expect("bridge client should parse");
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let ingest = TrackedDownloadSnapshotIngestHandle::new(tx);
+        let socket = RecordingSocket::default();
+        let (mut write, _read) = socket.clone().split();
+        let mut stream = BridgeStreamState {
+            last_cursor: Some("7".to_string()),
+            nzb_only: false,
+        };
+        {
+            let mut state = WsMessageState::new(&mut stream);
+            for id in ["snapshot", "events"] {
+                let error = json!({
+                    "id": id,
+                    "type": "error",
+                    "payload": [{ "message": "Unknown field \"protocol\" on type \"QueueItem\"." }]
+                });
+                handle_ws_message(&error.to_string(), &mut write, &bridge, &ingest, &mut state)
+                    .await
+                    .expect("a schema refusal keeps the connection");
+            }
+        }
+        assert!(stream.nzb_only);
+        let sent = socket.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0]["id"], "snapshot");
+        assert_eq!(sent[0]["payload"]["query"], QUEUE_SNAPSHOTS_QUERY);
+        assert_eq!(sent[1]["id"], "events");
+        assert_eq!(sent[1]["payload"]["query"], QUEUE_EVENTS_QUERY);
+        assert_eq!(sent[1]["payload"]["variables"]["after"], "7");
+        assert_eq!(
+            snapshot_subscribe_message(stream.nzb_only)["payload"]["query"],
+            QUEUE_SNAPSHOTS_QUERY
+        );
+
+        // Any other error still ends the connection, as before.
+        let mut state = WsMessageState::new(&mut stream);
+        let other = json!({
+            "id": "snapshot",
+            "type": "error",
+            "payload": [{ "message": "synthetic failure", "extensions": { "code": "INTERNAL" } }]
+        });
+        assert!(
+            handle_ws_message(&other.to_string(), &mut write, &bridge, &ingest, &mut state)
+                .await
+                .is_err()
+        );
     }
 }

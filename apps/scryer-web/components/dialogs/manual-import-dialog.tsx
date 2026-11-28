@@ -50,6 +50,16 @@ import {
   seriesMovieTargetLabel,
   seriesMovieTargetValue,
 } from "@/lib/utils/episode-target";
+import { manualImportVerdictsQuery } from "@/lib/graphql/queries";
+import {
+  MANUAL_IMPORT_VERDICT_TONES,
+  chunkManualImportVerdictRequests,
+  currentManualImportVerdict,
+  manualImportVerdictKey,
+  pendingManualImportVerdictRequests,
+  type ManualImportVerdict,
+  type ManualImportVerdictEstimate,
+} from "@/lib/utils/manual-import-verdict";
 import { buildViewPath } from "@/lib/utils/routing";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
@@ -263,6 +273,76 @@ export function ManualImportDialog({
   >({});
   const [selectionId, setSelectionId] = React.useState<string | null>(null);
   const [importing, setImporting] = React.useState(false);
+  const [verdicts, setVerdicts] = React.useState<
+    Record<string, ManualImportVerdictEstimate>
+  >({});
+  // The mapping each file's estimate was last asked for, so a change asks
+  // only about the files it touched.
+  const requestedVerdicts = React.useRef<Record<string, string>>({});
+
+  React.useEffect(() => {
+    requestedVerdicts.current = {};
+    setVerdicts({});
+  }, [selectionId]);
+
+  // Estimated upgrade verdicts follow the target each file is mapped to.
+  // Display only: the import decides again on the landed file.
+  React.useEffect(() => {
+    if (!selectionId || facet === "MOVIE") return;
+    const requests = pendingManualImportVerdictRequests(
+      mappings,
+      requestedVerdicts.current,
+    );
+    if (requests.length === 0) return;
+    const keys = new Map(
+      requests.map((request) => [
+        request.candidateId,
+        manualImportVerdictKey(request.episodeIds),
+      ]),
+    );
+    for (const [candidateId, key] of keys) {
+      requestedVerdicts.current[candidateId] = key;
+    }
+    for (const chunk of chunkManualImportVerdictRequests(requests)) {
+      void client
+        .query(
+          manualImportVerdictsQuery,
+          { selectionId, files: chunk },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise()
+        .then(({ data, error: queryError }) => {
+          if (queryError || !data) {
+            // Let the next change ask again about this batch's files.
+            for (const { candidateId } of chunk) {
+              if (
+                requestedVerdicts.current[candidateId] === keys.get(candidateId)
+              ) {
+                delete requestedVerdicts.current[candidateId];
+              }
+            }
+            return;
+          }
+          setVerdicts((previous) => {
+            const next = { ...previous };
+            for (const row of data.manualImportVerdicts as {
+              candidateId: string;
+              episodeIds: string[];
+              verdict: ManualImportVerdict | null;
+            }[]) {
+              const key = keys.get(row.candidateId);
+              if (key === undefined) continue;
+              next[row.candidateId] = {
+                key,
+                verdict: row.verdict,
+                episodeCount: row.episodeIds.length,
+              };
+            }
+            return next;
+          });
+        });
+    }
+  }, [client, facet, mappings, selectionId]);
   // Rows a bulk action works on. Queueing still follows each row's target.
   const [selectedRows, setSelectedRows] = React.useState<Set<string>>(
     () => new Set(),
@@ -840,6 +920,46 @@ export function ManualImportDialog({
                               onChange={handleMappingChange}
                             />
                           )}
+                          {(() => {
+                            const estimate = currentManualImportVerdict(
+                              verdicts[file.candidateId],
+                              mappings[file.candidateId],
+                            );
+                            if (!estimate?.verdict) return null;
+                            return (
+                              <div
+                                id={selectorId(
+                                  "activity-manual-import-verdict",
+                                  file.candidateId,
+                                )}
+                                data-verdict={estimate.verdict}
+                                className="mt-1 flex items-center gap-1.5"
+                              >
+                                <Badge
+                                  tone={
+                                    MANUAL_IMPORT_VERDICT_TONES[
+                                      estimate.verdict
+                                    ]
+                                  }
+                                  className="px-1.5 text-[10px]"
+                                >
+                                  {t(
+                                    `queue.manualImportVerdict.${estimate.verdict}`,
+                                  )}
+                                </Badge>
+                                {estimate.episodeCount > 1 ? (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {t("title.episodeCountOther", {
+                                      count: estimate.episodeCount,
+                                    })}
+                                  </span>
+                                ) : null}
+                                <span className="text-[10px] italic text-muted-foreground">
+                                  {t("queue.manualImportVerdictEstimated")}
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </TableCell>
                       </TableRow>
                     ))}

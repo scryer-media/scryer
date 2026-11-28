@@ -332,7 +332,7 @@ async fn retry_tracked_snapshot(
         &completed.client_type,
         &completed.download_client_item_id,
     );
-    let item = scryer_domain::DownloadQueueItem {
+    let item = scryer_domain::DownloadQueueItem { client_job_protocol: None,
         id: id.clone(),
         title_id: None,
         episode_id: None,
@@ -725,7 +725,9 @@ async fn reconcile_terminal_download_cleanup(
             client_type: client_type.trim().to_string(),
             client_item_id: download_client_item_id.trim().to_string(),
             info_hash: crate::normalize_torrent_info_hash(Some(download_client_item_id)),
+            // Already resolved by the caller, the client's report included.
             job_protocol,
+            client_reported_protocol: None,
         };
         let decision = crate::seeding_gate::evaluate_seeding_gate_with(
             app,

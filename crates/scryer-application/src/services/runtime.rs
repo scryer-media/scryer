@@ -669,6 +669,7 @@ mod download_queue_snapshot_cache_tests {
     fn item(index: usize) -> DownloadQueueItem {
         let id = format!("item-{index}");
         DownloadQueueItem {
+            client_job_protocol: None,
             id: id.clone(),
             title_id: None,
             episode_id: None,

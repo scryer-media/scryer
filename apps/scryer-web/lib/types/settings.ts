@@ -96,6 +96,11 @@ export type InstanceFeatures = {
   personalizedDiscoveryEnabled: boolean;
   /** Facets an administrator turned off for every user of the instance. */
   disabledFacets: Facet[];
+  /**
+   * Facets the signed-in user can view, request into, add to or manage a
+   * library of. Null until read, when every catalog entry is shown.
+   */
+  viewableFacets: Facet[] | null;
 };
 
 export type UiDateTimeFormat = "LOCALE" | "ISO24H";

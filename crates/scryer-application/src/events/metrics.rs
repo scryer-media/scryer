@@ -583,6 +583,7 @@ mod tests {
 
     fn queue_item() -> DownloadQueueItem {
         DownloadQueueItem {
+            client_job_protocol: None,
             id: "queue-1".to_string(),
             title_id: None,
             episode_id: None,

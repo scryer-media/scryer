@@ -6094,8 +6094,12 @@ pub mod import {
     pub const UNPARSEABLE_EPISODE_MEMBER: &str = "IMPORT_UNPARSEABLE_EPISODE_MEMBER";
     /// Preparing to replace the library file failed, so the new file was not placed and the existing file was kept.
     pub const UPGRADE_PREPARATION_FAILED: &str = "IMPORT_UPGRADE_PREPARATION_FAILED";
+    /// A manual-import verdict request named more files, or more episodes for one file, than one request may carry.
+    pub const MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE: &str =
+        "IMPORT_MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        MANUAL_IMPORT_VERDICT_REQUEST_TOO_LARGE,
         INCUMBENT_IDENTITY_UNDECIDED,
         RETRY_LIMIT_REACHED,
         INCUMBENT_PLACED_BY_THIS_DOWNLOAD,

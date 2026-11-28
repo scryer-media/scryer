@@ -6,10 +6,12 @@ use reqwest::multipart;
 use scryer_application::disk::{Disk, Open, PathReading};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
-    NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction, StagedNzbStore, plugin_codes,
+    NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction, ResolvedDownloadArtifact,
+    StagedNzbStore, plugin_codes,
 };
 use scryer_domain::{
-    CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState, PostedFileName,
+    ClientJobProtocol, CompletedDownload, DownloadClientConfig, DownloadQueueItem,
+    DownloadQueueState, PostedFileName,
 };
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
@@ -132,6 +134,15 @@ enum WeaverSchemaFeature {
     DeleteFilesVariable,
     RemoveHistoryItems,
     CancelQueueItem,
+    /// `QueueItem.protocol`: a Weaver that holds only NZB jobs lacks it.
+    Protocol,
+    /// `QueueItem.torrent`: a Weaver without torrents lacks it.
+    Torrent,
+    SubmitTorrent,
+    RemoveTorrent,
+    TorrentRowUpdates,
+    /// `QueueFilterInput.itemIds`: added to Weaver before torrents.
+    QueueItemIds,
 }
 
 impl WeaverSchemaFeature {
@@ -203,6 +214,20 @@ impl WeaverSchemaFeature {
             Self::CancelQueueItem => {
                 crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_CANCEL_QUEUE_ITEM_UNSUPPORTED
             }
+            Self::Protocol => crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_PROTOCOL_UNSUPPORTED,
+            Self::Torrent => crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_TORRENT_UNSUPPORTED,
+            Self::SubmitTorrent => {
+                crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_SUBMIT_TORRENT_UNSUPPORTED
+            }
+            Self::RemoveTorrent => {
+                crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_REMOVE_TORRENT_UNSUPPORTED
+            }
+            Self::TorrentRowUpdates => {
+                crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_TORRENT_ROW_UPDATES_UNSUPPORTED
+            }
+            Self::QueueItemIds => {
+                crate::error_reasons::ACQUISITION_WEAVER_SCHEMA_QUEUE_ITEM_IDS_UNSUPPORTED
+            }
         }
     }
 }
@@ -241,6 +266,12 @@ fn classify_weaver_schema_error(message: &str) -> Option<WeaverSchemaFeature> {
             "reprocessjob" => Some(WeaverSchemaFeature::ReprocessJob),
             "removehistoryitems" => Some(WeaverSchemaFeature::RemoveHistoryItems),
             "cancelqueueitem" => Some(WeaverSchemaFeature::CancelQueueItem),
+            "protocol" => Some(WeaverSchemaFeature::Protocol),
+            "torrent" => Some(WeaverSchemaFeature::Torrent),
+            "submittorrent" => Some(WeaverSchemaFeature::SubmitTorrent),
+            "removetorrent" => Some(WeaverSchemaFeature::RemoveTorrent),
+            "torrentrowupdates" => Some(WeaverSchemaFeature::TorrentRowUpdates),
+            "itemids" => Some(WeaverSchemaFeature::QueueItemIds),
             _ => None,
         };
     }
@@ -265,6 +296,13 @@ fn classify_weaver_schema_error(message: &str) -> Option<WeaverSchemaFeature> {
             "variable \"$deletefiles\"",
             WeaverSchemaFeature::DeleteFilesVariable,
         ),
+        (
+            "unknown type \"submittorrentinput\"",
+            WeaverSchemaFeature::SubmitTorrent,
+        ),
+        // The torrent documents spread a fragment on `Torrent`; a Weaver
+        // without torrents may report the unknown type before the field.
+        ("unknown type \"torrent\"", WeaverSchemaFeature::Torrent),
     ]
     .into_iter()
     .find_map(|(needle, feature)| normalized.contains(needle).then_some(feature))
@@ -347,9 +385,16 @@ struct GraphqlMultipartUploadRequest<'a> {
     variables: Value,
     upload_variable_path: &'a str,
     filename: String,
-    upload_path: &'a std::path::Path,
+    upload: MultipartUploadBody<'a>,
     content_type: &'a str,
-    content_length: u64,
+}
+
+/// What one multipart upload streams: a staged file on disk (an NZB), or
+/// bytes already held (a torrent's metainfo).
+#[derive(Clone, Copy)]
+enum MultipartUploadBody<'a> {
+    File { path: &'a std::path::Path, len: u64 },
+    Bytes(&'a [u8]),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -401,6 +446,20 @@ pub enum WeaverQueueState {
     Failed,
     #[serde(rename = "PAUSED")]
     Paused,
+    /// A torrent that is complete and uploading. Whether its content can be
+    /// imported is the torrent's `contentReady`, not this state.
+    #[serde(rename = "SEEDING")]
+    Seeding,
+    /// A magnet whose metadata is still being fetched.
+    #[serde(rename = "FETCHING_METADATA")]
+    FetchingMetadata,
+    /// A torrent whose files are being checked against its pieces.
+    #[serde(rename = "CHECKING_FILES")]
+    CheckingFiles,
+    /// A torrent that cannot make progress (no peers, or a certificate it
+    /// needs). Still active work, never terminal.
+    #[serde(rename = "STALLED")]
+    Stalled,
     /// Any state this build of scryer does not know about.
     ///
     /// Without this catch-all a single job in a state added by a newer weaver
@@ -431,6 +490,51 @@ pub struct WeaverQueueItem {
     pub attention: Option<WeaverAttention>,
     #[serde(default)]
     pub posted_file_names: Vec<WeaverPostedFileName>,
+    /// Selected only from a Weaver that reports it (`WeaverSchemaFeature::Protocol`).
+    #[serde(default)]
+    pub protocol: Option<WeaverProtocol>,
+    /// The job's torrent; `None` for an NZB job and from a Weaver without
+    /// torrents.
+    #[serde(default)]
+    pub torrent: Option<WeaverTorrent>,
+}
+
+impl WeaverQueueItem {
+    /// The job is a torrent: Weaver says so, or it carries a torrent row.
+    pub fn is_torrent(&self) -> bool {
+        self.protocol == Some(WeaverProtocol::Torrent) || self.torrent.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub enum WeaverProtocol {
+    #[serde(rename = "NZB")]
+    Nzb,
+    #[serde(rename = "TORRENT")]
+    Torrent,
+    /// A protocol a newer Weaver added; read as neither family.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The fields of Weaver's `Torrent` the queue snapshot, the seeding gate and
+/// the import read. Nothing else is selected.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaverTorrent {
+    pub id: u64,
+    #[serde(default)]
+    pub infohash_v1: Option<String>,
+    pub private: bool,
+    pub ratio: f64,
+    pub uploaded_bytes: i64,
+    pub seeding_seconds: i64,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub storage_dir: Option<String>,
+    pub seeding_goal_met: bool,
+    pub content_ready: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -513,6 +617,100 @@ struct PublishedWeaverJob {
 #[serde(rename_all = "camelCase")]
 struct SubmissionPayload {
     submit_nzb: SubmissionResultPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitTorrentPayload {
+    submit_torrent: SubmitTorrentResultPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitTorrentResultPayload {
+    status: WeaverSubmitTorrentStatus,
+    torrent: SubmittedTorrentPayload,
+}
+
+/// Weaver's `SubmitTorrentStatus`. A status this build does not know is
+/// refused as an unavailable submit rather than guessed at.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum WeaverSubmitTorrentStatus {
+    Accepted,
+    IdempotentReplay,
+    Duplicate,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmittedTorrentPayload {
+    /// The torrent's job id.
+    id: u64,
+    #[serde(default)]
+    infohash_v1: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueItemProtocolPayload {
+    queue_items: Vec<QueueItemProtocolRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueItemProtocolRow {
+    id: u64,
+    #[serde(default)]
+    protocol: Option<WeaverProtocol>,
+}
+
+/// The torrent a request carries, in the shape `TorrentSourceInput` takes.
+enum WeaverTorrentSource<'a> {
+    Metainfo {
+        bytes: &'a [u8],
+        file_name: Option<&'a str>,
+        info_hash_hint: Option<&'a str>,
+    },
+    Magnet {
+        uri: &'a str,
+        info_hash_hint: Option<&'a str>,
+    },
+}
+
+impl<'a> WeaverTorrentSource<'a> {
+    fn from_request(request: &'a DownloadClientAddRequest) -> Option<Self> {
+        match request.resolved_download_artifact.as_ref()? {
+            ResolvedDownloadArtifact::TorrentFile {
+                bytes,
+                file_name,
+                info_hash_hint,
+                ..
+            } => Some(Self::Metainfo {
+                bytes,
+                file_name: file_name.as_deref(),
+                info_hash_hint: info_hash_hint.as_deref(),
+            }),
+            ResolvedDownloadArtifact::Magnet {
+                uri,
+                info_hash_hint,
+            } => Some(Self::Magnet {
+                uri,
+                info_hash_hint: info_hash_hint.as_deref(),
+            }),
+            ResolvedDownloadArtifact::Nzb { .. } => None,
+        }
+    }
+
+    fn info_hash_hint(&self) -> Option<&'a str> {
+        match self {
+            Self::Metainfo { info_hash_hint, .. } | Self::Magnet { info_hash_hint, .. } => {
+                *info_hash_hint
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -849,32 +1047,34 @@ impl WeaverDownloadClient {
             variables,
             upload_variable_path,
             filename,
-            upload_path,
+            upload,
             content_type,
-            content_length,
         } = request;
         let response = self
             .outbound_http
             .send_async(self.mutation_policy(request_label), || {
-                let upload_path = upload_path.to_path_buf();
                 let filename = filename.clone();
                 let content_type = content_type.to_string();
                 let variables = variables.clone();
                 async move {
-                    let file = Disk::process()
-                        .open(&upload_path, Open::read())
-                        .await
-                        .map_err(|error| {
-                            AppError::Repository(format!(
-                                "failed to open weaver upload artifact {}: {}",
-                                upload_path.display(),
-                                error.words()
-                            ))
-                        })?;
-                    let part = multipart::Part::stream_with_length(
-                        reqwest::Body::wrap_stream(ReaderStream::new(file)),
-                        content_length,
-                    )
+                    let part = match upload {
+                        MultipartUploadBody::File { path, len } => {
+                            let file = Disk::process().open(path, Open::read()).await.map_err(
+                                |error| {
+                                    AppError::Repository(format!(
+                                        "failed to open weaver upload artifact {}: {}",
+                                        path.display(),
+                                        error.words()
+                                    ))
+                                },
+                            )?;
+                            multipart::Part::stream_with_length(
+                                reqwest::Body::wrap_stream(ReaderStream::new(file)),
+                                len,
+                            )
+                        }
+                        MultipartUploadBody::Bytes(bytes) => multipart::Part::bytes(bytes.to_vec()),
+                    }
                     .file_name(filename)
                     .mime_str(&content_type)
                     .map_err(|error| {
@@ -1013,11 +1213,12 @@ impl WeaverDownloadClient {
 
     async fn query_queue_items_once(
         &self,
+        document: &str,
         title_id: Option<&str>,
         use_title_filter: bool,
     ) -> AppResult<Vec<WeaverQueueItem>> {
         self.graphql_request::<QueueItemsPayload>(
-            graphql_docs::QUEUE_ITEMS_QUERY,
+            document,
             json!({
                 "filter": if use_title_filter {
                     title_attribute_filter(title_id)
@@ -1030,13 +1231,58 @@ impl WeaverDownloadClient {
         .map(|data| data.queue_items)
     }
 
+    /// The live queue, with each torrent job's torrent row from a Weaver that
+    /// has torrents. A Weaver that refuses the torrent selection is read with
+    /// the NZB-only document and its fallbacks, exactly as before.
     async fn query_queue_items(
         &self,
         title_id: Option<&str>,
         use_title_filter: bool,
     ) -> AppResult<Vec<WeaverQueueItem>> {
         match self
-            .query_queue_items_once(title_id, use_title_filter)
+            .query_queue_items_once(
+                graphql_docs::QUEUE_ITEMS_WITH_TORRENTS_QUERY,
+                title_id,
+                use_title_filter,
+            )
+            .await
+        {
+            Ok(data) => Ok(data),
+            // A Weaver without `attributeEquals` predates torrents too: read
+            // it unfiltered with the NZB-only document, as before.
+            Err(error)
+                if use_title_filter
+                    && title_id.is_some()
+                    && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
+            {
+                self.query_queue_items_without_torrents(None, false)
+                    .await
+                    .map(marked_nzb_only)
+            }
+            Err(error)
+                if [
+                    WeaverSchemaFeature::Protocol,
+                    WeaverSchemaFeature::Torrent,
+                    WeaverSchemaFeature::QueueItems,
+                ]
+                .into_iter()
+                .any(|feature| is_weaver_schema_error(&error, feature)) =>
+            {
+                self.query_queue_items_without_torrents(title_id, use_title_filter)
+                    .await
+                    .map(marked_nzb_only)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn query_queue_items_without_torrents(
+        &self,
+        title_id: Option<&str>,
+        use_title_filter: bool,
+    ) -> AppResult<Vec<WeaverQueueItem>> {
+        match self
+            .query_queue_items_once(graphql_docs::QUEUE_ITEMS_QUERY, title_id, use_title_filter)
             .await
         {
             Ok(data) => Ok(data),
@@ -1064,14 +1310,195 @@ impl WeaverDownloadClient {
                     && title_id.is_some()
                     && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
             {
-                self.query_queue_items_once(None, false).await
+                self.query_queue_items_once(graphql_docs::QUEUE_ITEMS_QUERY, None, false)
+                    .await
             }
             Err(error) => Err(error),
         }
     }
 
+    /// Whether this Weaver takes torrents. A Weaver that refuses the torrent
+    /// selection does not, and the grab is unavailable here so the router
+    /// tries its next client; nothing of the torrent has been sent.
+    async fn ensure_torrent_support(&self) -> AppResult<()> {
+        match self
+            .graphql_request::<serde::de::IgnoredAny>(
+                graphql_docs::TORRENT_SUPPORT_QUERY,
+                json!({}),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error)
+                if [
+                    WeaverSchemaFeature::Protocol,
+                    WeaverSchemaFeature::Torrent,
+                    WeaverSchemaFeature::QueueItems,
+                ]
+                .into_iter()
+                .any(|feature| is_weaver_schema_error(&error, feature)) =>
+            {
+                Err(AppError::download_submit_unavailable(
+                    "this Weaver does not take torrents",
+                ))
+            }
+            Err(error) => Err(error.into_download_submit_unavailable()),
+        }
+    }
+
+    async fn submit_torrent(
+        &self,
+        request: &DownloadClientAddRequest,
+        source: WeaverTorrentSource<'_>,
+    ) -> AppResult<DownloadGrabResult> {
+        self.ensure_torrent_support().await?;
+
+        let title = &request.title;
+        let normalized_source_title = request.source_title_without_password().and_then(|v| {
+            let t = v.trim().to_string();
+            (!t.is_empty()).then_some(t)
+        });
+        let category = request.category.clone().and_then(|v| {
+            let v = v.trim().to_string();
+            (!v.is_empty()).then_some(v)
+        });
+        let mut input = json!({
+            "source": {},
+            "category": category,
+            "seeding": weaver_seeding_policy_input(request),
+            "attributes": weaver_submission_attributes(request),
+            "clientRequestId": weaver_client_request_id(
+                request,
+                normalized_source_title.as_deref(),
+            ),
+        });
+
+        // The magnet and the metainfo carry tracker URLs; neither is logged.
+        debug!(
+            endpoint = self.graphql_url.as_str(),
+            title = title.name.as_str(),
+            "weaver submitTorrent request"
+        );
+        let submission = match source {
+            WeaverTorrentSource::Metainfo {
+                bytes, file_name, ..
+            } => {
+                input["source"] = json!({ "metainfoUpload": Value::Null });
+                let filename = file_name
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{}.torrent",
+                            normalized_source_title.as_deref().unwrap_or(&title.name)
+                        )
+                    });
+                self.graphql_multipart_request::<SubmitTorrentPayload>(
+                    GraphqlMultipartUploadRequest {
+                        request_label: "weaver_submit_torrent",
+                        query: graphql_docs::SUBMIT_TORRENT_MUTATION,
+                        variables: json!({ "input": input }),
+                        upload_variable_path: "variables.input.source.metainfoUpload",
+                        filename,
+                        upload: MultipartUploadBody::Bytes(bytes),
+                        content_type: "application/x-bittorrent",
+                    },
+                )
+                .await
+            }
+            WeaverTorrentSource::Magnet { uri, .. } => {
+                input["source"] = json!({ "magnet": uri });
+                self.graphql_request_with_policy::<SubmitTorrentPayload>(
+                    self.mutation_policy("weaver_submit_torrent"),
+                    graphql_docs::SUBMIT_TORRENT_MUTATION,
+                    json!({ "input": input }),
+                )
+                .await
+            }
+        }
+        .map_err(AppError::into_download_submit_unavailable)?
+        .submit_torrent;
+
+        match submission.status {
+            WeaverSubmitTorrentStatus::Accepted | WeaverSubmitTorrentStatus::IdempotentReplay => {
+                debug!(
+                    endpoint = self.graphql_url.as_str(),
+                    job_id = submission.torrent.id,
+                    replayed = submission.status == WeaverSubmitTorrentStatus::IdempotentReplay,
+                    title = title.name.as_str(),
+                    "weaver submitTorrent succeeded"
+                );
+                Ok(DownloadGrabResult {
+                    download_id: None,
+                    job_id: submission.torrent.id.to_string(),
+                    client_id: None,
+                    client_type: "weaver".to_string(),
+                    info_hash: submission
+                        .torrent
+                        .infohash_v1
+                        .filter(|hash| !hash.trim().is_empty())
+                        .or_else(|| source.info_hash_hint().map(str::to_string)),
+                    seed_goals: None,
+                    grabbed_file_names: Vec::new(),
+                })
+            }
+            // Weaver already holds this torrent under another request: the
+            // verdict the NZB path gives a duplicate block, never a failover.
+            WeaverSubmitTorrentStatus::Duplicate => Err(AppError::DownloadSubmitRejected(format!(
+                "weaver submitTorrent found the torrent already added as job {}",
+                submission.torrent.id
+            ))),
+            WeaverSubmitTorrentStatus::Unknown => Err(AppError::download_submit_unavailable(
+                "weaver submitTorrent answered with a status this Scryer does not know",
+            )),
+        }
+    }
+
+    /// Whether the live job is a torrent. `None` when this Weaver cannot say
+    /// (it has no torrents) or no longer holds the job live.
+    async fn live_job_is_torrent(&self, job_id: u64) -> AppResult<Option<bool>> {
+        match self
+            .graphql_request::<QueueItemProtocolPayload>(
+                graphql_docs::QUEUE_ITEM_PROTOCOL_QUERY,
+                json!({ "ids": [job_id] }),
+            )
+            .await
+        {
+            Ok(data) => Ok(data
+                .queue_items
+                .into_iter()
+                .find(|row| row.id == job_id)
+                .map(|row| row.protocol == Some(WeaverProtocol::Torrent))),
+            Err(error)
+                if [
+                    WeaverSchemaFeature::Protocol,
+                    WeaverSchemaFeature::QueueItems,
+                    WeaverSchemaFeature::QueueItemIds,
+                ]
+                .into_iter()
+                .any(|feature| is_weaver_schema_error(&error, feature)) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Remove one torrent job, and its files when `delete_files`.
+    async fn remove_torrent(&self, job_id: u64, delete_files: bool) -> AppResult<()> {
+        self.graphql_request_with_policy::<serde::de::IgnoredAny>(
+            self.mutation_policy("weaver_remove_torrent"),
+            graphql_docs::REMOVE_TORRENT_MUTATION,
+            json!({ "id": job_id, "deleteFiles": delete_files }),
+        )
+        .await
+        .map(|_| ())
+    }
+
     async fn query_history_items_once(
         &self,
+        document: &str,
         limit: Option<usize>,
         offset: Option<usize>,
         title_id: Option<&str>,
@@ -1081,7 +1508,7 @@ impl WeaverDownloadClient {
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("off:{value}"))
         });
         self.graphql_request::<HistoryItemsPayload>(
-            graphql_docs::HISTORY_ITEMS_QUERY,
+            document,
             json!({
                 "filter": if use_title_filter && title_id.is_some() {
                     title_attribute_filter(title_id)
@@ -1096,6 +1523,9 @@ impl WeaverDownloadClient {
         .map(|data| data.history_items)
     }
 
+    /// History with each job's protocol from a Weaver that has torrents. A
+    /// Weaver that refuses `protocol` holds NZB jobs only: it is read with the
+    /// NZB-only document and its fallbacks, as before, and every row is NZB.
     async fn query_history_items(
         &self,
         limit: Option<usize>,
@@ -1104,28 +1534,91 @@ impl WeaverDownloadClient {
         use_title_filter: bool,
     ) -> AppResult<Vec<WeaverQueueItem>> {
         match self
-            .query_history_items_once(limit, offset, title_id, use_title_filter)
+            .query_history_items_once(
+                graphql_docs::HISTORY_ITEMS_WITH_PROTOCOL_QUERY,
+                limit,
+                offset,
+                title_id,
+                use_title_filter,
+            )
             .await
         {
             Ok(data) => Ok(data),
+            // A Weaver without `attributeEquals` predates torrents too.
             Err(error)
                 if use_title_filter
                     && title_id.is_some()
                     && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
             {
-                self.query_history_items_once(limit, offset, None, false)
+                self.query_history_items_without_protocol(limit, offset, None, false)
+                    .await
+            }
+            Err(error) if is_weaver_schema_error(&error, WeaverSchemaFeature::Protocol) => {
+                self.query_history_items_without_protocol(limit, offset, title_id, use_title_filter)
                     .await
             }
             Err(error) => Err(error),
         }
     }
 
-    async fn query_history_item(&self, id: i32) -> AppResult<Option<WeaverQueueItem>> {
-        let data = self
-            .graphql_request::<serde_json::Value>(
-                graphql_docs::HISTORY_ITEM_QUERY,
-                json!({ "id": id }),
+    async fn query_history_items_without_protocol(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        title_id: Option<&str>,
+        use_title_filter: bool,
+    ) -> AppResult<Vec<WeaverQueueItem>> {
+        let items = match self
+            .query_history_items_once(
+                graphql_docs::HISTORY_ITEMS_QUERY,
+                limit,
+                offset,
+                title_id,
+                use_title_filter,
             )
+            .await
+        {
+            Ok(data) => data,
+            Err(error)
+                if use_title_filter
+                    && title_id.is_some()
+                    && is_weaver_schema_error(&error, WeaverSchemaFeature::AttributeEquals) =>
+            {
+                self.query_history_items_once(
+                    graphql_docs::HISTORY_ITEMS_QUERY,
+                    limit,
+                    offset,
+                    None,
+                    false,
+                )
+                .await?
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(marked_nzb_only(items))
+    }
+
+    async fn query_history_item(&self, id: i32) -> AppResult<Option<WeaverQueueItem>> {
+        match self
+            .query_history_item_once(graphql_docs::HISTORY_ITEM_WITH_PROTOCOL_QUERY, id)
+            .await
+        {
+            Ok(item) => Ok(item),
+            Err(error) if is_weaver_schema_error(&error, WeaverSchemaFeature::Protocol) => Ok(self
+                .query_history_item_once(graphql_docs::HISTORY_ITEM_QUERY, id)
+                .await?
+                .map(nzb_only)),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn query_history_item_once(
+        &self,
+        document: &str,
+        id: i32,
+    ) -> AppResult<Option<WeaverQueueItem>> {
+        let data = self
+            .graphql_request::<serde_json::Value>(document, json!({ "id": id }))
             .await?;
         let item = data.get("historyItem").ok_or_else(|| {
             AppError::Repository("weaver historyItem response is missing its result".into())
@@ -1170,6 +1663,22 @@ impl WeaverDownloadClient {
         };
 
         Ok(item.as_ref().and_then(weaver_item_to_completed_download))
+    }
+
+    /// The live queue mapped for the tracked runtime, with the completed row of
+    /// every torrent whose content is ready, from one queue read. A seeding
+    /// torrent stays in the queue, so its completed row comes from here and
+    /// never from history.
+    pub async fn list_queue_with_torrent_completions(
+        &self,
+    ) -> AppResult<(Vec<DownloadQueueItem>, Vec<CompletedDownload>)> {
+        let jobs = self.query_queue_items(None, false).await?;
+        let items = jobs.iter().map(weaver_item_to_queue_item).collect();
+        let completed = jobs
+            .iter()
+            .filter_map(weaver_torrent_to_completed_download)
+            .collect();
+        Ok((items, completed))
     }
 
     /// The names Weaver reports this job's renamed files were posted with.
@@ -1350,7 +1859,53 @@ fn map_weaver_status(status: WeaverQueueState) -> DownloadQueueState {
         WeaverQueueState::Completed => DownloadQueueState::Completed,
         WeaverQueueState::Failed => DownloadQueueState::Failed,
         WeaverQueueState::Paused => DownloadQueueState::Paused,
+        // Seeding with content that is not ready yet: an unpack Weaver runs
+        // after the download is still going. A ready torrent is mapped to
+        // `Completed` by `weaver_job_state` before this runs.
+        WeaverQueueState::Seeding => DownloadQueueState::Extracting,
+        WeaverQueueState::FetchingMetadata => DownloadQueueState::Queued,
+        WeaverQueueState::CheckingFiles => DownloadQueueState::Verifying,
+        WeaverQueueState::Stalled => DownloadQueueState::Downloading,
     }
+}
+
+/// Scryer's state for one Weaver job. A torrent whose content Weaver reports
+/// ready is `Completed`, whatever it does next (seeding, stopped, paused):
+/// its files are whole and imported while it seeds. A failed torrent stays
+/// failed.
+fn weaver_job_state(job: &WeaverQueueItem) -> DownloadQueueState {
+    if job.state != WeaverQueueState::Failed
+        && job
+            .torrent
+            .as_ref()
+            .is_some_and(|torrent| torrent.content_ready)
+    {
+        return DownloadQueueState::Completed;
+    }
+    map_weaver_status(job.state)
+}
+
+/// The seeding observation of a torrent job, read by the seeding gate.
+///
+/// `can_remove` is Weaver's own verdict on its seeding goals (false for a
+/// torrent with no goal); files never move while the torrent seeds, so a
+/// seeding import is a hardlink or a copy.
+fn weaver_seeding_snapshot(
+    job: &WeaverQueueItem,
+) -> Option<scryer_domain::DownloadSeedingSnapshot> {
+    let torrent = job.torrent.as_ref()?;
+    Some(scryer_domain::DownloadSeedingSnapshot {
+        can_remove: Some(torrent.seeding_goal_met),
+        can_move_files: Some(false),
+        seed_ratio: torrent.ratio.is_finite().then_some(torrent.ratio),
+        seed_time_seconds: Some(torrent.seeding_seconds.max(0)),
+        is_private: Some(torrent.private),
+        uploaded_bytes: Some(torrent.uploaded_bytes.max(0)),
+        completed_at: torrent.completed_at.map(|at| at.to_rfc3339()),
+        seed_goal_ratio: None,
+        seed_goal_seconds: None,
+        never_remove: false,
+    })
 }
 
 /// Compatibility with Weaver's currently published sentence-only archive
@@ -1368,7 +1923,7 @@ fn legacy_weaver_password_failure(reason: &str) -> Option<scryer_domain::Downloa
 
 /// Map a Weaver queue/history item to a scryer DownloadQueueItem.
 pub fn weaver_item_to_queue_item(job: &WeaverQueueItem) -> DownloadQueueItem {
-    let state = map_weaver_status(job.state);
+    let state = weaver_job_state(job);
 
     let attention_reason = if state == DownloadQueueState::Failed {
         job.error
@@ -1459,7 +2014,8 @@ pub fn weaver_item_to_queue_item(job: &WeaverQueueItem) -> DownloadQueueItem {
         tracked_status: None,
         tracked_status_messages: Vec::new(),
         tracked_match_type: None,
-        seeding: None,
+        seeding: weaver_seeding_snapshot(job),
+        client_job_protocol: weaver_client_job_protocol(job),
     }
 }
 
@@ -1491,6 +2047,35 @@ fn weaver_item_to_completed_download(job: &WeaverQueueItem) -> Option<CompletedD
         .as_ref()
         .filter(|value| !value.is_empty())?
         .to_string();
+    Some(completed_download_at(job, output_dir, None))
+}
+
+/// The completed row of a torrent job read from the live queue, for import
+/// while it seeds. Only a torrent whose content Weaver reports ready has one.
+/// Its folder is the job's output folder, else the folder its files are
+/// written in; Weaver gives both as the torrent's own folder. The save path
+/// is never used: it can be a folder other torrents share.
+pub fn weaver_torrent_to_completed_download(job: &WeaverQueueItem) -> Option<CompletedDownload> {
+    let torrent = job.torrent.as_ref()?;
+    if !torrent.content_ready || job.state == WeaverQueueState::Failed {
+        return None;
+    }
+    let dest_dir = [job.output_dir.as_deref(), torrent.storage_dir.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())?
+        .to_string();
+    let mut download = completed_download_at(job, dest_dir, torrent.infohash_v1.as_deref());
+    download.completed_at = torrent.completed_at.or(download.completed_at);
+    Some(download)
+}
+
+fn completed_download_at(
+    job: &WeaverQueueItem,
+    output_dir: String,
+    info_hash_hint: Option<&str>,
+) -> CompletedDownload {
     let mut parameters = job
         .attributes
         .iter()
@@ -1511,12 +2096,13 @@ fn weaver_item_to_completed_download(job: &WeaverQueueItem) -> Option<CompletedD
         scryer_application::ObservedDownloadIdentityInput {
             download_id: durable_scryer_download_id(job.client_request_id.as_deref()),
             parameters: &parameters,
-            info_hash_hint: None,
+            info_hash_hint,
         },
     );
 
-    Some(CompletedDownload {
+    CompletedDownload {
         subtitle_paths: Vec::new(),
+        client_job_protocol: weaver_client_job_protocol(job),
         client_type: "weaver".to_string(),
         client_id: String::new(),
         download_client_item_id: job.id.to_string(),
@@ -1536,7 +2122,107 @@ fn weaver_item_to_completed_download(job: &WeaverQueueItem) -> Option<CompletedD
                 posted_name: file.posted_name.clone(),
             })
             .collect(),
-    })
+    }
+}
+
+/// The Scryer attributes every Weaver submit carries, NZB and torrent alike.
+fn weaver_submission_attributes(request: &DownloadClientAddRequest) -> Vec<Value> {
+    let title = &request.title;
+    let facet_str = serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
+    let facet_str = facet_str.trim_matches('"');
+
+    let mut attributes = vec![
+        json!({"key": "*scryer_facet", "value": facet_str}),
+        json!({"key": "*scryer_import_purpose", "value": request.purpose.as_str()}),
+    ];
+    if !title.id.is_empty() {
+        attributes.insert(
+            0,
+            json!({"key": "*scryer_title_id", "value": title.id.clone()}),
+        );
+    }
+    if let Some(download_id) = request.download_id {
+        attributes.push(json!({"key": "*scryer_download_id", "value": download_id.to_wire()}));
+    }
+
+    if let Some(imdb_id) = title
+        .external_ids
+        .iter()
+        .find(|id| id.source.eq_ignore_ascii_case("imdb"))
+        .map(|id| id.value.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        attributes.push(json!({"key": "*scryer_imdb_id", "value": imdb_id}));
+    }
+    attributes
+}
+
+/// The idempotency key every Weaver submit carries, NZB and torrent alike.
+fn weaver_client_request_id(
+    request: &DownloadClientAddRequest,
+    normalized_source_title: Option<&str>,
+) -> String {
+    let title = &request.title;
+    request
+        .download_id
+        .map(|id| id.to_wire())
+        .unwrap_or_else(|| {
+            format!(
+                "scryer:{}:{}",
+                title.id,
+                request
+                    .release_title
+                    .clone()
+                    .or_else(|| normalized_source_title.map(str::to_string))
+                    .unwrap_or_else(|| title.name.clone())
+            )
+        })
+}
+
+/// The torrent's own seeding terms. Each goal is Scryer's resolved goal, or,
+/// when Scryer has none on that axis, the tracker's declared minimum; an axis
+/// with neither is left out, so it inherits Weaver's category and global
+/// terms. Meeting the goals stops the torrent: Scryer's seeding gate, not
+/// Weaver, decides when it is removed.
+fn weaver_seeding_policy_input(request: &DownloadClientAddRequest) -> Value {
+    let season_pack = request.season_pack.unwrap_or(false);
+    let tracker_min_ratio = if season_pack {
+        request
+            .season_pack_seed_ratio
+            .or(request.tracker_min_seed_ratio)
+    } else {
+        request.tracker_min_seed_ratio
+    };
+    let tracker_min_minutes = if season_pack {
+        request
+            .season_pack_seed_time_minutes
+            .or(request.tracker_min_seed_time_minutes)
+    } else {
+        request.tracker_min_seed_time_minutes
+    };
+    let ratio = request
+        .seed_goal_ratio
+        .or(tracker_min_ratio)
+        .filter(|ratio| ratio.is_finite() && *ratio >= 0.0);
+    let minutes = request
+        .seed_goal_seconds
+        .filter(|seconds| *seconds >= 0)
+        .map(|seconds| seconds.saturating_add(59) / 60)
+        .or(tracker_min_minutes.filter(|minutes| *minutes >= 0))
+        .map(|minutes| minutes.min(i64::from(i32::MAX)));
+
+    let mut policy = serde_json::Map::new();
+    if let Some(ratio) = ratio {
+        policy.insert("ratioGoal".into(), json!({"state": "SET", "value": ratio}));
+    }
+    if let Some(minutes) = minutes {
+        policy.insert(
+            "seedTimeGoalMinutes".into(),
+            json!({"state": "SET", "value": minutes}),
+        );
+    }
+    policy.insert("action".into(), json!({"state": "SET", "value": "STOP"}));
+    Value::Object(policy)
 }
 
 fn compat_job_to_queue_item(job: PublishedWeaverJob) -> WeaverQueueItem {
@@ -1556,6 +2242,31 @@ fn compat_job_to_queue_item(job: PublishedWeaverJob) -> WeaverQueueItem {
         completed_at: None,
         attention: None,
         posted_file_names: Vec::new(),
+        // A Weaver that only answers `jobs` predates torrents.
+        protocol: Some(WeaverProtocol::Nzb),
+        torrent: None,
+    }
+}
+
+/// A row read from a Weaver without torrents: every job it holds is an NZB.
+fn nzb_only(mut item: WeaverQueueItem) -> WeaverQueueItem {
+    item.protocol = Some(WeaverProtocol::Nzb);
+    item
+}
+
+fn marked_nzb_only(items: Vec<WeaverQueueItem>) -> Vec<WeaverQueueItem> {
+    items.into_iter().map(nzb_only).collect()
+}
+
+/// The protocol Weaver reports for a row, as Scryer's tracker reads it. A
+/// protocol a newer Weaver added says neither.
+fn weaver_client_job_protocol(job: &WeaverQueueItem) -> Option<ClientJobProtocol> {
+    if job.is_torrent() {
+        return Some(ClientJobProtocol::Torrent);
+    }
+    match job.protocol {
+        Some(WeaverProtocol::Nzb) => Some(ClientJobProtocol::Usenet),
+        _ => None,
     }
 }
 
@@ -1576,6 +2287,32 @@ fn compat_timestamp_to_utc(raw: Option<f64>) -> DateTime<Utc> {
 // A Weaver older than the posted-name record refuses the field.
 fn is_posted_file_names_schema_error(error: &AppError) -> bool {
     is_weaver_schema_error(error, WeaverSchemaFeature::PostedFileNames)
+}
+
+/// Whether a graphql-ws `error` payload is a Weaver without torrents refusing
+/// the torrent selection of a queue subscription. Only validator errors (no
+/// `extensions.code`) count, through the one classifier.
+pub(crate) fn weaver_ws_error_lacks_torrents(payload: Option<&Value>) -> bool {
+    let Some(errors) = payload.and_then(Value::as_array) else {
+        return false;
+    };
+    errors.iter().any(|error| {
+        let coded = error
+            .get("extensions")
+            .and_then(|extensions| extensions.get("code"))
+            .is_some_and(|code| !code.is_null());
+        !coded
+            && error
+                .get("message")
+                .and_then(Value::as_str)
+                .and_then(classify_weaver_schema_error)
+                .is_some_and(|feature| {
+                    matches!(
+                        feature,
+                        WeaverSchemaFeature::Protocol | WeaverSchemaFeature::Torrent
+                    )
+                })
+    })
 }
 
 fn is_weaver_schema_error(error: &AppError, feature: WeaverSchemaFeature) -> bool {
@@ -1748,6 +2485,9 @@ impl DownloadClient for WeaverDownloadClient {
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
+        if let Some(source) = WeaverTorrentSource::from_request(request) {
+            return self.submit_torrent(request, source).await;
+        }
         let title = &request.title;
         let source_hint = request
             .source_hint
@@ -1786,48 +2526,9 @@ impl DownloadClient for WeaverDownloadClient {
             (!v.is_empty()).then_some(v)
         });
 
-        let facet_str =
-            serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
-        let facet_str = facet_str.trim_matches('"');
-
-        let mut attributes = vec![
-            json!({"key": "*scryer_facet", "value": facet_str}),
-            json!({"key": "*scryer_import_purpose", "value": request.purpose.as_str()}),
-        ];
-        if !title.id.is_empty() {
-            attributes.insert(
-                0,
-                json!({"key": "*scryer_title_id", "value": title.id.clone()}),
-            );
-        }
-        if let Some(download_id) = request.download_id {
-            attributes.push(json!({"key": "*scryer_download_id", "value": download_id.to_wire()}));
-        }
-
-        if let Some(imdb_id) = title
-            .external_ids
-            .iter()
-            .find(|id| id.source.eq_ignore_ascii_case("imdb"))
-            .map(|id| id.value.trim().to_string())
-            .filter(|v| !v.is_empty())
-        {
-            attributes.push(json!({"key": "*scryer_imdb_id", "value": imdb_id}));
-        }
-
-        let client_request_id = request
-            .download_id
-            .map(|id| id.to_wire())
-            .unwrap_or_else(|| {
-                format!(
-                    "scryer:{}:{}",
-                    title.id,
-                    request
-                        .release_title
-                        .clone()
-                        .or_else(|| normalized_source_title.clone())
-                        .unwrap_or_else(|| title.name.clone())
-                )
-            });
+        let attributes = weaver_submission_attributes(request);
+        let client_request_id =
+            weaver_client_request_id(request, normalized_source_title.as_deref());
 
         let result: AppResult<DownloadGrabResult> = async {
             let mut variables = json!({
@@ -1875,9 +2576,11 @@ impl DownloadClient for WeaverDownloadClient {
                     variables: variables.clone(),
                     upload_variable_path: "variables.input.nzbUpload",
                     filename: format!("{nzb_filename}.zst"),
-                    upload_path: &staged.staged_nzb.compressed_path,
+                    upload: MultipartUploadBody::File {
+                        path: &staged.staged_nzb.compressed_path,
+                        len: content_length,
+                    },
                     content_type: "application/zstd",
-                    content_length,
                 })
                 .await;
             if let Err(error) = &submission {
@@ -1897,9 +2600,11 @@ impl DownloadClient for WeaverDownloadClient {
                                 variables: variables.clone(),
                                 upload_variable_path: "variables.input.nzbUpload",
                                 filename: format!("{nzb_filename}.zst"),
-                                upload_path: &staged.staged_nzb.compressed_path,
+                                upload: MultipartUploadBody::File {
+                                    path: &staged.staged_nzb.compressed_path,
+                                    len: content_length,
+                                },
                                 content_type: "application/zstd",
-                                content_length,
                             },
                         )
                         .await;
@@ -2346,6 +3051,14 @@ impl DownloadClient for WeaverDownloadClient {
                 format!("invalid weaver job id: {id}"),
             )
         })?;
+        // A torrent stays live while it seeds, so a completed one may arrive
+        // with either hint. Weaver removes a live torrent with
+        // `removeTorrent`, under the same `remove_data` decision; every other
+        // job, and every job on a Weaver without torrents, takes the paths
+        // below unchanged.
+        if self.live_job_is_torrent(job_id).await? == Some(true) {
+            return self.remove_torrent(job_id, remove_data).await;
+        }
         if is_history {
             match self.remove_history_item(job_id, remove_data).await {
                 Ok(()) => Ok(()),
@@ -2402,7 +3115,7 @@ impl WeaverDownloadClient {
     /// Classifies a history-delete `CONFLICT` once, here at the boundary, by
     /// reading Weaver's live queue for the job.
     async fn classify_history_delete_conflict(&self, job_id: u64) -> WeaverHistoryDeleteConflict {
-        match self.query_queue_items(None, false).await {
+        match self.query_queue_items_without_torrents(None, false).await {
             Ok(items) if items.iter().any(|item| item.id == job_id) => {
                 WeaverHistoryDeleteConflict::JobLive
             }
@@ -2570,14 +3283,16 @@ mod tests {
 
     use super::{
         QueueItemsPayload, SubmissionPayload, WeaverDownloadClient, WeaverQueueItem,
-        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, weaver_http_failure,
-        weaver_item_to_queue_item,
+        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, nzb_only,
+        weaver_http_failure, weaver_item_to_completed_download, weaver_item_to_queue_item,
     };
     use scryer_application::{
         AppError, DownloadClient, DownloadClientAddRequest, DownloadSubmissionPurpose,
         ResolvedDownloadArtifact,
     };
-    use scryer_domain::{DownloadClientConfig, DownloadQueueState, MediaFacet, Title};
+    use scryer_domain::{
+        ClientJobProtocol, DownloadClientConfig, DownloadQueueState, MediaFacet, Title,
+    };
     use scryer_outbound_http::OutboundHttpError;
     use std::sync::Arc;
     use std::time::Duration;
@@ -3050,6 +3765,7 @@ mod tests {
     #[tokio::test]
     async fn delete_history_item_without_data_removal_uses_legacy_mutation() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, None).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -3073,7 +3789,8 @@ mod tests {
             .received_requests()
             .await
             .expect("requests should be recorded");
-        assert!(!String::from_utf8_lossy(&requests[0].body).contains("deleteFiles"));
+        assert!(String::from_utf8_lossy(&requests[0].body).contains("query QueueItemProtocol"));
+        assert!(!String::from_utf8_lossy(&requests[1].body).contains("deleteFiles"));
     }
 
     #[tokio::test]
@@ -3174,6 +3891,7 @@ mod tests {
     #[tokio::test]
     async fn delete_history_item_with_data_removal_uses_delete_files_mutation() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, None).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -3196,6 +3914,7 @@ mod tests {
     #[tokio::test]
     async fn delete_history_item_preserves_entry_when_delete_files_is_unsupported() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, None).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -3234,6 +3953,7 @@ mod tests {
     #[tokio::test]
     async fn delete_queue_item_falls_back_to_history_when_job_already_finished() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, Some("NZB")).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -3272,6 +3992,7 @@ mod tests {
     // a cancel that must never be sent, and the live queue Weaver reports.
     async fn history_delete_conflict_server(queue: Option<serde_json::Value>) -> MockServer {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 0, None).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -3312,6 +4033,24 @@ mod tests {
         server
     }
 
+    // Mounts the protocol read every delete makes first: the job is live with
+    // `protocol`, or no longer live when `protocol` is `None`.
+    async fn mount_live_protocol(server: &MockServer, job_id: u64, protocol: Option<&str>) {
+        let rows = match protocol {
+            Some(protocol) => json!([{ "id": job_id, "protocol": protocol }]),
+            None => json!([]),
+        };
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query QueueItemProtocol"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data": {"queueItems": rows}})),
+            )
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
     async fn request_bodies(server: &MockServer) -> Vec<String> {
         server
             .received_requests()
@@ -3349,9 +4088,10 @@ mod tests {
         );
 
         let bodies = request_bodies(&server).await;
-        assert_eq!(bodies.len(), 2);
-        assert!(bodies[0].contains("mutation RemoveHistoryItems"));
-        assert!(bodies[1].contains("queueItems"));
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies[0].contains("query QueueItemProtocol"));
+        assert!(bodies[1].contains("mutation RemoveHistoryItems"));
+        assert!(bodies[2].contains("queueItems"));
         assert!(
             !bodies.iter().any(|body| body.contains("CancelQueueItem")),
             "no cancel may be sent for a job weaver still reports as live"
@@ -3367,6 +4107,7 @@ mod tests {
     async fn history_delete_conflict_for_a_job_off_the_live_queue_is_in_progress() {
         for is_history in [true, false] {
             let server = MockServer::start().await;
+            mount_live_protocol(&server, 10003, None).await;
             // On a queue hint the cancel comes first; Weaver says the job is
             // no longer live, and the history delete then meets the conflict.
             Mock::given(method("POST"))
@@ -3467,6 +4208,7 @@ mod tests {
     #[tokio::test]
     async fn delete_queue_item_cancels_a_live_job_on_a_queue_hint() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, Some("NZB")).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -3501,6 +4243,7 @@ mod tests {
     #[tokio::test]
     async fn delete_queue_item_falls_back_on_not_found_code_regardless_of_message() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, Some("NZB")).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(body_string_contains("mutation CancelQueueItem"))
@@ -3536,6 +4279,7 @@ mod tests {
     #[tokio::test]
     async fn delete_queue_item_does_not_fall_back_without_error_code() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, Some("NZB")).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(body_string_contains("mutation CancelQueueItem"))
@@ -3570,6 +4314,7 @@ mod tests {
     #[tokio::test]
     async fn delete_queue_item_keeps_other_cancel_errors() {
         let server = MockServer::start().await;
+        mount_live_protocol(&server, 10002, Some("NZB")).await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(header("authorization", "Bearer wvr_test"))
@@ -4869,6 +5614,677 @@ mod tests {
         assert_eq!(
             failure_reason(&error),
             scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
+    }
+
+    // ── Torrents ────────────────────────────────────────────────────────
+
+    const TORRENT_DOWNLOAD_ID: &str = "scryer-download:00000000-0000-4000-8000-000000000031";
+    const SYNTHETIC_INFOHASH: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn magnet_request() -> DownloadClientAddRequest {
+        let mut request = test_add_request(TORRENT_DOWNLOAD_ID);
+        request.resolved_download_artifact = Some(ResolvedDownloadArtifact::Magnet {
+            uri: format!("magnet:?xt=urn:btih:{SYNTHETIC_INFOHASH}&dn=Synthetic"),
+            info_hash_hint: Some(SYNTHETIC_INFOHASH.to_string()),
+        });
+        request.source_password = None;
+        request
+    }
+
+    fn torrent_file_request() -> DownloadClientAddRequest {
+        let mut request = test_add_request(TORRENT_DOWNLOAD_ID);
+        request.resolved_download_artifact = Some(ResolvedDownloadArtifact::TorrentFile {
+            bytes: b"d4:infod4:name9:syntheticee".to_vec(),
+            file_name: Some("Synthetic Release.torrent".to_string()),
+            content_type: Some("application/x-bittorrent".to_string()),
+            info_hash_hint: Some(SYNTHETIC_INFOHASH.to_string()),
+        });
+        request.source_password = None;
+        request
+    }
+
+    async fn mount_torrent_support(server: &MockServer, supported: bool) {
+        let response = if supported {
+            json!({"data": {"queueItems": []}})
+        } else {
+            json!({"errors": [{
+                "message": "Unknown field \"protocol\" on type \"QueueItem\"."
+            }]})
+        };
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query TorrentSupport"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_submit_torrent(server: &MockServer, status: &str, expected_calls: u64) {
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("mutation SubmitTorrent"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "submitTorrent": {
+                    "accepted": status != "DUPLICATE",
+                    "status": status,
+                    "clientRequestId": TORRENT_DOWNLOAD_ID,
+                    "torrent": { "id": 91, "infohashV1": SYNTHETIC_INFOHASH }
+                }}
+            })))
+            .expect(expected_calls)
+            .mount(server)
+            .await;
+    }
+
+    fn submit_torrent_body(bodies: &[String]) -> serde_json::Value {
+        let body = bodies
+            .iter()
+            .find(|body| body.contains("mutation SubmitTorrent"))
+            .expect("a SubmitTorrent request");
+        serde_json::from_str(body).expect("a JSON SubmitTorrent request")
+    }
+
+    #[tokio::test]
+    async fn magnet_submit_sends_identity_category_and_stop_policy() {
+        let server = MockServer::start().await;
+        mount_torrent_support(&server, true).await;
+        mount_submit_torrent(&server, "ACCEPTED", 1).await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+        let mut request = magnet_request();
+        request.seed_goal_ratio = Some(1.5);
+        request.seed_goal_seconds = Some(3601);
+
+        let result = client
+            .submit_download(&request)
+            .await
+            .expect("an accepted magnet");
+
+        assert_eq!(result.job_id, "91");
+        assert_eq!(result.client_type, "weaver");
+        assert_eq!(result.info_hash.as_deref(), Some(SYNTHETIC_INFOHASH));
+        let bodies = request_bodies(&server).await;
+        assert_eq!(bodies.len(), 2, "one probe, one submit");
+        assert!(bodies[0].contains("query TorrentSupport"));
+        let body = submit_torrent_body(&bodies);
+        assert_eq!(
+            body["variables"],
+            json!({ "input": {
+                "source": {
+                    "magnet": format!("magnet:?xt=urn:btih:{SYNTHETIC_INFOHASH}&dn=Synthetic")
+                },
+                "category": "movies",
+                "seeding": {
+                    "ratioGoal": { "state": "SET", "value": 1.5 },
+                    "seedTimeGoalMinutes": { "state": "SET", "value": 61 },
+                    "action": { "state": "SET", "value": "STOP" }
+                },
+                "attributes": [
+                    { "key": "*scryer_title_id", "value": "title-1" },
+                    { "key": "*scryer_facet", "value": "movie" },
+                    { "key": "*scryer_import_purpose", "value": "standard" },
+                    { "key": "*scryer_download_id", "value": TORRENT_DOWNLOAD_ID },
+                ],
+                "clientRequestId": TORRENT_DOWNLOAD_ID,
+            }})
+        );
+    }
+
+    #[tokio::test]
+    async fn torrent_file_submit_uploads_the_metainfo_as_multipart() {
+        let server = MockServer::start().await;
+        mount_torrent_support(&server, true).await;
+        mount_submit_torrent(&server, "ACCEPTED", 1).await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let result = client
+            .submit_download(&torrent_file_request())
+            .await
+            .expect("an accepted torrent file");
+
+        assert_eq!(result.job_id, "91");
+        let bodies = request_bodies(&server).await;
+        let body = bodies
+            .iter()
+            .find(|body| body.contains("mutation SubmitTorrent"))
+            .expect("a SubmitTorrent request");
+        assert!(body.contains(r#"{"0":["variables.input.source.metainfoUpload"]}"#));
+        assert!(body.contains(r#""source":{"metainfoUpload":null}"#));
+        assert!(body.contains(&format!(r#""clientRequestId":"{TORRENT_DOWNLOAD_ID}""#)));
+        assert!(body.contains(r#"filename="Synthetic Release.torrent""#));
+        assert!(body.contains("application/x-bittorrent"));
+        assert!(body.contains("d4:infod4:name9:syntheticee"));
+    }
+
+    #[tokio::test]
+    async fn submit_torrent_status_decides_the_outcome() {
+        for (status, expected) in [
+            ("ACCEPTED", "ok"),
+            ("IDEMPOTENT_REPLAY", "ok"),
+            ("DUPLICATE", "rejected"),
+            ("A_STATUS_FROM_A_NEWER_WEAVER", "unavailable"),
+        ] {
+            let server = MockServer::start().await;
+            mount_torrent_support(&server, true).await;
+            mount_submit_torrent(&server, status, 1).await;
+            let client = WeaverDownloadClient::new(server.uri(), None);
+            let outcome = client.submit_download(&magnet_request()).await;
+            match (expected, &outcome) {
+                ("ok", Ok(result)) => assert_eq!(result.job_id, "91", "{status}"),
+                ("rejected", Err(AppError::DownloadSubmitRejected(_))) => {}
+                ("unavailable", Err(AppError::DownloadSubmitUnavailable(_))) => {}
+                _ => panic!("{status}: expected {expected}, got {outcome:?}"),
+            }
+        }
+    }
+
+    // A Weaver without torrents refuses the probe: the grab is unavailable
+    // here, so the router tries its next client, and no torrent is sent.
+    #[tokio::test]
+    async fn a_weaver_without_torrents_is_never_sent_a_torrent() {
+        let server = MockServer::start().await;
+        mount_torrent_support(&server, false).await;
+        mount_submit_torrent(&server, "ACCEPTED", 0).await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let error = client
+            .submit_download(&magnet_request())
+            .await
+            .expect_err("no torrents on this Weaver");
+
+        assert!(
+            matches!(error, AppError::DownloadSubmitUnavailable(_)),
+            "{error:?}"
+        );
+        assert_eq!(request_bodies(&server).await.len(), 1);
+    }
+
+    fn request_with_goals(
+        ratio: Option<f64>,
+        seconds: Option<i64>,
+        tracker_ratio: Option<f64>,
+        tracker_minutes: Option<i64>,
+    ) -> DownloadClientAddRequest {
+        let mut request = magnet_request();
+        request.seed_goal_ratio = ratio;
+        request.seed_goal_seconds = seconds;
+        request.tracker_min_seed_ratio = tracker_ratio;
+        request.tracker_min_seed_time_minutes = tracker_minutes;
+        request
+    }
+
+    #[test]
+    fn seeding_policy_leaves_missing_goals_to_inherit_and_always_stops() {
+        assert_eq!(
+            super::weaver_seeding_policy_input(&request_with_goals(None, None, None, None)),
+            json!({ "action": { "state": "SET", "value": "STOP" } })
+        );
+        // Scryer's goal wins over the tracker minimum on each axis.
+        assert_eq!(
+            super::weaver_seeding_policy_input(&request_with_goals(
+                Some(2.0),
+                Some(60),
+                Some(1.0),
+                Some(600)
+            )),
+            json!({
+                "ratioGoal": { "state": "SET", "value": 2.0 },
+                "seedTimeGoalMinutes": { "state": "SET", "value": 1 },
+                "action": { "state": "SET", "value": "STOP" }
+            })
+        );
+        // With no goal, the tracker minimum is the term.
+        assert_eq!(
+            super::weaver_seeding_policy_input(&request_with_goals(
+                None,
+                None,
+                Some(1.0),
+                Some(600)
+            )),
+            json!({
+                "ratioGoal": { "state": "SET", "value": 1.0 },
+                "seedTimeGoalMinutes": { "state": "SET", "value": 600 },
+                "action": { "state": "SET", "value": "STOP" }
+            })
+        );
+        // Seconds round up to whole minutes, so a goal is never cut short.
+        let policy =
+            super::weaver_seeding_policy_input(&request_with_goals(None, Some(61), None, None));
+        assert_eq!(policy["seedTimeGoalMinutes"]["value"], json!(2));
+        assert!(policy.get("ratioGoal").is_none());
+        // The season-pack minimum applies to a season pack.
+        let mut season_pack = request_with_goals(None, None, Some(1.0), Some(600));
+        season_pack.season_pack = Some(true);
+        season_pack.season_pack_seed_ratio = Some(3.0);
+        season_pack.season_pack_seed_time_minutes = Some(1440);
+        let policy = super::weaver_seeding_policy_input(&season_pack);
+        assert_eq!(policy["ratioGoal"]["value"], json!(3.0));
+        assert_eq!(policy["seedTimeGoalMinutes"]["value"], json!(1440));
+    }
+
+    fn torrent_job(
+        state: &str,
+        private: bool,
+        goal_met: bool,
+        content_ready: bool,
+    ) -> WeaverQueueItem {
+        serde_json::from_value(json!({
+            "id": 91,
+            "name": "Synthetic.Torrent",
+            "state": state,
+            "error": null,
+            "progressPercent": 100.0,
+            "totalBytes": 4096,
+            "category": "movies",
+            "attributes": [
+                { "key": "*scryer_title_id", "value": "title-1" },
+                { "key": "*scryer_download_id", "value": TORRENT_DOWNLOAD_ID }
+            ],
+            "clientRequestId": TORRENT_DOWNLOAD_ID,
+            "outputDir": null,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "completedAt": null,
+            "attention": null,
+            "protocol": "TORRENT",
+            "torrent": {
+                "id": 91,
+                "infohashV1": SYNTHETIC_INFOHASH,
+                "private": private,
+                "ratio": 0.75,
+                "uploadedBytes": 3072,
+                "seedingSeconds": 600,
+                "completedAt": "2026-01-01T01:00:00Z",
+                "storageDir": "/downloads/torrents/Synthetic.Torrent",
+                "seedingGoalMet": goal_met,
+                "contentReady": content_ready
+            }
+        }))
+        .expect("a torrent queue row")
+    }
+
+    #[test]
+    fn torrent_rows_map_to_the_seeding_snapshot() {
+        for (private, goal_met) in [(true, false), (false, true), (true, true), (false, false)] {
+            let item = weaver_item_to_queue_item(&torrent_job("SEEDING", private, goal_met, true));
+            let seeding = item
+                .seeding
+                .expect("a torrent carries its seeding observation");
+            assert_eq!(seeding.is_private, Some(private));
+            assert_eq!(seeding.can_remove, Some(goal_met));
+            assert_eq!(
+                seeding.can_move_files,
+                Some(false),
+                "files never move while seeding"
+            );
+            assert_eq!(seeding.seed_ratio, Some(0.75));
+            assert_eq!(seeding.seed_time_seconds, Some(600));
+            assert_eq!(seeding.uploaded_bytes, Some(3072));
+            assert_eq!(item.state, DownloadQueueState::Completed);
+        }
+        // Content not ready yet: not completed, whatever the torrent state.
+        let item = weaver_item_to_queue_item(&torrent_job("SEEDING", false, false, false));
+        assert_ne!(item.state, DownloadQueueState::Completed);
+        let item =
+            weaver_item_to_queue_item(&torrent_job("FETCHING_METADATA", false, false, false));
+        assert_eq!(item.state, DownloadQueueState::Queued);
+        let item = weaver_item_to_queue_item(&torrent_job("CHECKING_FILES", false, false, false));
+        assert_eq!(item.state, DownloadQueueState::Verifying);
+        let item = weaver_item_to_queue_item(&torrent_job("STALLED", false, false, false));
+        assert_eq!(item.state, DownloadQueueState::Downloading);
+        // An NZB job carries no seeding observation.
+        let mut nzb = torrent_job("DOWNLOADING", false, false, false);
+        nzb.protocol = Some(super::WeaverProtocol::Nzb);
+        nzb.torrent = None;
+        assert!(weaver_item_to_queue_item(&nzb).seeding.is_none());
+    }
+
+    #[test]
+    fn a_seeding_torrent_with_ready_content_is_completed_from_its_own_folder() {
+        let completed =
+            super::weaver_torrent_to_completed_download(&torrent_job("SEEDING", true, false, true))
+                .expect("ready content is importable while it seeds");
+        assert_eq!(completed.dest_dir, "/downloads/torrents/Synthetic.Torrent");
+        assert_eq!(completed.download_client_item_id, "91");
+        assert_eq!(completed.client_type, "weaver");
+        assert!(
+            super::weaver_torrent_to_completed_download(&torrent_job(
+                "DOWNLOADING",
+                true,
+                false,
+                false
+            ))
+            .is_none(),
+            "content not ready is never imported"
+        );
+        assert!(
+            super::weaver_torrent_to_completed_download(&torrent_job("FAILED", true, false, true))
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_read_carries_torrent_completions_from_one_request() {
+        let server = MockServer::start().await;
+        let ready = serde_json::to_value(json!({
+            "id": 91, "name": "Synthetic.Torrent", "state": "SEEDING", "error": null,
+            "progressPercent": 100.0, "totalBytes": 4096, "category": null,
+            "attributes": [], "clientRequestId": null, "outputDir": "/downloads/torrents/Synthetic.Torrent",
+            "createdAt": "2026-01-01T00:00:00Z", "attention": null, "protocol": "TORRENT",
+            "torrent": {
+                "id": 91, "infohashV1": SYNTHETIC_INFOHASH, "private": false, "ratio": 0.1,
+                "uploadedBytes": 1, "seedingSeconds": 1, "completedAt": null,
+                "storageDir": "/downloads/torrents/Synthetic.Torrent",
+                "seedingGoalMet": false, "contentReady": true
+            }
+        }))
+        .expect("json");
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query QueueItemsWithTorrents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "queueItems": [ready] }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let (items, completed) = client
+            .list_queue_with_torrent_completions()
+            .await
+            .expect("queue read");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].state, DownloadQueueState::Completed);
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].download_client_item_id, "91");
+        assert_eq!(request_bodies(&server).await.len(), 1);
+    }
+
+    // A Weaver without torrents refuses the torrent selection; the queue is
+    // read with the NZB-only document and keeps working.
+    #[tokio::test]
+    async fn queue_read_falls_back_to_the_nzb_document_on_an_older_weaver() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query QueueItemsWithTorrents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{ "message": "Unknown field \"protocol\" on type \"QueueItem\"." }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query QueueItems("))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "queueItems": [{
+                    "id": 42, "name": "Synthetic.Nzb", "state": "DOWNLOADING", "error": null,
+                    "progressPercent": 50.0, "totalBytes": 1000, "category": null,
+                    "outputDir": null, "createdAt": "2024-01-01T00:00:00Z",
+                    "clientRequestId": null, "attributes": [], "attention": null
+                }]}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let (items, completed) = client
+            .list_queue_with_torrent_completions()
+            .await
+            .expect("the NZB-only read");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].download_client_item_id, "42");
+        assert!(items[0].seeding.is_none());
+        // Every job an NZB-only Weaver holds is Usenet.
+        assert_eq!(
+            items[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        assert!(completed.is_empty());
+    }
+
+    // A live torrent is removed with `removeTorrent`, under the caller's own
+    // data decision, from either hint; nothing else is sent.
+    #[tokio::test]
+    async fn a_live_torrent_is_removed_with_remove_torrent() {
+        for (is_history, remove_data) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let server = MockServer::start().await;
+            mount_live_protocol(&server, 91, Some("TORRENT")).await;
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .and(body_string_contains("mutation RemoveTorrent"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"data": {"removeTorrent": 91}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = WeaverDownloadClient::new(server.uri(), None);
+
+            client
+                .delete_queue_item("91", is_history, remove_data)
+                .await
+                .expect("the torrent is removed");
+
+            let bodies = request_bodies(&server).await;
+            assert_eq!(bodies.len(), 2);
+            let remove: serde_json::Value =
+                serde_json::from_str(&bodies[1]).expect("a JSON RemoveTorrent request");
+            assert_eq!(
+                remove["variables"],
+                json!({ "id": 91, "deleteFiles": remove_data })
+            );
+        }
+    }
+
+    // A Weaver without torrents refuses the protocol read; the delete takes
+    // the NZB path it always took.
+    #[tokio::test]
+    async fn a_delete_on_a_weaver_without_torrents_cancels_as_before() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query QueueItemProtocol"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{ "message": "Unknown field \"protocol\" on type \"QueueItem\"." }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("mutation CancelQueueItem"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "cancelQueueItem": { "success": true } }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("mutation RemoveTorrent"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        client
+            .delete_queue_item("10002", false, false)
+            .await
+            .expect("cancelled as before");
+    }
+
+    // A protocol read that fails for any other reason fails the delete:
+    // nothing is removed on a guess.
+    #[tokio::test]
+    async fn an_unreadable_protocol_fails_the_delete_closed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query QueueItemProtocol"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        client
+            .delete_queue_item("10002", false, true)
+            .await
+            .expect_err("no removal without knowing the protocol");
+        assert!(
+            request_bodies(&server)
+                .await
+                .iter()
+                .all(|body| body.contains("query QueueItemProtocol")),
+            "nothing but the protocol read is sent"
+        );
+    }
+
+    #[test]
+    fn subscription_errors_for_the_torrent_selection_are_told_apart() {
+        let lacks = json!([{ "message": "Unknown field \"torrent\" on type \"QueueItem\"." }]);
+        assert!(super::weaver_ws_error_lacks_torrents(Some(&lacks)));
+        let lacks = json!([{ "message": "Unknown field \"protocol\" on type \"QueueItem\"." }]);
+        assert!(super::weaver_ws_error_lacks_torrents(Some(&lacks)));
+        // A coded runtime error is never read as a schema refusal.
+        let coded = json!([{
+            "message": "Unknown field \"torrent\" on type \"QueueItem\".",
+            "extensions": { "code": "INTERNAL" }
+        }]);
+        assert!(!super::weaver_ws_error_lacks_torrents(Some(&coded)));
+        let other = json!([{ "message": "Unknown field \"health\" on type \"QueueItem\"." }]);
+        assert!(!super::weaver_ws_error_lacks_torrents(Some(&other)));
+        assert!(!super::weaver_ws_error_lacks_torrents(None));
+    }
+
+    fn history_row(protocol: Option<&str>) -> serde_json::Value {
+        let mut row = json!({
+            "id": 4242,
+            "name": "Synthetic.Protocol.Row",
+            "state": "COMPLETE",
+            "error": null,
+            "progressPercent": 100.0,
+            "totalBytes": 4096,
+            "category": "movies",
+            "attributes": [],
+            "clientRequestId": null,
+            "outputDir": "/downloads/complete/Synthetic.Protocol.Row",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "completedAt": "2026-01-01T00:10:00Z",
+            "attention": null
+        });
+        if let Some(protocol) = protocol {
+            row["protocol"] = json!(protocol);
+        }
+        row
+    }
+
+    // Weaver states each row's protocol to Scryer: an NZB row is Usenet, a
+    // torrent row a torrent, and a row that names none (or a protocol a newer
+    // Weaver added) says nothing. A row read from an NZB-only Weaver is Usenet.
+    #[test]
+    fn weaver_rows_report_their_protocol_to_scryer() {
+        let row = |protocol| -> WeaverQueueItem {
+            serde_json::from_value(history_row(protocol)).expect("a history row")
+        };
+        assert_eq!(
+            weaver_item_to_queue_item(&row(Some("NZB"))).client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        assert_eq!(
+            weaver_item_to_queue_item(&row(None)).client_job_protocol,
+            None
+        );
+        assert_eq!(
+            weaver_item_to_queue_item(&nzb_only(row(None))).client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        let torrent = torrent_job("COMPLETE", false, true, true);
+        assert_eq!(
+            weaver_item_to_queue_item(&torrent).client_job_protocol,
+            Some(ClientJobProtocol::Torrent)
+        );
+        let completed = weaver_item_to_completed_download(&row(Some("NZB")))
+            .expect("a complete row is a completed download");
+        assert_eq!(
+            completed.client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+    }
+
+    // A Weaver with torrents answers history with each row's protocol.
+    #[tokio::test]
+    async fn history_from_a_weaver_with_torrents_carries_each_rows_protocol() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query HistoryItemsWithProtocol"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "historyItems": [history_row(Some("NZB"))] }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let downloads = client
+            .list_completed_downloads()
+            .await
+            .expect("completed downloads load");
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+    }
+
+    // An NZB-only Weaver refuses `protocol`: history is read again with the
+    // NZB-only document, and every row it holds is Usenet.
+    #[tokio::test]
+    async fn every_history_row_of_an_nzb_only_weaver_is_usenet() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query HistoryItemsWithProtocol"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{ "message": "Unknown field \"protocol\" on type \"HistoryItem\"." }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("query HistoryItems("))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "historyItems": [history_row(None)] }
+            })))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+
+        let history = client.list_history().await.expect("history loads");
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
+        );
+        let downloads = client
+            .list_completed_downloads()
+            .await
+            .expect("completed downloads load");
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].client_job_protocol,
+            Some(ClientJobProtocol::Usenet)
         );
     }
 }

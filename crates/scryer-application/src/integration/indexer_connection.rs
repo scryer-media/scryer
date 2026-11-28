@@ -16,6 +16,7 @@ struct PreparedIndexerProbe {
     accounting: Option<crate::IndexerAccountingContext>,
     proxy_config: Option<scryer_domain::ProxyConfig>,
     temp_config: IndexerConfig,
+    secrets: ConnectionTestSecrets,
 }
 
 impl AppUseCase {
@@ -89,6 +90,7 @@ impl AppUseCase {
             accounting,
             proxy_config,
             temp_config,
+            secrets,
         } = self
             .prepare_indexer_probe(
                 actor,
@@ -143,11 +145,8 @@ impl AppUseCase {
                     format!("no indexer provider available for provider type '{provider_type}'"),
                 )
             })?;
-        if !client
-            .probe_connection()
-            .await
-            .map_err(map_indexer_connection_test_error)?
-        {
+        let map_error = |error| map_indexer_connection_test_error(error, &secrets);
+        if !client.probe_connection().await.map_err(map_error)? {
             let capabilities = provider.capabilities_for_provider(provider_type);
             let (query, ids, facet) = build_connection_test_search_request(&capabilities);
 
@@ -173,7 +172,7 @@ impl AppUseCase {
                     tokio_util::sync::CancellationToken::new(),
                 )
                 .await
-                .map_err(map_indexer_connection_test_error)?;
+                .map_err(map_error)?;
         }
 
         let mut caps_config = temp_config.clone();
@@ -209,7 +208,7 @@ impl AppUseCase {
                 accounting.as_ref(),
             )
             .await
-            .map_err(map_indexer_connection_test_error)?;
+            .map_err(map_error)?;
         if caps_refresh_available && temp_config.is_direct_nab() && caps_snapshot.is_none() {
             return Err(AppError::validation_refused(crate::error_reasons::integration::INDEXER_CONNECTION_TEST_DID_NOT_RETURN_VALID_NEWZNAB_CAPS_DOCUMENT, "indexer connection test did not return a valid Newznab caps document".to_string()));
         }
@@ -267,7 +266,7 @@ impl AppUseCase {
         client
             .login_challenge()
             .await
-            .map_err(map_indexer_connection_test_error)
+            .map_err(|error| map_indexer_connection_test_error(error, &prepared.secrets))
     }
 
     /// The submitted draft as a connection probe runs it: the provider is
@@ -380,6 +379,7 @@ impl AppUseCase {
                 return Err(AppError::validation_refused(crate::error_reasons::integration::API_KEY_APPEARS_MASKED_PLACEHOLDER_ENTER_REAL_KEY, "API key appears to be a masked placeholder — enter the real key"));
             }
         }
+        let secrets = ConnectionTestSecrets::from_config(&fields, &parsed_config);
 
         let proxy_config_id = match proxy_config_id_override {
             Some(Some(id)) => Some(id.to_string()),
@@ -479,6 +479,7 @@ impl AppUseCase {
             accounting,
             proxy_config,
             temp_config,
+            secrets,
         })
     }
 
@@ -627,7 +628,62 @@ fn validate_indexer_connection_result(result: crate::IndexerValidationResult) ->
 /// not Scryer. `Repository` masks it as "Internal server error" behind a
 /// reference id, which is the one thing an operator saving an indexer cannot
 /// act on; hand back what the indexer actually said instead.
-fn map_indexer_connection_test_error(error: AppError) -> AppError {
+/// The secret values of the settings a connection test runs with. A tracker
+/// can echo a passkey anywhere in a URL, including its path, where no
+/// parameter name marks it, so a test's error loses every configured secret
+/// value before it reaches the client.
+#[derive(Default)]
+struct ConnectionTestSecrets {
+    values: Vec<String>,
+}
+
+impl ConnectionTestSecrets {
+    /// Values shorter than this are too short to be a credential worth hiding,
+    /// and replacing them would garble ordinary words in the sentence.
+    const MIN_CHARS: usize = 4;
+
+    fn from_config(fields: &[scryer_domain::ConfigFieldDef], config: &serde_json::Value) -> Self {
+        let mut values = Vec::new();
+        for field in fields
+            .iter()
+            .filter(|field| field.field_type == scryer_domain::ConfigFieldType::Password)
+        {
+            let Some(value) = config
+                .get(&field.key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| value.chars().count() >= Self::MIN_CHARS)
+            else {
+                continue;
+            };
+            // Raw, form-encoded and path-encoded, the forms a URL can carry.
+            let encoded =
+                url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+            let path_encoded = encoded.replace('+', "%20");
+            for candidate in [value.to_string(), encoded, path_encoded] {
+                if !values.contains(&candidate) {
+                    values.push(candidate);
+                }
+            }
+        }
+        // Longest first, so a secret that contains another is replaced whole.
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        Self { values }
+    }
+
+    /// `text` with URL credentials and every configured secret value removed.
+    fn redact(&self, text: &str) -> String {
+        let mut redacted = crate::url_redaction::redact_url_credentials(text);
+        for value in &self.values {
+            if redacted.contains(value.as_str()) {
+                redacted = redacted.replace(value.as_str(), crate::url_redaction::REDACTED_SECRET);
+            }
+        }
+        redacted
+    }
+}
+
+fn map_indexer_connection_test_error(error: AppError, secrets: &ConnectionTestSecrets) -> AppError {
     match error {
         // Kinds that already carry a user-facing message and their own GraphQL
         // code. Re-wrapping them would only bury what they say.
@@ -641,11 +697,25 @@ fn map_indexer_connection_test_error(error: AppError) -> AppError {
         | AppError::Canceled(_)
         | AppError::TemporaryUnavailable { .. } => error,
         // Keeps the reason the plugin named, so a client can still say why
-        // in its own language; only the sentence says it was the test.
-        AppError::PluginFailed { message, failure } => AppError::PluginFailed {
-            message: format!("indexer connection test failed: {message}"),
-            failure,
-        },
+        // in its own language. The sentence names that reason and the
+        // plugin's own public sentence, not the call that failed.
+        AppError::PluginFailed { mut failure, .. } => {
+            failure.detail = failure
+                .detail
+                .as_deref()
+                .map(|detail| secrets.redact(detail));
+            let message = match failure.detail.as_deref() {
+                Some(detail) => format!(
+                    "indexer connection test failed ({}): {detail}",
+                    failure.reason.as_str()
+                ),
+                None => format!(
+                    "indexer connection test failed ({})",
+                    failure.reason.as_str()
+                ),
+            };
+            AppError::PluginFailed { message, failure }
+        }
         error => {
             // `Repository`'s Display prepends "repository: ", which is noise in
             // a toast, so unwrap it to the message the provider wrote.
@@ -655,6 +725,7 @@ fn map_indexer_connection_test_error(error: AppError) -> AppError {
                 | AppError::RepositoryFailed { message, .. } => message,
                 other => other.to_string(),
             };
+            let message = secrets.redact(&message);
             match known_newznab_error_message(&message) {
                 Some(user_message) => AppError::validation_refused(
                     crate::error_reasons::integration::INDEXER_REQUEST_REJECTED,
@@ -1301,17 +1372,93 @@ mod tests {
             reason: crate::PluginFailureReason::AuthFailed,
             detail: Some("Tracker login failed: wrong password".to_string()),
         };
-        let mapped = map_indexer_connection_test_error(AppError::PluginFailed {
-            message: "indexer indexer_search component: plugin error AuthFailed: x".to_string(),
-            failure: failure.clone(),
-        });
+        let mapped = map_indexer_connection_test_error(
+            AppError::PluginFailed {
+                message: "indexer indexer_search component: plugin error AuthFailed: x".to_string(),
+                failure: failure.clone(),
+            },
+            &ConnectionTestSecrets::default(),
+        );
 
         assert_eq!(
             mapped.to_string(),
-            "indexer connection test failed: indexer indexer_search component: \
-             plugin error AuthFailed: x"
+            "indexer connection test failed (PLUGIN_AUTH_FAILED): \
+             Tracker login failed: wrong password"
         );
         assert_eq!(mapped.plugin_failure(), Some(&failure));
+    }
+
+    #[test]
+    fn a_plugin_failure_without_detail_names_its_reason() {
+        let failure = crate::PluginFailure::new(crate::PluginFailureReason::from_code(
+            &scryer_plugin_sdk::PluginErrorCode::from("invalid_passkey"),
+        ));
+        let mapped = map_indexer_connection_test_error(
+            AppError::PluginFailed {
+                message: "indexer indexer_search component: plugin error Other: failed".to_string(),
+                failure: failure.clone(),
+            },
+            &ConnectionTestSecrets::default(),
+        );
+
+        assert_eq!(
+            mapped.to_string(),
+            "indexer connection test failed (PLUGIN_INVALID_PASSKEY)"
+        );
+        assert_eq!(mapped.plugin_failure(), Some(&failure));
+    }
+
+    #[test]
+    fn a_connection_test_error_loses_a_passkey_carried_in_the_url_path() {
+        let secrets = ConnectionTestSecrets::from_config(
+            &[
+                password_field("passkey", "Passkey"),
+                password_field("pin", "Pin"),
+            ],
+            &serde_json::json!({ "passkey": "synthetic pass/key", "pin": "123" }),
+        );
+        let failure = crate::PluginFailure {
+            reason: crate::PluginFailureReason::UpstreamUnavailable,
+            detail: Some(
+                "GET https://tracker.invalid/rss/synthetic%20pass%2Fkey/feed?apikey=other \
+                 and https://tracker.invalid/synthetic+pass%2Fkey/x answered 502 for 123"
+                    .to_string(),
+            ),
+        };
+        let mapped = map_indexer_connection_test_error(
+            AppError::PluginFailed {
+                message: "ignored".to_string(),
+                failure,
+            },
+            &secrets,
+        );
+
+        let expected_detail = "GET https://tracker.invalid/rss/[redacted]/feed?apikey=[redacted] \
+             and https://tracker.invalid/[redacted]/x answered 502 for 123";
+        assert_eq!(
+            mapped
+                .plugin_failure()
+                .and_then(|failure| failure.detail.as_deref()),
+            Some(expected_detail)
+        );
+        assert_eq!(
+            mapped.to_string(),
+            format!(
+                "indexer connection test failed (PLUGIN_UPSTREAM_UNAVAILABLE): {expected_detail}"
+            )
+        );
+
+        let mapped = map_indexer_connection_test_error(
+            AppError::Repository(
+                "fetch of https://tracker.invalid/dl/synthetic pass/key failed".into(),
+            ),
+            &secrets,
+        );
+        assert_eq!(
+            mapped.to_string(),
+            "validation: indexer connection test failed: fetch of \
+             https://tracker.invalid/dl/[redacted] failed"
+        );
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]

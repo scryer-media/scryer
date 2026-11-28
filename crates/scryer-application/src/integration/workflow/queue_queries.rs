@@ -1211,7 +1211,7 @@ impl AppUseCase {
     }
 }
 fn password_retry_recovery_queue_item(submission: DownloadSubmission) -> DownloadQueueItem {
-    DownloadQueueItem {
+    DownloadQueueItem { client_job_protocol: None,
         id: submission.download_id.to_string(),
         title_id: Some(submission.title_id.clone()),
         episode_id: None,
@@ -2240,7 +2240,7 @@ mod queue_query_unit_tests {
     use crate::{DownloadSubmission, DownloadSubmissionPurpose, SubmissionScope};
 
     fn queue_item() -> DownloadQueueItem {
-        DownloadQueueItem {
+        DownloadQueueItem { client_job_protocol: None,
             id: "item-1".to_string(),
             title_id: None,
             episode_id: None,

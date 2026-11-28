@@ -3976,6 +3976,7 @@ export const instanceFeaturesQuery = `query InstanceFeatures {
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
     disabledFacets
+    viewableFacets
   }
 }`;
 
@@ -4782,6 +4783,14 @@ export const notificationSubscriptionsQuery = `query NotificationSubscriptions {
 
 export const notificationProviderTypesQuery = `query NotificationProviderTypes {
   notificationProviderTypes {${PROVIDER_TYPE_FIELDS}
+  }
+}`;
+
+/** Installed notification providers and their events, for the media-server refresh offer. */
+export const mediaServerRefreshProvidersQuery = `query MediaServerRefreshProviders {
+  notificationProviderTypes {
+    providerType
+    supportedEvents
   }
 }`;
 
@@ -6468,5 +6477,13 @@ export const libraryFullHashBackfillQuery = `query LibraryFullHashBackfill {
   libraries(permission: MANAGE_LIBRARY) {
     id
     fullHashBackfillEnabled
+  }
+}`;
+
+export const manualImportVerdictsQuery = `query ManualImportVerdicts($selectionId: ID!, $files: [ManualImportVerdictRequestInput!]!) {
+  manualImportVerdicts(selectionId: $selectionId, files: $files) {
+    candidateId
+    episodeIds
+    verdict
   }
 }`;

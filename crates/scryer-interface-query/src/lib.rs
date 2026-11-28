@@ -3416,6 +3416,61 @@ impl JobAndDownloadQueries {
         Ok(graph.map(from_library_graph))
     }
 
+    /// Estimate whether each manual-import candidate would upgrade the episodes it is mapped to; requires the selection's owner with import resolution on its library. Read-only: nothing is queued or imported.
+    async fn manual_import_verdicts(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Selection ID from beginManualImportSelection.")] selection_id: ID,
+        #[graphql(
+            desc = "Candidates and the episodes each is mapped to; at most 2000 candidates and 500 episodes per candidate."
+        )]
+        files: Vec<ManualImportVerdictRequestInput>,
+    ) -> GqlResult<Vec<ManualImportVerdictPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let rows = scryer_application::manual_import_verdicts(
+            &app,
+            &actor,
+            selection_id.as_str(),
+            files
+                .into_iter()
+                .map(|file| scryer_application::ManualImportVerdictRequest {
+                    candidate_id: file.candidate_id.to_string(),
+                    episode_ids: file.episode_ids.into_iter().map(String::from).collect(),
+                })
+                .collect(),
+        )
+        .await
+        .map_err(to_gql_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ManualImportVerdictPayload {
+                candidate_id: row.candidate_id.into(),
+                episode_ids: row.episode_ids.into_iter().map(Into::into).collect(),
+                verdict: row.verdict.map(|verdict| match verdict {
+                    scryer_application::ManualImportVerdict::Upgrade => {
+                        ManualImportVerdictValue::Upgrade
+                    }
+                    scryer_application::ManualImportVerdict::Equal => {
+                        ManualImportVerdictValue::Equal
+                    }
+                    scryer_application::ManualImportVerdict::Downgrade => {
+                        ManualImportVerdictValue::Downgrade
+                    }
+                    scryer_application::ManualImportVerdict::NoCurrentFile => {
+                        ManualImportVerdictValue::NoCurrentFile
+                    }
+                }),
+                estimated_score: row.estimated_score,
+                current_file: row.current_file.map(|file| ManualImportCurrentFilePayload {
+                    quality: file.quality,
+                    release_group: file.release_group,
+                    score: file.score,
+                }),
+            })
+            .collect())
+    }
+
     /// Return a bounded download queue page with readiness, revision, staleness, filters, and stable sorting metadata.
     async fn download_queue_page(
         &self,
@@ -3817,7 +3872,18 @@ impl SystemQueries {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let features = app.instance_features(&actor).await.map_err(to_gql_error)?;
+        let viewable_facets = if ctx.look_ahead().field("viewableFacets").exists() {
+            app.viewable_facets(&actor)
+                .await
+                .map_err(to_gql_error)?
+                .into_iter()
+                .map(MediaFacetValue::from_domain)
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(InstanceFeaturesPayload {
+            viewable_facets,
             api_explorer_enabled: features.api_explorer_enabled,
             experimental_features_enabled: features.experimental_features_enabled,
             personalized_discovery_enabled: features.personalized_discovery_enabled,

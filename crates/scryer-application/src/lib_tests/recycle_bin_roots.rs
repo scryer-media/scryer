@@ -2488,6 +2488,7 @@ impl DownloadCopyFixture {
             completed_at: None,
             parameters: vec![],
             posted_file_names: Vec::new(),
+            client_job_protocol: None,
         };
         let imports = Arc::new(TrackingImportRepo::default());
         imports.records.lock().await.push(ImportRecord {

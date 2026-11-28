@@ -81,6 +81,7 @@ pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
+pub mod host_memory;
 mod image_proxy;
 mod import;
 mod indexer_category;
@@ -490,11 +491,14 @@ pub use events::activity_api::{
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
     HeldDownloadClientPolicy, HeldSourcesReason, HeldSourcesRelease, HeldSourcesReleaseOffer,
-    HeldSourcesSettlement, HeldWorkspacePreserved, ManualImportCandidateMapping,
+    HeldSourcesSettlement, HeldWorkspacePreserved, MANUAL_IMPORT_VERDICT_MAX_EPISODES_PER_ROW,
+    MANUAL_IMPORT_VERDICT_MAX_ROWS, ManualImportCandidateMapping, ManualImportCurrentFile,
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
-    ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
+    ManualImportRequestPayload, ManualImportVerdict, ManualImportVerdictRequest,
+    ManualImportVerdictRow, begin_manual_import_selection, execute_manual_import,
     execute_queued_manual_import, import_completed_download, import_staging_path,
-    release_held_import_sources, retry_failed_import, start_background_manual_import_poller,
+    manual_import_verdicts, release_held_import_sources, retry_failed_import,
+    start_background_manual_import_poller,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;
 pub(crate) use integration::integration::ManualImportSourceResolution;

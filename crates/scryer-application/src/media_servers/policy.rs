@@ -272,7 +272,7 @@ pub(super) fn option_has_non_empty_secret(value: Option<&str>) -> bool {
 
 pub(super) fn default_media_server_display_name(provider: &MediaServerProvider) -> &'static str {
     match provider {
-        MediaServerProvider::Jellyfin => "Jellyfin",
+        MediaServerProvider::Jellyfin => "Jellyfin / Silo",
         MediaServerProvider::Plex => "Plex",
         MediaServerProvider::Emby => "Emby",
     }

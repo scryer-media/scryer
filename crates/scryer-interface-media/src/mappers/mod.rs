@@ -444,6 +444,7 @@ mod tests {
     #[test]
     fn from_import_record_uses_release_folder_for_numeric_weaver_job_name() {
         let payload = CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "weaver".to_string(),
             client_id: String::new(),
@@ -577,6 +578,7 @@ mod tests {
 
     fn torrent_queue_item() -> scryer_domain::DownloadQueueItem {
         scryer_domain::DownloadQueueItem {
+            client_job_protocol: None,
             id: "qbittorrent:abc".to_string(),
             title_id: None,
             episode_id: None,

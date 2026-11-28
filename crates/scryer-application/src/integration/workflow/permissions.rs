@@ -283,7 +283,7 @@ fn download_history_item_from_terminal_row(
         value.map(|value| value.timestamp().to_string())
     };
 
-    Some(DownloadQueueItem {
+    Some(DownloadQueueItem { client_job_protocol: None,
         id,
         title_id: row.title_id,
         episode_id: row.episode_id,

@@ -4490,3 +4490,62 @@ async fn library_root_writes_install_the_roots_on_the_disk_owner() {
         VolumeClass::AppData
     );
 }
+
+#[tokio::test]
+async fn viewable_facets_follow_the_member_s_library_grants() {
+    let (app, admin) = bootstrap();
+    let mut library_ids = Vec::new();
+    for (facet, name) in [
+        (MediaFacet::Movie, "Hollowmere movies"),
+        (MediaFacet::Series, "Hollowmere series"),
+    ] {
+        let library = app
+            .create_library(
+                &admin,
+                facet,
+                name.into(),
+                vec![LibraryRootDraft {
+                    id: None,
+                    path: format!("/synthetic/{}", name.replace(' ', "-")),
+                    is_default: true,
+                }],
+                None,
+            )
+            .await
+            .expect("create library");
+        library_ids.push(library.id);
+    }
+    let member = |grants: &[(usize, scryer_domain::LibraryPermission)]| {
+        let mut user = test_user_with_app_permissions("hollowmere-member", AppPermissionMask::NONE);
+        for (index, permission) in grants {
+            user.authorization.libraries.insert(
+                library_ids[*index].clone(),
+                scryer_domain::LibraryPermissionMask::from_permissions([*permission]),
+            );
+        }
+        user
+    };
+
+    use scryer_domain::LibraryPermission::*;
+    for (actor, expected) in [
+        (member(&[(0, View)]), vec![MediaFacet::Movie]),
+        (member(&[(1, Request)]), vec![MediaFacet::Series]),
+        (
+            member(&[(0, ManageTitles), (1, ManageLibrary)]),
+            vec![MediaFacet::Movie, MediaFacet::Series],
+        ),
+        // Resolving imports alone is not a reason to open the catalog.
+        (member(&[(0, ResolveImports)]), vec![]),
+        (member(&[]), vec![]),
+    ] {
+        assert_eq!(
+            app.viewable_facets(&actor).await.expect("viewable facets"),
+            expected
+        );
+    }
+    let viewable = app.viewable_facets(&admin).await.expect("admin facets");
+    assert!(
+        viewable.contains(&MediaFacet::Movie) && viewable.contains(&MediaFacet::Series),
+        "an administrator keeps every catalog: {viewable:?}"
+    );
+}

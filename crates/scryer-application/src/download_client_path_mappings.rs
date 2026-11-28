@@ -593,6 +593,7 @@ mod tests {
         )
         .expect("parse mappings");
         let mut completed = CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "qbittorrent".to_string(),
             client_id: "client-1".to_string(),
@@ -620,6 +621,7 @@ mod tests {
         )
         .expect("parse mappings");
         let mut completed = CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: "qbittorrent".to_string(),
             client_id: "client-1".to_string(),

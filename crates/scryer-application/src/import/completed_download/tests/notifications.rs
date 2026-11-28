@@ -39,6 +39,7 @@ async fn check_emits_manual_interaction_notification_once() {
         client_id: "client-1".to_string(),
         client_type: "nzbget".to_string(),
         client_item: DownloadQueueItem {
+            client_job_protocol: None,
             id: Id::new().0,
             title_id: None,
             episode_id: None,

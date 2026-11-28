@@ -904,6 +904,7 @@ async fn an_upgrade_waits_while_the_queued_movie_download_is_live() {
         .await
         .expect("record the live submission");
     *client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "lantern-quay-live".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: None,
@@ -4574,6 +4575,7 @@ async fn acquisition_cycle_episode_submission_blocks_only_matching_episode() {
         .expect("record active episode submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "episode-one-active".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: Some(episode_one.id.clone()),
@@ -4812,6 +4814,7 @@ async fn acquisition_cycle_collection_submission_blocks_same_season_only() {
         .expect("record active season pack submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "season-one-pack".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: None,
@@ -12271,6 +12274,7 @@ async fn acquisition_cycle_title_submission_still_blocks_movie_search() {
         .expect("record active movie submission");
 
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "movie-active".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: None,
@@ -20466,6 +20470,7 @@ async fn a_saved_pack_waits_while_an_episode_it_covers_is_downloading() {
         .await
         .expect("record the live episode submission");
     *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        client_job_protocol: None,
         id: "season-seven-episode-live".to_string(),
         title_id: Some(title.id.clone()),
         episode_id: Some(episode_id),

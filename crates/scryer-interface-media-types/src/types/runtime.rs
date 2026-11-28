@@ -314,6 +314,9 @@ pub struct InstanceFeaturesPayload {
     pub personalized_discovery_enabled: bool,
     /// Facets an administrator turned off for the whole instance.
     pub disabled_facets: Vec<MediaFacetValue>,
+    /// Facets the current user can view, request into, add titles to or
+    /// manage a library of.
+    pub viewable_facets: Vec<MediaFacetValue>,
 }
 
 #[derive(SimpleObject, Clone)]

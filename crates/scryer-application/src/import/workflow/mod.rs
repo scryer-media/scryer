@@ -795,6 +795,7 @@ include!("paths.rs");
 include!("metadata.rs");
 include!("wanted.rs");
 include!("manual.rs");
+include!("manual_verdict.rs");
 include!("results.rs");
 include!("retry.rs");
 include!("held_sources.rs");

@@ -118,6 +118,7 @@ fn scryer_completed(
     facet_id: &str,
 ) -> CompletedDownload {
     CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "test-client".to_string(),
@@ -881,6 +882,7 @@ async fn import_returns_unmatched_when_title_not_found() {
     .expect("write");
 
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "test-client".to_string(),
@@ -1348,6 +1350,7 @@ async fn import_movie_decypharr_symlink_release_folder_succeeds() {
     .await;
 
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "qbittorrent".to_string(),
         client_id: "test-client".to_string(),
@@ -1440,6 +1443,7 @@ async fn import_movie_decypharr_symlink_release_folder_uses_remote_path_mapping(
     .await;
 
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "qbittorrent".to_string(),
         client_id: config.id,
@@ -3018,6 +3022,7 @@ fn tracked_movie_download(
         client_id: completed.client_id.clone(),
         client_type: completed.client_type.clone(),
         client_item: scryer_domain::DownloadQueueItem {
+            client_job_protocol: None,
             attention_reason_code: None,
             id: Id::new().0,
             title_id: Some(title_id.to_string()),
@@ -3934,6 +3939,7 @@ async fn a_titleless_obfuscated_download_matches_and_imports_on_its_recovered_na
     .await;
     let episode = seed_short_form_series_episode(&ctx, &title).await;
     let completed = CompletedDownload {
+        client_job_protocol: None,
         subtitle_paths: Vec::new(),
         client_type: "sabnzbd".to_string(),
         client_id: "test-client".to_string(),

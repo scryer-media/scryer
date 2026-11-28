@@ -198,6 +198,7 @@ impl RaceHarness {
         ];
         let name = "Race.Fixture.Movie.2024.Extras.1080p.WEB-DL".to_string();
         let item = DownloadQueueItem {
+            client_job_protocol: None,
             attention_reason_code: None,
             id: RACE_JOB_ID.to_string(),
             title_id: Some(self.title.id.clone()),
@@ -239,6 +240,7 @@ impl RaceHarness {
             seeding: None,
         };
         let completed = CompletedDownload {
+            client_job_protocol: None,
             subtitle_paths: Vec::new(),
             client_type: RACE_CLIENT_TYPE.to_string(),
             client_id: RACE_CLIENT_ID.to_string(),

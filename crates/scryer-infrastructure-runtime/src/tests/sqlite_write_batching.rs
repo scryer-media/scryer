@@ -136,7 +136,7 @@ async fn sqlite_wal_autocheckpoint_honors_the_env_override() {
 }
 
 #[tokio::test]
-async fn sqlite_connections_use_normal_sync_and_a_20_mb_cache() {
+async fn sqlite_connections_use_normal_sync_and_the_decided_cache() {
     let (services, _db) = temp_services("scryer_sqlite_sync_cache").await;
     let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
         .fetch_one(services.pool())
@@ -148,7 +148,9 @@ async fn sqlite_connections_use_normal_sync_and_a_20_mb_cache() {
         .fetch_one(services.pool())
         .await
         .expect("pragma should read");
-    assert_eq!(cache_size, -20_000);
+    let decided = scryer_infrastructure_datastore::sqlite::services::sqlite_cache_size_kib();
+    assert!(decided == 2048 || decided == 4096, "{decided}");
+    assert_eq!(cache_size, -decided);
 }
 
 #[tokio::test]
