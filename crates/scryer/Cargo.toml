@@ -42,7 +42,7 @@ async-graphql = { workspace = true }
 async-graphql-axum = { version = "7.2" }
 axum = { version = "0.8", features = ["macros", "http1", "http2", "json", "multipart", "ws"] }
 futures-util = "0.3"
-axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.9", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["compression-br", "compression-gzip", "compression-zstd"] }
