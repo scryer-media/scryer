@@ -4291,6 +4291,8 @@ struct SeedGoalOnlySubmissionRepo {
     batch_fails: std::sync::atomic::AtomicBool,
     identity_fails: std::sync::atomic::AtomicBool,
     info_hash_fails: std::sync::atomic::AtomicBool,
+    /// The grab record failure handling asks for. Empty unless a test sets it.
+    grabbed: std::sync::Mutex<Vec<DownloadSubmission>>,
 }
 
 #[async_trait]
@@ -4314,9 +4316,15 @@ impl DownloadSubmissionRepository for SeedGoalOnlySubmissionRepo {
 
     async fn find_by_client_item_id(
         &self,
-        _: &ClientJobLocator,
+        identity: &ClientJobLocator,
     ) -> AppResult<Option<DownloadSubmission>> {
-        Ok(None)
+        Ok(self
+            .grabbed
+            .lock()
+            .expect("grabbed submissions")
+            .iter()
+            .find(|submission| &ClientJobLocator::from_submission(submission) == identity)
+            .cloned())
     }
 
     async fn list_for_client_items(
@@ -8239,6 +8247,139 @@ async fn a_rejected_torrent_without_goals_is_removed_at_once_with_remove_failed_
         deleted_items(&download_client.deleted_requests.lock().await),
         vec![("torrent-rejected-no-goals".to_string(), true)]
     );
+}
+
+/// From the refusal to the seeding gate: a torrent of Scryer's own grab whose
+/// files all lost to the library is routed to failure handling, failed, then
+/// held while its goal is unmet and removed with its data once it is met.
+#[tokio::test]
+async fn a_refused_torrent_is_failed_then_seeds_to_its_goal_before_removal() {
+    for (goal_met, item_id) in [
+        (false, "torrent-refused-seeding"),
+        (true, "torrent-refused-seeded"),
+    ] {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let (mut app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, false).await;
+        let title = movie_title(&app, &user, "Refused Torrent Chain").await;
+        let submissions = goals_repo(item_id, persisted_goals(false));
+        app.services.workflow.download_submissions = submissions.clone();
+        let mut tracked = tracked_for(
+            &config.id,
+            "qbittorrent",
+            item_id,
+            &title,
+            TrackedDownloadState::ImportPending,
+            true,
+        );
+        tracked.client_item.is_scryer_origin = true;
+        submissions
+            .grabbed
+            .lock()
+            .expect("grabbed submissions")
+            .push(DownloadSubmission {
+                download_id: tracked.download_id,
+                title_id: title.id.clone(),
+                purpose: crate::DownloadSubmissionPurpose::Standard,
+                facet: "movie".to_string(),
+                download_client_id: Some(config.id.clone()),
+                download_client_type: "qbittorrent".to_string(),
+                download_client_item_id: tracked.client_item.download_client_item_id.clone(),
+                source_hint: None,
+                source_provider_id: None,
+                source_provider_name: None,
+                source_kind: None,
+                source_title: Some("Synthetic.Refused.Movie.2031.1080p".to_string()),
+                info_hash: None,
+                release_size_bytes: None,
+                request_signature: None,
+                release_listing_json: None,
+                scope: SubmissionScope::Title,
+            });
+        let now = chrono::Utc::now();
+        let refused = scryer_domain::ImportResult {
+            import_id: format!("import-{item_id}"),
+            decision: scryer_domain::ImportDecision::Skipped,
+            skip_reason: Some(scryer_domain::ImportSkipReason::DuplicateFile),
+            title_id: Some(title.id.clone()),
+            source_system: Some("qbittorrent".to_string()),
+            source_ref: Some(item_id.to_string()),
+            source_title: Some(title.name.clone()),
+            source_path: format!("/downloads/{item_id}"),
+            dest_path: None,
+            quality: None,
+            episode_ids: vec![],
+            file_size_bytes: None,
+            link_type: None,
+            error_message: Some("not an upgrade for the library file".to_string()),
+            release_burned: false,
+            release_refused: true,
+            started_at: now,
+            completed_at: now,
+            upgrade: false,
+            upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
+        };
+
+        let settled = crate::completed_download_handler::apply_import_result_with_completed(
+            &app,
+            &mut tracked,
+            refused,
+            0,
+            None,
+            None,
+        )
+        .await;
+        assert!(!settled, "goal_met={goal_met}");
+        assert_eq!(
+            tracked.state,
+            TrackedDownloadState::FailedPending,
+            "goal_met={goal_met}"
+        );
+
+        crate::failed_download_handler::process_failed(&app, &mut tracked).await;
+        assert_eq!(
+            tracked.state,
+            TrackedDownloadState::Failed,
+            "goal_met={goal_met}"
+        );
+        assert!(
+            download_client.deleted_requests.lock().await.is_empty(),
+            "goal_met={goal_met}: failure handling leaves removal to the seeding gate"
+        );
+
+        observed(
+            DownloadSeedingSnapshot {
+                can_remove: Some(false),
+                can_move_files: Some(true),
+                seed_ratio: Some(if goal_met { 2.4 } else { 0.4 }),
+                ..DownloadSeedingSnapshot::default()
+            },
+            &mut tracked,
+        );
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Failed,
+            None,
+        )
+        .await;
+
+        if goal_met {
+            assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+            assert_eq!(
+                deleted_items(&download_client.deleted_requests.lock().await),
+                vec![(item_id.to_string(), true)]
+            );
+        } else {
+            assert_eq!(outcome, TerminalDownloadCleanupOutcome::HeldForSeeding);
+            assert!(download_client.deleted_requests.lock().await.is_empty());
+        }
+    }
 }
 
 /// A torrent that failed in its client, and one whose warning outlasted the
